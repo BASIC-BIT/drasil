@@ -226,6 +226,9 @@ export class ThreadManager implements IThreadManager {
     if (!channel?.isThread()) {
       return false;
     }
+    if (channel.archived) {
+      await channel.setArchived(false, 'Deliver CAPTCHA case status');
+    }
     await channel.send({ content: enforceDiscordMessageLimit(message) });
     return true;
   }

@@ -724,7 +724,9 @@ export class InteractionHandler implements IInteractionHandler {
             } else if (
               captchaChallenge.status === CaptchaChallengeStatus.FAILED ||
               captchaChallenge.status === CaptchaChallengeStatus.EXPIRED ||
-              captchaChallenge.status === CaptchaChallengeStatus.BYPASSED
+              captchaChallenge.status === CaptchaChallengeStatus.BYPASSED ||
+              (captchaChallenge.status === CaptchaChallengeStatus.PENDING &&
+                Boolean(captchaChallenge.delivery_error_code))
             ) {
               actionButtons.push(
                 this.adminActionButton(

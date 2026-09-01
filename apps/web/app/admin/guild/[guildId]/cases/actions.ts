@@ -243,7 +243,7 @@ async function assertCanQueueCaseAction(
       throw new Error('A reason is required to continue without the browser check.');
     }
     return {
-      attemptId: action === 'retry_captcha' ? randomUUID() : null,
+      attemptId: action === 'retry_captcha' || action === 'bypass_captcha' ? randomUUID() : null,
       quarantinePhase: null,
       previewRequestId: null,
       reason,

@@ -12,6 +12,7 @@ export interface IAdminActionService {
     options?: { limit?: number; offset?: number }
   ): Promise<AdminAction[]>;
   getActionsForUser(serverId: string, userId: string): Promise<AdminAction[]>;
+  getActionsForVerificationEvent?(verificationEventId: string): Promise<AdminAction[]>;
   formatActionSummary(action: AdminAction): string;
 }
 
@@ -53,6 +54,10 @@ export class AdminActionService implements IAdminActionService {
 
   async getActionsForUser(serverId: string, userId: string): Promise<AdminAction[]> {
     return this.adminActionRepository.findByUserAndServer(userId, serverId);
+  }
+
+  async getActionsForVerificationEvent(verificationEventId: string): Promise<AdminAction[]> {
+    return this.adminActionRepository.findByVerificationEvent(verificationEventId);
   }
 
   formatActionSummary(action: AdminAction): string {

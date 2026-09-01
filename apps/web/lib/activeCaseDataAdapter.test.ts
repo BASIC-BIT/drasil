@@ -63,6 +63,22 @@ describe('activeCaseDataAdapter', () => {
     ).toBe('web:case-action:quarantine_compromised_account:guild-1:ver-1:execute:preview-1');
   });
 
+  it('uses a fresh idempotency key for each repeatable CAPTCHA action', () => {
+    const base = {
+      adminId: 'moderator-1',
+      attemptId: 'attempt-2',
+      caseId: 'ver-1',
+      guildId: 'guild-1',
+    };
+
+    expect(buildCaseActionIdempotencyKey({ ...base, action: 'retry_captcha' })).toBe(
+      'web:case-action:retry_captcha:guild-1:ver-1:attempt-2'
+    );
+    expect(buildCaseActionIdempotencyKey({ ...base, action: 'bypass_captcha' })).toBe(
+      'web:case-action:bypass_captcha:guild-1:ver-1:attempt-2'
+    );
+  });
+
   it('preserves failed queue receipts for inline action feedback', () => {
     expect(resolveCaseActionQueueStatus('queued')).toBe('queued');
     expect(resolveCaseActionQueueStatus('processing')).toBe('queued');
@@ -162,6 +178,32 @@ describe('activeCaseDataAdapter', () => {
     );
     expect(summary.allowedActions).toContain('bypass_captcha');
     expect(summary.allowedActions).not.toContain('challenge_user');
+  });
+
+  it('offers immediate retry when a pending challenge was not delivered', () => {
+    const summary = parseCaseSummaryRow(
+      {
+        ...baseRow,
+        server_settings: { captcha_mode: 'manual' },
+        captcha_status: 'pending',
+        captcha_request_source: 'moderator',
+        captcha_pass_effect: 'evidence_only',
+        captcha_generation: 1,
+        captcha_submission_count: 0,
+        captcha_expires_at: new Date('2026-06-04T00:00:00.000Z'),
+        captcha_requested_at: new Date('2026-06-03T00:00:00.000Z'),
+        captcha_delivered_at: null,
+        captcha_delivery_error_code: 'discord_delivery_failed',
+        captcha_passed_at: null,
+        captcha_bypassed_at: null,
+        captcha_bypassed_by: null,
+        captcha_bypass_reason: null,
+      },
+      new Date('2026-06-03T01:00:00.000Z')
+    );
+
+    expect(summary.allowedActions).toContain('retry_captcha');
+    expect(summary.allowedActions).toContain('bypass_captcha');
   });
 
   it('never offers another challenge after a pass', () => {

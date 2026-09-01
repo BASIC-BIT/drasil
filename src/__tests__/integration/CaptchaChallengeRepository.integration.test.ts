@@ -106,6 +106,51 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     await expect(challenges.expirePending(new Date(), 10)).resolves.toEqual([]);
   });
 
+  it('allows an immediate retry after challenge delivery fails', async () => {
+    const { verification } = await createCase(
+      'guild-captcha-delivery-retry',
+      'user-captcha-delivery-retry'
+    );
+    const challenges = new CaptchaChallengeRepository(prisma);
+    const initial = await challenges.create({
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      caseRevision: verification.case_revision,
+      tokenHash: 'delivery-failed-hash',
+      expiresAt: new Date(Date.now() + 60_000),
+      requestedBy: 'moderator-1',
+    });
+    await challenges.recordDeliveryFailure(
+      initial.id,
+      initial.generation,
+      'discord_delivery_failed'
+    );
+
+    await expect(
+      challenges.retry({
+        verificationEventId: verification.id,
+        serverId: verification.server_id,
+        userId: verification.user_id,
+        requestSource: CaptchaChallengeRequestSource.MODERATOR,
+        passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+        caseRevision: verification.case_revision,
+        tokenHash: 'delivery-retry-hash',
+        expiresAt: new Date(Date.now() + 120_000),
+        requestedBy: 'moderator-2',
+      })
+    ).resolves.toEqual(
+      expect.objectContaining({
+        delivery_error_code: null,
+        generation: 2,
+        link_token_hash: 'delivery-retry-hash',
+        status: CaptchaChallengeStatus.PENDING,
+      })
+    );
+  });
+
   it('cancels pending challenges exactly once after the server disables the feature', async () => {
     const { verification } = await createCase('guild-captcha-disabled', 'user-captcha-disabled');
     const challenges = new CaptchaChallengeRepository(prisma);

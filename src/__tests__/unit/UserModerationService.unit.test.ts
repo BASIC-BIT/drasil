@@ -326,6 +326,61 @@ describe('UserModerationService (unit)', () => {
     );
   });
 
+  it('resumes unfinished CAPTCHA resolution effects after the case commit', async () => {
+    const guildId = 'guild-captcha-resume';
+    const userId = 'user-captcha-resume';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const input = {
+      verificationEventId: verificationEvent.id,
+      challengeId: 'challenge-resume',
+      generation: 1,
+      expectedCaseRevision: verificationEvent.case_revision,
+    };
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+    threadManager.resolveVerificationThread.mockRejectedValueOnce(new Error('Discord unavailable'));
+
+    await expect(service.resolveCaptchaCase(member, input)).rejects.toThrow('Discord unavailable');
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        resolved_by: 'drasil:captcha',
+        status: VerificationStatus.VERIFIED,
+      })
+    );
+    await expect(adminActionRepository.findByUserAndServer(userId, guildId)).resolves.toHaveLength(
+      0
+    );
+
+    await expect(service.resolveCaptchaCase(member, input)).resolves.toEqual({
+      status: 'resolved',
+    });
+
+    expect(roleManager.removeCaseRole).toHaveBeenCalledTimes(1);
+    expect(threadManager.resolveVerificationThread).toHaveBeenCalledTimes(2);
+    await expect(adminActionRepository.findByUserAndServer(userId, guildId)).resolves.toHaveLength(
+      1
+    );
+    await expect(
+      moderationOutcomeRepository.findByVerificationEvent(verificationEvent.id)
+    ).resolves.toHaveLength(1);
+  });
+
   it('keeps the case role when another pending case exists', async () => {
     const guildId = 'guild-captcha-other-case';
     const userId = 'user-captcha-other-case';

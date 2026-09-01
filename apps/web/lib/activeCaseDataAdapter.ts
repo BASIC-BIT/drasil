@@ -242,7 +242,7 @@ function resolveCaseActionRequestType(
 
 export function buildCaseActionIdempotencyKey(input: QueueCaseActionInput): string {
   const base = `web:case-action:${input.action}:${input.guildId}:${input.caseId}`;
-  if (input.action === 'retry_captcha') {
+  if (input.action === 'retry_captcha' || input.action === 'bypass_captcha') {
     return `${base}:${input.attemptId ?? 'missing-attempt'}`;
   }
   if (input.action !== 'quarantine_compromised_account') {
@@ -589,6 +589,9 @@ function appendCaptchaActions(row: CaseSummaryRow, actions: CaseAction[]): CaseA
     return actions;
   }
   if (row.captcha_status === 'pending') {
+    if (row.captcha_delivery_error_code) {
+      actions.push('retry_captcha');
+    }
     actions.push('bypass_captcha');
     return actions;
   }

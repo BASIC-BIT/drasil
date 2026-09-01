@@ -136,6 +136,31 @@ describe('ThreadManager (unit)', () => {
     serverMemberRepository = new InMemoryServerMemberRepository();
   });
 
+  it('unarchives a case thread before sending a CAPTCHA status', async () => {
+    (thread as unknown as { archived: boolean }).archived = true;
+    const client = {
+      channels: { fetch: jest.fn().mockResolvedValue(thread) },
+    };
+    const manager = new ThreadManager(
+      client as any,
+      configService,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      serverMemberRepository
+    );
+
+    await expect(
+      manager.sendCaptchaStatus(
+        buildVerificationEvent({ thread_id: thread.id }),
+        'Security check completed.'
+      )
+    ).resolves.toBe(true);
+
+    expect(thread.setArchived).toHaveBeenCalledWith(false, 'Deliver CAPTCHA case status');
+    expect(thread.send).toHaveBeenCalledWith({ content: 'Security check completed.' });
+  });
+
   it('creates a verification thread and stores thread_id', async () => {
     const manager = new ThreadManager(
       {} as any,

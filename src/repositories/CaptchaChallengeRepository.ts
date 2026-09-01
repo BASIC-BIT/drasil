@@ -88,11 +88,13 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
       if (existing.status === CaptchaChallengeStatus.PASSED) {
         throw new Error('This case has already passed its security check.');
       }
-      if (
-        existing.status !== CaptchaChallengeStatus.FAILED &&
-        existing.status !== CaptchaChallengeStatus.EXPIRED &&
-        existing.status !== CaptchaChallengeStatus.BYPASSED
-      ) {
+      const pendingDeliveryFailure =
+        existing.status === CaptchaChallengeStatus.PENDING && Boolean(existing.delivery_error_code);
+      const retryableStatus =
+        existing.status === CaptchaChallengeStatus.FAILED ||
+        existing.status === CaptchaChallengeStatus.EXPIRED ||
+        existing.status === CaptchaChallengeStatus.BYPASSED;
+      if (!pendingDeliveryFailure && !retryableStatus) {
         throw new Error('This CAPTCHA challenge is not eligible for retry.');
       }
 
@@ -101,6 +103,7 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
           id: existing.id,
           generation: existing.generation,
           status: existing.status,
+          ...(pendingDeliveryFailure ? { delivery_error_code: existing.delivery_error_code } : {}),
         },
         data: {
           status: CaptchaChallengeStatus.PENDING,

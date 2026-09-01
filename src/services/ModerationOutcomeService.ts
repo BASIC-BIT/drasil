@@ -22,6 +22,7 @@ export interface IModerationOutcomeService {
     userId: string,
     outcomeType: ModerationOutcomeType
   ): Promise<ModerationOutcome | null>;
+  findOutcomesForVerificationEvent?(verificationEventId: string): Promise<ModerationOutcome[]>;
 }
 
 @injectable()
@@ -67,6 +68,12 @@ export class ModerationOutcomeService implements IModerationOutcomeService {
       serverId,
       outcomeType
     );
+  }
+
+  async findOutcomesForVerificationEvent(
+    verificationEventId: string
+  ): Promise<ModerationOutcome[]> {
+    return this.moderationOutcomeRepository.findByVerificationEvent(verificationEventId);
   }
 }
 
