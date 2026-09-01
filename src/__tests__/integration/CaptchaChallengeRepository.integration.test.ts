@@ -86,6 +86,42 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     await expect(prisma.captcha_challenges.count()).resolves.toBe(1);
   });
 
+  it('distinguishes duplicate cases from public-link token collisions', async () => {
+    const first = await createCase('guild-captcha-unique', 'user-captcha-unique-1');
+    const second = await createCase('guild-captcha-unique', 'user-captcha-unique-2');
+    const challenges = new CaptchaChallengeRepository(prisma);
+    const baseInput = {
+      serverId: first.verification.server_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      caseRevision: 0,
+      expiresAt: new Date(Date.now() + 60_000),
+    };
+    await challenges.create({
+      ...baseInput,
+      verificationEventId: first.verification.id,
+      userId: first.verification.user_id,
+      tokenHash: 'shared-token-hash',
+    });
+
+    await expect(
+      challenges.create({
+        ...baseInput,
+        verificationEventId: first.verification.id,
+        userId: first.verification.user_id,
+        tokenHash: 'different-token-hash',
+      })
+    ).rejects.toThrow('This case already has a CAPTCHA challenge.');
+    await expect(
+      challenges.create({
+        ...baseInput,
+        verificationEventId: second.verification.id,
+        userId: second.verification.user_id,
+        tokenHash: 'shared-token-hash',
+      })
+    ).rejects.toThrow('Could not create a unique CAPTCHA link. Try issuing the check again.');
+  });
+
   it('expires a generation exactly once', async () => {
     const { verification } = await createCase('guild-captcha-expiry', 'user-captcha-expiry');
     const challenges = new CaptchaChallengeRepository(prisma);

@@ -71,7 +71,16 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
       })) as CaptchaChallenge;
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        throw new Error('This case already has a CAPTCHA challenge.');
+        const existingForCase = await this.findByCaseId(input.verificationEventId);
+        if (existingForCase) {
+          throw new Error('This case already has a CAPTCHA challenge.');
+        }
+        const existingForToken = await this.prisma.captcha_challenges.findUnique({
+          where: { link_token_hash: input.tokenHash },
+        });
+        if (existingForToken) {
+          throw new Error('Could not create a unique CAPTCHA link. Try issuing the check again.');
+        }
       }
       throw error;
     }
