@@ -442,6 +442,14 @@ describe('UserModerationService (unit)', () => {
     await expect(
       service.closeCaseNoAction(buildGuildWithMember(guildId, member), userId, moderator)
     ).rejects.toThrow('Account quarantine is currently in progress');
+    await expect(
+      service.resolveCaptchaCase(member, {
+        challengeId: 'challenge-containment-race',
+        expectedCaseRevision: verificationEvent.case_revision,
+        generation: 1,
+        verificationEventId: verificationEvent.id,
+      })
+    ).resolves.toEqual({ status: 'held', reason: 'case_changed' });
 
     await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
       expect.objectContaining({

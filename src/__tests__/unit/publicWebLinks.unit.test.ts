@@ -56,7 +56,7 @@ describe('publicWebLinks', () => {
       'https://drasilbot.com/admin/guild/guild-1/cases/case-1'
     );
     expect(buildCaptchaChallengeUrl('opaque/token')).toBe(
-      'https://drasilbot.com/challenge/opaque%2Ftoken'
+      'https://drasilbot.com/captcha/opaque%2Ftoken'
     );
   });
 });

@@ -1246,6 +1246,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       verificationEvent.user_id !== member.id ||
       verificationEvent.status !== VerificationStatus.PENDING ||
       verificationEvent.case_kind !== CaseKind.STANDARD ||
+      verificationEvent.containment_status === CaseContainmentStatus.IN_PROGRESS ||
       verificationEvent.case_revision !== input.expectedCaseRevision
     ) {
       return { status: 'held', reason: 'case_changed' };

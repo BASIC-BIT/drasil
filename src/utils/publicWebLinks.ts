@@ -61,5 +61,5 @@ export function buildAdminCaseDetailUrl(guildId: string, caseId: string): string
 }
 
 export function buildCaptchaChallengeUrl(token: string): string | null {
-  return buildPublicWebUrl(`/challenge/${encodeURIComponent(token)}`);
+  return buildPublicWebUrl(`/captcha/${encodeURIComponent(token)}`);
 }

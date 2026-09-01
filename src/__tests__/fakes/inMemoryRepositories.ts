@@ -704,6 +704,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
         event.user_id === input.userId &&
         event.status === VerificationStatus.PENDING &&
         event.case_kind === CaseKind.STANDARD &&
+        event.containment_status !== CaseContainmentStatus.IN_PROGRESS &&
         event.case_revision === input.expectedCaseRevision
     );
     const hasAnotherPendingCase = this.events.some(
@@ -727,6 +728,12 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       resolved_by: input.resolvedBy,
       resolved_at: input.resolvedAt,
       notes: 'Security check completed.',
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+      quarantine_attempt_id: null,
+      quarantine_lease_renewed_at: null,
+      parked_at: null,
+      parked_by: null,
       metadata: {
         ...metadata,
         captcha_resolution: {

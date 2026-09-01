@@ -8,6 +8,7 @@ import {
   CaptchaChallengePassEffect,
   CaptchaChallengeRequestSource,
   CaptchaChallengeStatus,
+  CaseContainmentStatus,
   DetectionType,
   VerificationStatus,
 } from '../../repositories/types';
@@ -155,9 +156,24 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       resolved_by: 'moderator-1',
       status: VerificationStatus.VERIFIED,
     });
+    await verifications.update(verification.id, {
+      containment_status: CaseContainmentStatus.IN_PROGRESS,
+      quarantine_attempt_id: 'quarantine-race',
+      quarantine_lease_renewed_at: new Date(),
+      parked_at: new Date(),
+      parked_by: 'moderator-2',
+    });
+    await expect(verifications.completeCaptchaVerification(completion)).resolves.toBeNull();
+    await verifications.update(verification.id, {
+      containment_status: CaseContainmentStatus.INCOMPLETE,
+    });
     await expect(verifications.completeCaptchaVerification(completion)).resolves.toEqual(
       expect.objectContaining({
         id: verification.id,
+        quarantine_attempt_id: null,
+        quarantine_lease_renewed_at: null,
+        parked_at: null,
+        parked_by: null,
         resolved_by: 'drasil:captcha',
         status: VerificationStatus.VERIFIED,
       })

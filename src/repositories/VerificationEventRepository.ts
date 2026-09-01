@@ -589,6 +589,10 @@ export class VerificationEventRepository implements IVerificationEventRepository
           notes = 'Security check completed.',
           attention_state = ${CaseAttentionState.REVIEW_REQUIRED}::case_attention_state,
           containment_status = ${CaseContainmentStatus.NOT_APPLICABLE}::case_containment_status,
+          quarantine_attempt_id = NULL,
+          quarantine_lease_renewed_at = NULL,
+          parked_at = NULL,
+          parked_by = NULL,
           metadata = COALESCE(target.metadata, '{}'::jsonb) || jsonb_build_object(
             'captcha_resolution',
             jsonb_build_object(
@@ -603,6 +607,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
           AND target.user_id = ${input.userId}
           AND target.status = ${VerificationStatus.PENDING}::verification_status
           AND target.case_kind = ${CaseKind.STANDARD}::case_kind
+          AND target.containment_status <> ${CaseContainmentStatus.IN_PROGRESS}::case_containment_status
           AND target.case_revision = ${input.expectedCaseRevision}
           AND NOT EXISTS (
             SELECT 1
