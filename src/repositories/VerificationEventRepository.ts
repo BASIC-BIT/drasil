@@ -10,6 +10,7 @@ import {
 import { TYPES } from '../di/symbols';
 import { RepositoryError } from './BaseRepository';
 import {
+  CaptchaChallengeStatus,
   CaseAttentionState,
   CaseContainmentStatus,
   CaseKind,
@@ -609,6 +610,17 @@ export class VerificationEventRepository implements IVerificationEventRepository
           AND target.case_kind = ${CaseKind.STANDARD}::case_kind
           AND target.containment_status <> ${CaseContainmentStatus.IN_PROGRESS}::case_containment_status
           AND target.case_revision = ${input.expectedCaseRevision}
+          AND EXISTS (
+            SELECT 1
+            FROM captcha_challenges AS challenge
+            WHERE challenge.id = ${input.challengeId}::uuid
+              AND challenge.verification_event_id = target.id
+              AND challenge.server_id = target.server_id
+              AND challenge.user_id = target.user_id
+              AND challenge.generation = ${input.generation}
+              AND challenge.case_revision_at_issue = ${input.expectedCaseRevision}
+              AND challenge.status = ${CaptchaChallengeStatus.PASSED}::captcha_challenge_status
+          )
           AND NOT EXISTS (
             SELECT 1
             FROM verification_events AS other

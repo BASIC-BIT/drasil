@@ -251,6 +251,17 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       'user-captcha-exact-case'
     );
     const verifications = new VerificationEventRepository(prisma);
+    const challenges = new CaptchaChallengeRepository(prisma);
+    const challenge = await challenges.create({
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
+      passEffect: CaptchaChallengePassEffect.VERIFY_JOIN_ONLY,
+      caseRevision: verification.case_revision,
+      tokenHash: 'exact-case-hash',
+      expiresAt: new Date(Date.now() + 60_000),
+    });
     const otherCase = await verifications.createFromDetection(
       null,
       verification.server_id,
@@ -258,9 +269,9 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       VerificationStatus.PENDING
     );
     const completion = {
-      challengeId: 'challenge-exact-case',
+      challengeId: challenge.id,
       expectedCaseRevision: verification.case_revision,
-      generation: 1,
+      generation: challenge.generation,
       id: verification.id,
       resolvedAt: new Date(),
       resolvedBy: 'drasil:captcha',
@@ -268,6 +279,23 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
     };
 
+    await expect(verifications.completeCaptchaVerification(completion)).resolves.toBeNull();
+    await prisma.captcha_challenges.update({
+      where: { id: challenge.id },
+      data: { status: CaptchaChallengeStatus.PASSED, passed_at: new Date() },
+    });
+    await expect(
+      verifications.completeCaptchaVerification({
+        ...completion,
+        challengeId: '2e35afe7-51bf-4b57-8807-699946696aa2',
+      })
+    ).resolves.toBeNull();
+    await expect(
+      verifications.completeCaptchaVerification({
+        ...completion,
+        generation: challenge.generation + 1,
+      })
+    ).resolves.toBeNull();
     await expect(verifications.completeCaptchaVerification(completion)).resolves.toBeNull();
     await verifications.update(otherCase.id, {
       resolved_at: new Date(),
