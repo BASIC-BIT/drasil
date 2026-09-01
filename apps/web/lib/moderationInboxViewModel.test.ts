@@ -43,6 +43,7 @@ function buildItem(id: string, overrides: Partial<ModerationInboxItem> = {}): Mo
     links: [],
     allowedActions: [],
     ...overrides,
+    summarySource: overrides.summarySource ?? 'other',
   };
 }
 

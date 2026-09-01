@@ -205,10 +205,19 @@ export function ReportDetailView({
           <h1 className="page-title">
             Report for {detail.targetUserId ? `user ${detail.targetUserId}` : 'unknown target'}
           </h1>
-          <p className="lede">
-            {detail.summary ??
-              'Review submitted evidence before deciding whether to open a case or close the report.'}
-          </p>
+          {detail.summary ? (
+            detail.summarySource === 'ai' ? (
+              <p className="lede">
+                <strong>AI Assessment:</strong> <code>{detail.summary}</code>
+              </p>
+            ) : (
+              <p className="lede">{detail.summary}</p>
+            )
+          ) : (
+            <p className="lede">
+              Review submitted evidence before deciding whether to open a case or close the report.
+            </p>
+          )}
         </div>
         <div className="case-meta compact">
           <div>

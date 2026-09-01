@@ -364,6 +364,9 @@ export class ReportIntakeService implements IReportIntakeService {
 
     const metadata = toRecord(intake.metadata);
     const candidateSuggestions = this.mergeCandidateSuggestions(metadata, input.candidates);
+    const aiSummary = input.extraction?.abuseSignals.length
+      ? input.extraction.abuseSignals.join('; ')
+      : null;
     const promptMetadata =
       candidateSuggestions.length > 0
         ? await this.sendCandidateConfirmationPrompt(intake, input.message, candidateSuggestions)
@@ -371,11 +374,10 @@ export class ReportIntakeService implements IReportIntakeService {
 
     await this.reportIntakeRepository.update(intake.id, {
       status: this.resolveNextStatus(intake.status, candidateSuggestions.length),
-      summary: input.extraction?.abuseSignals.length
-        ? input.extraction.abuseSignals.join('; ')
-        : intake.summary,
+      summary: aiSummary ?? intake.summary,
       metadata: {
         ...metadata,
+        ...(aiSummary ? { summary_source: 'ai_report_intake_extraction' } : {}),
         candidate_suggestions: candidateSuggestions,
         report_intake_agent: {
           extraction: input.extraction,

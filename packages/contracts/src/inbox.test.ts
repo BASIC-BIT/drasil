@@ -19,6 +19,7 @@ const buildItem = (id: string, stale: boolean, updatedAt: string): ModerationInb
   },
   title: 'Pending case',
   summary: null,
+  summarySource: 'other',
   statusLabel: stale ? 'Stale' : 'Fresh',
   signalLabel: null,
   createdAt: '2026-06-01T00:00:00.000Z',

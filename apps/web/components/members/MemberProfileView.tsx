@@ -260,7 +260,17 @@ function ReportRows({
                   </a>
                 </h3>
                 <p className="muted">{formatUtc(report.updatedAt)}</p>
-                <p>{report.summary ?? 'No report summary recorded.'}</p>
+                {report.summary ? (
+                  report.summarySource === 'ai' ? (
+                    <p>
+                      <strong>AI Assessment:</strong> <code>{report.summary}</code>
+                    </p>
+                  ) : (
+                    <p>{report.summary}</p>
+                  )
+                ) : (
+                  <p>No report summary recorded.</p>
+                )}
                 {report.reportThreadUrl ? (
                   <DiscordExternalLink
                     className="link-control"

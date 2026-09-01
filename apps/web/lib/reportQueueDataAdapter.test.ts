@@ -8,6 +8,7 @@ const baseRow = {
   thread_id: 'thread-1',
   status: 'submitted' as const,
   summary: 'Reported suspicious Nitro link.',
+  metadata: {},
   confirmed_target_user_id: 'user-1',
   created_at: new Date('2026-06-01T00:00:00.000Z'),
   updated_at: new Date('2026-06-02T00:00:00.000Z'),
@@ -56,6 +57,15 @@ describe('reportQueueDataAdapter', () => {
       'dismiss_no_action',
       'mark_false_positive',
     ]);
+  });
+
+  it('carries explicit AI summary provenance into the report contract', () => {
+    const report = parseReportQueueRow({
+      ...baseRow,
+      metadata: { summary_source: 'ai_report_intake_extraction' },
+    });
+
+    expect(report.summarySource).toBe('ai');
   });
 
   it('omits open-case when a submitted report has no linked detection', () => {
