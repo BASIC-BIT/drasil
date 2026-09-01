@@ -57,6 +57,7 @@ export const moderationInboxItemSchema = z.object({
   subject: moderationInboxSubjectSchema,
   title: z.string(),
   summary: z.string().nullable(),
+  summarySource: z.enum(['ai', 'other']).default('other'),
   statusLabel: z.string(),
   signalLabel: z.string().nullable(),
   createdAt: z.string(),

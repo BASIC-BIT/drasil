@@ -47,6 +47,7 @@ const baseReport: ReportQueueItem = {
   targetUserId: 'user-2',
   status: 'submitted',
   summary: 'Reporter supplied message evidence.',
+  summarySource: 'other',
   createdAt: '2026-06-01T00:00:00.000Z',
   updatedAt: '2026-06-02T00:00:00.000Z',
   stale: true,
@@ -92,6 +93,7 @@ const baseQueueRow: ModerationQueueRow = {
   case_status: null,
   report_status: null,
   report_summary: null,
+  report_metadata: null,
   user_username: 'observed-user',
   user_metadata: {},
 };
@@ -218,6 +220,29 @@ describe('moderationInboxDataAdapter', () => {
       'ban_user',
       'open_discord',
     ]);
+  });
+
+  it('preserves AI summary provenance for report attention queue rows', () => {
+    const item = parseModerationQueueRow(
+      {
+        ...baseQueueRow,
+        item_type: 'report_thread_attention',
+        detection_event_id: null,
+        report_intake_id: 'report-1',
+        report_status: 'collecting_evidence',
+        report_summary: 'Possible impersonation attempt',
+        report_metadata: { summary_source: 'ai_report_intake_extraction' },
+      },
+      new Date('2026-06-03T02:00:00.000Z')
+    );
+
+    expect(item).toEqual(
+      expect.objectContaining({
+        kind: 'report_attention',
+        summary: 'Possible impersonation attempt',
+        summarySource: 'ai',
+      })
+    );
   });
 
   it('shows quarantine breach attention as an acknowledgeable urgent inbox item', () => {

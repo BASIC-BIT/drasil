@@ -39,6 +39,7 @@ interface ThreadAnalysisMetadata {
     suspicionSignals: string[];
     recommendedNextQuestion?: string;
     recommendedAction: 'none' | 'ask_followup' | 'manual_review' | 'restrict';
+    isFallback: boolean;
     analyzedMessageCount: number;
   };
 }
@@ -285,6 +286,7 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
               suspicionSignals: analysis.suspicionSignals,
               recommendedNextQuestion: analysis.recommendedNextQuestion,
               recommendedAction: analysis.recommendedAction,
+              isFallback: analysis.isFallback,
               analyzedMessageCount: responses.length,
             },
           },
@@ -389,6 +391,10 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
             ? 'likely_suspicious'
             : null;
 
+    const reasonCodes = Array.isArray(latestAnalysis?.reasonCodes)
+      ? latestAnalysis.reasonCodes.filter((value): value is string => typeof value === 'string')
+      : [];
+
     return {
       analyzedMessageIds,
       latestAnalysis:
@@ -401,11 +407,7 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
               result,
               confidence: latestAnalysis.confidence,
               summary: latestAnalysis.summary,
-              reasonCodes: Array.isArray(latestAnalysis.reasonCodes)
-                ? latestAnalysis.reasonCodes.filter(
-                    (value): value is string => typeof value === 'string'
-                  )
-                : [],
+              reasonCodes,
               legitimacySignals: Array.isArray(latestAnalysis.legitimacySignals)
                 ? latestAnalysis.legitimacySignals.filter(
                     (value): value is string => typeof value === 'string'
@@ -427,6 +429,9 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
                 latestAnalysis.recommendedAction === 'restrict'
                   ? latestAnalysis.recommendedAction
                   : 'manual_review',
+              isFallback:
+                latestAnalysis.isFallback === true ||
+                reasonCodes.includes('ai_analysis_unavailable'),
               analyzedMessageCount: latestAnalysis.analyzedMessageCount,
             }
           : undefined,

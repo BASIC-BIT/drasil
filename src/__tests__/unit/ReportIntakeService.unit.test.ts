@@ -494,13 +494,32 @@ describe('ReportIntakeService', () => {
       intakeId: intake.id,
       message: buildMessage({ id: 'message-3', channel: followupChannel }),
       candidates: [buildCandidate('user-1')],
+      extraction: {
+        visibleNames: [],
+        visibleUsernames: [],
+        visibleUserIds: [],
+        visibleMessageLinks: [],
+        quotedMessageText: [],
+        platformHints: [],
+        abuseSignals: ['Possible impersonation attempt'],
+        uncertainty: [],
+        confidence: 0.7,
+        analyzedImageCount: 1,
+        model: 'test-model',
+        promptVersion: 'test-prompt',
+        isFallback: false,
+      },
       evidenceCount: 3,
       imageCount: 1,
     });
     const afterAnalysis = await reportIntakeRepository.findById(intake.id);
     expect(analysisPrompted).toBe(false);
     expect(afterAnalysis?.status).toBe(ReportIntakeStatus.COLLECTING_EVIDENCE);
-    expect(afterAnalysis?.metadata).toMatchObject({ candidate_suggestions: [] });
+    expect(afterAnalysis?.summary).toBe('Possible impersonation attempt');
+    expect(afterAnalysis?.metadata).toMatchObject({
+      candidate_suggestions: [],
+      summary_source: 'ai_report_intake_extraction',
+    });
     expect(followupChannel.send).not.toHaveBeenCalled();
   });
 

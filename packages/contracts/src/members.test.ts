@@ -55,6 +55,7 @@ describe('member profile contract', () => {
             reporterId: 'reporter-1',
             status: 'submitted',
             summary: 'Reporter supplied context.',
+            summarySource: 'other',
             createdAt: '2026-06-01T00:00:00.000Z',
             updatedAt: '2026-06-01T00:30:00.000Z',
             reportThreadUrl: null,

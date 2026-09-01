@@ -178,10 +178,11 @@ describe('SecurityActionService (unit)', () => {
         isFallback: false,
       }),
       describeProfileImages: jest.fn().mockResolvedValue({
-        avatarDescription: null,
+        summary: 'Profile images contain a stylized landscape.',
+        avatarDescription: 'A mountain beneath a night sky.',
         bannerDescription: null,
-        riskNotes: [],
-        analyzedImageCount: 0,
+        riskNotes: ['No obvious impersonation markers.'],
+        analyzedImageCount: 1,
         model: 'gpt-5.4-mini',
         promptVersion: 'profile-image-triage-v1',
         isFallback: false,
@@ -569,6 +570,13 @@ describe('SecurityActionService (unit)', () => {
       expect.objectContaining({
         content: expect.stringContaining(
           '- Avatar URL: https://cdn.discordapp.com/visible-avatar.png'
+        ),
+      })
+    );
+    expect(evidenceThread.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining(
+          'AI visual assessment:\n- Summary: `Profile images contain a stylized landscape.`\n- Avatar: `A mountain beneath a night sky.`\n- Visual notes: `No obvious impersonation markers.`'
         ),
       })
     );

@@ -796,6 +796,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
           suspicionSignals: [],
           recommendedNextQuestion: 'Which category do you run?',
           recommendedAction: 'ask_followup',
+          isFallback: false,
           analyzedMessageCount: 2,
         },
       },

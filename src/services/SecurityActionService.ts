@@ -1207,17 +1207,30 @@ export class SecurityActionService implements ISecurityActionService {
       return ['Profile image description: unavailable.'];
     }
 
-    const lines = [`Profile image description: ${description.summary}`];
+    if (description.isFallback) {
+      return [`Profile image description: ${description.summary}`];
+    }
+
+    const lines = [
+      'AI visual assessment:',
+      `- Summary: ${this.formatAiAuthoredInlineCode(description.summary)}`,
+    ];
     if (description.avatarDescription) {
-      lines.push(`- Avatar: ${description.avatarDescription}`);
+      lines.push(`- Avatar: ${this.formatAiAuthoredInlineCode(description.avatarDescription)}`);
     }
     if (description.bannerDescription) {
-      lines.push(`- Banner: ${description.bannerDescription}`);
+      lines.push(`- Banner: ${this.formatAiAuthoredInlineCode(description.bannerDescription)}`);
     }
     if (description.riskNotes.length > 0) {
-      lines.push(`- Visual notes: ${description.riskNotes.join('; ')}`);
+      lines.push(
+        `- Visual notes: ${this.formatAiAuthoredInlineCode(description.riskNotes.join('; '))}`
+      );
     }
     return lines;
+  }
+
+  private formatAiAuthoredInlineCode(value: string): string {
+    return `\`${value.replace(/`/g, "'")}\``;
   }
 
   private formatRecentMessages(messages: MessageContext[], guildId: string): string[] {

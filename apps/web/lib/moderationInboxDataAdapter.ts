@@ -14,6 +14,7 @@ import { discordMessageUrl } from './discordUrls';
 import { isWebE2eFixtureMode } from './e2eFixtures';
 import { createActiveCaseDataAdapter } from './activeCaseDataAdapter';
 import { createReportQueueDataAdapter } from './reportQueueDataAdapter';
+import { resolveReportSummarySource } from './reportSummaryProvenance';
 import { getPostgresPool } from './setupDataAdapter';
 import { fixtureModerationInboxItems } from './inboxFixtures';
 
@@ -46,6 +47,7 @@ export interface ModerationQueueRow {
   case_status: string | null;
   report_status: string | null;
   report_summary: string | null;
+  report_metadata: unknown;
   user_username: string | null;
   user_metadata: unknown;
 }
@@ -246,6 +248,7 @@ export function caseSummaryToInboxItem(item: CaseSummary): ModerationInboxItem {
     summary: item.latestDetectionType
       ? `Latest detection: ${item.latestDetectionType}.`
       : 'Pending case needs moderator review.',
+    summarySource: 'other',
     statusLabel: item.presenceState,
     signalLabel: confidenceSignal(item.confidence),
     createdAt: item.createdAt,
@@ -275,6 +278,7 @@ export function reportQueueItemToInboxItem(item: ReportQueueItem): ModerationInb
     },
     title: 'Submitted report',
     summary: item.summary,
+    summarySource: item.summarySource,
     statusLabel: item.status,
     signalLabel: `${item.evidenceCount} evidence item${item.evidenceCount === 1 ? '' : 's'}`,
     createdAt: item.createdAt,
@@ -362,6 +366,7 @@ export function parseModerationQueueRow(
     subject: subjectFromQueueRow(row),
     title: queueTitle(kind, row.item_type),
     summary,
+    summarySource: resolveReportSummarySource(row.report_summary, row.report_metadata),
     statusLabel: queueStatusLabel(kind, row),
     signalLabel: confidenceSignal(row.detection_confidence),
     createdAt: toIsoString(row.created_at),
@@ -419,6 +424,7 @@ export class PostgresModerationInboxDataAdapter implements ModerationInboxDataAd
            ve.status as case_status,
            ri.status as report_status,
            ri.summary as report_summary,
+           ri.metadata as report_metadata,
            u.username as user_username,
            u.metadata as user_metadata
          from moderation_queue_items mqi

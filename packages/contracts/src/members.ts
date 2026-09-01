@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { caseSummarySchema, caseUserIdentitySchema, casePresenceStateSchema } from './cases';
-import { reportQueueStatusSchema } from './reports';
+import { reportQueueStatusSchema, reportSummarySourceSchema } from './reports';
 
 export const memberProfileMembershipSchema = z.object({
   joinDate: z.string().nullable(),
@@ -40,6 +40,7 @@ export const memberProfileReportSchema = z.object({
   reporterId: z.string(),
   status: reportQueueStatusSchema,
   summary: z.string().nullable(),
+  summarySource: reportSummarySourceSchema.default('other'),
   createdAt: z.string(),
   updatedAt: z.string(),
   reportThreadUrl: z.string().url().nullable(),

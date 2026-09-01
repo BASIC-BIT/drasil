@@ -558,10 +558,15 @@ describe('NotificationManager (unit)', () => {
     const aiField = fields.find((field) => field.name === 'Risk Analysis');
     const reportField = fields.find((field) => field.name === 'Report Triage');
     expect(reasonsField?.value).toContain('Message contains suspicious keywords or patterns');
-    expect(aiField?.value).toContain('Primary signal: message_content');
-    expect(aiField?.value).toContain('Reason codes: suspicious_keyword');
-    expect(aiField?.value).toContain('Recent message context matches common scam patterns.');
-    expect(reportField?.value).toContain('Concerns: Screenshot indicates targeted harassment.');
+    expect(aiField?.value).toBe(
+      '**Suspicious** (High confidence)\n' +
+        '**AI Assessment:** `Recent message context matches common scam patterns.`'
+    );
+    expect(reportField?.value).toBe(
+      '**Needs review** (Medium confidence, 1 image analyzed)\n' +
+        '**AI Assessment:** `Reporter evidence needs moderator review.`\n' +
+        '**Suggested action:** Open a case'
+    );
 
     const updatedEvent = await detectionRepository.findById(detectionEvent.id);
     expect(updatedEvent?.metadata).toMatchObject({
@@ -1079,31 +1084,74 @@ describe('NotificationManager (unit)', () => {
     await manager.updateVerificationThreadAnalysis(
       verificationEvent,
       {
-        result: 'likely_legitimate',
-        confidence: 0.72,
-        summary: 'Responses match what legitimate users normally say here.',
-        reasonCodes: ['normal_context'],
-        legitimacySignals: ['Specific server context matched'],
-        suspicionSignals: [],
-        recommendedAction: 'none',
+        result: 'needs_review',
+        confidence: 0.65,
+        summary:
+          'Response is very brief and vague, with a honeypot role hit that warrants manual review.',
+        reasonCodes: ['honeypot_role', 'vague_response'],
+        legitimacySignals: ['Mentions members by name', 'Answers in first person'],
+        suspicionSignals: ['Honeypot role assigned', 'Vague involvement explanation'],
+        recommendedNextQuestion: 'Who invited you and what server topic brought you here?',
+        recommendedAction: 'manual_review',
         model: GPT_PROFILE_MODEL,
         promptVersion: 'verification-thread-legitimacy-v2',
         isFallback: false,
       },
-      2
+      1
     );
 
     const editArgs = message.edit.mock.calls[0][0] as { embeds: EmbedBuilder[] };
     const fields = editArgs.embeds[0].data.fields ?? [];
     const analysisField = fields.find((field) => field.name === 'Thread Analysis');
 
-    expect(analysisField?.value).toContain('Result: **likely_legitimate** (Medium confidence)');
-    expect(analysisField?.value).toContain('Responses reviewed: 2');
-    expect(analysisField?.value).toContain(
-      'Responses match what legitimate users normally say here.'
+    expect(analysisField?.value).toBe(
+      '**Needs review** (Medium confidence, 1 response reviewed)\n' +
+        '**AI Assessment:** `Response is very brief and vague, with a honeypot role hit that warrants manual review.`\n' +
+        '**Suggested action:** Manual review'
     );
-    expect(analysisField?.value).toContain('Legitimacy: Specific server context matched');
-    expect(analysisField?.value).not.toContain('Reason codes: normal_context');
+    expect(analysisField?.value).not.toContain('needs_review');
+    expect(analysisField?.value).not.toContain('manual_review');
+    expect(analysisField?.value).not.toContain('Legitimacy:');
+    expect(analysisField?.value).not.toContain('Suspicion:');
+    expect(analysisField?.value).not.toContain('Suggested follow-up:');
+  });
+
+  it('keeps deterministic thread-analysis fallback copy outside the AI assessment style', async () => {
+    const embed = new EmbedBuilder().setTitle('Suspicious User');
+    const message: MockMessage = {
+      embeds: [embed],
+      edit: jest.fn().mockResolvedValue(undefined),
+    };
+    adminChannel.messages.fetch.mockResolvedValue(message as unknown as Message<true>);
+
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+    const verificationEvent = buildVerificationEvent({
+      notification_message_id: 'message-6-fallback',
+    });
+
+    await manager.updateVerificationThreadAnalysis(
+      verificationEvent,
+      {
+        result: 'needs_review',
+        confidence: 0.1,
+        summary: 'Thread analysis failed; review manually.',
+        reasonCodes: ['ai_analysis_unavailable'],
+        legitimacySignals: [],
+        suspicionSignals: [],
+        recommendedAction: 'manual_review',
+        model: GPT_PROFILE_MODEL,
+        promptVersion: 'verification-thread-legitimacy-v2',
+        isFallback: true,
+      },
+      1
+    );
+
+    const editArgs = message.edit.mock.calls[0][0] as { embeds: EmbedBuilder[] };
+    const fields = editArgs.embeds[0].data.fields ?? [];
+    const analysisField = fields.find((field) => field.name === 'Thread Analysis');
+
+    expect(analysisField?.value).toBe('**Unavailable**\nThread analysis failed; review manually.');
+    expect(analysisField?.value).not.toContain('AI Assessment:');
   });
 
   it('mirrors verification-thread user replies into the private evidence thread', async () => {
@@ -1193,8 +1241,9 @@ describe('NotificationManager (unit)', () => {
     const fields = sendArgs.embeds[0].data.fields ?? [];
     const aiField = fields.find((field) => field.name === 'Risk Analysis');
 
-    expect(aiField?.value).toContain('Result: **Unavailable**');
-    expect(aiField?.value).not.toContain('Result: **OK**');
+    expect(aiField?.value).toBe(
+      '**Unavailable**\nRisk analysis returned incomplete output; review manually.'
+    );
   });
 
   it('omits overlong risk-analysis prose instead of truncating it with ellipses', async () => {
@@ -1230,7 +1279,7 @@ describe('NotificationManager (unit)', () => {
     const riskField = fields.find((field) => field.name === 'Risk Analysis');
 
     expect(riskField?.value.length).toBeLessThanOrEqual(1024);
-    expect(riskField?.value).toContain('Result: **SUSPICIOUS** (High confidence)');
+    expect(riskField?.value).toContain('**Suspicious** (High confidence)');
     expect(riskField?.value).not.toContain('...');
   });
 
@@ -1273,8 +1322,10 @@ describe('NotificationManager (unit)', () => {
     const fields = editArgs.embeds[0].data.fields ?? [];
     const analysisField = fields.find((field) => field.name === 'Thread Analysis');
 
-    expect(analysisField?.value).toContain('Result: **likely_legitimate** (Medium confidence)');
-    expect(analysisField?.value).toContain('Responses reviewed: 2');
+    expect(analysisField?.value).toContain(
+      '**Likely legitimate** (Medium confidence, 2 responses reviewed)'
+    );
+    expect(analysisField?.value).not.toContain('likely_legitimate');
     expect(analysisField?.value).toContain(
       'Responses match what legitimate users normally say here.'
     );

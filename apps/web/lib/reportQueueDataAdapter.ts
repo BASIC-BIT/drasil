@@ -25,6 +25,7 @@ import { discordMessageUrl } from './discordUrls';
 import { isWebE2eFixtureMode } from './e2eFixtures';
 import { queueModerationActionRequestWithReceipt } from './moderationActionRequestQueue';
 import { getPostgresPool } from './setupDataAdapter';
+import { resolveReportSummarySource } from './reportSummaryProvenance';
 
 export type { ReportClosureAction } from '../../../src/services/ReportReviewService';
 
@@ -52,6 +53,7 @@ interface ReportQueueRow {
   thread_id: string | null;
   status: ReportQueueStatus;
   summary: string | null;
+  metadata?: unknown;
   confirmed_target_user_id: string | null;
   created_at: unknown;
   updated_at: unknown;
@@ -106,6 +108,7 @@ export function parseReportQueueRow(row: ReportQueueRow, now = new Date()): Repo
     targetUserId: row.confirmed_target_user_id,
     status: row.status,
     summary: row.summary,
+    summarySource: resolveReportSummarySource(row.summary, row.metadata),
     createdAt: toIsoString(row.created_at),
     updatedAt: updatedAt.toISOString(),
     stale: staleHours >= DEFAULT_STALE_HOURS,
@@ -251,6 +254,7 @@ export class PostgresReportQueueDataAdapter implements ReportQueueDataAdapter {
          ri.thread_id,
          ri.status,
          ri.summary,
+         ri.metadata,
          ri.confirmed_target_user_id,
          ri.created_at,
          ri.updated_at,

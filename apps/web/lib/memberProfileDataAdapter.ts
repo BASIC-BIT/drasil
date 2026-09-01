@@ -11,6 +11,7 @@ import {
 } from '@drasil/contracts';
 import { discordMessageUrl } from './discordUrls';
 import { isWebE2eFixtureMode } from './e2eFixtures';
+import { resolveReportSummarySource } from './reportSummaryProvenance';
 import { fixtureMemberProfile } from './memberProfileFixtures';
 import { createActiveCaseDataAdapter } from './activeCaseDataAdapter';
 import { getPostgresPool } from './setupDataAdapter';
@@ -53,6 +54,7 @@ interface MemberReportRow {
   reporter_id: string;
   status: ReportQueueStatus;
   summary: string | null;
+  metadata: unknown;
   created_at: unknown;
   updated_at: unknown;
   thread_id: string | null;
@@ -261,12 +263,13 @@ function parseDetectionRow(guildId: string, row: MemberDetectionRow): MemberProf
   };
 }
 
-function parseReportRow(guildId: string, row: MemberReportRow): MemberProfileReport {
+export function parseReportRow(guildId: string, row: MemberReportRow): MemberProfileReport {
   return {
     id: row.id,
     reporterId: row.reporter_id,
     status: row.status,
     summary: row.summary,
+    summarySource: resolveReportSummarySource(row.summary, row.metadata),
     createdAt: toIsoString(row.created_at),
     updatedAt: toIsoString(row.updated_at),
     reportThreadUrl: row.thread_id ? discordMessageUrl(guildId, row.thread_id) : null,
@@ -346,6 +349,7 @@ export class PostgresMemberProfileDataAdapter implements MemberProfileDataAdapte
            ri.reporter_id,
            ri.status,
            ri.summary,
+           ri.metadata,
            ri.created_at,
            ri.updated_at,
            ri.thread_id,
