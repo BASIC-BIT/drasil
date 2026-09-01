@@ -55,6 +55,7 @@ interface ThreadAnalysisMetadata {
     suspicionSignals?: string[];
     recommendedNextQuestion?: string;
     recommendedAction?: 'none' | 'ask_followup' | 'manual_review' | 'restrict';
+    isFallback: boolean;
     analyzedMessageCount: number;
   };
 }
@@ -1456,8 +1457,13 @@ export class NotificationPresentationBuilder {
     suspicionSignals?: string[];
     recommendedNextQuestion?: string;
     recommendedAction?: 'none' | 'ask_followup' | 'manual_review' | 'restrict';
+    isFallback: boolean;
     analyzedMessageCount: number;
   }): string {
+    if (analysis.isFallback) {
+      return this.formatCompactEmbedFieldValue(['**Unavailable**', analysis.summary]);
+    }
+
     const responseLabel = `${analysis.analyzedMessageCount} ${
       analysis.analyzedMessageCount === 1 ? 'response' : 'responses'
     } reviewed`;
@@ -1695,15 +1701,17 @@ export class NotificationPresentationBuilder {
       return metadataRecord;
     }
 
+    const reasonCodes = Array.isArray(latestAnalysis.reasonCodes)
+      ? latestAnalysis.reasonCodes.filter((value): value is string => typeof value === 'string')
+      : [];
+
     return {
       ...metadataRecord,
       latestAnalysis: {
         result,
         confidence: latestAnalysis.confidence,
         summary: latestAnalysis.summary,
-        reasonCodes: Array.isArray(latestAnalysis.reasonCodes)
-          ? latestAnalysis.reasonCodes.filter((value): value is string => typeof value === 'string')
-          : [],
+        reasonCodes,
         legitimacySignals: Array.isArray(latestAnalysis.legitimacySignals)
           ? latestAnalysis.legitimacySignals.filter(
               (value): value is string => typeof value === 'string'
@@ -1725,6 +1733,8 @@ export class NotificationPresentationBuilder {
           latestAnalysis.recommendedAction === 'restrict'
             ? latestAnalysis.recommendedAction
             : 'manual_review',
+        isFallback:
+          latestAnalysis.isFallback === true || reasonCodes.includes('ai_analysis_unavailable'),
         analyzedMessageCount: latestAnalysis.analyzedMessageCount,
       },
     };

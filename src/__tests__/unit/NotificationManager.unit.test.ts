@@ -1101,6 +1101,44 @@ describe('NotificationManager (unit)', () => {
     expect(analysisField?.value).not.toContain('Suggested follow-up:');
   });
 
+  it('keeps deterministic thread-analysis fallback copy outside the AI assessment style', async () => {
+    const embed = new EmbedBuilder().setTitle('Suspicious User');
+    const message: MockMessage = {
+      embeds: [embed],
+      edit: jest.fn().mockResolvedValue(undefined),
+    };
+    adminChannel.messages.fetch.mockResolvedValue(message as unknown as Message<true>);
+
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+    const verificationEvent = buildVerificationEvent({
+      notification_message_id: 'message-6-fallback',
+    });
+
+    await manager.updateVerificationThreadAnalysis(
+      verificationEvent,
+      {
+        result: 'needs_review',
+        confidence: 0.1,
+        summary: 'Thread analysis failed; review manually.',
+        reasonCodes: ['ai_analysis_unavailable'],
+        legitimacySignals: [],
+        suspicionSignals: [],
+        recommendedAction: 'manual_review',
+        model: GPT_PROFILE_MODEL,
+        promptVersion: 'verification-thread-legitimacy-v2',
+        isFallback: true,
+      },
+      1
+    );
+
+    const editArgs = message.edit.mock.calls[0][0] as { embeds: EmbedBuilder[] };
+    const fields = editArgs.embeds[0].data.fields ?? [];
+    const analysisField = fields.find((field) => field.name === 'Thread Analysis');
+
+    expect(analysisField?.value).toBe('**Unavailable**\nThread analysis failed; review manually.');
+    expect(analysisField?.value).not.toContain('AI Assessment:');
+  });
+
   it('mirrors verification-thread user replies into the private evidence thread', async () => {
     const evidenceThread = { send: jest.fn().mockResolvedValue({}) };
     const imageBytes = Uint8Array.from([1, 2, 3]);
