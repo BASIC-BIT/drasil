@@ -951,11 +951,26 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       this.requireCaptchaModerator(request.server_id, request.actor_id),
       this.fetchGuildMember(request.server_id, request.target_user_id),
     ]);
+    const expectedChallengeId = retry
+      ? this.readMetadataString(request.metadata, 'expected_challenge_id')
+      : null;
+    const expectedGeneration = retry
+      ? this.readMetadataInteger(request.metadata, 'expected_generation')
+      : null;
+    if (retry && (!expectedChallengeId || expectedGeneration === null || expectedGeneration < 1)) {
+      throw new Error('Security-check retry metadata is invalid.');
+    }
     const result = await this.captchaChallengeService.requestChallenge({
       verificationEventId: request.verification_event_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       requestedBy: request.actor_id,
       retry,
+      ...(retry
+        ? {
+            expectedChallengeId: expectedChallengeId as string,
+            expectedGeneration: expectedGeneration as number,
+          }
+        : {}),
     });
     await this.repository.complete(request.id, {
       action_type: request.action_type,

@@ -958,7 +958,7 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
       return { action: input.action, caseId: input.caseId, requestId: null, status: 'not_allowed' };
     }
     if (
-      input.action === 'bypass_captcha' &&
+      (input.action === 'retry_captcha' || input.action === 'bypass_captcha') &&
       (!input.expectedCaptchaChallengeId ||
         input.expectedCaptchaGeneration === null ||
         input.expectedCaptchaGeneration === undefined ||
@@ -978,7 +978,7 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
         ...(input.quarantinePhase ? { quarantine_phase: input.quarantinePhase } : {}),
         ...(input.previewRequestId ? { preview_request_id: input.previewRequestId } : {}),
         ...(input.reason ? { reason: input.reason } : {}),
-        ...(input.action === 'bypass_captcha'
+        ...(input.action === 'retry_captcha' || input.action === 'bypass_captcha'
           ? {
               expected_challenge_id: input.expectedCaptchaChallengeId,
               expected_generation: input.expectedCaptchaGeneration,

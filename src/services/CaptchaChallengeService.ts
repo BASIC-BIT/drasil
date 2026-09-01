@@ -35,6 +35,8 @@ export interface RequestCaptchaChallengeInput {
   requestSource: CaptchaChallengeRequestSource;
   requestedBy?: string | null;
   retry?: boolean;
+  expectedChallengeId?: string;
+  expectedGeneration?: number;
   caseWasCreatedBySuspiciousJoin?: boolean;
 }
 
@@ -62,6 +64,7 @@ export interface BypassCaptchaChallengeInput {
 export interface ICaptchaChallengeService {
   start(): void;
   stop(): void;
+  findById(id: string): Promise<CaptchaChallenge | null>;
   findByCaseId(verificationEventId: string): Promise<CaptchaChallenge | null>;
   requestChallenge(input: RequestCaptchaChallengeInput): Promise<CaptchaChallengeRequestResult>;
   bypassChallenge(input: BypassCaptchaChallengeInput): Promise<CaptchaChallenge>;
@@ -110,6 +113,10 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     return this.challenges.findByCaseId(verificationEventId);
   }
 
+  public findById(id: string): Promise<CaptchaChallenge | null> {
+    return this.challenges.findById(id);
+  }
+
   public async requestChallenge(
     input: RequestCaptchaChallengeInput
   ): Promise<CaptchaChallengeRequestResult> {
@@ -131,9 +138,27 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
       expiresAt: new Date(Date.now() + settings.challengeLifetimeHours * 60 * 60 * 1000),
       requestedBy: input.requestedBy ?? null,
     };
-    const challenge = input.retry
-      ? await this.challenges.retry(challengeInput)
-      : await this.challenges.create(challengeInput);
+    let challenge: CaptchaChallenge;
+    if (input.retry) {
+      const expectedGeneration = input.expectedGeneration;
+      if (
+        !input.expectedChallengeId ||
+        expectedGeneration === undefined ||
+        !Number.isInteger(expectedGeneration) ||
+        expectedGeneration < 1
+      ) {
+        throw new Error(
+          'The displayed security check is no longer available. Refresh and try again.'
+        );
+      }
+      challenge = await this.challenges.retry({
+        ...challengeInput,
+        expectedChallengeId: input.expectedChallengeId,
+        expectedGeneration,
+      });
+    } else {
+      challenge = await this.challenges.create(challengeInput);
+    }
     const url = buildCaptchaChallengeUrl(token);
     if (!url) {
       await this.challenges.recordDeliveryFailure(

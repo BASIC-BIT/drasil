@@ -413,12 +413,7 @@ export function CaseActionControls({
                       Send a case-scoped browser security check to the existing user thread.
                     </p>
                   ) : null}
-                  {action === 'retry_captcha' ? (
-                    <p className="muted">
-                      Invalidate the previous link and send a new browser security check.
-                    </p>
-                  ) : null}
-                  {action === 'bypass_captcha' ? (
+                  {action === 'retry_captcha' || action === 'bypass_captcha' ? (
                     <>
                       <input
                         name="expectedCaptchaChallengeId"
@@ -430,9 +425,15 @@ export function CaseActionControls({
                         type="hidden"
                         value={captchaChallenge?.generation}
                       />
-                      <p className="muted">
-                        Continue moderator review without treating the browser check as passed.
-                      </p>
+                      {action === 'retry_captcha' ? (
+                        <p className="muted">
+                          Invalidate the previous link and send a new browser security check.
+                        </p>
+                      ) : (
+                        <p className="muted">
+                          Continue moderator review without treating the browser check as passed.
+                        </p>
+                      )}
                     </>
                   ) : null}
                   {action === 'bypass_captcha' || destructiveCaseActionSet.has(action) ? (
@@ -462,12 +463,7 @@ export function CaseActionControls({
                       Send a case-scoped browser security check to the existing user thread.
                     </p>
                   ) : null}
-                  {action === 'retry_captcha' ? (
-                    <p className="muted">
-                      Invalidate the previous link and send a new browser security check.
-                    </p>
-                  ) : null}
-                  {action === 'bypass_captcha' ? (
+                  {action === 'retry_captcha' || action === 'bypass_captcha' ? (
                     <>
                       <input
                         name="expectedCaptchaChallengeId"
@@ -479,9 +475,15 @@ export function CaseActionControls({
                         type="hidden"
                         value={captchaChallenge?.generation}
                       />
-                      <p className="muted">
-                        Continue moderator review without treating the browser check as passed.
-                      </p>
+                      {action === 'retry_captcha' ? (
+                        <p className="muted">
+                          Invalidate the previous link and send a new browser security check.
+                        </p>
+                      ) : (
+                        <p className="muted">
+                          Continue moderator review without treating the browser check as passed.
+                        </p>
+                      )}
                     </>
                   ) : null}
                   {action === 'bypass_captcha' || destructiveCaseActionSet.has(action) ? (

@@ -98,15 +98,26 @@ export function buildAdminActionCustomId(
   userId: string,
   detectionEventId?: string,
   verificationEventId?: string,
-  confirmationFingerprint?: string
+  confirmationFingerprint?: string,
+  captchaChallengeId?: string,
+  captchaGeneration?: number
 ): string {
-  const optionalParts = confirmationFingerprint
-    ? [detectionEventId ?? '_', verificationEventId ?? '_', confirmationFingerprint]
-    : verificationEventId
-      ? [detectionEventId ?? '_', verificationEventId]
-      : detectionEventId
-        ? [detectionEventId]
-        : [];
+  const isCaptchaRetry = action === 'captcha_retry' || action === 'confirm_captcha_retry';
+  if (
+    isCaptchaRetry &&
+    (!captchaChallengeId || !Number.isInteger(captchaGeneration) || (captchaGeneration ?? 0) < 1)
+  ) {
+    throw new Error('CAPTCHA retry custom IDs require a challenge ID and generation.');
+  }
+  const optionalParts = isCaptchaRetry
+    ? [captchaChallengeId as string, String(captchaGeneration)]
+    : confirmationFingerprint
+      ? [detectionEventId ?? '_', verificationEventId ?? '_', confirmationFingerprint]
+      : verificationEventId
+        ? [detectionEventId ?? '_', verificationEventId]
+        : detectionEventId
+          ? [detectionEventId]
+          : [];
   return assertCustomIdLength(
     [
       ADMIN_ACTION_CUSTOM_ID_PREFIX,
@@ -125,6 +136,8 @@ export interface ParsedAdminActionCustomId {
   readonly detectionEventId?: string;
   readonly verificationEventId?: string;
   readonly confirmationFingerprint?: string;
+  readonly captchaChallengeId?: string;
+  readonly captchaGeneration?: number;
 }
 
 export function parseAdminActionCustomId(customId: string): ParsedAdminActionCustomId | null {
@@ -144,6 +157,25 @@ export function parseAdminActionCustomId(customId: string): ParsedAdminActionCus
   const surface = parseSurface(CODE_TO_SURFACE[surfaceCode] ?? surfaceCode);
   if (!surface) {
     return null;
+  }
+
+  if (action === 'captcha_retry' || action === 'confirm_captcha_retry') {
+    const captchaGeneration = Number(verificationEventId);
+    if (
+      !detectionEventId ||
+      !Number.isInteger(captchaGeneration) ||
+      captchaGeneration < 1 ||
+      confirmationFingerprint
+    ) {
+      return null;
+    }
+    return {
+      action,
+      surface,
+      userId,
+      captchaChallengeId: detectionEventId,
+      captchaGeneration,
+    };
   }
 
   return {

@@ -107,6 +107,8 @@ should stop accepting new completions and move to `cancelled` so the operator ha
 
 - `Retry challenge` is available only for `failed`, `expired`, or `bypassed` challenges on a pending
   case.
+- The retry confirmation carries the displayed challenge ID and generation. If either changed before
+  execution, refuse the stale action instead of retrying the newer generation.
 - Retry increments the generation, creates a new opaque link and 24-hour expiry, resets the
   generation submission count, and invalidates every previous link.
 - `Continue without browser check` requires confirmation and a concise reason.

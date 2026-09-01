@@ -65,6 +65,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     await challenges.bypass(initial.id, initial.generation, 'moderator-bypass', 'Manual review');
 
     const retried = await challenges.retry({
+      expectedChallengeId: initial.id,
+      expectedGeneration: initial.generation,
       verificationEventId: verification.id,
       serverId: verification.server_id,
       userId: verification.user_id,
@@ -96,6 +98,62 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
         reason: 'Manual review',
       }),
     ]);
+  });
+
+  it('refuses a stale retry after another moderator advances the challenge', async () => {
+    const { verification } = await createCase(
+      'guild-captcha-stale-retry',
+      'user-captcha-stale-retry'
+    );
+    const challenges = new CaptchaChallengeRepository(prisma);
+    const initial = await challenges.create({
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      caseRevision: verification.case_revision,
+      tokenHash: 'stale-retry-initial',
+      expiresAt: new Date(Date.now() - 60_000),
+      requestedBy: 'moderator-1',
+    });
+    await challenges.expirePending(new Date(), 10);
+    const advanced = await challenges.retry({
+      expectedChallengeId: initial.id,
+      expectedGeneration: initial.generation,
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      caseRevision: verification.case_revision,
+      tokenHash: 'stale-retry-advanced',
+      expiresAt: new Date(Date.now() + 60_000),
+      requestedBy: 'moderator-2',
+    });
+    await challenges.bypass(advanced.id, advanced.generation, 'moderator-2', 'Reviewed manually');
+
+    await expect(
+      challenges.retry({
+        expectedChallengeId: initial.id,
+        expectedGeneration: initial.generation,
+        verificationEventId: verification.id,
+        serverId: verification.server_id,
+        userId: verification.user_id,
+        requestSource: CaptchaChallengeRequestSource.MODERATOR,
+        passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+        caseRevision: verification.case_revision,
+        tokenHash: 'stale-retry-rejected',
+        expiresAt: new Date(Date.now() + 120_000),
+        requestedBy: 'moderator-1',
+      })
+    ).rejects.toThrow('The security check changed before it could be retried.');
+    await expect(challenges.findById(initial.id)).resolves.toEqual(
+      expect.objectContaining({
+        generation: advanced.generation,
+        status: CaptchaChallengeStatus.BYPASSED,
+      })
+    );
   });
 
   it('invalidates a passed generation when its resolved case is reopened', async () => {
@@ -206,9 +264,14 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       status: VerificationStatus.VERIFIED,
     });
 
-    await expect(challenges.retry({ ...input, tokenHash: 'pending-guard-retry' })).rejects.toThrow(
-      'The case changed before the security check could be retried.'
-    );
+    await expect(
+      challenges.retry({
+        ...input,
+        expectedChallengeId: challenge.id,
+        expectedGeneration: challenge.generation,
+        tokenHash: 'pending-guard-retry',
+      })
+    ).rejects.toThrow('The case changed before the security check could be retried.');
     await expect(
       challenges.create({
         ...input,
@@ -266,6 +329,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
 
     await expect(
       challenges.retry({
+        expectedChallengeId: initial.id,
+        expectedGeneration: initial.generation,
         verificationEventId: verification.id,
         serverId: verification.server_id,
         userId: verification.user_id,
@@ -325,6 +390,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
 
     await expect(
       challenges.retry({
+        expectedChallengeId: challenge.id,
+        expectedGeneration: challenge.generation,
         verificationEventId: verification.id,
         serverId: verification.server_id,
         userId: verification.user_id,

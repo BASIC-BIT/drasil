@@ -244,16 +244,14 @@ async function assertCanQueueCaseAction(
     if (action === 'bypass_captcha' && !reason) {
       throw new Error('A reason is required to continue without the browser check.');
     }
-    const expectedCaptchaChallengeId =
-      action === 'bypass_captcha' ? readFormString(formData, 'expectedCaptchaChallengeId') : null;
-    const expectedCaptchaGeneration =
-      action === 'bypass_captcha'
-        ? readFormPositiveInteger(formData, 'expectedCaptchaGeneration')
-        : null;
-    if (
-      action === 'bypass_captcha' &&
-      (!expectedCaptchaChallengeId || !expectedCaptchaGeneration)
-    ) {
+    const requiresDisplayedChallenge = action === 'retry_captcha' || action === 'bypass_captcha';
+    const expectedCaptchaChallengeId = requiresDisplayedChallenge
+      ? readFormString(formData, 'expectedCaptchaChallengeId')
+      : null;
+    const expectedCaptchaGeneration = requiresDisplayedChallenge
+      ? readFormPositiveInteger(formData, 'expectedCaptchaGeneration')
+      : null;
+    if (requiresDisplayedChallenge && (!expectedCaptchaChallengeId || !expectedCaptchaGeneration)) {
       throw new Error(
         'The displayed security check is no longer available. Refresh and try again.'
       );

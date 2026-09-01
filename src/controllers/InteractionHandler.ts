@@ -732,7 +732,11 @@ export class InteractionHandler implements IInteractionHandler {
               ) {
                 actionButtons.push(
                   this.adminActionButton(
-                    captchaParsed,
+                    {
+                      ...captchaParsed,
+                      captchaChallengeId: captchaChallenge.id,
+                      captchaGeneration: captchaChallenge.generation,
+                    },
                     'captcha_retry',
                     'Retry Security Check',
                     ButtonStyle.Primary
@@ -1284,7 +1288,9 @@ export class InteractionHandler implements IInteractionHandler {
           parsed.userId,
           parsed.detectionEventId,
           parsed.verificationEventId,
-          parsed.confirmationFingerprint
+          parsed.confirmationFingerprint,
+          parsed.captchaChallengeId,
+          parsed.captchaGeneration
         )
       )
       .setLabel(label)
@@ -1852,7 +1858,11 @@ export class InteractionHandler implements IInteractionHandler {
         );
         return;
       }
-      if (!this.captchaChallengeService || !parsed.verificationEventId) {
+      if (
+        !this.captchaChallengeService ||
+        (action === 'captcha' && !parsed.verificationEventId) ||
+        (action === 'captcha_retry' && (!parsed.captchaChallengeId || !parsed.captchaGeneration))
+      ) {
         await interaction.reply({
           content: 'This security check action is no longer available.',
           flags: MessageFlags.Ephemeral,
@@ -1866,11 +1876,31 @@ export class InteractionHandler implements IInteractionHandler {
         if (!targetMember) {
           throw new Error('The target is no longer a member of this server.');
         }
+        const displayedChallenge =
+          action === 'captcha_retry' && parsed.captchaChallengeId
+            ? await this.captchaChallengeService.findById(parsed.captchaChallengeId)
+            : null;
+        if (
+          action === 'captcha_retry' &&
+          (!displayedChallenge ||
+            displayedChallenge.server_id !== guildId ||
+            displayedChallenge.user_id !== parsed.userId ||
+            displayedChallenge.generation !== parsed.captchaGeneration)
+        ) {
+          throw new Error('The security check changed. Refresh the case and try again.');
+        }
         const result = await this.captchaChallengeService.requestChallenge({
-          verificationEventId: parsed.verificationEventId,
+          verificationEventId:
+            displayedChallenge?.verification_event_id ?? (parsed.verificationEventId as string),
           requestSource: CaptchaChallengeRequestSource.MODERATOR,
           requestedBy: interaction.user.id,
           retry: action === 'captcha_retry',
+          ...(action === 'captcha_retry'
+            ? {
+                expectedChallengeId: parsed.captchaChallengeId as string,
+                expectedGeneration: parsed.captchaGeneration as number,
+              }
+            : {}),
         });
         await interaction.followUp({
           content: result.delivered

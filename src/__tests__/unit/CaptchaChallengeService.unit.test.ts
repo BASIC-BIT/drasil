@@ -219,6 +219,27 @@ describe('CaptchaChallengeService', () => {
     expect(threads.sendCaptchaChallenge).not.toHaveBeenCalled();
   });
 
+  it('binds a retry to the displayed challenge generation', async () => {
+    const { challenges, service } = createHarness();
+
+    await service.requestChallenge({
+      verificationEventId: 'case-1',
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      requestedBy: 'moderator-1',
+      retry: true,
+      expectedChallengeId: 'challenge-1',
+      expectedGeneration: 3,
+    });
+
+    expect(challenges.retry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedChallengeId: 'challenge-1',
+        expectedGeneration: 3,
+        verificationEventId: 'case-1',
+      })
+    );
+  });
+
   it('requires a pending standard case before bypassing', async () => {
     const { service, verificationEvents } = createHarness();
     verificationEvents.findById.mockResolvedValue(

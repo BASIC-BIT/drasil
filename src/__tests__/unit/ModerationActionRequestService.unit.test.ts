@@ -133,6 +133,17 @@ const requestCaptchaChallengeRequest: ModerationActionRequest = {
   idempotency_key: 'web:case-action:challenge_user:guild-1:ver-1',
 };
 
+const retryCaptchaChallengeRequest: ModerationActionRequest = {
+  ...verifyRequest,
+  action_type: ModerationActionRequestType.RETRY_CAPTCHA_CHALLENGE,
+  id: 'captcha-retry-request-1',
+  idempotency_key: 'web:case-action:retry_captcha:guild-1:ver-1:attempt-1',
+  metadata: {
+    expected_challenge_id: 'challenge-1',
+    expected_generation: 4,
+  },
+};
+
 const bypassCaptchaChallengeRequest: ModerationActionRequest = {
   ...verifyRequest,
   action_type: ModerationActionRequestType.BYPASS_CAPTCHA_CHALLENGE,
@@ -1636,6 +1647,24 @@ describe('ModerationActionRequestService', () => {
         error: 'Security-check request does not match its case subject.',
       },
     ]);
+  });
+
+  it('binds a queued CAPTCHA retry to the displayed challenge generation', async () => {
+    const { captchaChallengeService, repository, service } = buildService([
+      retryCaptchaChallengeRequest,
+    ]);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(captchaChallengeService.requestChallenge).toHaveBeenCalledWith({
+      expectedChallengeId: 'challenge-1',
+      expectedGeneration: 4,
+      requestedBy: 'moderator-1',
+      requestSource: 'moderator',
+      retry: true,
+      verificationEventId: 'ver-1',
+    });
+    expect(repository.failed).toEqual([]);
   });
 
   it('refuses to bypass a CAPTCHA when the queued target does not match the case subject', async () => {

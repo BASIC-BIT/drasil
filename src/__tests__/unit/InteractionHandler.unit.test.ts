@@ -1264,6 +1264,73 @@ describe('InteractionHandler (unit)', () => {
     consoleError.mockRestore();
   });
 
+  it('submits the challenge identity carried by a confirmed CAPTCHA retry', async () => {
+    const challengeId = '11111111-1111-4111-8111-111111111111';
+    const requestChallenge = jest.fn().mockResolvedValue({
+      challenge: { id: challengeId, generation: 5 },
+      delivered: true,
+    });
+    const captchaChallengeService = {
+      findById: jest.fn().mockResolvedValue({
+        id: challengeId,
+        generation: 4,
+        server_id: 'guild-1',
+        user_id: 'user-1',
+        verification_event_id: 'ver-1',
+      }),
+      requestChallenge,
+    } as any;
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      members: { fetch: jest.fn().mockResolvedValue(buildMember('guild-1', 'user-1')) },
+    });
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      captchaChallengeService
+    );
+    const interaction = buildInteraction(
+      buildAdminActionCustomId(
+        'confirm_captcha_retry',
+        'case',
+        'user-1',
+        undefined,
+        undefined,
+        undefined,
+        challengeId,
+        4
+      ),
+      'guild-1',
+      { id: 'admin-1' } as User
+    );
+    grantOnlyModerationPermission(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(captchaChallengeService.findById).toHaveBeenCalledWith(challengeId);
+    expect(requestChallenge).toHaveBeenCalledWith({
+      expectedChallengeId: challengeId,
+      expectedGeneration: 4,
+      requestedBy: 'admin-1',
+      requestSource: 'moderator',
+      retry: true,
+      verificationEventId: 'ver-1',
+    });
+  });
+
   it('binds the CAPTCHA bypass modal to the displayed challenge generation', async () => {
     const captchaChallengeService = {
       findByCaseId: jest.fn().mockResolvedValue({

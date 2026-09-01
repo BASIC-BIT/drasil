@@ -21,11 +21,16 @@ export interface CaptchaChallengeIssueInput {
   requestedBy?: string | null;
 }
 
+export interface CaptchaChallengeRetryInput extends CaptchaChallengeIssueInput {
+  expectedChallengeId: string;
+  expectedGeneration: number;
+}
+
 export interface ICaptchaChallengeRepository {
   findById(id: string): Promise<CaptchaChallenge | null>;
   findByCaseId(verificationEventId: string): Promise<CaptchaChallenge | null>;
   create(input: CaptchaChallengeIssueInput): Promise<CaptchaChallenge>;
-  retry(input: CaptchaChallengeIssueInput): Promise<CaptchaChallenge>;
+  retry(input: CaptchaChallengeRetryInput): Promise<CaptchaChallenge>;
   recordDelivery(id: string, generation: number): Promise<boolean>;
   recordDeliveryFailure(id: string, generation: number, code: string): Promise<boolean>;
   bypass(
@@ -102,7 +107,7 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
     }
   }
 
-  public async retry(input: CaptchaChallengeIssueInput): Promise<CaptchaChallenge> {
+  public async retry(input: CaptchaChallengeRetryInput): Promise<CaptchaChallenge> {
     return (await this.prisma.$transaction(async (transaction) => {
       const pendingCase = await transaction.$queryRaw<Array<{ id: string }>>`
         SELECT id::text
@@ -118,10 +123,16 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
         throw new Error('The case changed before the security check could be retried.');
       }
       const existing = await transaction.captcha_challenges.findUnique({
-        where: { verification_event_id: input.verificationEventId },
+        where: { id: input.expectedChallengeId },
       });
-      if (!existing) {
-        throw new Error('No CAPTCHA challenge exists for this case.');
+      if (
+        !existing ||
+        existing.verification_event_id !== input.verificationEventId ||
+        existing.server_id !== input.serverId ||
+        existing.user_id !== input.userId ||
+        existing.generation !== input.expectedGeneration
+      ) {
+        throw new Error('The security check changed before it could be retried.');
       }
       if (existing.status === CaptchaChallengeStatus.PASSED) {
         throw new Error('This case has already passed its security check.');
