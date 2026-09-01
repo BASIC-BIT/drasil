@@ -82,6 +82,7 @@ const buildThread = (id = 'thread-1'): jest.Mocked<ThreadChannel> =>
     url: `https://discord.com/channels/${id}`,
     members: {
       add: jest.fn().mockResolvedValue(undefined),
+      fetch: jest.fn().mockResolvedValue({ id: 'user-1' }),
     },
     send: jest.fn().mockResolvedValue(undefined),
     setArchived: jest.fn().mockResolvedValue(undefined),
@@ -181,6 +182,59 @@ describe('ThreadManager (unit)', () => {
         'https://drasil.example/captcha/token'
       )
     ).resolves.toBe(false);
+  });
+
+  it('delivers a CAPTCHA challenge after confirming the subject belongs to the case thread', async () => {
+    const client = {
+      channels: { fetch: jest.fn().mockResolvedValue(thread) },
+    };
+    const manager = new ThreadManager(
+      client as any,
+      configService,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      serverMemberRepository
+    );
+
+    await expect(
+      manager.sendCaptchaChallenge(
+        buildVerificationEvent({ thread_id: thread.id }),
+        'https://drasil.example/captcha/token'
+      )
+    ).resolves.toBe(true);
+
+    expect(thread.members.fetch).toHaveBeenCalledWith('user-1');
+    expect(thread.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: 'Complete this browser check to confirm access to your Discord account.',
+      })
+    );
+  });
+
+  it('does not deliver a CAPTCHA challenge when the subject cannot access the case thread', async () => {
+    (thread.members.fetch as jest.Mock).mockRejectedValueOnce(new Error('Unknown thread member'));
+    const client = {
+      channels: { fetch: jest.fn().mockResolvedValue(thread) },
+    };
+    const manager = new ThreadManager(
+      client as any,
+      configService,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      serverMemberRepository
+    );
+
+    await expect(
+      manager.sendCaptchaChallenge(
+        buildVerificationEvent({ thread_id: thread.id }),
+        'https://drasil.example/captcha/token'
+      )
+    ).resolves.toBe(false);
+
+    expect(thread.members.fetch).toHaveBeenCalledWith('user-1');
+    expect(thread.send).not.toHaveBeenCalled();
   });
 
   it('returns false when a CAPTCHA status thread cannot be unarchived', async () => {

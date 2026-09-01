@@ -202,6 +202,7 @@ export class ThreadManager implements IThreadManager {
       if (!channel?.isThread()) {
         return false;
       }
+      await channel.members.fetch(verificationEvent.user_id);
       if (channel.archived) {
         await channel.setArchived(false, 'Deliver CAPTCHA case challenge');
       }
