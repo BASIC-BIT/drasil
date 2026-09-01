@@ -172,6 +172,43 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     await expect(challenges.cancelPendingForDisabledServers(10)).resolves.toEqual([]);
   });
 
+  it('retries a cancelled challenge after its case is reopened', async () => {
+    const { verification } = await createCase('guild-captcha-reopened', 'user-captcha-reopened');
+    const challenges = new CaptchaChallengeRepository(prisma);
+    const challenge = await challenges.create({
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      caseRevision: verification.case_revision,
+      tokenHash: 'cancelled-hash',
+      expiresAt: new Date(Date.now() + 60_000),
+      requestedBy: 'moderator-1',
+    });
+    await challenges.cancelPendingForCase(verification.id);
+
+    await expect(
+      challenges.retry({
+        verificationEventId: verification.id,
+        serverId: verification.server_id,
+        userId: verification.user_id,
+        requestSource: CaptchaChallengeRequestSource.MODERATOR,
+        passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+        caseRevision: verification.case_revision,
+        tokenHash: 'reopened-hash',
+        expiresAt: new Date(Date.now() + 120_000),
+        requestedBy: 'moderator-2',
+      })
+    ).resolves.toEqual(
+      expect.objectContaining({
+        cancelled_at: null,
+        generation: challenge.generation + 1,
+        status: CaptchaChallengeStatus.PENDING,
+      })
+    );
+  });
+
   it('refuses exact-case CAPTCHA completion while another case is pending', async () => {
     const { verification } = await createCase(
       'guild-captcha-exact-case',

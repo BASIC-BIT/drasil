@@ -940,7 +940,10 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     if (!this.captchaChallengeService) {
       throw new Error('Security-check service is unavailable.');
     }
-    await this.fetchModerator(request.actor_id);
+    await Promise.all([
+      this.requireCaptchaModerator(request.server_id, request.actor_id),
+      this.fetchGuildMember(request.server_id, request.target_user_id),
+    ]);
     const result = await this.captchaChallengeService.requestChallenge({
       verificationEventId: request.verification_event_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
@@ -964,7 +967,7 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     if (!this.captchaChallengeService) {
       throw new Error('Security-check service is unavailable.');
     }
-    await this.fetchModerator(request.actor_id);
+    await this.requireCaptchaModerator(request.server_id, request.actor_id);
     const reason = this.readMetadataString(request.metadata, 'reason')?.trim();
     if (!reason) {
       throw new Error('A reason is required to continue without the browser check.');
@@ -2042,6 +2045,16 @@ export class ModerationActionRequestService implements IModerationActionRequestS
   private async fetchGuildMember(serverId: string, userId: string): Promise<GuildMember> {
     const guild = await this.fetchGuild(serverId);
     return guild.members.fetch(userId);
+  }
+
+  private async requireCaptchaModerator(serverId: string, userId: string): Promise<void> {
+    const moderator = await this.fetchGuildMember(serverId, userId);
+    if (
+      !moderator.permissions.has(PermissionFlagsBits.ManageGuild) &&
+      !moderator.permissions.has(PermissionFlagsBits.ModerateMembers)
+    ) {
+      throw new Error('Security-check actions require current moderation permission.');
+    }
   }
 
   private async requireCleanupAdministrator(

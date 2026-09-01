@@ -56,7 +56,16 @@ describe('publicWebLinks', () => {
       'https://drasilbot.com/admin/guild/guild-1/cases/case-1'
     );
     expect(buildCaptchaChallengeUrl('opaque/token')).toBe(
-      'https://drasilbot.com/captcha/opaque%2Ftoken'
+      'https://ignored.example/captcha/opaque%2Ftoken'
+    );
+  });
+
+  it('uses the same preferred origin as CAPTCHA OAuth when both URLs are configured', () => {
+    process.env.DRASIL_WEB_PUBLIC_URL = 'https://bot-links.example';
+    process.env.NEXT_PUBLIC_APP_URL = 'https://oauth.example';
+
+    expect(buildCaptchaChallengeUrl('opaque-token')).toBe(
+      'https://oauth.example/captcha/opaque-token'
     );
   });
 });

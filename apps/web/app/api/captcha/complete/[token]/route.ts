@@ -6,6 +6,7 @@ import {
   buildCaptchaCdata,
   completeCaptchaAttempt,
   getCaptchaPublicChallenge,
+  requeueCaptchaPassEffect,
 } from '@/lib/captchaCompletion';
 import { getPublicAppUrl } from '@/lib/env';
 import { buildSessionCookieOptions } from '@/lib/session';
@@ -42,6 +43,7 @@ export async function POST(
   try {
     const challenge = await getCaptchaPublicChallenge(token);
     if (challenge?.status === 'passed') {
+      await requeueCaptchaPassEffect(challenge);
       return redirectToChallenge(request, token, 'completed');
     }
     const identity = decodeCaptchaIdentity(request.cookies.get(CAPTCHA_IDENTITY_COOKIE)?.value);
@@ -67,6 +69,10 @@ export async function POST(
       return redirectToChallenge(request, token, 'rate_limited');
     }
     if (started.state !== 'ready' || !started.attemptId || !started.challenge) {
+      if (started.challenge?.status === 'passed') {
+        await requeueCaptchaPassEffect(started.challenge);
+        return redirectToChallenge(request, token, 'completed');
+      }
       return redirectToChallenge(request, token, 'stale');
     }
 

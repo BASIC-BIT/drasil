@@ -35,7 +35,16 @@ export async function GET(request: NextRequest) {
   );
   const token = cookieState?.token ?? '';
 
-  if (!code || !state || !cookieState || cookieState.state !== state) {
+  if (!cookieState || !token) {
+    return clearOAuthState(
+      new NextResponse(
+        'Discord account confirmation expired. Return to the security check link and try again.',
+        { status: 400 }
+      )
+    );
+  }
+
+  if (!code || !state || cookieState.state !== state) {
     return clearOAuthState(challengeRedirect(request, token, 'failed'));
   }
 

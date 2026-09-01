@@ -313,6 +313,7 @@ describe('UserModerationService (unit)', () => {
     });
     const actionCount = (await adminActionRepository.findByUserAndServer(userId, guildId)).length;
     jest.clearAllMocks();
+    const upsertMember = jest.spyOn(serverMemberRepository, 'upsertMember');
 
     await expect(service.resolveCaptchaCase(member, input)).resolves.toEqual({
       status: 'resolved',
@@ -321,6 +322,12 @@ describe('UserModerationService (unit)', () => {
     expect(roleManager.removeCaseRole).not.toHaveBeenCalled();
     expect(threadManager.resolveVerificationThread).not.toHaveBeenCalled();
     expect(notificationManager.logActionToMessage).not.toHaveBeenCalled();
+    expect(upsertMember).toHaveBeenCalledWith(
+      guildId,
+      userId,
+      expect.not.objectContaining({ last_status_change: expect.anything() })
+    );
+    upsertMember.mockRestore();
     await expect(adminActionRepository.findByUserAndServer(userId, guildId)).resolves.toHaveLength(
       actionCount
     );

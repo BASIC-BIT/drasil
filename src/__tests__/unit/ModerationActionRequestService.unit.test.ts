@@ -126,6 +126,13 @@ const applyCaptchaPassRequest: ModerationActionRequest = {
   },
 };
 
+const requestCaptchaChallengeRequest: ModerationActionRequest = {
+  ...verifyRequest,
+  action_type: ModerationActionRequestType.REQUEST_CAPTCHA_CHALLENGE,
+  id: 'captcha-request-1',
+  idempotency_key: 'web:case-action:challenge_user:guild-1:ver-1',
+};
+
 const notifyCaptchaAttentionRequest: ModerationActionRequest = {
   ...applyCaptchaPassRequest,
   action_type: ModerationActionRequestType.NOTIFY_CAPTCHA_ATTENTION,
@@ -988,6 +995,10 @@ describe('ModerationActionRequestService', () => {
     };
     const captchaChallengeService = {
       evaluatePassedChallenge: jest.fn(async () => ({ status: 'eligible' as const })),
+      requestChallenge: jest.fn(async () => ({
+        challenge: { generation: 1, id: 'challenge-1' },
+        delivered: true,
+      })),
     };
     const service = new ModerationActionRequestService(
       repository,
@@ -1549,6 +1560,39 @@ describe('ModerationActionRequestService', () => {
       },
     ]);
     expect(repository.failed).toEqual([]);
+  });
+
+  it('refuses to issue a CAPTCHA after the target member leaves the server', async () => {
+    const { captchaChallengeService, guild, repository, service } = buildService([
+      requestCaptchaChallengeRequest,
+    ]);
+    guild.members.fetch.mockRejectedValueOnce(new Error('Unknown member'));
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(captchaChallengeService.requestChallenge).not.toHaveBeenCalled();
+    expect(repository.failed).toEqual([{ id: 'captcha-request-1', error: 'Unknown member' }]);
+  });
+
+  it('refuses a queued CAPTCHA action after the moderator loses permission', async () => {
+    const { captchaChallengeService, guild, reporterMember, repository, service } = buildService([
+      requestCaptchaChallengeRequest,
+    ]);
+    reporterMember.permissions.has.mockReturnValue(false);
+    guild.members.fetch.mockImplementation(async (value: string | { user: string }) => {
+      const id = typeof value === 'string' ? value : value.user;
+      return id === 'moderator-1' ? reporterMember : { guild, id: 'user-1' };
+    });
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(captchaChallengeService.requestChallenge).not.toHaveBeenCalled();
+    expect(repository.failed).toEqual([
+      {
+        id: 'captcha-request-1',
+        error: 'Security-check actions require current moderation permission.',
+      },
+    ]);
   });
 
   it('resolves an eligible CAPTCHA pass through the exact-case system path', async () => {

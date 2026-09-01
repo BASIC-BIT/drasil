@@ -3,11 +3,7 @@ import Link from 'next/link';
 import { cookies } from 'next/headers';
 import { CAPTCHA_IDENTITY_COOKIE } from '@/lib/cookies';
 import { decodeCaptchaIdentity } from '@/lib/captchaSession';
-import {
-  buildCaptchaCdata,
-  getCaptchaPublicChallenge,
-  getTurnstileSiteKey,
-} from '@/lib/captchaCompletion';
+import { getCaptchaFormConfiguration, getCaptchaPublicChallenge } from '@/lib/captchaCompletion';
 import { TurnstileChallengeForm } from '@/components/captcha/TurnstileChallengeForm';
 
 export const dynamic = 'force-dynamic';
@@ -23,6 +19,10 @@ function resultMessage(result: string | undefined): string | null {
       return 'Too many attempts were submitted. Wait a minute and try again.';
     case 'authenticate':
       return 'Confirm your Discord account again before continuing.';
+    case 'retry':
+      return 'The browser check could not be submitted. Please try again.';
+    case 'stale':
+      return 'This security check changed while it was being completed. Please try again.';
     default:
       return null;
   }
@@ -80,6 +80,9 @@ export default async function CaptchaChallengePage({
       : query.auth === 'failed'
         ? 'Discord account confirmation did not complete. Please try again.'
         : resultMessage(query.result);
+  const formConfiguration = identityMatches
+    ? getCaptchaFormConfiguration(challenge.id, challenge.generation)
+    : null;
 
   return (
     <main className="public-flow-shell">
@@ -91,13 +94,22 @@ export default async function CaptchaChallengePage({
             {message}
           </p>
         ) : null}
-        {identityMatches ? (
+        {identityMatches && formConfiguration ? (
           <TurnstileChallengeForm
             token={token}
-            siteKey={getTurnstileSiteKey()}
-            cdata={buildCaptchaCdata(challenge.id, challenge.generation)}
+            siteKey={formConfiguration.siteKey}
+            cdata={formConfiguration.cdata}
             attemptId={randomUUID()}
           />
+        ) : identityMatches ? (
+          <>
+            <p className="status-banner" role="status">
+              The browser check is temporarily unavailable. Please try again.
+            </p>
+            <Link className="button" href={`/captcha/${encodeURIComponent(token)}`}>
+              Try again
+            </Link>
+          </>
         ) : (
           <Link className="button" href={`/api/captcha/auth/${encodeURIComponent(token)}`}>
             Confirm Discord account

@@ -93,7 +93,8 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
       const retryableStatus =
         existing.status === CaptchaChallengeStatus.FAILED ||
         existing.status === CaptchaChallengeStatus.EXPIRED ||
-        existing.status === CaptchaChallengeStatus.BYPASSED;
+        existing.status === CaptchaChallengeStatus.BYPASSED ||
+        existing.status === CaptchaChallengeStatus.CANCELLED;
       if (!pendingDeliveryFailure && !retryableStatus) {
         throw new Error('This CAPTCHA challenge is not eligible for retry.');
       }

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocked = vi.hoisted(() => ({
   getPostgresPool: vi.fn(),
@@ -10,7 +10,14 @@ vi.mock('./moderationActionRequestQueue', () => ({
   insertModerationActionRequestWithReceipt: mocked.insertModerationActionRequestWithReceipt,
 }));
 
-import { completeCaptchaAttempt } from './captchaCompletion';
+import {
+  completeCaptchaAttempt,
+  getCaptchaFormConfiguration,
+  requeueCaptchaPassEffect,
+} from './captchaCompletion';
+
+const originalTurnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
+const originalCaptchaBindingSecret = process.env.DRASIL_CAPTCHA_BINDING_SECRET;
 
 const challengeRow = {
   attempt_id: '00000000-0000-4000-8000-000000000001',
@@ -32,13 +39,13 @@ const challengeRow = {
   verification_event_id: '00000000-0000-4000-8000-000000000003',
 };
 
-function createDatabaseHarness() {
+function createDatabaseHarness(options: { readonly passUpdateSucceeds?: boolean } = {}) {
   const query = vi.fn(async (statement: string, _parameters?: readonly unknown[]) => {
     if (statement.includes('from captcha_challenge_attempts a')) {
       return { rows: [challengeRow] };
     }
     if (statement.includes("set status = 'passed'")) {
-      return { rows: [{ id: challengeRow.id }] };
+      return { rows: options.passUpdateSucceeds === false ? [] : [{ id: challengeRow.id }] };
     }
     return { rows: [] };
   });
@@ -57,6 +64,26 @@ function createDatabaseHarness() {
 describe('captcha completion transaction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    if (originalTurnstileSiteKey === undefined) {
+      delete process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
+    } else {
+      process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY = originalTurnstileSiteKey;
+    }
+    if (originalCaptchaBindingSecret === undefined) {
+      delete process.env.DRASIL_CAPTCHA_BINDING_SECRET;
+    } else {
+      process.env.DRASIL_CAPTCHA_BINDING_SECRET = originalCaptchaBindingSecret;
+    }
+  });
+
+  it('returns no form configuration instead of throwing when provider settings are missing', () => {
+    delete process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
+    delete process.env.DRASIL_CAPTCHA_BINDING_SECRET;
+
+    expect(getCaptchaFormConfiguration(challengeRow.id, 1)).toBeNull();
   });
 
   it('marks the generation failed and queues moderator attention at the submission limit', async () => {
@@ -148,5 +175,54 @@ describe('captcha completion transaction', () => {
       })
     );
     expect(query.mock.calls.at(-1)?.[0]).toBe('commit');
+  });
+
+  it('commits a stale attempt when the challenge pass update loses its guard', async () => {
+    const { query } = createDatabaseHarness({ passUpdateSucceeds: false });
+
+    await expect(
+      completeCaptchaAttempt({
+        attemptId: challengeRow.attempt_id,
+        validation: {
+          action: 'drasil_case_access',
+          errorCodes: [],
+          hostname: 'drasil.example',
+          state: 'passed',
+          success: true,
+        },
+      })
+    ).resolves.toBe('stale');
+
+    expect(
+      query.mock.calls.some(([statement]) =>
+        statement.includes("set validation_state = 'stale', validated_at = now()")
+      )
+    ).toBe(true);
+    expect(query.mock.calls.at(-1)?.[0]).toBe('commit');
+  });
+
+  it('requeues a failed exact-case pass effect with its stable idempotency key', async () => {
+    const pool = {};
+    mocked.getPostgresPool.mockReturnValue(pool);
+
+    await requeueCaptchaPassEffect({
+      id: challengeRow.id,
+      verificationEventId: challengeRow.verification_event_id,
+      serverId: challengeRow.server_id,
+      userId: challengeRow.user_id,
+      status: 'passed',
+      generation: challengeRow.generation,
+      caseRevision: challengeRow.case_revision_at_issue,
+      expiresAt: challengeRow.expires_at,
+    });
+
+    expect(mocked.insertModerationActionRequestWithReceipt).toHaveBeenCalledWith(
+      pool,
+      expect.objectContaining({
+        actionType: 'apply_captcha_pass',
+        idempotencyKey: `captcha:apply:${challengeRow.id}:1`,
+        verificationEventId: challengeRow.verification_event_id,
+      })
+    );
   });
 });

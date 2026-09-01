@@ -1325,11 +1325,17 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         throw new Error(`Failed to reconcile case role for ${member.user.tag}`);
       }
     }
+    const memberVerificationStatus =
+      remainingPending.length > 0 ? VerificationStatus.PENDING : VerificationStatus.VERIFIED;
+    const memberStateChanged =
+      !alreadyResolvedByCaptcha ||
+      !storedMember ||
+      storedMember.case_role_active !== remainingPending.length > 0 ||
+      storedMember.verification_status !== memberVerificationStatus;
     await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
       case_role_active: remainingPending.length > 0,
-      verification_status:
-        remainingPending.length > 0 ? VerificationStatus.PENDING : VerificationStatus.VERIFIED,
-      last_status_change: new Date(),
+      verification_status: memberVerificationStatus,
+      ...(memberStateChanged ? { last_status_change: new Date() } : {}),
       ...(remainingPending.length === 0 ? { last_verified_at: resolvedAt.toISOString() } : {}),
       updated_by: actorId,
     });

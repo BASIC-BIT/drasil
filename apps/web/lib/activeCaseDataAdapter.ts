@@ -468,7 +468,7 @@ function resolveAllowedActions(
   if (row.status !== 'pending') {
     const actions: CaseAction[] =
       presenceState === 'in_server' ? ['view_history', 'reopen_case'] : ['view_history'];
-    return appendCaptchaActions(row, appendRefreshNotificationAction(row, actions));
+    return appendCaptchaActions(row, appendRefreshNotificationAction(row, actions), presenceState);
   }
 
   if (row.attention_state === 'parked') {
@@ -483,7 +483,8 @@ function resolveAllowedActions(
   if (presenceActions) {
     return appendCaptchaActions(
       row,
-      appendRefreshNotificationAction(row, resolveCaseKindActions(row, presenceActions))
+      appendRefreshNotificationAction(row, resolveCaseKindActions(row, presenceActions)),
+      presenceState
     );
   }
 
@@ -498,7 +499,7 @@ function resolveAllowedActions(
   const actionsWithNotification = appendRefreshNotificationAction(row, actions);
   const threadPresentIndex = Number(Boolean(row.thread_id)) as 0 | 1;
   actionsWithNotification.push(...THREAD_REPAIR_ACTIONS_BY_STATE[parkedIndex][threadPresentIndex]);
-  return appendCaptchaActions(row, actionsWithNotification);
+  return appendCaptchaActions(row, actionsWithNotification, presenceState);
 }
 
 function resolveCaseKindActions(row: CaseSummaryRow, actions: readonly CaseAction[]): CaseAction[] {
@@ -576,12 +577,26 @@ export function parseCaseSummaryRow(row: CaseSummaryRow, now = new Date()): Case
   });
 }
 
-function appendCaptchaActions(row: CaseSummaryRow, actions: CaseAction[]): CaseAction[] {
+function appendCaptchaActions(
+  row: CaseSummaryRow,
+  actions: CaseAction[],
+  presenceState: CasePresenceState
+): CaseAction[] {
   if (row.case_kind === 'compromised_account' || row.status !== 'pending') {
     return actions;
   }
   const mode = metadataToRecord(row.server_settings).captcha_mode;
   if (mode !== 'manual' && mode !== 'suspicious_join') {
+    return actions;
+  }
+  if (presenceState !== 'in_server') {
+    if (
+      row.captcha_status === 'pending' ||
+      row.captcha_status === 'failed' ||
+      row.captcha_status === 'expired'
+    ) {
+      actions.push('bypass_captcha');
+    }
     return actions;
   }
   if (!row.captcha_status) {
@@ -600,6 +615,8 @@ function appendCaptchaActions(row: CaseSummaryRow, actions: CaseAction[]): CaseA
     return actions;
   }
   if (row.captcha_status === 'bypassed') {
+    actions.push('retry_captcha');
+  } else if (row.captcha_status === 'cancelled') {
     actions.push('retry_captcha');
   }
   return actions;

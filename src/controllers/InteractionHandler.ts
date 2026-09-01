@@ -712,30 +712,33 @@ export class InteractionHandler implements IInteractionHandler {
           ) {
             const captchaChallenge = await this.captchaChallengeService.findByCaseId(activeCase.id);
             const captchaParsed = { ...parsed, verificationEventId: activeCase.id };
-            if (!captchaChallenge) {
-              actionButtons.push(
-                this.adminActionButton(
-                  captchaParsed,
-                  'captcha',
-                  'Challenge User',
-                  ButtonStyle.Primary
-                )
-              );
-            } else if (
-              captchaChallenge.status === CaptchaChallengeStatus.FAILED ||
-              captchaChallenge.status === CaptchaChallengeStatus.EXPIRED ||
-              captchaChallenge.status === CaptchaChallengeStatus.BYPASSED ||
-              (captchaChallenge.status === CaptchaChallengeStatus.PENDING &&
-                Boolean(captchaChallenge.delivery_error_code))
-            ) {
-              actionButtons.push(
-                this.adminActionButton(
-                  captchaParsed,
-                  'captcha_retry',
-                  'Retry Security Check',
-                  ButtonStyle.Primary
-                )
-              );
+            if (!alreadyBanned) {
+              if (!captchaChallenge) {
+                actionButtons.push(
+                  this.adminActionButton(
+                    captchaParsed,
+                    'captcha',
+                    'Challenge User',
+                    ButtonStyle.Primary
+                  )
+                );
+              } else if (
+                captchaChallenge.status === CaptchaChallengeStatus.FAILED ||
+                captchaChallenge.status === CaptchaChallengeStatus.EXPIRED ||
+                captchaChallenge.status === CaptchaChallengeStatus.BYPASSED ||
+                captchaChallenge.status === CaptchaChallengeStatus.CANCELLED ||
+                (captchaChallenge.status === CaptchaChallengeStatus.PENDING &&
+                  Boolean(captchaChallenge.delivery_error_code))
+              ) {
+                actionButtons.push(
+                  this.adminActionButton(
+                    captchaParsed,
+                    'captcha_retry',
+                    'Retry Security Check',
+                    ButtonStyle.Primary
+                  )
+                );
+              }
             }
             if (
               captchaChallenge &&

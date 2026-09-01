@@ -182,6 +182,40 @@ export function buildCaptchaCdata(challengeId: string, generation: number): stri
     .digest('base64url');
 }
 
+export function getCaptchaFormConfiguration(
+  challengeId: string,
+  generation: number
+): { readonly cdata: string; readonly siteKey: string } | null {
+  try {
+    return {
+      cdata: buildCaptchaCdata(challengeId, generation),
+      siteKey: getTurnstileSiteKey(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function requeueCaptchaPassEffect(challenge: CaptchaPublicChallenge): Promise<void> {
+  if (challenge.status !== 'passed') {
+    return;
+  }
+  await insertModerationActionRequestWithReceipt(getPostgresPool(), {
+    actionType: 'apply_captcha_pass',
+    actorId: CAPTCHA_SYSTEM_ACTOR_ID,
+    actorSurface: 'captcha',
+    idempotencyKey: `captcha:apply:${challenge.id}:${challenge.generation}`,
+    metadata: {
+      challenge_id: challenge.id,
+      generation: challenge.generation,
+      expected_case_revision: challenge.caseRevision,
+    },
+    serverId: challenge.serverId,
+    targetUserId: challenge.userId,
+    verificationEventId: challenge.verificationEventId,
+  });
+}
+
 export async function getCaptchaPublicChallenge(
   token: string
 ): Promise<CaptchaPublicChallenge | null> {
@@ -497,7 +531,13 @@ export async function completeCaptchaAttempt(input: {
       [row.id, row.generation]
     );
     if (!passed.rows[0]) {
-      await client.query('rollback');
+      await client.query(
+        `update captcha_challenge_attempts
+         set validation_state = 'stale', validated_at = now()
+         where id = $1::uuid and validation_state = 'passed'`,
+        [input.attemptId]
+      );
+      await client.query('commit');
       return 'stale';
     }
     await insertModerationActionRequestWithReceipt(client, {
