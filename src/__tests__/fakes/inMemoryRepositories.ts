@@ -2184,7 +2184,7 @@ export class InMemoryRoleQuarantineSnapshotRepository implements IRoleQuarantine
     return this.clone(snapshots[0]);
   }
 
-  async findActiveCompletedCompromised(): Promise<RoleQuarantineSnapshot[]> {
+  async findActiveCompletedForRestoration(): Promise<RoleQuarantineSnapshot[]> {
     return [];
   }
 

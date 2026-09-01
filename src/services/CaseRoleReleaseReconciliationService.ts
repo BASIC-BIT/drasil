@@ -12,6 +12,7 @@ import {
   CaseKind,
   RoleQuarantineSnapshot,
   VerificationEvent,
+  VerificationStatus,
 } from '../repositories/types';
 import {
   CASE_ROLE_RELEASE_RECONCILIATION_ATTEMPT_PREFIX,
@@ -252,7 +253,7 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
   }
 
   private async reconcileCompletedRoleRestorations(): Promise<void> {
-    const snapshots = await this.snapshotRepository.findActiveCompletedCompromised();
+    const snapshots = await this.snapshotRepository.findActiveCompletedForRestoration();
     for (const snapshot of snapshots) {
       await this.reconcileCompletedRoleRestoration(snapshot).catch((error) => {
         console.error(`Failed to reconcile role restoration for snapshot ${snapshot.id}:`, error);
@@ -268,6 +269,18 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
       snapshot.verification_event_id
     );
     if (!verificationEvent) {
+      return;
+    }
+    if (verificationEvent.status !== VerificationStatus.VERIFIED) {
+      return;
+    }
+    const hasPendingCase = (
+      await this.verificationEventRepository.findByUserAndServer(
+        snapshot.user_id,
+        snapshot.server_id
+      )
+    ).some((event) => event.status === VerificationStatus.PENDING);
+    if (hasPendingCase) {
       return;
     }
 
