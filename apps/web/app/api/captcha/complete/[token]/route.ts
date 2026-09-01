@@ -94,7 +94,8 @@ export async function POST(
       response.cookies.set(CAPTCHA_IDENTITY_COOKIE, '', buildSessionCookieOptions(0));
     }
     return response;
-  } catch {
+  } catch (error) {
+    console.error('CAPTCHA completion failed:', error);
     return redirectToChallenge(request, token, 'service');
   }
 }

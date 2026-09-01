@@ -78,7 +78,8 @@ export async function GET(request: NextRequest) {
       buildSessionCookieOptions(CAPTCHA_IDENTITY_MAX_AGE_SECONDS)
     );
     return clearOAuthState(response);
-  } catch {
+  } catch (error) {
+    console.error('CAPTCHA Discord account confirmation failed:', error);
     return clearOAuthState(challengeRedirect(request, token, 'failed'));
   }
 }
