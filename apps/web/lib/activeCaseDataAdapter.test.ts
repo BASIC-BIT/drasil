@@ -125,6 +125,101 @@ describe('activeCaseDataAdapter', () => {
     expect(summary.allowedActions).toContain('quarantine_compromised_account');
   });
 
+  it('offers a moderator challenge only when browser checks are enabled and unused', () => {
+    const summary = parseCaseSummaryRow(
+      { ...baseRow, server_settings: { captcha_mode: 'manual' } },
+      new Date('2026-06-03T01:00:00.000Z')
+    );
+
+    expect(summary.allowedActions).toContain('challenge_user');
+    expect(summary.captchaChallenge).toBeNull();
+  });
+
+  it('maps a pending challenge and replaces challenge with bypass', () => {
+    const summary = parseCaseSummaryRow(
+      {
+        ...baseRow,
+        server_settings: { captcha_mode: 'suspicious_join' },
+        captcha_status: 'pending',
+        captcha_request_source: 'automatic_suspicious_join',
+        captcha_pass_effect: 'verify_join_only',
+        captcha_generation: 1,
+        captcha_submission_count: 2,
+        captcha_expires_at: new Date('2026-06-04T00:00:00.000Z'),
+        captcha_requested_at: new Date('2026-06-03T00:00:00.000Z'),
+        captcha_delivered_at: new Date('2026-06-03T00:01:00.000Z'),
+        captcha_delivery_error_code: null,
+        captcha_passed_at: null,
+        captcha_bypassed_at: null,
+        captcha_bypassed_by: null,
+        captcha_bypass_reason: null,
+      },
+      new Date('2026-06-03T01:00:00.000Z')
+    );
+
+    expect(summary.captchaChallenge).toEqual(
+      expect.objectContaining({ status: 'pending', submissionCount: 2, generation: 1 })
+    );
+    expect(summary.allowedActions).toContain('bypass_captcha');
+    expect(summary.allowedActions).not.toContain('challenge_user');
+  });
+
+  it('never offers another challenge after a pass', () => {
+    const summary = parseCaseSummaryRow(
+      {
+        ...baseRow,
+        server_settings: { captcha_mode: 'manual' },
+        captcha_status: 'passed',
+        captcha_request_source: 'moderator',
+        captcha_pass_effect: 'evidence_only',
+        captcha_generation: 1,
+        captcha_submission_count: 1,
+        captcha_expires_at: new Date('2026-06-04T00:00:00.000Z'),
+        captcha_requested_at: new Date('2026-06-03T00:00:00.000Z'),
+        captcha_delivered_at: new Date('2026-06-03T00:01:00.000Z'),
+        captcha_delivery_error_code: null,
+        captcha_passed_at: new Date('2026-06-03T00:02:00.000Z'),
+        captcha_bypassed_at: null,
+        captcha_bypassed_by: null,
+        captcha_bypass_reason: null,
+      },
+      new Date('2026-06-03T01:00:00.000Z')
+    );
+
+    expect(summary.allowedActions).not.toContain('challenge_user');
+    expect(summary.allowedActions).not.toContain('retry_captcha');
+    expect(summary.allowedActions).not.toContain('bypass_captcha');
+  });
+
+  it.each(['failed', 'expired'] as const)(
+    'offers retry or bypass when a challenge is %s',
+    (captchaStatus) => {
+      const summary = parseCaseSummaryRow(
+        {
+          ...baseRow,
+          server_settings: { captcha_mode: 'manual' },
+          captcha_status: captchaStatus,
+          captcha_request_source: 'moderator',
+          captcha_pass_effect: 'evidence_only',
+          captcha_generation: 1,
+          captcha_submission_count: 5,
+          captcha_expires_at: new Date('2026-06-04T00:00:00.000Z'),
+          captcha_requested_at: new Date('2026-06-03T00:00:00.000Z'),
+          captcha_delivered_at: new Date('2026-06-03T00:01:00.000Z'),
+          captcha_delivery_error_code: null,
+          captcha_passed_at: null,
+          captcha_bypassed_at: null,
+          captcha_bypassed_by: null,
+          captcha_bypass_reason: null,
+        },
+        new Date('2026-06-03T01:00:00.000Z')
+      );
+
+      expect(summary.allowedActions).toContain('retry_captcha');
+      expect(summary.allowedActions).toContain('bypass_captcha');
+    }
+  );
+
   it('parses parked quarantine effects and keeps the case outside normal review actions', () => {
     const summary = parseCaseSummaryRow(
       {

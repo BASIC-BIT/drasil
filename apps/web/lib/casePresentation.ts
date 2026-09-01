@@ -1,4 +1,9 @@
-import type { CaseAction, CasePresenceState, CaseSurfaceKind } from '@drasil/contracts';
+import type {
+  CaptchaChallengeSummary,
+  CaseAction,
+  CasePresenceState,
+  CaseSurfaceKind,
+} from '@drasil/contracts';
 
 const actionLabels: Record<CaseAction, string> = {
   ban_by_id: 'Ban by ID',
@@ -13,6 +18,9 @@ const actionLabels: Record<CaseAction, string> = {
   sync_existing_ban: 'Sync Existing Ban',
   verify_user: 'Verify User',
   view_history: 'View History',
+  challenge_user: 'Challenge User',
+  retry_captcha: 'Retry Security Check',
+  bypass_captcha: 'Continue Without Browser Check',
 };
 
 const presenceLabels: Record<CasePresenceState, string> = {
@@ -51,6 +59,23 @@ export function isDebugCaseAction(action: CaseAction): boolean {
 
 export function formatPresenceState(state: CasePresenceState): string {
   return presenceLabels[state];
+}
+
+export function formatCaptchaStatus(status: CaptchaChallengeSummary['status']): string {
+  switch (status) {
+    case 'pending':
+      return 'Awaiting security check';
+    case 'passed':
+      return 'Security check completed';
+    case 'failed':
+      return 'Security check failed';
+    case 'expired':
+      return 'Security check expired';
+    case 'bypassed':
+      return 'Security check bypassed';
+    case 'cancelled':
+      return 'Security check cancelled';
+  }
 }
 
 export function presenceStatusClass(state: CasePresenceState): string {

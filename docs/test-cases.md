@@ -36,6 +36,15 @@ For a real-server walkthrough, use `docs/manual-qa.md`.
 - Reopen button: verification returns to PENDING, thread reopened, case role reapplied.
 - Stale case digest: groups pending cases into fresh, stale, and very stale; very stale users remain pending for moderator review.
 - User-facing support reminder: pings only the target user in their verification thread, not admins, and stops after the target replies or reaches the very-stale day threshold.
+- Manual browser security check: a moderator can challenge a pending standard case, the exact user
+  confirms their Discord account and completes Turnstile, `Security check completed.` appears, and
+  the case remains pending as evidence only.
+- Automatic suspicious-join security check: only a newly created suspicious-join case gets the
+  link. With join-only verification enabled, an unchanged case resolves; mixed evidence or another
+  pending case keeps the case role and leaves the case pending.
+- Browser security check recovery: wrong Discord identity, invalid response, provider outage,
+  expiry, exhaustion, delivery failure, and bypass never kick, ban, or release the user. Retry
+  invalidates the old link. Turning the feature off makes pending links unavailable and cancels them.
 
 ## Automated tests (high-signal, easy to maintain)
 
@@ -88,6 +97,16 @@ For a real-server walkthrough, use `docs/manual-qa.md`.
   - Does not restore a configured honeypot role because role gate owns that role.
   - Removes newly gained removable roles while a case is active, including roles gained through onboarding or Channels & Roles.
   - Does not restore roles that were gained and removed after restriction started.
+- `CaptchaChallengePolicy` and `CaptchaChallengeService`
+  - Enforce off, moderator-only, and suspicious-join eligibility.
+  - Keep moderator passes evidence-only and hold changed, mixed-evidence, or competing cases.
+  - Maintain one challenge aggregate per case and advance generations on retry.
+- CAPTCHA public flow and action worker
+  - Bind opaque hashed links, Discord identity, Turnstile action, hostname, and `cdata` to one case
+    generation.
+  - Count user-invalid responses without counting provider failures.
+  - Queue the pass atomically, accept only the dedicated system actor, and resolve only the exact
+    eligible case with its expected evidence revision.
 
 ## Role gate
 

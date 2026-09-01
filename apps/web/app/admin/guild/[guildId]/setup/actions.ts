@@ -338,6 +338,13 @@ export async function saveGuildSetup(guildId: string, formData: FormData): Promi
     roleQuarantineMode: readOptionalFormValue(formData, 'roleQuarantineMode'),
     roleQuarantineExemptRoleIds: readFormStringArray(formData, 'roleQuarantineExemptRoleIds'),
     accountQuarantineEnabled: formData.get('accountQuarantineEnabled') === 'on',
+    captchaMode: readOptionalFormValue(formData, 'captchaMode'),
+    captchaPassAction: readOptionalFormValue(formData, 'captchaPassAction'),
+    captchaChallengeLifetimeHours: readOptionalIntegerFormValue(
+      formData,
+      'captchaChallengeLifetimeHours'
+    ),
+    captchaMaxSubmissions: readOptionalIntegerFormValue(formData, 'captchaMaxSubmissions'),
     manualIntakeEnabled: formData.get('manualIntakeEnabled') === 'on',
     manualIntakeRoleId: readOptionalFormString(formData, 'manualIntakeRoleId'),
     manualIntakeGracePeriodSeconds: readOptionalIntegerFormValue(

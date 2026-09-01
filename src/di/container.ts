@@ -80,6 +80,10 @@ import {
   MessageDeletionJobRepository,
 } from '../repositories/MessageDeletionJobRepository';
 import {
+  CaptchaChallengeRepository,
+  ICaptchaChallengeRepository,
+} from '../repositories/CaptchaChallengeRepository';
+import {
   IIntegrityAuditRepository,
   IntegrityAuditRepository,
 } from '../repositories/IntegrityAuditRepository';
@@ -140,6 +144,10 @@ import {
   CaseThreadClosureSweepService,
   ICaseThreadClosureSweepService,
 } from '../services/CaseThreadClosureSweepService';
+import {
+  CaptchaChallengeService,
+  ICaptchaChallengeService,
+} from '../services/CaptchaChallengeService';
 // Initialize container
 const container = new Container();
 
@@ -253,6 +261,10 @@ function configureRepositories(container: Container): void {
   container
     .bind<IGlobalMessageWatchlistRepository>(TYPES.GlobalMessageWatchlistRepository)
     .to(GlobalMessageWatchlistRepository)
+    .inSingletonScope();
+  container
+    .bind<ICaptchaChallengeRepository>(TYPES.CaptchaChallengeRepository)
+    .to(CaptchaChallengeRepository)
     .inSingletonScope();
 
   // Add more repository bindings as they're refactored
@@ -399,6 +411,10 @@ function configureServices(container: Container): void {
   container
     .bind<ICaseThreadClosureSweepService>(TYPES.CaseThreadClosureSweepService)
     .to(CaseThreadClosureSweepService)
+    .inSingletonScope();
+  container
+    .bind<ICaptchaChallengeService>(TYPES.CaptchaChallengeService)
+    .to(CaptchaChallengeService)
     .inSingletonScope();
 }
 

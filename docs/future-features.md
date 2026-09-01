@@ -17,9 +17,12 @@ Go through a wizard to set up the verificaiton channel, admin channel, and case 
 
 Have users confirm their actions for verification and banning, and reopening cases
 
-## Captcha
+## CAPTCHA case challenges
 
-Have the user complete a captcha as part of the verification process. This could be an automatic DM to the user, probably configurable.
+Add CAPTCHA as an optional component of a normal case, with automatic suspicious-join inclusion and
+moderator-requested challenges. See the
+[CAPTCHA Case Challenge Implementation Plan](captcha-case-challenge-plan.md) and
+[#218](https://github.com/BASIC-BIT/drasil/issues/218).
 
 ## Server Customizable Thread Verification Message
 

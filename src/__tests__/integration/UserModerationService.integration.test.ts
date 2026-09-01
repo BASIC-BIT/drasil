@@ -77,6 +77,8 @@ describeIntegration('UserModerationService (integration)', () => {
       restoreObservedDetectionActions: jest.fn().mockResolvedValue(true),
     };
     threadManager = {
+      sendCaptchaChallenge: jest.fn().mockResolvedValue(true),
+      sendCaptchaStatus: jest.fn().mockResolvedValue(true),
       createVerificationThread: jest.fn().mockResolvedValue({} as any),
       createReportReviewThread: jest.fn().mockResolvedValue({} as any),
       createPrivateEvidenceThread: jest.fn().mockResolvedValue({} as any),

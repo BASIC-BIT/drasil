@@ -11,6 +11,14 @@ import {
   CASE_REVIEW_REMINDER_MAX_VERY_STALE_DAYS,
   CASE_REVIEW_REMINDER_MIN_HOURS,
   CASE_REVIEW_REMINDER_MIN_VERY_STALE_DAYS,
+  CAPTCHA_DEFAULT_CHALLENGE_LIFETIME_HOURS,
+  CAPTCHA_DEFAULT_MAX_SUBMISSIONS,
+  CAPTCHA_DEFAULT_MODE,
+  CAPTCHA_DEFAULT_PASS_ACTION,
+  CAPTCHA_MAX_CHALLENGE_LIFETIME_HOURS,
+  CAPTCHA_MAX_MAX_SUBMISSIONS,
+  CAPTCHA_MIN_CHALLENGE_LIFETIME_HOURS,
+  CAPTCHA_MIN_MAX_SUBMISSIONS,
   HEURISTIC_DEFAULT_MESSAGE_THRESHOLD,
   HEURISTIC_DEFAULT_TIMEFRAME_SECONDS,
   HEURISTIC_KEYWORDS_INPUT_MAX_LENGTH,
@@ -76,6 +84,7 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
 import { createSetupDashboardService } from '@/lib/setupDashboardService';
 import type { DiscordChannel, DiscordRole } from '@/lib/discordApi';
+import { captchaProviderConfigurationIssues } from '@/lib/turnstile';
 
 type PageProps = {
   readonly params: Promise<{ readonly guildId: string }>;
@@ -209,6 +218,14 @@ export default async function GuildSetupPage({ params }: PageProps) {
   const roleQuarantineMode = server?.settings.role_quarantine_mode ?? 'off';
   const roleQuarantineExemptRoleIds = server?.settings.role_quarantine_exempt_role_ids ?? [];
   const accountQuarantineEnabled = server?.settings.account_quarantine_enabled ?? false;
+  const captchaMode = server?.settings.captcha_mode ?? CAPTCHA_DEFAULT_MODE;
+  const captchaPassAction = server?.settings.captcha_pass_action ?? CAPTCHA_DEFAULT_PASS_ACTION;
+  const captchaChallengeLifetimeHours =
+    server?.settings.captcha_challenge_lifetime_hours ?? CAPTCHA_DEFAULT_CHALLENGE_LIFETIME_HOURS;
+  const captchaMaxSubmissions =
+    server?.settings.captcha_max_submissions ?? CAPTCHA_DEFAULT_MAX_SUBMISSIONS;
+  const captchaConfigurationIssues =
+    captchaMode === 'off' ? [] : captchaProviderConfigurationIssues();
   const caseResponderRoleIds = server?.settings.case_responder_role_ids ?? [];
   const caseResponderRoutingMode = server?.settings.case_responder_routing_mode ?? 'off';
   const caseResponderThreadMemberCap =
@@ -983,6 +1000,7 @@ export default async function GuildSetupPage({ params }: PageProps) {
             reminder cadence. Disabling case review does not disable screening notices.
           </p>
         </div>
+
         <div className="actions">
           <label>
             <input
@@ -1024,6 +1042,63 @@ export default async function GuildSetupPage({ params }: PageProps) {
               max={CASE_REVIEW_REMINDER_MAX_VERY_STALE_DAYS}
               min={CASE_REVIEW_REMINDER_MIN_VERY_STALE_DAYS}
               name="caseReviewVeryStaleDays"
+              type="number"
+            />
+          </div>
+        </div>
+
+        <div>
+          <h2>Browser Security Checks</h2>
+          <p className="muted">
+            Add an optional Turnstile check to standard cases. Moderators can request a check in
+            manual mode; suspicious-join mode can also add one when a join case is first created.
+          </p>
+          {captchaConfigurationIssues.length > 0 ? (
+            <p className="danger-text" role="alert">
+              Browser checks are not ready. Operator configuration needs:{' '}
+              {captchaConfigurationIssues.join(', ')}.
+            </p>
+          ) : null}
+        </div>
+        <div className="form-grid">
+          <div className="field">
+            <label htmlFor="captchaMode">Security check mode</label>
+            <select defaultValue={captchaMode} id="captchaMode" name="captchaMode">
+              <option value="off">Off</option>
+              <option value="manual">Moderator request only</option>
+              <option value="suspicious_join">Moderator request and suspicious joins</option>
+            </select>
+          </div>
+          <div className="field">
+            <label htmlFor="captchaPassAction">Automatic join pass behavior</label>
+            <select
+              defaultValue={captchaPassAction}
+              id="captchaPassAction"
+              name="captchaPassAction"
+            >
+              <option value="evidence_only">Record evidence only</option>
+              <option value="verify_join_only">Verify unchanged join-only case</option>
+            </select>
+          </div>
+          <div className="field">
+            <label htmlFor="captchaChallengeLifetimeHours">Link lifetime hours</label>
+            <input
+              defaultValue={captchaChallengeLifetimeHours}
+              id="captchaChallengeLifetimeHours"
+              max={CAPTCHA_MAX_CHALLENGE_LIFETIME_HOURS}
+              min={CAPTCHA_MIN_CHALLENGE_LIFETIME_HOURS}
+              name="captchaChallengeLifetimeHours"
+              type="number"
+            />
+          </div>
+          <div className="field">
+            <label htmlFor="captchaMaxSubmissions">Maximum submissions</label>
+            <input
+              defaultValue={captchaMaxSubmissions}
+              id="captchaMaxSubmissions"
+              max={CAPTCHA_MAX_MAX_SUBMISSIONS}
+              min={CAPTCHA_MIN_MAX_SUBMISSIONS}
+              name="captchaMaxSubmissions"
               type="number"
             />
           </div>

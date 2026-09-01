@@ -65,6 +65,12 @@ export type AccountQuarantineAttentionReason =
   | 'attention_delivery_incomplete'
   | 'role_restoration_incomplete';
 
+export type CaptchaAttentionReason =
+  | 'delivery_failed'
+  | 'expired'
+  | 'submission_limit'
+  | 'automatic_resolution_held';
+
 /**
  * Interface for NotificationManager service
  */
@@ -94,7 +100,7 @@ export interface INotificationManager {
   logActionToMessage(
     verificationEvent: VerificationEvent,
     actionTaken: AdminActionType,
-    admin: User,
+    admin: Pick<User, 'id'>,
     thread?: ThreadChannel
   ): Promise<boolean>;
 
@@ -168,6 +174,11 @@ export interface INotificationManager {
     verificationEvent: VerificationEvent,
     reason: AccountQuarantineAttentionReason,
     sourceMessage?: Message
+  ): Promise<boolean>;
+
+  notifyCaptchaAttention?(
+    verificationEvent: VerificationEvent,
+    reason: CaptchaAttentionReason
   ): Promise<boolean>;
 
   upsertObservedDetectionNotification(
@@ -692,6 +703,49 @@ export class NotificationManager implements INotificationManager {
     }
   }
 
+  public async notifyCaptchaAttention(
+    verificationEvent: VerificationEvent,
+    reason: CaptchaAttentionReason
+  ): Promise<boolean> {
+    try {
+      const serverConfig = await this.configService.getServerConfig(verificationEvent.server_id);
+      const adminChannel = await this.configService.getAdminChannel(verificationEvent.server_id);
+      if (!adminChannel) {
+        return false;
+      }
+
+      const notificationRoleIds = this.presentationBuilder.getCaseNotificationRoleIds(serverConfig);
+      const summary =
+        reason === 'delivery_failed'
+          ? 'A browser security check could not be delivered. Review the case and retry when ready.'
+          : reason === 'expired'
+            ? 'A browser security check expired. The user remains restricted.'
+            : reason === 'submission_limit'
+              ? 'A browser security check reached its submission limit. The user remains restricted.'
+              : 'A browser security check passed, but current case state prevented automatic resolution.';
+      const lines = [
+        `${this.presentationBuilder.formatRoleMentions(notificationRoleIds)} ${summary}`.trim(),
+        `User: <@${verificationEvent.user_id}> (\`${verificationEvent.user_id}\`)`,
+        `Case: \`${verificationEvent.id}\``,
+        verificationEvent.thread_id ? `Support thread: <#${verificationEvent.thread_id}>` : null,
+        verificationEvent.private_evidence_thread_id
+          ? `Evidence thread: <#${verificationEvent.private_evidence_thread_id}>`
+          : null,
+      ].filter((line): line is string => Boolean(line));
+      await adminChannel.send({
+        content: lines.join('\n'),
+        allowedMentions: this.presentationBuilder.createAdminAllowedMentions(notificationRoleIds),
+      });
+      return true;
+    } catch (error) {
+      console.warn(
+        `Failed to notify admins about browser security-check attention for case ${verificationEvent.id}:`,
+        error
+      );
+      return false;
+    }
+  }
+
   /**
    * Log an admin action to the notification message
    * @param message The original notification message
@@ -702,7 +756,7 @@ export class NotificationManager implements INotificationManager {
   public async logActionToMessage(
     verificationEvent: VerificationEvent,
     actionTaken: AdminActionType,
-    admin: User,
+    admin: Pick<User, 'id'>,
     thread?: ThreadChannel
   ): Promise<boolean> {
     try {

@@ -38,6 +38,7 @@ export const TYPES = {
   MessageCleanupService: Symbol.for('MessageCleanupService'),
   CaseThreadClosureSweepService: Symbol.for('CaseThreadClosureSweepService'),
   CaseRoleReleaseReconciliationService: Symbol.for('CaseRoleReleaseReconciliationService'),
+  CaptchaChallengeService: Symbol.for('CaptchaChallengeService'),
 
   // Repositories
   BaseRepository: Symbol.for('BaseRepository'),
@@ -55,6 +56,7 @@ export const TYPES = {
   RoleQuarantineSnapshotRepository: Symbol.for('RoleQuarantineSnapshotRepository'),
   IntegrityAuditRepository: Symbol.for('IntegrityAuditRepository'),
   GlobalMessageWatchlistRepository: Symbol.for('GlobalMessageWatchlistRepository'),
+  CaptchaChallengeRepository: Symbol.for('CaptchaChallengeRepository'),
 
   // External dependencies
   DiscordClient: Symbol.for('DiscordClient'),

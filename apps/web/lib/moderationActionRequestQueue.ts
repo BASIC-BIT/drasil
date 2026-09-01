@@ -36,7 +36,12 @@ export type ModerationActionRequestActionType =
   | 'intake_role_members'
   | 'sync_existing_ban'
   | 'complete_setup_verification'
-  | 'upsert_report_instructions';
+  | 'upsert_report_instructions'
+  | 'request_captcha_challenge'
+  | 'retry_captcha_challenge'
+  | 'bypass_captcha_challenge'
+  | 'apply_captcha_pass'
+  | 'notify_captcha_attention';
 
 export type ModerationActionRequestQueueStatus = 'queued' | 'processing' | 'completed' | 'failed';
 
@@ -76,7 +81,7 @@ export async function queueModerationActionRequestWithReceipt(
   return insertModerationActionRequestWithReceipt(getPostgresPool(), input);
 }
 
-async function insertModerationActionRequestWithReceipt(
+export async function insertModerationActionRequestWithReceipt(
   client: Pool | PoolClient,
   input: QueueModerationActionRequestInput
 ): Promise<ModerationActionRequestReceipt> {

@@ -26,6 +26,7 @@ import type { AccountQuarantineActionRequests } from '@/lib/inboxActionReceipts'
 import {
   confidenceStatusClass,
   formatCaseAction,
+  formatCaptchaStatus,
   formatConfidence,
   formatDetectionType,
   formatPresenceState,
@@ -151,6 +152,22 @@ function SummaryPanel({
           <span>
             The verification thread remains open for a recovery report. Release requires moderator
             verification, kick, or ban.
+          </span>
+        </div>
+      ) : null}
+
+      {detail.captchaChallenge ? (
+        <div className="member-warning neutral-warning">
+          <strong>{formatCaptchaStatus(detail.captchaChallenge.status)}</strong>
+          <span>
+            {detail.captchaChallenge.status === 'pending'
+              ? `Expires ${formatUtc(detail.captchaChallenge.expiresAt)}. ${detail.captchaChallenge.submissionCount} submissions recorded.`
+              : detail.captchaChallenge.status === 'passed'
+                ? 'Security check completed.'
+                : detail.captchaChallenge.status === 'bypassed'
+                  ? (detail.captchaChallenge.bypassReason ??
+                    'A moderator continued this case without the browser check.')
+                  : `Generation ${detail.captchaChallenge.generation}.`}
           </span>
         </div>
       ) : null}

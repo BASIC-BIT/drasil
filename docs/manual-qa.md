@@ -196,6 +196,33 @@ Prefer deterministic flows first. Use `/flaguser` instead of hoping heuristics t
   - bot replies do not ping roles/users unexpectedly
   - GPT-backed flows still work with configured context present
 
+### 13. Case-bound browser security check
+
+- Configure Turnstile test keys, the canonical public web URL, exact expected hostname, and a
+  separate binding secret. Keep a safe test account available in the staging server.
+- Set browser security checks to `Moderator request only`, open a standard case, and select
+  `Challenge user`.
+- Expected result:
+  - the existing user-facing case thread receives one link with the approved instruction copy
+  - a different Discord account cannot continue and does not consume the submission allowance
+  - the case subject can complete the provider check and sees `Security check completed.`
+  - the moderator-requested pass is visible as evidence and the case remains pending
+- Retry from an expired or failed generation.
+- Expected result:
+  - the old link is unavailable and only the new generation can complete
+  - provider or network failure does not consume a submission or change the restriction
+- Set mode to `Moderator request and suspicious joins`, then create a new suspicious-join case.
+- Expected result:
+  - only the newly created join case receives an automatic check
+  - evidence-only policy leaves the case pending after pass
+  - join-only verification resolves an unchanged join-only case
+  - adding message/report evidence or another pending case before completion keeps the case role and
+    leaves the case pending
+- Turn the feature off while a check is pending.
+- Expected result:
+  - the public link stops accepting completions immediately
+  - the bounded bot sweep records the pending challenge as cancelled
+
 ## What to record during QA
 
 For each flow, capture enough evidence to debug failures later:

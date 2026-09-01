@@ -35,6 +35,17 @@ export interface TerminalActionCompletion {
   requiresTerminalActionClaim: boolean;
 }
 
+export interface CaptchaVerificationCompletionInput {
+  id: string;
+  serverId: string;
+  userId: string;
+  expectedCaseRevision: number;
+  challengeId: string;
+  generation: number;
+  resolvedBy: string;
+  resolvedAt: Date;
+}
+
 class VerificationReleaseConflictError extends Error {}
 class TerminalActionClaimConflictError extends Error {}
 
@@ -115,6 +126,9 @@ export interface IVerificationEventRepository {
     resolvedBy: string,
     resolvedAt: Date
   ): Promise<VerificationEvent[] | null>;
+  completeCaptchaVerification(
+    input: CaptchaVerificationCompletionInput
+  ): Promise<VerificationEvent | null>;
   rollbackCaseRoleRelease(id: string, attemptId: string): Promise<VerificationEvent | null>;
   renewQuarantineAttempt(id: string, attemptId: string): Promise<boolean>;
   recordQuarantineCaseRole(id: string, attemptId: string, roleId: string): Promise<boolean>;
@@ -559,6 +573,50 @@ export class VerificationEventRepository implements IVerificationEventRepository
         return null;
       }
       this.handleError(error, 'completeVerificationRelease');
+    }
+  }
+
+  public async completeCaptchaVerification(
+    input: CaptchaVerificationCompletionInput
+  ): Promise<VerificationEvent | null> {
+    try {
+      const rows = await this.prisma.$queryRaw<VerificationEvent[]>`
+        UPDATE verification_events AS target
+        SET
+          status = ${VerificationStatus.VERIFIED}::verification_status,
+          resolved_by = ${input.resolvedBy},
+          resolved_at = ${input.resolvedAt},
+          notes = 'Security check completed.',
+          attention_state = ${CaseAttentionState.REVIEW_REQUIRED}::case_attention_state,
+          containment_status = ${CaseContainmentStatus.NOT_APPLICABLE}::case_containment_status,
+          metadata = COALESCE(target.metadata, '{}'::jsonb) || jsonb_build_object(
+            'captcha_resolution',
+            jsonb_build_object(
+              'challenge_id', ${input.challengeId}::text,
+              'generation', ${input.generation}::integer,
+              'resolved_at', ${input.resolvedAt.toISOString()}::text
+            )
+          ),
+          updated_at = now()
+        WHERE target.id = ${input.id}::uuid
+          AND target.server_id = ${input.serverId}
+          AND target.user_id = ${input.userId}
+          AND target.status = ${VerificationStatus.PENDING}::verification_status
+          AND target.case_kind = ${CaseKind.STANDARD}::case_kind
+          AND target.case_revision = ${input.expectedCaseRevision}
+          AND NOT EXISTS (
+            SELECT 1
+            FROM verification_events AS other
+            WHERE other.server_id = target.server_id
+              AND other.user_id = target.user_id
+              AND other.status = ${VerificationStatus.PENDING}::verification_status
+              AND other.id <> target.id
+          )
+        RETURNING target.*
+      `;
+      return rows[0] ?? null;
+    } catch (error) {
+      this.handleError(error, 'completeCaptchaVerification');
     }
   }
 

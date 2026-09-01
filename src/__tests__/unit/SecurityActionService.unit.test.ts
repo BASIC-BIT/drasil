@@ -106,6 +106,8 @@ describe('SecurityActionService (unit)', () => {
       restoreObservedDetectionActions: jest.fn().mockResolvedValue(true),
     };
     threadManager = {
+      sendCaptchaChallenge: jest.fn().mockResolvedValue(true),
+      sendCaptchaStatus: jest.fn().mockResolvedValue(true),
       createVerificationThread: jest
         .fn()
         .mockResolvedValue({ id: 'thread-1', url: 'https://discord.com/channels/thread-1' } as any),
@@ -145,6 +147,7 @@ describe('SecurityActionService (unit)', () => {
         return true;
       }),
       verifyUser: jest.fn().mockResolvedValue(true),
+      resolveCaptchaCase: jest.fn().mockResolvedValue({ status: 'resolved' }),
       kickUser: jest.fn().mockResolvedValue(true),
       banUser: jest.fn().mockResolvedValue(true),
       banUserById: jest.fn().mockResolvedValue(true),

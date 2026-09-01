@@ -81,6 +81,8 @@ describeIntegration('SecurityActionService (integration)', () => {
       restoreObservedDetectionActions: jest.fn().mockResolvedValue(true),
     };
     threadManager = {
+      sendCaptchaChallenge: jest.fn().mockResolvedValue(true),
+      sendCaptchaStatus: jest.fn().mockResolvedValue(true),
       createVerificationThread: jest
         .fn()
         .mockResolvedValue({ id: 'thread-1', url: 'https://discord.com/channels/thread-1' } as any),
@@ -113,6 +115,7 @@ describeIntegration('SecurityActionService (integration)', () => {
     };
     userModerationService = {
       applyCaseRole: jest.fn().mockResolvedValue(true),
+      resolveCaptchaCase: jest.fn().mockResolvedValue({ status: 'resolved' }),
       verifyUser: jest.fn().mockResolvedValue(true),
       kickUser: jest.fn().mockResolvedValue(true),
       banUser: jest.fn().mockResolvedValue(true),

@@ -18,7 +18,12 @@ import {
 } from '@/components/cases/CaseActionControls';
 import { InboxActionForm, type InboxStateAction } from './InboxActionForm';
 import { InboxActionRequestPollingProvider } from './InboxActionRequestPoller';
-import { formatDetectionType, formatUtc, freshnessStatusClass } from '@/lib/casePresentation';
+import {
+  formatCaptchaStatus,
+  formatDetectionType,
+  formatUtc,
+  freshnessStatusClass,
+} from '@/lib/casePresentation';
 import type { InboxActionState } from '@/lib/inboxActionState';
 import {
   findAccountQuarantineActionRequests,
@@ -156,6 +161,9 @@ const actionLabels: Record<ModerationInboxAction, string> = {
   view_case: 'View Case',
   view_history: 'View History',
   view_report: 'View Report',
+  challenge_user: 'Challenge User',
+  retry_captcha: 'Retry Security Check',
+  bypass_captcha: 'Continue Without Browser Check',
 };
 
 const reportClosureActionSet = new Set<ModerationInboxAction>([
@@ -799,6 +807,12 @@ function InboxDetailPanel({
         <DetailMetric label="Created" value={formatUtc(item.createdAt)} />
         <DetailMetric label="Source" value={item.sourceId} />
         <DetailMetric label="Queue" value={item.queueItemId ? attentionLabel : 'No queue mirror'} />
+        {item.captchaChallenge ? (
+          <DetailMetric
+            label="Security check"
+            value={formatCaptchaStatus(item.captchaChallenge.status)}
+          />
+        ) : null}
       </div>
 
       <div className="inbox-detail-section">

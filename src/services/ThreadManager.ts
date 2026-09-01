@@ -90,6 +90,10 @@ export interface IThreadManager {
     verificationEvent: VerificationEvent
   ): Promise<ThreadChannel | null>;
 
+  sendCaptchaChallenge(verificationEvent: VerificationEvent, url: string): Promise<boolean>;
+
+  sendCaptchaStatus(verificationEvent: VerificationEvent, message: string): Promise<boolean>;
+
   repairVerificationThread(
     member: GuildMember,
     verificationEvent: VerificationEvent
@@ -184,6 +188,46 @@ export class ThreadManager implements IThreadManager {
     this.userRepository = userRepository;
     this.serverRepository = serverRepository;
     this.serverMemberRepository = serverMemberRepository;
+  }
+
+  public async sendCaptchaChallenge(
+    verificationEvent: VerificationEvent,
+    url: string
+  ): Promise<boolean> {
+    if (!verificationEvent.thread_id) {
+      return false;
+    }
+    const channel = await this.client.channels.fetch(verificationEvent.thread_id).catch(() => null);
+    if (!channel?.isThread()) {
+      return false;
+    }
+    if (channel.archived) {
+      await channel.setArchived(false, 'Deliver CAPTCHA case challenge');
+    }
+    await channel.send({
+      content: 'Complete this browser check to confirm access to your Discord account.',
+      components: [
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Open security check').setURL(url)
+        ),
+      ],
+    });
+    return true;
+  }
+
+  public async sendCaptchaStatus(
+    verificationEvent: VerificationEvent,
+    message: string
+  ): Promise<boolean> {
+    if (!verificationEvent.thread_id) {
+      return false;
+    }
+    const channel = await this.client.channels.fetch(verificationEvent.thread_id).catch(() => null);
+    if (!channel?.isThread()) {
+      return false;
+    }
+    await channel.send({ content: enforceDiscordMessageLimit(message) });
+    return true;
   }
 
   private async getInitialVerificationPrompt(member: GuildMember): Promise<string> {

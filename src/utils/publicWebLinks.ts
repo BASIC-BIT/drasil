@@ -59,3 +59,7 @@ export function buildAdminCaseDetailUrl(guildId: string, caseId: string): string
     `/admin/guild/${encodeURIComponent(guildId)}/cases/${encodeURIComponent(caseId)}`
   );
 }
+
+export function buildCaptchaChallengeUrl(token: string): string | null {
+  return buildPublicWebUrl(`/challenge/${encodeURIComponent(token)}`);
+}

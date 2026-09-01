@@ -43,6 +43,9 @@ Initial capabilities:
   including queued verify, close-no-action, kick, ban, ban-by-ID, repair-thread,
   and create-thread controls, plus sync-existing-ban for already-banned users
   and reopen for eligible resolved in-server cases.
+- Optional case-bound browser security checks using Discord `identify` OAuth and Cloudflare
+  Turnstile. Moderators can challenge, retry, or bypass eligible standard cases from the existing
+  case surfaces; automatic inclusion is limited to newly created suspicious-join cases.
 - Resolved case history at `/admin/guild/[guildId]/history`, with read-only
   outcome rows, Discord provenance, client-side search/outcome sorting, visible
   export packets, and links back into case detail.
@@ -191,6 +194,11 @@ Required web runtime variables:
 - `DISCORD_CLIENT_SECRET`: Discord OAuth app client secret.
 - `DRASIL_SESSION_SECRET`: high-entropy cookie signing secret.
 - `DRASIL_OAUTH_ENCRYPTION_KEY`: high-entropy OAuth token encryption secret. This must be set separately from `DRASIL_SESSION_SECRET`.
+- `NEXT_PUBLIC_TURNSTILE_SITE_KEY`: Cloudflare Turnstile site key for the public case page.
+- `TURNSTILE_SECRET_KEY`: matching Turnstile server-side validation secret.
+- `TURNSTILE_EXPECTED_HOSTNAME`: exact hostname of `NEXT_PUBLIC_APP_URL`.
+- `DRASIL_CAPTCHA_BINDING_SECRET`: separate high-entropy HMAC secret for binding provider responses
+  to one challenge generation.
 - `DATABASE_URL` or `DRASIL_WEB_DATABASE_URL`: Supabase/Postgres connection string.
 - `DRASIL_WEB_BOT_TOKEN` or `DISCORD_TOKEN`: bot token for live role/channel diagnostics and active-case Discord message reads.
 
@@ -256,3 +264,6 @@ UI-affecting changes should include either a Playwright assertion, a visual snap
 - Report AI settings retain the current product rule: report AI can never auto-ban.
 - Cross-server intelligence and privileged evidence are not exposed in this dashboard slice.
 - Active case pages require the same Discord Manage Server authorization recheck as setup pages.
+- Public security-check pages expose only challenge state. They use a separate short-lived,
+  case-bound Discord identity cookie, never persist OAuth or Turnstile tokens, validate request
+  origin, and send every provider response through Turnstile Siteverify before recording a result.

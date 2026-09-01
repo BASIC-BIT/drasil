@@ -23,6 +23,8 @@ import {
   AdminActionType,
   CaseAttentionState,
   CaseKind,
+  CaptchaChallengeRequestSource,
+  CaptchaChallengeStatus,
   DetectionType,
   VerificationStatus,
   type VerificationEvent,
@@ -89,6 +91,8 @@ import {
   IAccountQuarantineService,
 } from '../services/AccountQuarantineService';
 import { getAccountQuarantineSettings } from '../utils/accountQuarantineSettings';
+import { getCaptchaSettings } from '../utils/captchaSettings';
+import type { ICaptchaChallengeService } from '../services/CaptchaChallengeService';
 import { truncatePreview } from '../utils/textPreview';
 import { buildAccountQuarantinePreviewFingerprint as fingerprintAccountQuarantinePreview } from '../utils/accountQuarantinePreview';
 import {
@@ -118,6 +122,8 @@ const MODERATION_ACTION_CONFIRMATION_PREFIX = 'moderation_action_confirm';
 const MODERATION_ACTION_CONFIRMATION_TTL_MS = 10 * 60 * 1000;
 const CASE_REVIEW_DIGEST_PAGE_SIZE = 25;
 const ACCOUNT_QUARANTINE_CONFIRMATION_MAX_LENGTH = 1900;
+const CAPTCHA_BYPASS_MODAL_PREFIX = 'captcha:bypass';
+const CAPTCHA_BYPASS_REASON_FIELD_ID = 'captcha_bypass_reason';
 
 interface PendingModerationActionConfirmation {
   readonly action: ModeratorUserAction;
@@ -162,6 +168,7 @@ export class InteractionHandler implements IInteractionHandler {
   private roleGateService?: IRoleGateService;
   private detectionEventsRepository?: IDetectionEventsRepository;
   private accountQuarantineService?: IAccountQuarantineService;
+  private captchaChallengeService?: ICaptchaChallengeService;
   private moderationActionConfirmationCounter = 0;
   private readonly pendingModerationActionConfirmations = new Map<
     string,
@@ -201,7 +208,10 @@ export class InteractionHandler implements IInteractionHandler {
     detectionEventsRepository?: IDetectionEventsRepository,
     @inject(TYPES.AccountQuarantineService)
     @optional()
-    accountQuarantineService?: IAccountQuarantineService
+    accountQuarantineService?: IAccountQuarantineService,
+    @inject(TYPES.CaptchaChallengeService)
+    @optional()
+    captchaChallengeService?: ICaptchaChallengeService
   ) {
     this.client = client;
     this.notificationManager = notificationManager;
@@ -216,6 +226,7 @@ export class InteractionHandler implements IInteractionHandler {
     this.roleGateService = roleGateService;
     this.detectionEventsRepository = detectionEventsRepository;
     this.accountQuarantineService = accountQuarantineService;
+    this.captchaChallengeService = captchaChallengeService;
     const reportSubmissionService = new ReportSubmissionService(
       this.configService,
       this.securityActionService
@@ -549,6 +560,11 @@ export class InteractionHandler implements IInteractionHandler {
       return;
     }
 
+    if (normalizedParsed.action === 'captcha_bypass') {
+      await this.showCaptchaBypassModal(interaction, guildId, normalizedParsed);
+      return;
+    }
+
     if (normalizedParsed.action.startsWith('confirm_')) {
       await this.executeConfirmedAdminAction(interaction, guildId, normalizedParsed);
       return;
@@ -621,6 +637,7 @@ export class InteractionHandler implements IInteractionHandler {
     );
     const serverConfig = await this.configService.getServerConfig(guildId);
     const accountQuarantineEnabled = getAccountQuarantineSettings(serverConfig.settings).enabled;
+    const captchaSettings = getCaptchaSettings(serverConfig.settings);
     const history = await this.verificationEventRepository.findByUserAndServer(
       parsed.userId,
       guildId
@@ -688,6 +705,52 @@ export class InteractionHandler implements IInteractionHandler {
           actionButtons.push(
             this.adminActionButton(parsed, 'repair', 'Repair Active Case', ButtonStyle.Primary)
           );
+          if (
+            this.captchaChallengeService &&
+            captchaSettings.mode !== 'off' &&
+            activeCase.case_kind !== CaseKind.COMPROMISED_ACCOUNT
+          ) {
+            const captchaChallenge = await this.captchaChallengeService.findByCaseId(activeCase.id);
+            const captchaParsed = { ...parsed, verificationEventId: activeCase.id };
+            if (!captchaChallenge) {
+              actionButtons.push(
+                this.adminActionButton(
+                  captchaParsed,
+                  'captcha',
+                  'Challenge User',
+                  ButtonStyle.Primary
+                )
+              );
+            } else if (
+              captchaChallenge.status === CaptchaChallengeStatus.FAILED ||
+              captchaChallenge.status === CaptchaChallengeStatus.EXPIRED ||
+              captchaChallenge.status === CaptchaChallengeStatus.BYPASSED
+            ) {
+              actionButtons.push(
+                this.adminActionButton(
+                  captchaParsed,
+                  'captcha_retry',
+                  'Retry Security Check',
+                  ButtonStyle.Primary
+                )
+              );
+            }
+            if (
+              captchaChallenge &&
+              (captchaChallenge.status === CaptchaChallengeStatus.PENDING ||
+                captchaChallenge.status === CaptchaChallengeStatus.FAILED ||
+                captchaChallenge.status === CaptchaChallengeStatus.EXPIRED)
+            ) {
+              actionButtons.push(
+                this.adminActionButton(
+                  captchaParsed,
+                  'captcha_bypass',
+                  'Continue Without Check...',
+                  ButtonStyle.Secondary
+                )
+              );
+            }
+          }
         }
         if (
           this.accountQuarantineService &&
@@ -1292,6 +1355,18 @@ export class InteractionHandler implements IInteractionHandler {
           message: `Reopen verification for ${target} and apply the case role again?`,
           style: ButtonStyle.Primary,
         };
+      case 'captcha':
+        return {
+          label: 'Send Security Check',
+          message: `Send a browser security check to ${target} in the current case thread?`,
+          style: ButtonStyle.Primary,
+        };
+      case 'captcha_retry':
+        return {
+          label: 'Retry Security Check',
+          message: `Issue a new browser security check link to ${target}?`,
+          style: ButtonStyle.Primary,
+        };
       case 'observed_open':
         return {
           label: 'Confirm Open Case',
@@ -1541,6 +1616,92 @@ export class InteractionHandler implements IInteractionHandler {
     await this.handleBanButton(interaction, guildId, parsed.userId);
   }
 
+  private async showCaptchaBypassModal(
+    interaction: ButtonInteraction,
+    guildId: string,
+    parsed: ParsedAdminActionCustomId
+  ): Promise<void> {
+    if (!(await this.hasAnyPermission(interaction, guildId, this.getModerationPermissions()))) {
+      await this.replyPermissionDenied(
+        interaction,
+        'You need moderation permissions to continue without a security check.'
+      );
+      return;
+    }
+    if (!parsed.verificationEventId || !this.captchaChallengeService) {
+      await interaction.reply({
+        content: 'This security check action is no longer available.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const modal = new ModalBuilder()
+      .setCustomId(`${CAPTCHA_BYPASS_MODAL_PREFIX}:${parsed.verificationEventId}:${parsed.userId}`)
+      .setTitle('Continue Without Security Check');
+    const reason = new TextInputBuilder()
+      .setCustomId(CAPTCHA_BYPASS_REASON_FIELD_ID)
+      .setLabel('Reason')
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(true)
+      .setMaxLength(1000);
+    modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(reason));
+    await interaction.showModal(modal);
+  }
+
+  private async handleCaptchaBypassModalSubmit(interaction: ModalSubmitInteraction): Promise<void> {
+    const guildId = interaction.guildId;
+    const [prefix, action, verificationEventId, userId] = interaction.customId.split(':');
+    if (
+      !guildId ||
+      `${prefix}:${action}` !== CAPTCHA_BYPASS_MODAL_PREFIX ||
+      !verificationEventId ||
+      !userId ||
+      !this.captchaChallengeService
+    ) {
+      await interaction.reply({
+        content: 'This security check action is no longer available.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    if (!(await this.hasAnyPermission(interaction, guildId, this.getModerationPermissions()))) {
+      await interaction.reply({
+        content: 'You need moderation permissions to continue without a security check.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    try {
+      const verificationEvent =
+        await this.verificationEventRepository.findById(verificationEventId);
+      if (
+        !verificationEvent ||
+        verificationEvent.server_id !== guildId ||
+        verificationEvent.user_id !== userId
+      ) {
+        throw new Error('The bound case changed before the security check could be bypassed.');
+      }
+      const reason = interaction.fields.getTextInputValue(CAPTCHA_BYPASS_REASON_FIELD_ID).trim();
+      await this.captchaChallengeService.bypassChallenge(
+        verificationEventId,
+        interaction.user.id,
+        reason
+      );
+      await interaction.editReply({ content: 'Security check bypass recorded.' });
+    } catch (error) {
+      console.error('Failed to bypass CAPTCHA challenge from Discord:', error);
+      await interaction.editReply({
+        content:
+          error instanceof Error
+            ? error.message
+            : 'The security check bypass could not be recorded.',
+      });
+    }
+  }
+
   private async executeConfirmedAdminAction(
     interaction: ButtonInteraction,
     guildId: string,
@@ -1662,6 +1823,45 @@ export class InteractionHandler implements IInteractionHandler {
         return;
       }
       await this.handleReopenButton(interaction, guildId, parsed.userId);
+      return;
+    }
+
+    if (action === 'captcha' || action === 'captcha_retry') {
+      if (!(await this.hasAnyPermission(interaction, guildId, moderationPermissions))) {
+        await this.replyPermissionDenied(
+          interaction,
+          'You need moderation permissions to request a security check.'
+        );
+        return;
+      }
+      if (!this.captchaChallengeService || !parsed.verificationEventId) {
+        await interaction.reply({
+          content: 'This security check action is no longer available.',
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+      await interaction.deferUpdate();
+      try {
+        const result = await this.captchaChallengeService.requestChallenge({
+          verificationEventId: parsed.verificationEventId,
+          requestSource: CaptchaChallengeRequestSource.MODERATOR,
+          requestedBy: interaction.user.id,
+          retry: action === 'captcha_retry',
+        });
+        await interaction.followUp({
+          content: result.delivered
+            ? 'Security check sent in the case thread.'
+            : 'Security check created, but its case-thread link could not be delivered. Repair the public URL or case thread, then retry.',
+          flags: MessageFlags.Ephemeral,
+        });
+      } catch (error) {
+        console.error('Failed to request CAPTCHA challenge from Discord:', error);
+        await interaction.followUp({
+          content: error instanceof Error ? error.message : 'The security check could not be sent.',
+          flags: MessageFlags.Ephemeral,
+        });
+      }
       return;
     }
 
@@ -2166,6 +2366,10 @@ export class InteractionHandler implements IInteractionHandler {
   }
 
   public async handleModalSubmit(interaction: ModalSubmitInteraction): Promise<void> {
+    if (interaction.customId.startsWith(`${CAPTCHA_BYPASS_MODAL_PREFIX}:`)) {
+      await this.handleCaptchaBypassModalSubmit(interaction);
+      return;
+    }
     const moderationActionReason = parseModerationActionReasonModalCustomId(interaction.customId);
     if (moderationActionReason) {
       await this.handleModerationActionReasonModalSubmit(interaction, moderationActionReason);

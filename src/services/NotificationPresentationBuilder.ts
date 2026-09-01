@@ -633,7 +633,7 @@ export class NotificationPresentationBuilder {
 
     const field = {
       name: 'Action Taken',
-      value: `<@${adminId}> ${actionDescription} <t:${timestamp}:R>`,
+      value: `${this.formatActorReference(adminId)} ${actionDescription} <t:${timestamp}:R>`,
       inline: false,
     };
     const existingFields =
@@ -653,7 +653,7 @@ export class NotificationPresentationBuilder {
     this.restoreObservedPendingPresentation(embed);
     const field = {
       name: 'Action Reverted',
-      value: `<@${adminId}> ${actionDescription} <t:${timestamp}:R>`,
+      value: `${this.formatActorReference(adminId)} ${actionDescription} <t:${timestamp}:R>`,
       inline: false,
     };
     const existingFields =
@@ -1081,7 +1081,7 @@ export class NotificationPresentationBuilder {
     adminId: string,
     timestamp: number
   ): string {
-    return `${this.formatAdminActionLabel(actionTaken)} by <@${adminId}> at <t:${timestamp}:F>`;
+    return `${this.formatAdminActionLabel(actionTaken)} by ${this.formatActorReference(adminId)} at <t:${timestamp}:F>`;
   }
 
   private upsertLatestAdminActionField(
@@ -1201,7 +1201,7 @@ export class NotificationPresentationBuilder {
     adminId: string | null,
     timestamp: number | null
   ): string {
-    const actor = adminId ? ` by <@${adminId}>` : '';
+    const actor = adminId ? ` by ${this.formatActorReference(adminId)}` : '';
     const when = timestamp ? ` at <t:${timestamp}:F>` : '';
     return `${this.formatAdminActionLabel(actionTaken)}${actor}${when}\nNo further moderator action is pending.`;
   }
@@ -1218,6 +1218,10 @@ export class NotificationPresentationBuilder {
     } else {
       embed.addFields(field);
     }
+  }
+
+  private formatActorReference(actorId: string): string {
+    return actorId === 'drasil:captcha' ? 'Drasil browser check' : `<@${actorId}>`;
   }
 
   private metadataToRecord(metadata: DetectionEvent['metadata']): Record<string, unknown> {
@@ -1580,7 +1584,11 @@ export class NotificationPresentationBuilder {
       verificationEvent.status === VerificationStatus.BANNED ||
       verificationEvent.status === VerificationStatus.KICKED ||
       verificationEvent.status === VerificationStatus.CLOSED_NO_ACTION
-        ? `${verificationEvent.status}${verificationEvent.resolved_by ? ` by <@${verificationEvent.resolved_by}>` : ''}`
+        ? `${verificationEvent.status}${
+            verificationEvent.resolved_by
+              ? ` by ${this.formatActorReference(verificationEvent.resolved_by)}`
+              : ''
+          }`
         : 'pending';
 
     if (verificationEvent.thread_id) {

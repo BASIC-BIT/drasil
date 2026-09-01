@@ -27,6 +27,16 @@ export const verificationAiMaxActionSchema = z.preprocess(
   activeVerificationAiMaxActionSchema
 );
 export const roleQuarantineModeSchema = z.enum(['off', 'on']);
+export const captchaModeSchema = z.enum(['off', 'manual', 'suspicious_join']);
+export const captchaPassActionSchema = z.enum(['evidence_only', 'verify_join_only']);
+export const CAPTCHA_DEFAULT_MODE = 'off';
+export const CAPTCHA_DEFAULT_PASS_ACTION = 'evidence_only';
+export const CAPTCHA_DEFAULT_CHALLENGE_LIFETIME_HOURS = 24;
+export const CAPTCHA_MIN_CHALLENGE_LIFETIME_HOURS = 1;
+export const CAPTCHA_MAX_CHALLENGE_LIFETIME_HOURS = 168;
+export const CAPTCHA_DEFAULT_MAX_SUBMISSIONS = 5;
+export const CAPTCHA_MIN_MAX_SUBMISSIONS = 1;
+export const CAPTCHA_MAX_MAX_SUBMISSIONS = 20;
 export const MESSAGE_DELETION_MAX_CUSTOM_WATCHLIST_TERMS = 25;
 export const MESSAGE_DELETION_CUSTOM_WATCHLIST_TERM_MAX_LENGTH = 120;
 export const MESSAGE_DELETION_MAX_DISABLED_DEFAULT_IDS = 10;
@@ -222,6 +232,20 @@ export const serverSettingsSchema = z
     role_quarantine_mode: roleQuarantineModeSchema.optional(),
     role_quarantine_exempt_role_ids: z.array(z.string()).optional(),
     account_quarantine_enabled: z.boolean().optional(),
+    captcha_mode: captchaModeSchema.optional(),
+    captcha_pass_action: captchaPassActionSchema.optional(),
+    captcha_challenge_lifetime_hours: z
+      .number()
+      .int()
+      .min(CAPTCHA_MIN_CHALLENGE_LIFETIME_HOURS)
+      .max(CAPTCHA_MAX_CHALLENGE_LIFETIME_HOURS)
+      .optional(),
+    captcha_max_submissions: z
+      .number()
+      .int()
+      .min(CAPTCHA_MIN_MAX_SUBMISSIONS)
+      .max(CAPTCHA_MAX_MAX_SUBMISSIONS)
+      .optional(),
     verification_ai_thread_analysis_enabled: z.boolean().optional(),
     verification_ai_thread_analysis_message_limit: z
       .number()
@@ -424,6 +448,20 @@ export const guildSetupUpdateSchema = z
     roleQuarantineMode: roleQuarantineModeSchema.optional(),
     roleQuarantineExemptRoleIds: z.array(z.string()).optional(),
     accountQuarantineEnabled: z.boolean().optional(),
+    captchaMode: captchaModeSchema.optional(),
+    captchaPassAction: captchaPassActionSchema.optional(),
+    captchaChallengeLifetimeHours: z
+      .number()
+      .int()
+      .min(CAPTCHA_MIN_CHALLENGE_LIFETIME_HOURS)
+      .max(CAPTCHA_MAX_CHALLENGE_LIFETIME_HOURS)
+      .optional(),
+    captchaMaxSubmissions: z
+      .number()
+      .int()
+      .min(CAPTCHA_MIN_MAX_SUBMISSIONS)
+      .max(CAPTCHA_MAX_MAX_SUBMISSIONS)
+      .optional(),
     verificationAnalysisEnabled: z.boolean().optional(),
     verificationAnalysisMessageLimit: z
       .number()

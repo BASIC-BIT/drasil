@@ -37,6 +37,9 @@ const queuedCaseActions = new Set<CaseAction>([
   'reopen_case',
   'refresh_notification',
   'sync_existing_ban',
+  'challenge_user',
+  'retry_captcha',
+  'bypass_captcha',
 ]);
 
 const queueCaseActionErrorMessages = {
@@ -221,6 +224,28 @@ async function assertCanQueueCaseAction(
       attemptId: null,
       quarantinePhase,
       previewRequestId,
+      reason,
+    };
+  }
+
+  if (action === 'challenge_user' || action === 'retry_captcha' || action === 'bypass_captcha') {
+    if (formData?.get('confirmAction') !== 'on') {
+      throw new Error('Confirm the security-check action before queueing it.');
+    }
+    const setupAdapter = createSetupDataAdapter();
+    const server = await setupAdapter.getServer(guild.id);
+    const mode = server?.settings.captcha_mode;
+    if (mode !== 'manual' && mode !== 'suspicious_join') {
+      throw new Error('Browser security checks are disabled for this server.');
+    }
+    const reason = action === 'bypass_captcha' ? readFormString(formData, 'reason') : null;
+    if (action === 'bypass_captcha' && !reason) {
+      throw new Error('A reason is required to continue without the browser check.');
+    }
+    return {
+      attemptId: action === 'retry_captcha' ? randomUUID() : null,
+      quarantinePhase: null,
+      previewRequestId: null,
       reason,
     };
   }

@@ -43,6 +43,9 @@ export type WebCaseAction = Extract<
   | 'sync_existing_ban'
   | 'refresh_notification'
   | 'reopen_case'
+  | 'challenge_user'
+  | 'retry_captcha'
+  | 'bypass_captcha'
 >;
 
 export type CaseActionQueueStatus =
@@ -125,6 +128,19 @@ interface CaseSummaryRow {
   user_username: string | null;
   user_metadata: unknown;
   member_user_id: string | null;
+  captcha_status?: 'pending' | 'passed' | 'failed' | 'expired' | 'bypassed' | 'cancelled' | null;
+  captcha_request_source?: 'moderator' | 'automatic_suspicious_join' | null;
+  captcha_pass_effect?: 'evidence_only' | 'verify_join_only' | null;
+  captcha_generation?: number | null;
+  captcha_submission_count?: number | null;
+  captcha_expires_at?: unknown;
+  captcha_requested_at?: unknown;
+  captcha_delivered_at?: unknown;
+  captcha_delivery_error_code?: string | null;
+  captcha_passed_at?: unknown;
+  captcha_bypassed_at?: unknown;
+  captcha_bypassed_by?: string | null;
+  captcha_bypass_reason?: string | null;
 }
 
 interface DetectionHistoryRow {
@@ -210,6 +226,9 @@ const requestTypeByCaseAction: Record<WebCaseAction, ModerationActionRequestActi
   sync_existing_ban: 'sync_existing_ban',
   verify_user: 'verify_case_user',
   quarantine_compromised_account: 'quarantine_compromised_account',
+  challenge_user: 'request_captcha_challenge',
+  retry_captcha: 'retry_captcha_challenge',
+  bypass_captcha: 'bypass_captcha_challenge',
 };
 
 function resolveCaseActionRequestType(
@@ -223,6 +242,9 @@ function resolveCaseActionRequestType(
 
 export function buildCaseActionIdempotencyKey(input: QueueCaseActionInput): string {
   const base = `web:case-action:${input.action}:${input.guildId}:${input.caseId}`;
+  if (input.action === 'retry_captcha') {
+    return `${base}:${input.attemptId ?? 'missing-attempt'}`;
+  }
   if (input.action !== 'quarantine_compromised_account') {
     return base;
   }
@@ -446,7 +468,7 @@ function resolveAllowedActions(
   if (row.status !== 'pending') {
     const actions: CaseAction[] =
       presenceState === 'in_server' ? ['view_history', 'reopen_case'] : ['view_history'];
-    return appendRefreshNotificationAction(row, actions);
+    return appendCaptchaActions(row, appendRefreshNotificationAction(row, actions));
   }
 
   if (row.attention_state === 'parked') {
@@ -459,7 +481,10 @@ function resolveAllowedActions(
 
   const presenceActions = ACTIONS_BY_PRESENCE_STATE[presenceState];
   if (presenceActions) {
-    return appendRefreshNotificationAction(row, resolveCaseKindActions(row, presenceActions));
+    return appendCaptchaActions(
+      row,
+      appendRefreshNotificationAction(row, resolveCaseKindActions(row, presenceActions))
+    );
   }
 
   const parkedIndex = 0;
@@ -473,7 +498,33 @@ function resolveAllowedActions(
   const actionsWithNotification = appendRefreshNotificationAction(row, actions);
   const threadPresentIndex = Number(Boolean(row.thread_id)) as 0 | 1;
   actionsWithNotification.push(...THREAD_REPAIR_ACTIONS_BY_STATE[parkedIndex][threadPresentIndex]);
-  return actionsWithNotification;
+  return appendCaptchaActions(row, actionsWithNotification);
+}
+
+function appendCaptchaActions(row: CaseSummaryRow, actions: CaseAction[]): CaseAction[] {
+  if (row.case_kind === 'compromised_account' || row.status !== 'pending') {
+    return actions;
+  }
+  const mode = metadataToRecord(row.server_settings).captcha_mode;
+  if (mode !== 'manual' && mode !== 'suspicious_join') {
+    return actions;
+  }
+  if (!row.captcha_status) {
+    actions.push('challenge_user');
+    return actions;
+  }
+  if (row.captcha_status === 'pending') {
+    actions.push('bypass_captcha');
+    return actions;
+  }
+  if (row.captcha_status === 'failed' || row.captcha_status === 'expired') {
+    actions.push('retry_captcha', 'bypass_captcha');
+    return actions;
+  }
+  if (row.captcha_status === 'bypassed') {
+    actions.push('retry_captcha');
+  }
+  return actions;
 }
 
 function resolveCaseKindActions(row: CaseSummaryRow, actions: readonly CaseAction[]): CaseAction[] {
@@ -531,6 +582,23 @@ export function parseCaseSummaryRow(row: CaseSummaryRow, now = new Date()): Case
     lastActionAt: toNullableIsoString(row.last_action_at),
     surfaces: buildSurfaces(row),
     allowedActions: resolveAllowedActions(row, presenceState),
+    captchaChallenge: row.captcha_status
+      ? {
+          status: row.captcha_status,
+          requestSource: row.captcha_request_source,
+          passEffect: row.captcha_pass_effect,
+          generation: row.captcha_generation,
+          submissionCount: row.captcha_submission_count,
+          expiresAt: toIsoString(row.captcha_expires_at),
+          requestedAt: toIsoString(row.captcha_requested_at),
+          deliveredAt: toNullableIsoString(row.captcha_delivered_at),
+          deliveryErrorCode: row.captcha_delivery_error_code,
+          passedAt: toNullableIsoString(row.captcha_passed_at),
+          bypassedAt: toNullableIsoString(row.captcha_bypassed_at),
+          bypassedBy: row.captcha_bypassed_by,
+          bypassReason: row.captcha_bypass_reason,
+        }
+      : null,
   });
 }
 
@@ -631,11 +699,25 @@ const SUMMARY_QUERY = `
     mo.source as latest_outcome_source,
     u.username as user_username,
     u.metadata as user_metadata,
-    sm.user_id as member_user_id
+    sm.user_id as member_user_id,
+    cc.status as captcha_status,
+    cc.request_source as captcha_request_source,
+    cc.pass_effect as captcha_pass_effect,
+    cc.generation as captcha_generation,
+    cc.submission_count as captcha_submission_count,
+    cc.expires_at as captcha_expires_at,
+    cc.requested_at as captcha_requested_at,
+    cc.delivered_at as captcha_delivered_at,
+    cc.delivery_error_code as captcha_delivery_error_code,
+    cc.passed_at as captcha_passed_at,
+    cc.bypassed_at as captcha_bypassed_at,
+    cc.bypassed_by as captcha_bypassed_by,
+    cc.bypass_reason as captcha_bypass_reason
   from verification_events ve
   join servers s on s.guild_id = ve.server_id
   left join users u on u.discord_id = ve.user_id
   left join server_members sm on sm.server_id = ve.server_id and sm.user_id = ve.user_id
+  left join captcha_challenges cc on cc.verification_event_id = ve.id
   left join detection_events opening_de on opening_de.id = ve.detection_event_id
   left join lateral (
     select detection_type, confidence, detected_at, metadata, channel_id, message_id

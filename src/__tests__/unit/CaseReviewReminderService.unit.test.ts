@@ -50,6 +50,7 @@ const buildPendingCase = (
       ? (overrides.notification_message_id ?? null)
       : 'message-1',
   status: VerificationStatus.PENDING,
+  case_revision: overrides.case_revision ?? 0,
   created_at: overrides.created_at ?? updatedAt,
   updated_at: updatedAt,
   resolved_at: null,

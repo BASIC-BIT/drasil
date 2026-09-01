@@ -29,6 +29,7 @@ import {
   CaseAttentionState,
   CaseContainmentStatus,
   CaseKind,
+  CaptchaChallengeRequestSource,
   MessageDeletionBanStatus,
   MessageDeletionCaseFinalizationStatus,
   MessageDeletionJobMode,
@@ -58,6 +59,7 @@ import { ICaseThreadClosureSweepService } from './CaseThreadClosureSweepService'
 import { CaseRoleLockdownReport, ICaseRoleLockdownService } from './CaseRoleLockdownService';
 import { IAccountQuarantineService } from './AccountQuarantineService';
 import { buildAccountQuarantinePreviewFingerprint } from '../utils/accountQuarantinePreview';
+import type { ICaptchaChallengeService } from './CaptchaChallengeService';
 
 const DEFAULT_POLL_INTERVAL_MS = 5000;
 const DEFAULT_MAX_REQUESTS_PER_TICK = 5;
@@ -137,6 +139,15 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       this.completeSetupVerification(request),
     [ModerationActionRequestType.UPSERT_REPORT_INSTRUCTIONS]: (request) =>
       this.upsertReportInstructions(request),
+    [ModerationActionRequestType.REQUEST_CAPTCHA_CHALLENGE]: (request) =>
+      this.requestCaptchaChallenge(request, false),
+    [ModerationActionRequestType.RETRY_CAPTCHA_CHALLENGE]: (request) =>
+      this.requestCaptchaChallenge(request, true),
+    [ModerationActionRequestType.BYPASS_CAPTCHA_CHALLENGE]: (request) =>
+      this.bypassCaptchaChallenge(request),
+    [ModerationActionRequestType.APPLY_CAPTCHA_PASS]: (request) => this.applyCaptchaPass(request),
+    [ModerationActionRequestType.NOTIFY_CAPTCHA_ATTENTION]: (request) =>
+      this.notifyCaptchaAttention(request),
   };
 
   public constructor(
@@ -172,7 +183,10 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     private readonly messageCleanupService: MessageCleanupService,
     @inject(TYPES.AccountQuarantineService)
     @optional()
-    private readonly accountQuarantineService?: IAccountQuarantineService
+    private readonly accountQuarantineService?: IAccountQuarantineService,
+    @inject(TYPES.CaptchaChallengeService)
+    @optional()
+    private readonly captchaChallengeService?: ICaptchaChallengeService
   ) {}
 
   public start(): void {
@@ -913,6 +927,227 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       target_user_id: request.target_user_id,
       verification_event_id: request.verification_event_id,
       verified,
+    });
+  }
+
+  private async requestCaptchaChallenge(
+    request: ModerationActionRequest,
+    retry: boolean
+  ): Promise<void> {
+    if (!request.target_user_id || !request.verification_event_id) {
+      throw new Error('Security-check request is missing target user or case id.');
+    }
+    if (!this.captchaChallengeService) {
+      throw new Error('Security-check service is unavailable.');
+    }
+    await this.fetchModerator(request.actor_id);
+    const result = await this.captchaChallengeService.requestChallenge({
+      verificationEventId: request.verification_event_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      requestedBy: request.actor_id,
+      retry,
+    });
+    await this.repository.complete(request.id, {
+      action_type: request.action_type,
+      challenge_id: result.challenge.id,
+      delivered: result.delivered,
+      generation: result.challenge.generation,
+      target_user_id: request.target_user_id,
+      verification_event_id: request.verification_event_id,
+    });
+  }
+
+  private async bypassCaptchaChallenge(request: ModerationActionRequest): Promise<void> {
+    if (!request.target_user_id || !request.verification_event_id) {
+      throw new Error('Security-check bypass is missing target user or case id.');
+    }
+    if (!this.captchaChallengeService) {
+      throw new Error('Security-check service is unavailable.');
+    }
+    await this.fetchModerator(request.actor_id);
+    const reason = this.readMetadataString(request.metadata, 'reason')?.trim();
+    if (!reason) {
+      throw new Error('A reason is required to continue without the browser check.');
+    }
+    const challenge = await this.captchaChallengeService.bypassChallenge(
+      request.verification_event_id,
+      request.actor_id,
+      reason
+    );
+    await this.repository.complete(request.id, {
+      action_type: request.action_type,
+      bypassed: true,
+      challenge_id: challenge.id,
+      generation: challenge.generation,
+      target_user_id: request.target_user_id,
+      verification_event_id: request.verification_event_id,
+    });
+  }
+
+  private async applyCaptchaPass(request: ModerationActionRequest): Promise<void> {
+    if (
+      request.actor_id !== 'drasil:captcha' ||
+      request.actor_surface !== 'captcha' ||
+      !request.target_user_id ||
+      !request.verification_event_id
+    ) {
+      throw new Error('Security-check completion request is invalid.');
+    }
+    if (!this.captchaChallengeService) {
+      throw new Error('Security-check service is unavailable.');
+    }
+
+    const challengeId = this.readMetadataString(request.metadata, 'challenge_id');
+    const generation = this.readMetadataInteger(request.metadata, 'generation');
+    const expectedCaseRevision = this.readMetadataInteger(
+      request.metadata,
+      'expected_case_revision'
+    );
+    if (
+      !challengeId ||
+      generation === null ||
+      generation < 1 ||
+      expectedCaseRevision === null ||
+      expectedCaseRevision < 0
+    ) {
+      throw new Error('Security-check completion metadata is invalid.');
+    }
+
+    const decision = await this.captchaChallengeService.evaluatePassedChallenge({
+      challengeId,
+      verificationEventId: request.verification_event_id,
+      targetUserId: request.target_user_id,
+      generation,
+      expectedCaseRevision,
+    });
+    const verificationEvent = await this.verificationEventRepository.findById(
+      request.verification_event_id
+    );
+    if (verificationEvent) {
+      await this.threadManager
+        .sendCaptchaStatus(verificationEvent, 'Security check completed.')
+        .catch((error) => {
+          console.warn(
+            `Failed to post security-check completion to case ${verificationEvent.id}:`,
+            error
+          );
+          return false;
+        });
+    }
+
+    if (decision.status !== 'eligible') {
+      if (
+        decision.status === 'held' &&
+        verificationEvent &&
+        this.notificationManager.notifyCaptchaAttention
+      ) {
+        await this.notificationManager.notifyCaptchaAttention(
+          verificationEvent,
+          'automatic_resolution_held'
+        );
+      }
+      await this.repository.complete(request.id, {
+        action_type: request.action_type,
+        challenge_id: challengeId,
+        effect: decision.status,
+        generation,
+        held_reason: decision.status === 'held' ? decision.reason : null,
+        resolved: false,
+        target_user_id: request.target_user_id,
+        verification_event_id: request.verification_event_id,
+      });
+      return;
+    }
+
+    const member = await this.fetchGuildMember(request.server_id, request.target_user_id).catch(
+      () => null
+    );
+    if (!member) {
+      if (verificationEvent && this.notificationManager.notifyCaptchaAttention) {
+        await this.notificationManager.notifyCaptchaAttention(
+          verificationEvent,
+          'automatic_resolution_held'
+        );
+      }
+      await this.repository.complete(request.id, {
+        action_type: request.action_type,
+        challenge_id: challengeId,
+        effect: 'held',
+        generation,
+        held_reason: 'member_unavailable',
+        resolved: false,
+        target_user_id: request.target_user_id,
+        verification_event_id: request.verification_event_id,
+      });
+      return;
+    }
+
+    const result = await this.userModerationService.resolveCaptchaCase(member, {
+      verificationEventId: request.verification_event_id,
+      challengeId,
+      generation,
+      expectedCaseRevision,
+    });
+    if (
+      result.status === 'held' &&
+      verificationEvent &&
+      this.notificationManager.notifyCaptchaAttention
+    ) {
+      await this.notificationManager.notifyCaptchaAttention(
+        verificationEvent,
+        'automatic_resolution_held'
+      );
+    }
+    await this.repository.complete(request.id, {
+      action_type: request.action_type,
+      challenge_id: challengeId,
+      effect: result.status,
+      generation,
+      held_reason: result.status === 'held' ? result.reason : null,
+      resolved: result.status === 'resolved',
+      target_user_id: request.target_user_id,
+      verification_event_id: request.verification_event_id,
+    });
+  }
+
+  private async notifyCaptchaAttention(request: ModerationActionRequest): Promise<void> {
+    if (
+      request.actor_id !== 'drasil:captcha' ||
+      request.actor_surface !== 'captcha' ||
+      !request.target_user_id ||
+      !request.verification_event_id
+    ) {
+      throw new Error('Security-check attention request is invalid.');
+    }
+    if (this.readMetadataString(request.metadata, 'reason') !== 'submission_limit') {
+      throw new Error('Security-check attention reason is invalid.');
+    }
+
+    const verificationEvent = await this.verificationEventRepository.findById(
+      request.verification_event_id
+    );
+    if (
+      !verificationEvent ||
+      verificationEvent.server_id !== request.server_id ||
+      verificationEvent.user_id !== request.target_user_id
+    ) {
+      throw new Error('Security-check attention case binding is invalid.');
+    }
+    await this.threadManager
+      .sendCaptchaStatus(
+        verificationEvent,
+        'This security check reached its attempt limit. Ask a moderator to issue a new check.'
+      )
+      .catch(() => false);
+    const notified = this.notificationManager.notifyCaptchaAttention
+      ? await this.notificationManager.notifyCaptchaAttention(verificationEvent, 'submission_limit')
+      : false;
+    await this.repository.complete(request.id, {
+      action_type: request.action_type,
+      notified,
+      reason: 'submission_limit',
+      target_user_id: request.target_user_id,
+      verification_event_id: request.verification_event_id,
     });
   }
 

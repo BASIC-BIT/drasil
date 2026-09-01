@@ -206,6 +206,7 @@ const buildVerificationEvent = (
   notification_channel_id: null,
   notification_message_id: `message-${id}`,
   status: VerificationStatus.PENDING,
+  case_revision: 0,
   created_at: updatedAt,
   updated_at: updatedAt,
   resolved_at: null,
@@ -292,6 +293,7 @@ describe('InteractionHandler (unit)', () => {
     userModerationService = {
       applyCaseRole: jest.fn().mockResolvedValue(true),
       verifyUser: jest.fn().mockResolvedValue(true),
+      resolveCaptchaCase: jest.fn().mockResolvedValue({ status: 'resolved' }),
       kickUser: jest.fn().mockResolvedValue(true),
       banUser: jest.fn().mockResolvedValue(true),
       banUserById: jest.fn().mockResolvedValue(true),
@@ -398,6 +400,7 @@ describe('InteractionHandler (unit)', () => {
       completeTerminalActions: jest.fn(),
       completeCaseRoleRelease: jest.fn(),
       completeVerificationRelease: jest.fn(),
+      completeCaptchaVerification: jest.fn(),
       rollbackCaseRoleRelease: jest.fn(),
       renewQuarantineAttempt: jest.fn(),
       recordQuarantineCaseRole: jest.fn(),
@@ -407,6 +410,8 @@ describe('InteractionHandler (unit)', () => {
       update: jest.fn(),
     };
     threadManager = {
+      sendCaptchaChallenge: jest.fn().mockResolvedValue(true),
+      sendCaptchaStatus: jest.fn().mockResolvedValue(true),
       createVerificationThread: jest
         .fn()
         .mockResolvedValue({ url: 'https://discord.com/channels/thread-1' } as any),
@@ -1358,6 +1363,7 @@ describe('InteractionHandler (unit)', () => {
       notification_channel_id: null,
       notification_message_id: 'message-1',
       status: VerificationStatus.PENDING,
+      case_revision: 0,
       created_at: new Date(),
       updated_at: new Date(),
       resolved_at: null,
@@ -1603,6 +1609,7 @@ describe('InteractionHandler (unit)', () => {
       notification_channel_id: null,
       notification_message_id: 'message-1',
       status: VerificationStatus.PENDING,
+      case_revision: 0,
       created_at: new Date(),
       updated_at: new Date(),
       resolved_at: null,
@@ -1648,6 +1655,7 @@ describe('InteractionHandler (unit)', () => {
       notification_channel_id: null,
       notification_message_id: 'message-1',
       status: VerificationStatus.VERIFIED,
+      case_revision: 0,
       created_at: new Date(),
       updated_at: new Date(),
       resolved_at: new Date(),

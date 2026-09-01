@@ -112,6 +112,32 @@ const verifyRequest: ModerationActionRequest = {
   verification_event_id: 'ver-1',
 };
 
+const applyCaptchaPassRequest: ModerationActionRequest = {
+  ...verifyRequest,
+  action_type: ModerationActionRequestType.APPLY_CAPTCHA_PASS,
+  actor_id: 'drasil:captcha',
+  actor_surface: 'captcha',
+  id: 'captcha-pass-request-1',
+  idempotency_key: 'captcha:apply:challenge-1:1',
+  metadata: {
+    challenge_id: 'challenge-1',
+    expected_case_revision: 2,
+    generation: 1,
+  },
+};
+
+const notifyCaptchaAttentionRequest: ModerationActionRequest = {
+  ...applyCaptchaPassRequest,
+  action_type: ModerationActionRequestType.NOTIFY_CAPTCHA_ATTENTION,
+  id: 'captcha-attention-request-1',
+  idempotency_key: 'captcha:attention:challenge-1:1:submission-limit',
+  metadata: {
+    challenge_id: 'challenge-1',
+    generation: 1,
+    reason: 'submission_limit',
+  },
+};
+
 const accountQuarantinePreviewRequest: ModerationActionRequest = {
   ...verifyRequest,
   action_type: ModerationActionRequestType.PREVIEW_ACCOUNT_QUARANTINE,
@@ -703,6 +729,7 @@ describe('ModerationActionRequestService', () => {
     const threadManager = {
       activateReportIntakeThread: jest.fn(async () => true),
       createReportIntakeThread: jest.fn(async () => reportIntakeThread),
+      sendCaptchaStatus: jest.fn(async () => true),
     };
     const reportIntakeService = {
       closeIntakeForThread: jest.fn(async () => ({
@@ -786,6 +813,7 @@ describe('ModerationActionRequestService', () => {
       performDiscordBanById: jest.fn(async () => undefined),
       performDiscordMemberBan: jest.fn(async () => undefined),
       syncAlreadyBannedUser: jest.fn(async () => 1),
+      resolveCaptchaCase: jest.fn(async () => ({ status: 'resolved' as const })),
       verifyUser: jest.fn(async () => true),
     };
     const moderationQueueService = {
@@ -854,6 +882,7 @@ describe('ModerationActionRequestService', () => {
       updateServerSettings: jest.fn(async () => undefined),
     };
     const notificationManager = {
+      notifyCaptchaAttention: jest.fn(async () => true),
       restoreVerificationChannelPermissions: jest.fn(async () => true),
       setupVerificationChannel: jest.fn(async (...args: unknown[]) => {
         const configuredChannelId = args[4];
@@ -957,6 +986,9 @@ describe('ModerationActionRequestService', () => {
         verificationEvent: { containment_status: 'contained' },
       })),
     };
+    const captchaChallengeService = {
+      evaluatePassedChallenge: jest.fn(async () => ({ status: 'eligible' as const })),
+    };
     const service = new ModerationActionRequestService(
       repository,
       verificationEventRepository as any,
@@ -974,7 +1006,8 @@ describe('ModerationActionRequestService', () => {
       setupDiagnosticsService as any,
       messageDeletionJobs as any,
       messageCleanupService as any,
-      accountQuarantineService as any
+      accountQuarantineService as any,
+      captchaChallengeService as any
     );
 
     return {
@@ -1004,6 +1037,7 @@ describe('ModerationActionRequestService', () => {
       verificationChannel,
       caseThreadClosureSweepService,
       caseRoleLockdownService,
+      captchaChallengeService,
       moderationQueueService,
       messageCleanupService,
       messageDeletionJobs,
@@ -1515,6 +1549,97 @@ describe('ModerationActionRequestService', () => {
       },
     ]);
     expect(repository.failed).toEqual([]);
+  });
+
+  it('resolves an eligible CAPTCHA pass through the exact-case system path', async () => {
+    const {
+      captchaChallengeService,
+      member,
+      repository,
+      service,
+      threadManager,
+      userModerationService,
+    } = buildService([applyCaptchaPassRequest]);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(captchaChallengeService.evaluatePassedChallenge).toHaveBeenCalledWith({
+      challengeId: 'challenge-1',
+      expectedCaseRevision: 2,
+      generation: 1,
+      targetUserId: 'user-1',
+      verificationEventId: 'ver-1',
+    });
+    expect(threadManager.sendCaptchaStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'ver-1' }),
+      'Security check completed.'
+    );
+    expect(userModerationService.resolveCaptchaCase).toHaveBeenCalledWith(member, {
+      challengeId: 'challenge-1',
+      expectedCaseRevision: 2,
+      generation: 1,
+      verificationEventId: 'ver-1',
+    });
+    expect(repository.completed[0]).toEqual({
+      id: 'captcha-pass-request-1',
+      result: expect.objectContaining({
+        action_type: ModerationActionRequestType.APPLY_CAPTCHA_PASS,
+        resolved: true,
+      }),
+    });
+    expect(repository.failed).toEqual([]);
+  });
+
+  it('records a moderator-issued CAPTCHA pass as evidence without resolving the case', async () => {
+    const { captchaChallengeService, repository, service, userModerationService } = buildService([
+      applyCaptchaPassRequest,
+    ]);
+    captchaChallengeService.evaluatePassedChallenge.mockResolvedValueOnce({
+      status: 'evidence_only',
+    } as any);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(userModerationService.resolveCaptchaCase).not.toHaveBeenCalled();
+    expect(repository.completed[0]).toEqual({
+      id: 'captcha-pass-request-1',
+      result: expect.objectContaining({ effect: 'evidence_only', resolved: false }),
+    });
+  });
+
+  it('rejects a CAPTCHA pass request that does not use the dedicated system actor', async () => {
+    const { captchaChallengeService, repository, service, userModerationService } = buildService([
+      { ...applyCaptchaPassRequest, actor_id: 'moderator-1' },
+    ]);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(captchaChallengeService.evaluatePassedChallenge).not.toHaveBeenCalled();
+    expect(userModerationService.resolveCaptchaCase).not.toHaveBeenCalled();
+    expect(repository.failed).toEqual([
+      { id: 'captcha-pass-request-1', error: 'Security-check completion request is invalid.' },
+    ]);
+  });
+
+  it('delivers submission-limit attention through the system-only CAPTCHA action', async () => {
+    const { notificationManager, repository, service, threadManager } = buildService([
+      notifyCaptchaAttentionRequest,
+    ]);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(threadManager.sendCaptchaStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'ver-1' }),
+      'This security check reached its attempt limit. Ask a moderator to issue a new check.'
+    );
+    expect(notificationManager.notifyCaptchaAttention).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'ver-1' }),
+      'submission_limit'
+    );
+    expect(repository.completed[0]).toEqual({
+      id: 'captcha-attention-request-1',
+      result: expect.objectContaining({ notified: true, reason: 'submission_limit' }),
+    });
   });
 
   it('produces a read-only live account-quarantine preview for the web flow', async () => {

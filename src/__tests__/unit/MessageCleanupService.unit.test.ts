@@ -124,6 +124,7 @@ function buildVerification(overrides: Partial<VerificationEvent> = {}): Verifica
     notification_channel_id: null,
     notification_message_id: null,
     status: VerificationStatus.PENDING,
+    case_revision: overrides.case_revision ?? 0,
     created_at: NOW,
     updated_at: NOW,
     resolved_at: null,

@@ -98,7 +98,25 @@ const baseQueueRow: ModerationQueueRow = {
 
 describe('moderationInboxDataAdapter', () => {
   it('converts active case summaries into inbox case items', () => {
-    const item = caseSummaryToInboxItem({ ...baseCase, caseKind: 'compromised_account' });
+    const item = caseSummaryToInboxItem({
+      ...baseCase,
+      caseKind: 'compromised_account',
+      captchaChallenge: {
+        status: 'pending',
+        requestSource: 'moderator',
+        passEffect: 'evidence_only',
+        generation: 1,
+        submissionCount: 0,
+        expiresAt: '2026-06-04T00:00:00.000Z',
+        requestedAt: '2026-06-03T00:00:00.000Z',
+        deliveredAt: '2026-06-03T00:01:00.000Z',
+        deliveryErrorCode: null,
+        passedAt: null,
+        bypassedAt: null,
+        bypassedBy: null,
+        bypassReason: null,
+      },
+    });
 
     expect(item).toEqual(
       expect.objectContaining({
@@ -109,6 +127,7 @@ describe('moderationInboxDataAdapter', () => {
         title: 'Pending moderation case',
         detailHref: '/admin/guild/guild-1/cases/case-1',
         signalLabel: '91% confidence',
+        captchaChallenge: expect.objectContaining({ status: 'pending' }),
         allowedActions: [
           'view_case',
           'view_history',

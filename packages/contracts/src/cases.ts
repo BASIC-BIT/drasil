@@ -21,7 +21,26 @@ export const caseActionSchema = z.enum([
   'create_thread',
   'reopen_case',
   'close_no_action',
+  'challenge_user',
+  'retry_captcha',
+  'bypass_captcha',
 ]);
+
+export const captchaChallengeSummarySchema = z.object({
+  status: z.enum(['pending', 'passed', 'failed', 'expired', 'bypassed', 'cancelled']),
+  requestSource: z.enum(['moderator', 'automatic_suspicious_join']),
+  passEffect: z.enum(['evidence_only', 'verify_join_only']),
+  generation: z.number().int().positive(),
+  submissionCount: z.number().int().min(0),
+  expiresAt: z.string(),
+  requestedAt: z.string(),
+  deliveredAt: z.string().nullable(),
+  deliveryErrorCode: z.string().nullable(),
+  passedAt: z.string().nullable(),
+  bypassedAt: z.string().nullable(),
+  bypassedBy: z.string().nullable(),
+  bypassReason: z.string().nullable(),
+});
 
 export const caseSurfaceKindSchema = z.enum([
   'admin_notification',
@@ -84,6 +103,7 @@ export const caseSummarySchema = z.object({
   lastActionAt: z.string().nullable(),
   surfaces: z.array(caseSurfaceLinkSchema),
   allowedActions: z.array(caseActionSchema),
+  captchaChallenge: captchaChallengeSummarySchema.nullable().optional(),
 });
 
 export const caseDetectionHistoryItemSchema = z.object({
@@ -140,6 +160,7 @@ export type CaseEvidenceItem = z.infer<typeof caseEvidenceItemSchema>;
 export type CaseMessageContextItem = z.infer<typeof caseMessageContextItemSchema>;
 export type CaseModerationOutcome = z.infer<typeof caseModerationOutcomeSchema>;
 export type CaseDetail = z.infer<typeof caseDetailSchema>;
+export type CaptchaChallengeSummary = z.infer<typeof captchaChallengeSummarySchema>;
 
 export function sortCaseSummariesForQueue(cases: readonly CaseSummary[]): CaseSummary[] {
   return [...cases].sort((left, right) => {

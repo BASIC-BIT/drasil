@@ -4,6 +4,7 @@ import {
   buildAdminGuildSetupUrl,
   buildAdminGuildOnboardingUrl,
   buildAdminModerationInboxUrl,
+  buildCaptchaChallengeUrl,
   getPublicWebBaseUrl,
 } from '../../utils/publicWebLinks';
 
@@ -53,6 +54,9 @@ describe('publicWebLinks', () => {
     );
     expect(buildAdminCaseDetailUrl('guild-1', 'case-1')).toBe(
       'https://drasilbot.com/admin/guild/guild-1/cases/case-1'
+    );
+    expect(buildCaptchaChallengeUrl('opaque/token')).toBe(
+      'https://drasilbot.com/challenge/opaque%2Ftoken'
     );
   });
 });

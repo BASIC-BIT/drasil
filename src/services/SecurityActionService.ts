@@ -22,6 +22,7 @@ import {
 } from '../repositories/ServerMemberRepository';
 import {
   AdminActionType,
+  CaptchaChallengeRequestSource,
   DetectionEvent,
   DetectionType,
   MessageContext,
@@ -70,6 +71,8 @@ import { getConfidenceBucket } from '../utils/analyticsHelpers';
 import { ReportAiAnalyzer } from './ReportAiAnalyzer';
 import { ReportDetectionBuilder } from './ReportDetectionBuilder';
 import { RoleIntakeProcessor } from './RoleIntakeProcessor';
+import type { ICaptchaChallengeService } from './CaptchaChallengeService';
+import { getCaptchaSettings } from '../utils/captchaSettings';
 import { IModerationQueueService } from './ModerationQueueService';
 import type { IMessageDeletionService } from './MessageDeletionService';
 import { IReportIntakeRepository } from '../repositories/ReportIntakeRepository';
@@ -387,6 +390,7 @@ export class SecurityActionService implements ISecurityActionService {
   private moderationQueueService?: IModerationQueueService;
   private messageDeletionService?: IMessageDeletionService;
   private reportIntakeRepository?: IReportIntakeRepository;
+  private captchaChallengeService?: ICaptchaChallengeService;
   private reportAiAnalyzer: ReportAiAnalyzer;
   private reportDetectionBuilder: ReportDetectionBuilder;
   private roleIntakeProcessor: RoleIntakeProcessor;
@@ -419,7 +423,10 @@ export class SecurityActionService implements ISecurityActionService {
     messageDeletionService?: IMessageDeletionService,
     @inject(TYPES.ReportIntakeRepository)
     @optional()
-    reportIntakeRepository?: IReportIntakeRepository
+    reportIntakeRepository?: IReportIntakeRepository,
+    @inject(TYPES.CaptchaChallengeService)
+    @optional()
+    captchaChallengeService?: ICaptchaChallengeService
   ) {
     this.notificationManager = notificationManager;
     this.detectionEventsRepository = detectionEventsRepository;
@@ -437,6 +444,7 @@ export class SecurityActionService implements ISecurityActionService {
     this.moderationQueueService = moderationQueueService;
     this.messageDeletionService = messageDeletionService;
     this.reportIntakeRepository = reportIntakeRepository;
+    this.captchaChallengeService = captchaChallengeService;
     this.reportAiAnalyzer = new ReportAiAnalyzer(this.serverRepository, this.gptService);
     this.reportDetectionBuilder = new ReportDetectionBuilder(
       this.detectionEventsRepository,
@@ -2343,7 +2351,8 @@ export class SecurityActionService implements ISecurityActionService {
     useReportReviewThread?: boolean,
     entitiesAlreadyEnsured = false,
     moderator?: User,
-    notificationSourceDetectionEvent?: DetectionEvent
+    notificationSourceDetectionEvent?: DetectionEvent,
+    automaticCaptchaForNewCase = false
   ): Promise<boolean> {
     const shouldUseReviewThread = useReportReviewThread ?? this.shouldUseReportReviewThread();
 
@@ -2516,7 +2525,36 @@ export class SecurityActionService implements ISecurityActionService {
       (moderationQueueService) => moderationQueueService.upsertCaseMirror(newVerificationEvent)
     );
 
+    if (automaticCaptchaForNewCase) {
+      await this.maybeRequestAutomaticCaptcha(newVerificationEvent);
+    }
+
     return true;
+  }
+
+  private async maybeRequestAutomaticCaptcha(verificationEvent: VerificationEvent): Promise<void> {
+    const server = await this.serverRepository.findByGuildId(verificationEvent.server_id);
+    if (getCaptchaSettings(server?.settings ?? {}).mode !== 'suspicious_join') {
+      return;
+    }
+    if (!this.captchaChallengeService) {
+      console.error(
+        `CAPTCHA is enabled for guild ${verificationEvent.server_id}, but the challenge service is unavailable.`
+      );
+      return;
+    }
+    try {
+      const result = await this.captchaChallengeService.requestChallenge({
+        verificationEventId: verificationEvent.id,
+        requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
+        caseWasCreatedBySuspiciousJoin: true,
+      });
+      if (!result.delivered) {
+        console.warn(`CAPTCHA delivery is unavailable for case ${verificationEvent.id}.`);
+      }
+    } catch (error) {
+      console.warn(`Failed to issue CAPTCHA for case ${verificationEvent.id}:`, error);
+    }
   }
 
   private async maybeDeleteSourceMessage(
@@ -2598,7 +2636,16 @@ export class SecurityActionService implements ISecurityActionService {
       if (await this.shouldAutoKickDetection(member, detectionResult, 'join')) {
         return await this.autoKickSuspiciousMember(member, detectionResult, undefined, 'join');
       }
-      return await this.handleSuspiciousMember(member, detectionResult);
+      return await this.handleSuspiciousMember(
+        member,
+        detectionResult,
+        undefined,
+        undefined,
+        false,
+        undefined,
+        undefined,
+        true
+      );
     } catch (error) {
       console.error(`Failed to handle suspicious join for ${member.user.tag}:`, error);
       throw error;
@@ -2627,7 +2674,16 @@ export class SecurityActionService implements ISecurityActionService {
     try {
       console.log(`Opening join case for: ${member.user.tag} (${member.id})`);
       console.log(`Confidence: ${(detectionResult.confidence * 100).toFixed(2)}%`);
-      return await this.handleSuspiciousMember(member, detectionResult);
+      return await this.handleSuspiciousMember(
+        member,
+        detectionResult,
+        undefined,
+        undefined,
+        false,
+        undefined,
+        undefined,
+        true
+      );
     } catch (error) {
       console.error(`Failed to open join case for ${member.user.tag}:`, error);
       throw error;
