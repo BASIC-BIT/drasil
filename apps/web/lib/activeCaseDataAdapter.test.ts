@@ -262,61 +262,6 @@ describe('activeCaseDataAdapter', () => {
     }
   );
 
-  it('offers retry after a cancelled challenge is reopened with the case', () => {
-    const summary = parseCaseSummaryRow(
-      {
-        ...baseRow,
-        server_settings: { captcha_mode: 'manual' },
-        captcha_status: 'cancelled',
-        captcha_request_source: 'moderator',
-        captcha_pass_effect: 'evidence_only',
-        captcha_generation: 1,
-        captcha_submission_count: 0,
-        captcha_expires_at: new Date('2026-06-04T00:00:00.000Z'),
-        captcha_requested_at: new Date('2026-06-03T00:00:00.000Z'),
-        captcha_delivery_error_code: null,
-        captcha_bypassed_by: null,
-        captcha_bypass_reason: null,
-      },
-      new Date('2026-06-03T01:00:00.000Z')
-    );
-
-    expect(summary.allowedActions).toContain('retry_captcha');
-  });
-
-  it('does not offer CAPTCHA issuance or retry when the case subject is absent', () => {
-    const unused = parseCaseSummaryRow(
-      {
-        ...baseRow,
-        member_user_id: null,
-        server_settings: { captcha_mode: 'manual' },
-      },
-      new Date('2026-06-03T01:00:00.000Z')
-    );
-    const failed = parseCaseSummaryRow(
-      {
-        ...baseRow,
-        member_user_id: null,
-        server_settings: { captcha_mode: 'manual' },
-        captcha_status: 'failed',
-        captcha_request_source: 'moderator',
-        captcha_pass_effect: 'evidence_only',
-        captcha_generation: 1,
-        captcha_submission_count: 5,
-        captcha_expires_at: new Date('2026-06-04T00:00:00.000Z'),
-        captcha_requested_at: new Date('2026-06-03T00:00:00.000Z'),
-        captcha_delivery_error_code: null,
-        captcha_bypassed_by: null,
-        captcha_bypass_reason: null,
-      },
-      new Date('2026-06-03T01:00:00.000Z')
-    );
-
-    expect(unused.allowedActions).not.toContain('challenge_user');
-    expect(failed.allowedActions).not.toContain('retry_captcha');
-    expect(failed.allowedActions).toContain('bypass_captcha');
-  });
-
   it('parses parked quarantine effects and keeps the case outside normal review actions', () => {
     const summary = parseCaseSummaryRow(
       {
@@ -638,5 +583,62 @@ describe('activeCaseDataAdapter', () => {
         containmentStatus: 'contained',
       }),
     ]);
+  });
+});
+
+describe('activeCaseDataAdapter CAPTCHA recovery actions', () => {
+  it('offers retry after a cancelled challenge is reopened with the case', () => {
+    const summary = parseCaseSummaryRow(
+      {
+        ...baseRow,
+        server_settings: { captcha_mode: 'manual' },
+        captcha_status: 'cancelled',
+        captcha_request_source: 'moderator',
+        captcha_pass_effect: 'evidence_only',
+        captcha_generation: 1,
+        captcha_submission_count: 0,
+        captcha_expires_at: new Date('2026-06-04T00:00:00.000Z'),
+        captcha_requested_at: new Date('2026-06-03T00:00:00.000Z'),
+        captcha_delivery_error_code: null,
+        captcha_bypassed_by: null,
+        captcha_bypass_reason: null,
+      },
+      new Date('2026-06-03T01:00:00.000Z')
+    );
+
+    expect(summary.allowedActions).toContain('retry_captcha');
+  });
+
+  it('does not offer CAPTCHA issuance or retry when the case subject is absent', () => {
+    const unused = parseCaseSummaryRow(
+      {
+        ...baseRow,
+        member_user_id: null,
+        server_settings: { captcha_mode: 'manual' },
+      },
+      new Date('2026-06-03T01:00:00.000Z')
+    );
+    const failed = parseCaseSummaryRow(
+      {
+        ...baseRow,
+        member_user_id: null,
+        server_settings: { captcha_mode: 'manual' },
+        captcha_status: 'failed',
+        captcha_request_source: 'moderator',
+        captcha_pass_effect: 'evidence_only',
+        captcha_generation: 1,
+        captcha_submission_count: 5,
+        captcha_expires_at: new Date('2026-06-04T00:00:00.000Z'),
+        captcha_requested_at: new Date('2026-06-03T00:00:00.000Z'),
+        captcha_delivery_error_code: null,
+        captcha_bypassed_by: null,
+        captcha_bypass_reason: null,
+      },
+      new Date('2026-06-03T01:00:00.000Z')
+    );
+
+    expect(unused.allowedActions).not.toContain('challenge_user');
+    expect(failed.allowedActions).not.toContain('retry_captcha');
+    expect(failed.allowedActions).toContain('bypass_captcha');
   });
 });
