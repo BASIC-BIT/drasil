@@ -723,8 +723,9 @@ export class NotificationManager implements INotificationManager {
             : reason === 'submission_limit'
               ? 'A browser security check reached its submission limit. The user remains restricted.'
               : 'A browser security check passed, but current case state prevented automatic resolution.';
+      const roleMentions = this.presentationBuilder.formatRoleMentions(notificationRoleIds) ?? '';
       const lines = [
-        `${this.presentationBuilder.formatRoleMentions(notificationRoleIds)} ${summary}`.trim(),
+        `${roleMentions} ${summary}`.trim(),
         `User: <@${verificationEvent.user_id}> (\`${verificationEvent.user_id}\`)`,
         `Case: \`${verificationEvent.id}\``,
         verificationEvent.thread_id ? `Support thread: <#${verificationEvent.thread_id}>` : null,

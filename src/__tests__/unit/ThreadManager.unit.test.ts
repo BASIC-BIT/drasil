@@ -161,6 +161,51 @@ describe('ThreadManager (unit)', () => {
     expect(thread.send).toHaveBeenCalledWith({ content: 'Security check completed.' });
   });
 
+  it('returns false when a CAPTCHA challenge cannot be sent', async () => {
+    thread.send.mockRejectedValueOnce(new Error('Discord unavailable'));
+    const client = {
+      channels: { fetch: jest.fn().mockResolvedValue(thread) },
+    };
+    const manager = new ThreadManager(
+      client as any,
+      configService,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      serverMemberRepository
+    );
+
+    await expect(
+      manager.sendCaptchaChallenge(
+        buildVerificationEvent({ thread_id: thread.id }),
+        'https://drasil.example/captcha/token'
+      )
+    ).resolves.toBe(false);
+  });
+
+  it('returns false when a CAPTCHA status thread cannot be unarchived', async () => {
+    (thread as unknown as { archived: boolean }).archived = true;
+    thread.setArchived.mockRejectedValueOnce(new Error('Discord unavailable'));
+    const client = {
+      channels: { fetch: jest.fn().mockResolvedValue(thread) },
+    };
+    const manager = new ThreadManager(
+      client as any,
+      configService,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      serverMemberRepository
+    );
+
+    await expect(
+      manager.sendCaptchaStatus(
+        buildVerificationEvent({ thread_id: thread.id }),
+        'Security check completed.'
+      )
+    ).resolves.toBe(false);
+  });
+
   it('creates a verification thread and stores thread_id', async () => {
     const manager = new ThreadManager(
       {} as any,

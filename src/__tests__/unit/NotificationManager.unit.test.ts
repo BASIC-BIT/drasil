@@ -168,6 +168,20 @@ describe('NotificationManager (unit)', () => {
     }
   });
 
+  it('omits an undefined role prefix from CAPTCHA attention notifications', async () => {
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+
+    await expect(manager.notifyCaptchaAttention(buildVerificationEvent(), 'expired')).resolves.toBe(
+      true
+    );
+
+    expect(adminChannel.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.not.stringContaining('undefined'),
+      })
+    );
+  });
+
   it('sends a new notification when no existing message is set', async () => {
     const member = buildMember('guild-1', 'user-1');
     const detectionResult: DetectionResult = {

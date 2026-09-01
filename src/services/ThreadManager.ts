@@ -197,22 +197,30 @@ export class ThreadManager implements IThreadManager {
     if (!verificationEvent.thread_id) {
       return false;
     }
-    const channel = await this.client.channels.fetch(verificationEvent.thread_id).catch(() => null);
-    if (!channel?.isThread()) {
+    try {
+      const channel = await this.client.channels.fetch(verificationEvent.thread_id);
+      if (!channel?.isThread()) {
+        return false;
+      }
+      if (channel.archived) {
+        await channel.setArchived(false, 'Deliver CAPTCHA case challenge');
+      }
+      await channel.send({
+        content: 'Complete this browser check to confirm access to your Discord account.',
+        components: [
+          new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder()
+              .setStyle(ButtonStyle.Link)
+              .setLabel('Open security check')
+              .setURL(url)
+          ),
+        ],
+      });
+      return true;
+    } catch (error) {
+      console.warn(`Failed to deliver CAPTCHA challenge for case ${verificationEvent.id}:`, error);
       return false;
     }
-    if (channel.archived) {
-      await channel.setArchived(false, 'Deliver CAPTCHA case challenge');
-    }
-    await channel.send({
-      content: 'Complete this browser check to confirm access to your Discord account.',
-      components: [
-        new ActionRowBuilder<ButtonBuilder>().addComponents(
-          new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Open security check').setURL(url)
-        ),
-      ],
-    });
-    return true;
   }
 
   public async sendCaptchaStatus(
@@ -222,15 +230,20 @@ export class ThreadManager implements IThreadManager {
     if (!verificationEvent.thread_id) {
       return false;
     }
-    const channel = await this.client.channels.fetch(verificationEvent.thread_id).catch(() => null);
-    if (!channel?.isThread()) {
+    try {
+      const channel = await this.client.channels.fetch(verificationEvent.thread_id);
+      if (!channel?.isThread()) {
+        return false;
+      }
+      if (channel.archived) {
+        await channel.setArchived(false, 'Deliver CAPTCHA case status');
+      }
+      await channel.send({ content: enforceDiscordMessageLimit(message) });
+      return true;
+    } catch (error) {
+      console.warn(`Failed to deliver CAPTCHA status for case ${verificationEvent.id}:`, error);
       return false;
     }
-    if (channel.archived) {
-      await channel.setArchived(false, 'Deliver CAPTCHA case status');
-    }
-    await channel.send({ content: enforceDiscordMessageLimit(message) });
-    return true;
   }
 
   private async getInitialVerificationPrompt(member: GuildMember): Promise<string> {

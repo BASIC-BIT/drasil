@@ -100,6 +100,15 @@ interface ProfileAssetSnapshot {
   accent_color?: string;
   captured_at: string;
 }
+
+interface SuspiciousMemberOptions {
+  readonly sourceMessage?: Message;
+  readonly useReportReviewThread?: boolean;
+  readonly entitiesAlreadyEnsured?: boolean;
+  readonly moderator?: User;
+  readonly notificationSourceDetectionEvent?: DetectionEvent;
+  readonly automaticCaptchaForNewCase?: boolean;
+}
 /**
  * Interface for the SecurityActionService
  */
@@ -1734,13 +1743,10 @@ export class SecurityActionService implements ISecurityActionService {
       return;
     }
 
-    const handled = await this.handleSuspiciousMember(
-      member,
-      detectionResult,
-      undefined,
-      false,
-      true
-    );
+    const handled = await this.handleSuspiciousMember(member, detectionResult, {
+      entitiesAlreadyEnsured: true,
+      useReportReviewThread: false,
+    });
     if (!handled) {
       throw new Error(`Failed to route confirmed report intake as ${route}`);
     }
@@ -1862,15 +1868,10 @@ export class SecurityActionService implements ISecurityActionService {
   ): Promise<VerificationEvent> {
     const detectionResult = this.createDetectionResultFromEvent(detectionEvent);
     const shouldUseReviewThread = useReportReviewThread ?? this.shouldUseReportReviewThread();
-    await this.handleSuspiciousMember(
-      member,
-      detectionResult,
-      undefined,
-      shouldUseReviewThread,
-      false,
-      undefined,
-      detectionEvent
-    );
+    await this.handleSuspiciousMember(member, detectionResult, {
+      notificationSourceDetectionEvent: detectionEvent,
+      useReportReviewThread: shouldUseReviewThread,
+    });
 
     const verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
       member.id,
@@ -2347,13 +2348,16 @@ export class SecurityActionService implements ISecurityActionService {
   private async handleSuspiciousMember(
     member: GuildMember,
     detectionResult: DetectionResult,
-    sourceMessage?: Message,
-    useReportReviewThread?: boolean,
-    entitiesAlreadyEnsured = false,
-    moderator?: User,
-    notificationSourceDetectionEvent?: DetectionEvent,
-    automaticCaptchaForNewCase = false
+    options: SuspiciousMemberOptions = {}
   ): Promise<boolean> {
+    const {
+      sourceMessage,
+      useReportReviewThread,
+      entitiesAlreadyEnsured = false,
+      moderator,
+      notificationSourceDetectionEvent,
+      automaticCaptchaForNewCase = false,
+    } = options;
     const shouldUseReviewThread = useReportReviewThread ?? this.shouldUseReportReviewThread();
 
     if (!entitiesAlreadyEnsured) {
@@ -2612,7 +2616,7 @@ export class SecurityActionService implements ISecurityActionService {
           'message'
         );
       }
-      return await this.handleSuspiciousMember(member, detectionResult, sourceMessage);
+      return await this.handleSuspiciousMember(member, detectionResult, { sourceMessage });
     } catch (error) {
       console.error(`Failed to handle suspicious message for ${member.user.tag}:`, error);
       throw error;
@@ -2636,16 +2640,9 @@ export class SecurityActionService implements ISecurityActionService {
       if (await this.shouldAutoKickDetection(member, detectionResult, 'join')) {
         return await this.autoKickSuspiciousMember(member, detectionResult, undefined, 'join');
       }
-      return await this.handleSuspiciousMember(
-        member,
-        detectionResult,
-        undefined,
-        undefined,
-        false,
-        undefined,
-        undefined,
-        true
-      );
+      return await this.handleSuspiciousMember(member, detectionResult, {
+        automaticCaptchaForNewCase: true,
+      });
     } catch (error) {
       console.error(`Failed to handle suspicious join for ${member.user.tag}:`, error);
       throw error;
@@ -2660,7 +2657,7 @@ export class SecurityActionService implements ISecurityActionService {
     try {
       console.log(`Opening case for: ${member.user.tag} (${member.id})`);
       console.log(`Confidence: ${(detectionResult.confidence * 100).toFixed(2)}%`);
-      return await this.handleSuspiciousMember(member, detectionResult, sourceMessage);
+      return await this.handleSuspiciousMember(member, detectionResult, { sourceMessage });
     } catch (error) {
       console.error(`Failed to open case for ${member.user.tag}:`, error);
       throw error;
@@ -2674,16 +2671,9 @@ export class SecurityActionService implements ISecurityActionService {
     try {
       console.log(`Opening join case for: ${member.user.tag} (${member.id})`);
       console.log(`Confidence: ${(detectionResult.confidence * 100).toFixed(2)}%`);
-      return await this.handleSuspiciousMember(
-        member,
-        detectionResult,
-        undefined,
-        undefined,
-        false,
-        undefined,
-        undefined,
-        true
-      );
+      return await this.handleSuspiciousMember(member, detectionResult, {
+        automaticCaptchaForNewCase: true,
+      });
     } catch (error) {
       console.error(`Failed to open join case for ${member.user.tag}:`, error);
       throw error;
@@ -2751,7 +2741,9 @@ export class SecurityActionService implements ISecurityActionService {
       return true;
     }
 
-    return await this.handleSuspiciousMember(member, detectionResult, undefined, undefined, true);
+    return await this.handleSuspiciousMember(member, detectionResult, {
+      entitiesAlreadyEnsured: true,
+    });
   }
 
   public async openAdminCase(
@@ -2824,14 +2816,11 @@ export class SecurityActionService implements ISecurityActionService {
         detectionEventId: detectionEvent.id,
       };
 
-      const handled = await this.handleSuspiciousMember(
-        member,
-        detectionResult,
-        options.sourceMessage,
-        undefined,
-        true,
-        moderator
-      );
+      const handled = await this.handleSuspiciousMember(member, detectionResult, {
+        entitiesAlreadyEnsured: true,
+        moderator,
+        sourceMessage: options.sourceMessage,
+      });
       if (handled) {
         await this.mergeActiveCaseMetadata(member, sourceMetadata);
         this.captureMemberAnalytics(
@@ -3115,14 +3104,10 @@ export class SecurityActionService implements ISecurityActionService {
         detectionEventId: detectionEvent.id,
       };
 
-      const handled = await this.handleSuspiciousMember(
-        member,
-        detectionResult,
-        undefined,
-        undefined,
-        true,
-        moderator
-      );
+      const handled = await this.handleSuspiciousMember(member, detectionResult, {
+        entitiesAlreadyEnsured: true,
+        moderator,
+      });
       if (handled) {
         this.captureMemberAnalytics(
           member,
