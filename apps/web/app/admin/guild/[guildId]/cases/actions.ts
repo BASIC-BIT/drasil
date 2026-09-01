@@ -127,15 +127,6 @@ function readFormString(formData: FormData | undefined, key: string): string | n
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
-function readFormPositiveInteger(formData: FormData | undefined, key: string): number | null {
-  const value = readFormString(formData, key);
-  if (!value) {
-    return null;
-  }
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
-}
-
 function assertDestructiveActionEnabled(
   settings: Record<string, unknown>,
   context: DestructiveActionContext
@@ -305,6 +296,15 @@ async function assertCanQueueCaseAction(
     previewRequestId: null,
     reason,
   };
+}
+
+function readFormPositiveInteger(formData: FormData | undefined, key: string): number | null {
+  const value = readFormString(formData, key);
+  if (!value) {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 async function performQueueCaseAction(
