@@ -165,7 +165,17 @@ function ReportRow({
         </div>
       </div>
 
-      {item.summary ? <p>{item.summary}</p> : <p className="muted">No summary recorded.</p>}
+      {item.summary ? (
+        item.summarySource === 'ai' ? (
+          <p>
+            <strong>AI Assessment:</strong> <code>{item.summary}</code>
+          </p>
+        ) : (
+          <p>{item.summary}</p>
+        )
+      ) : (
+        <p className="muted">No summary recorded.</p>
+      )}
       <ReportActions
         canOpenReportCases={canOpenReportCases}
         closeReportAction={closeReportAction}

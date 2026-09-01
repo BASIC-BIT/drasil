@@ -15,6 +15,8 @@ export const reportQueueActionSchema = z.enum([
   'mark_false_positive',
 ]);
 
+export const reportSummarySourceSchema = z.enum(['ai', 'other']);
+
 export const reportQueueItemSchema = z.object({
   id: z.string(),
   guildId: z.string(),
@@ -22,6 +24,7 @@ export const reportQueueItemSchema = z.object({
   targetUserId: z.string().nullable(),
   status: reportQueueStatusSchema,
   summary: z.string().nullable(),
+  summarySource: reportSummarySourceSchema.default('other'),
   createdAt: z.string(),
   updatedAt: z.string(),
   stale: z.boolean(),
@@ -67,6 +70,7 @@ export const reportDetailSchema = z.object({
   targetUserId: z.string().nullable(),
   status: reportQueueStatusSchema,
   summary: z.string().nullable(),
+  summarySource: reportSummarySourceSchema.default('other'),
   createdAt: z.string(),
   updatedAt: z.string(),
   closedAt: z.string().nullable(),
@@ -79,6 +83,7 @@ export const reportDetailSchema = z.object({
 
 export type ReportQueueStatus = z.infer<typeof reportQueueStatusSchema>;
 export type ReportQueueAction = z.infer<typeof reportQueueActionSchema>;
+export type ReportSummarySource = z.infer<typeof reportSummarySourceSchema>;
 export type ReportQueueItem = z.infer<typeof reportQueueItemSchema>;
 export type ReportEvidenceKind = z.infer<typeof reportEvidenceKindSchema>;
 export type ReportEvidenceAttachment = z.infer<typeof reportEvidenceAttachmentSchema>;

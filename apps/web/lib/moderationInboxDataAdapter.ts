@@ -243,6 +243,7 @@ export function caseSummaryToInboxItem(item: CaseSummary): ModerationInboxItem {
     summary: item.latestDetectionType
       ? `Latest detection: ${item.latestDetectionType}.`
       : 'Pending case needs moderator review.',
+    summarySource: 'other',
     statusLabel: item.presenceState,
     signalLabel: confidenceSignal(item.confidence),
     createdAt: item.createdAt,
@@ -271,6 +272,7 @@ export function reportQueueItemToInboxItem(item: ReportQueueItem): ModerationInb
     },
     title: 'Submitted report',
     summary: item.summary,
+    summarySource: item.summarySource,
     statusLabel: item.status,
     signalLabel: `${item.evidenceCount} evidence item${item.evidenceCount === 1 ? '' : 's'}`,
     createdAt: item.createdAt,
@@ -358,6 +360,7 @@ export function parseModerationQueueRow(
     subject: subjectFromQueueRow(row),
     title: queueTitle(kind, row.item_type),
     summary,
+    summarySource: 'other',
     statusLabel: queueStatusLabel(kind, row),
     signalLabel: confidenceSignal(row.detection_confidence),
     createdAt: toIsoString(row.created_at),

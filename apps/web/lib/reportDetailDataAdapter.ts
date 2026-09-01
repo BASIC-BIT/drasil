@@ -10,6 +10,7 @@ import { discordMessageUrl } from './discordUrls';
 import { isWebE2eFixtureMode } from './e2eFixtures';
 import { fixtureReportDetail } from './reportFixtures';
 import { getPostgresPool } from './setupDataAdapter';
+import { resolveReportSummarySource } from './reportSummaryProvenance';
 
 export interface ReportDetailDataAdapter {
   getReportDetail(guildId: string, reportId: string): Promise<ReportDetail | null>;
@@ -22,6 +23,7 @@ interface ReportDetailRow {
   thread_id: string | null;
   status: ReportQueueStatus;
   summary: string | null;
+  metadata?: unknown;
   confirmed_target_user_id: string | null;
   created_at: unknown;
   updated_at: unknown;
@@ -151,6 +153,7 @@ export function parseReportDetailRows(
     targetUserId: row.confirmed_target_user_id,
     status: row.status,
     summary: row.summary,
+    summarySource: resolveReportSummarySource(row.summary, row.metadata),
     createdAt: toIsoString(row.created_at),
     updatedAt: toIsoString(row.updated_at),
     closedAt: toNullableIsoString(row.closed_at),
@@ -172,6 +175,7 @@ export class PostgresReportDetailDataAdapter implements ReportDetailDataAdapter 
          ri.thread_id,
          ri.status,
          ri.summary,
+         ri.metadata,
          ri.confirmed_target_user_id,
          ri.created_at,
          ri.updated_at,

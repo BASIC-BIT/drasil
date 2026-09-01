@@ -8,6 +8,7 @@ const baseReportRow = {
   thread_id: 'thread-1',
   status: 'submitted' as const,
   summary: 'Reporter supplied evidence.',
+  metadata: {},
   confirmed_target_user_id: 'user-1',
   created_at: new Date('2026-06-01T00:00:00.000Z'),
   updated_at: new Date('2026-06-02T00:00:00.000Z'),
@@ -48,6 +49,7 @@ describe('reportDetailDataAdapter', () => {
 
     expect(detail).toMatchObject({
       id: 'report-1',
+      summarySource: 'other',
       reportThreadUrl: 'https://discord.com/channels/guild-1/thread-1',
       allowedActions: [
         'open_report_thread',

@@ -718,7 +718,17 @@ function InboxRow({
             <span className="muted">{item.subject.secondaryLabel}</span>
           ) : null}
         </div>
-        {item.summary ? <p>{item.summary}</p> : <p className="muted">No summary recorded.</p>}
+        {item.summary ? (
+          item.summarySource === 'ai' ? (
+            <p>
+              <strong>AI Assessment:</strong> <code>{item.summary}</code>
+            </p>
+          ) : (
+            <p>{item.summary}</p>
+          )
+        ) : (
+          <p className="muted">No summary recorded.</p>
+        )}
         <InboxLinks item={item} />
       </div>
     </article>
@@ -790,7 +800,17 @@ function InboxDetailPanel({
           <span className="muted">{item.subject.secondaryLabel}</span>
         ) : null}
       </div>
-      {item.summary ? <p>{item.summary}</p> : <p className="muted">No summary recorded.</p>}
+      {item.summary ? (
+        item.summarySource === 'ai' ? (
+          <p>
+            <strong>AI Assessment:</strong> <code>{item.summary}</code>
+          </p>
+        ) : (
+          <p>{item.summary}</p>
+        )
+      ) : (
+        <p className="muted">No summary recorded.</p>
+      )}
 
       <div className="inbox-detail-grid">
         <DetailMetric label="Status" value={formatDetectionType(item.statusLabel)} />

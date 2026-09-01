@@ -8,6 +8,7 @@ const baseReport: ReportQueueItem = {
   targetUserId: 'user-1',
   status: 'submitted',
   summary: null,
+  summarySource: 'other',
   createdAt: '2026-06-01T00:00:00.000Z',
   updatedAt: '2026-06-01T00:00:00.000Z',
   stale: false,
