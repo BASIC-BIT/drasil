@@ -1848,6 +1848,11 @@ export class InteractionHandler implements IInteractionHandler {
       }
       await interaction.deferUpdate();
       try {
+        const guild = await this.client.guilds.fetch(guildId);
+        const targetMember = await guild.members.fetch(parsed.userId).catch(() => null);
+        if (!targetMember) {
+          throw new Error('The target is no longer a member of this server.');
+        }
         const result = await this.captchaChallengeService.requestChallenge({
           verificationEventId: parsed.verificationEventId,
           requestSource: CaptchaChallengeRequestSource.MODERATOR,

@@ -130,6 +130,7 @@ export interface IVerificationEventRepository {
   completeCaptchaVerification(
     input: CaptchaVerificationCompletionInput
   ): Promise<VerificationEvent | null>;
+  recordSubjectCaseEvidence(id: string, messageId: string): Promise<VerificationEvent | null>;
   rollbackCaseRoleRelease(id: string, attemptId: string): Promise<VerificationEvent | null>;
   renewQuarantineAttempt(id: string, attemptId: string): Promise<boolean>;
   recordQuarantineCaseRole(id: string, attemptId: string, roleId: string): Promise<boolean>;
@@ -634,6 +635,49 @@ export class VerificationEventRepository implements IVerificationEventRepository
       return rows[0] ?? null;
     } catch (error) {
       this.handleError(error, 'completeCaptchaVerification');
+    }
+  }
+
+  public async recordSubjectCaseEvidence(
+    id: string,
+    messageId: string
+  ): Promise<VerificationEvent | null> {
+    try {
+      const rows = await this.prisma.$queryRaw<VerificationEvent[]>`
+        UPDATE verification_events AS target
+        SET
+          case_revision = target.case_revision + 1,
+          metadata = jsonb_set(
+            CASE
+              WHEN jsonb_typeof(target.metadata) = 'object' THEN target.metadata
+              ELSE '{}'::jsonb
+            END,
+            '{subject_evidence_message_ids}',
+            CASE
+              WHEN jsonb_typeof(target.metadata) = 'object'
+                AND jsonb_typeof(target.metadata->'subject_evidence_message_ids') = 'array'
+                THEN target.metadata->'subject_evidence_message_ids'
+              ELSE '[]'::jsonb
+            END
+              || jsonb_build_array(${messageId}::text),
+            true
+          ),
+          updated_at = now()
+        WHERE target.id = ${id}::uuid
+          AND target.status = ${VerificationStatus.PENDING}::verification_status
+          AND NOT (
+            CASE
+              WHEN jsonb_typeof(target.metadata) = 'object'
+                AND jsonb_typeof(target.metadata->'subject_evidence_message_ids') = 'array'
+                THEN target.metadata->'subject_evidence_message_ids'
+              ELSE '[]'::jsonb
+            END @> jsonb_build_array(${messageId}::text)
+          )
+        RETURNING target.*
+      `;
+      return rows[0] ?? null;
+    } catch (error) {
+      this.handleError(error, 'recordSubjectCaseEvidence');
     }
   }
 

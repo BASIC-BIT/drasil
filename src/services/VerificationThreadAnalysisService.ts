@@ -92,9 +92,20 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
     verificationEventId: string
   ): Promise<void> {
     let verificationEvent = await this.verificationEventRepository.findById(verificationEventId);
+    if (!verificationEvent || verificationEvent.status !== VerificationStatus.PENDING) {
+      return;
+    }
+
+    const evidenceEvent = await this.verificationEventRepository.recordSubjectCaseEvidence(
+      verificationEvent.id,
+      message.id
+    );
+    if (!evidenceEvent) {
+      return;
+    }
+    verificationEvent = evidenceEvent;
+
     if (
-      !verificationEvent ||
-      verificationEvent.status !== VerificationStatus.PENDING ||
       isCaseRoleReleaseLeaseActive(
         verificationEvent.quarantine_attempt_id,
         verificationEvent.quarantine_lease_renewed_at

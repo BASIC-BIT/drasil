@@ -748,6 +748,44 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     return { ...completed };
   }
 
+  public async recordSubjectCaseEvidence(
+    id: string,
+    messageId: string
+  ): Promise<VerificationEvent | null> {
+    const eventIndex = this.events.findIndex(
+      (event) => event.id === id && event.status === VerificationStatus.PENDING
+    );
+    if (eventIndex === -1) {
+      return null;
+    }
+    const existing = this.events[eventIndex];
+    const metadata =
+      existing.metadata &&
+      typeof existing.metadata === 'object' &&
+      !Array.isArray(existing.metadata)
+        ? existing.metadata
+        : {};
+    const subjectEvidenceMessageIds = Array.isArray(metadata.subject_evidence_message_ids)
+      ? metadata.subject_evidence_message_ids.filter(
+          (value): value is string => typeof value === 'string'
+        )
+      : [];
+    if (subjectEvidenceMessageIds.includes(messageId)) {
+      return null;
+    }
+    const updated: VerificationEvent = {
+      ...existing,
+      case_revision: existing.case_revision + 1,
+      metadata: {
+        ...metadata,
+        subject_evidence_message_ids: [...subjectEvidenceMessageIds, messageId],
+      },
+      updated_at: new Date(),
+    };
+    this.events[eventIndex] = updated;
+    return { ...updated };
+  }
+
   async claimQuarantineAttempt(
     id: string,
     serverId: string,

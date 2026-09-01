@@ -465,6 +465,50 @@ describe('UserModerationService (unit)', () => {
     expect(roleManager.assignCaseRole).toHaveBeenCalledWith(member);
   });
 
+  it('does not restore the case role when another resolution wins the race', async () => {
+    const guildId = 'guild-captcha-terminal-race';
+    const userId = 'user-captcha-terminal-race';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    jest
+      .spyOn(verificationEventRepository, 'completeCaptchaVerification')
+      .mockImplementation(async () => {
+        await verificationEventRepository.update(verificationEvent.id, {
+          resolved_at: new Date(),
+          resolved_by: 'moderator-1',
+          status: VerificationStatus.VERIFIED,
+        });
+        return null;
+      });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager
+    );
+
+    await expect(
+      service.resolveCaptchaCase(member, {
+        challengeId: 'challenge-1',
+        expectedCaseRevision: 0,
+        generation: 1,
+        verificationEventId: verificationEvent.id,
+      })
+    ).resolves.toEqual({ status: 'held', reason: 'case_changed' });
+
+    expect(roleManager.removeCaseRole).toHaveBeenCalledWith(member);
+    expect(roleManager.assignCaseRole).not.toHaveBeenCalled();
+  });
+
   it('does not resolve a case while account containment is in progress', async () => {
     const guildId = 'guild-quarantine-in-progress';
     const userId = 'user-quarantine-in-progress';

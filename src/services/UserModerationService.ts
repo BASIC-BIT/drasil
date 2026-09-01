@@ -1292,9 +1292,14 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         resolvedAt,
       });
       if (!committed) {
-        const roleRestored = await this.roleManager.assignCaseRole(member);
-        if (!roleRestored) {
-          throw new Error(`Failed to restore case role for ${member.user.tag}`);
+        const currentPendingEvents = (
+          await this.verificationEventRepository.findByUserAndServer(member.id, member.guild.id)
+        ).filter((event) => event.status === VerificationStatus.PENDING);
+        if (currentPendingEvents.length > 0) {
+          const roleRestored = await this.roleManager.assignCaseRole(member);
+          if (!roleRestored) {
+            throw new Error(`Failed to restore case role for ${member.user.tag}`);
+          }
         }
         return { status: 'held', reason: 'case_changed' };
       }

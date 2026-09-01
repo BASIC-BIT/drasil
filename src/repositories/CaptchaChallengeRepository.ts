@@ -6,6 +6,7 @@ import {
   CaptchaChallengePassEffect,
   CaptchaChallengeRequestSource,
   CaptchaChallengeStatus,
+  VerificationStatus,
 } from './types';
 
 export interface CaptchaChallengeIssueInput {
@@ -56,18 +57,33 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
 
   public async create(input: CaptchaChallengeIssueInput): Promise<CaptchaChallenge> {
     try {
-      return (await this.prisma.captcha_challenges.create({
-        data: {
-          verification_event_id: input.verificationEventId,
-          server_id: input.serverId,
-          user_id: input.userId,
-          request_source: input.requestSource,
-          pass_effect: input.passEffect,
-          case_revision_at_issue: input.caseRevision,
-          link_token_hash: input.tokenHash,
-          expires_at: input.expiresAt,
-          requested_by: input.requestedBy ?? null,
-        },
+      return (await this.prisma.$transaction(async (transaction) => {
+        const pendingCase = await transaction.$queryRaw<Array<{ id: string }>>`
+          SELECT id::text
+          FROM verification_events
+          WHERE id = ${input.verificationEventId}::uuid
+            AND server_id = ${input.serverId}
+            AND user_id = ${input.userId}
+            AND status = ${VerificationStatus.PENDING}::verification_status
+            AND case_revision = ${input.caseRevision}
+          FOR UPDATE
+        `;
+        if (!pendingCase[0]) {
+          throw new Error('The case changed before the security check could be created.');
+        }
+        return await transaction.captcha_challenges.create({
+          data: {
+            verification_event_id: input.verificationEventId,
+            server_id: input.serverId,
+            user_id: input.userId,
+            request_source: input.requestSource,
+            pass_effect: input.passEffect,
+            case_revision_at_issue: input.caseRevision,
+            link_token_hash: input.tokenHash,
+            expires_at: input.expiresAt,
+            requested_by: input.requestedBy ?? null,
+          },
+        });
       })) as CaptchaChallenge;
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
@@ -88,6 +104,19 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
 
   public async retry(input: CaptchaChallengeIssueInput): Promise<CaptchaChallenge> {
     return (await this.prisma.$transaction(async (transaction) => {
+      const pendingCase = await transaction.$queryRaw<Array<{ id: string }>>`
+        SELECT id::text
+        FROM verification_events
+        WHERE id = ${input.verificationEventId}::uuid
+          AND server_id = ${input.serverId}
+          AND user_id = ${input.userId}
+          AND status = ${VerificationStatus.PENDING}::verification_status
+          AND case_revision = ${input.caseRevision}
+        FOR UPDATE
+      `;
+      if (!pendingCase[0]) {
+        throw new Error('The case changed before the security check could be retried.');
+      }
       const existing = await transaction.captcha_challenges.findUnique({
         where: { verification_event_id: input.verificationEventId },
       });

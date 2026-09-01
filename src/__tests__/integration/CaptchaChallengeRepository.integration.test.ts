@@ -122,6 +122,49 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     ).rejects.toThrow('Could not create a unique CAPTCHA link. Try issuing the check again.');
   });
 
+  it('requires the bound case to remain pending when creating or retrying a challenge', async () => {
+    const { verification } = await createCase(
+      'guild-captcha-pending-guard',
+      'user-captcha-pending-guard'
+    );
+    const challenges = new CaptchaChallengeRepository(prisma);
+    const verifications = new VerificationEventRepository(prisma);
+    const input = {
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      caseRevision: verification.case_revision,
+      expiresAt: new Date(Date.now() + 60_000),
+      requestedBy: 'moderator-1',
+    };
+    const challenge = await challenges.create({
+      ...input,
+      tokenHash: 'pending-guard-initial',
+    });
+    await challenges.recordDeliveryFailure(challenge.id, challenge.generation, 'delivery_failed');
+    await verifications.update(verification.id, {
+      resolved_at: new Date(),
+      resolved_by: 'moderator-2',
+      status: VerificationStatus.VERIFIED,
+    });
+
+    await expect(challenges.retry({ ...input, tokenHash: 'pending-guard-retry' })).rejects.toThrow(
+      'The case changed before the security check could be retried.'
+    );
+    await expect(
+      challenges.create({
+        ...input,
+        verificationEventId: '2e35afe7-51bf-4b57-8807-699946696aa2',
+        tokenHash: 'pending-guard-create',
+      })
+    ).rejects.toThrow('The case changed before the security check could be created.');
+    await expect(challenges.findById(challenge.id)).resolves.toEqual(
+      expect.objectContaining({ generation: challenge.generation })
+    );
+  });
+
   it('expires a generation exactly once', async () => {
     const { verification } = await createCase('guild-captcha-expiry', 'user-captcha-expiry');
     const challenges = new CaptchaChallengeRepository(prisma);
@@ -346,5 +389,30 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     await expect(
       prisma.verification_events.findUnique({ where: { id: verification.id } })
     ).resolves.toEqual(expect.objectContaining({ case_revision: 1 }));
+  });
+
+  it('increments case revision once for each newly accepted subject message', async () => {
+    const { verification } = await createCase(
+      'guild-captcha-subject-evidence',
+      'user-captcha-subject-evidence'
+    );
+    const verifications = new VerificationEventRepository(prisma);
+
+    await expect(
+      verifications.recordSubjectCaseEvidence(verification.id, 'message-1')
+    ).resolves.toEqual(
+      expect.objectContaining({
+        case_revision: 1,
+        metadata: expect.objectContaining({
+          subject_evidence_message_ids: ['message-1'],
+        }),
+      })
+    );
+    await expect(
+      verifications.recordSubjectCaseEvidence(verification.id, 'message-1')
+    ).resolves.toBeNull();
+    await expect(
+      verifications.recordSubjectCaseEvidence(verification.id, 'message-2')
+    ).resolves.toEqual(expect.objectContaining({ case_revision: 2 }));
   });
 });

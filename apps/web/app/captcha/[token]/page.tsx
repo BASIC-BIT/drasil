@@ -3,7 +3,11 @@ import Link from 'next/link';
 import { cookies } from 'next/headers';
 import { CAPTCHA_IDENTITY_COOKIE } from '@/lib/cookies';
 import { decodeCaptchaIdentity } from '@/lib/captchaSession';
-import { getCaptchaFormConfiguration, getCaptchaPublicChallenge } from '@/lib/captchaCompletion';
+import {
+  getCaptchaFormConfiguration,
+  getCaptchaPublicChallenge,
+  requeueCaptchaPassEffect,
+} from '@/lib/captchaCompletion';
 import { TurnstileChallengeForm } from '@/components/captcha/TurnstileChallengeForm';
 
 export const dynamic = 'force-dynamic';
@@ -49,6 +53,11 @@ export default async function CaptchaChallengePage({
     );
   }
   if (challenge.status === 'passed') {
+    try {
+      await requeueCaptchaPassEffect(challenge);
+    } catch (error) {
+      console.error('Failed to requeue completed CAPTCHA effects:', error);
+    }
     return (
       <main className="public-flow-shell">
         <section className="public-flow-panel">

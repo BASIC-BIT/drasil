@@ -57,6 +57,7 @@ import {
 } from '../../controllers/CaseCommandHandler';
 import { buildReportIntakeAdminActionsCustomId } from '../../utils/reportIntakeAdminActions';
 import { buildAccountQuarantinePreviewFingerprint } from '../../utils/accountQuarantinePreview';
+import { buildAdminActionCustomId } from '../../utils/adminActionCustomIds';
 import type { AccountQuarantinePreview } from '../../services/AccountQuarantineService';
 
 const buildMember = (guildId: string, userId: string, displayName = 'test-user'): GuildMember =>
@@ -401,6 +402,7 @@ describe('InteractionHandler (unit)', () => {
       completeCaseRoleRelease: jest.fn(),
       completeVerificationRelease: jest.fn(),
       completeCaptchaVerification: jest.fn(),
+      recordSubjectCaseEvidence: jest.fn(),
       rollbackCaseRoleRelease: jest.fn(),
       renewQuarantineAttempt: jest.fn(),
       recordQuarantineCaseRole: jest.fn(),
@@ -1214,6 +1216,51 @@ describe('InteractionHandler (unit)', () => {
       (row: { toJSON(): { components: any[] } }) => row.toJSON().components
     );
     expect(buttons.map((button: { label?: string }) => button.label)).toEqual(['Kick User']);
+  });
+
+  it('refuses a confirmed CAPTCHA action when the target has left the server', async () => {
+    const requestChallenge = jest.fn();
+    const captchaChallengeService = { requestChallenge } as any;
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      members: {
+        fetch: jest.fn().mockRejectedValue(new Error('Unknown Member')),
+      },
+    });
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      captchaChallengeService
+    );
+    const interaction = buildInteraction(
+      buildAdminActionCustomId('confirm_captcha', 'case', 'user-1', undefined, 'ver-1'),
+      'guild-1',
+      { id: 'admin-1' } as User
+    );
+    grantOnlyModerationPermission(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(requestChallenge).not.toHaveBeenCalled();
+    expect(interaction.followUp).toHaveBeenCalledWith({
+      content: 'The target is no longer a member of this server.',
+      flags: MessageFlags.Ephemeral,
+    });
+    consoleError.mockRestore();
   });
 
   it('shows observed admin actions with a resolved display label and no confirmation copy', async () => {
