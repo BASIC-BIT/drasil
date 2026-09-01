@@ -501,32 +501,6 @@ function resolveAllowedActions(
   return appendCaptchaActions(row, actionsWithNotification);
 }
 
-function appendCaptchaActions(row: CaseSummaryRow, actions: CaseAction[]): CaseAction[] {
-  if (row.case_kind === 'compromised_account' || row.status !== 'pending') {
-    return actions;
-  }
-  const mode = metadataToRecord(row.server_settings).captcha_mode;
-  if (mode !== 'manual' && mode !== 'suspicious_join') {
-    return actions;
-  }
-  if (!row.captcha_status) {
-    actions.push('challenge_user');
-    return actions;
-  }
-  if (row.captcha_status === 'pending') {
-    actions.push('bypass_captcha');
-    return actions;
-  }
-  if (row.captcha_status === 'failed' || row.captcha_status === 'expired') {
-    actions.push('retry_captcha', 'bypass_captcha');
-    return actions;
-  }
-  if (row.captcha_status === 'bypassed') {
-    actions.push('retry_captcha');
-  }
-  return actions;
-}
-
 function resolveCaseKindActions(row: CaseSummaryRow, actions: readonly CaseAction[]): CaseAction[] {
   return row.case_kind === 'compromised_account'
     ? actions.filter((action) => action !== 'close_no_action')
@@ -600,6 +574,32 @@ export function parseCaseSummaryRow(row: CaseSummaryRow, now = new Date()): Case
         }
       : null,
   });
+}
+
+function appendCaptchaActions(row: CaseSummaryRow, actions: CaseAction[]): CaseAction[] {
+  if (row.case_kind === 'compromised_account' || row.status !== 'pending') {
+    return actions;
+  }
+  const mode = metadataToRecord(row.server_settings).captcha_mode;
+  if (mode !== 'manual' && mode !== 'suspicious_join') {
+    return actions;
+  }
+  if (!row.captcha_status) {
+    actions.push('challenge_user');
+    return actions;
+  }
+  if (row.captcha_status === 'pending') {
+    actions.push('bypass_captcha');
+    return actions;
+  }
+  if (row.captcha_status === 'failed' || row.captcha_status === 'expired') {
+    actions.push('retry_captcha', 'bypass_captcha');
+    return actions;
+  }
+  if (row.captcha_status === 'bypassed') {
+    actions.push('retry_captcha');
+  }
+  return actions;
 }
 
 function parseDetectionHistoryRow(row: DetectionHistoryRow): CaseDetectionHistoryItem {
