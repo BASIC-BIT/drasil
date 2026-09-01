@@ -133,6 +133,14 @@ const requestCaptchaChallengeRequest: ModerationActionRequest = {
   idempotency_key: 'web:case-action:challenge_user:guild-1:ver-1',
 };
 
+const bypassCaptchaChallengeRequest: ModerationActionRequest = {
+  ...verifyRequest,
+  action_type: ModerationActionRequestType.BYPASS_CAPTCHA_CHALLENGE,
+  id: 'captcha-bypass-request-1',
+  idempotency_key: 'web:case-action:bypass_captcha:guild-1:ver-1',
+  metadata: { reason: 'Moderator confirmed access another way.' },
+};
+
 const notifyCaptchaAttentionRequest: ModerationActionRequest = {
   ...applyCaptchaPassRequest,
   action_type: ModerationActionRequestType.NOTIFY_CAPTCHA_ATTENTION,
@@ -994,6 +1002,7 @@ describe('ModerationActionRequestService', () => {
       })),
     };
     const captchaChallengeService = {
+      bypassChallenge: jest.fn(async () => ({ generation: 1, id: 'challenge-1' })),
       evaluatePassedChallenge: jest.fn(async () => ({ status: 'eligible' as const })),
       requestChallenge: jest.fn(async () => ({
         challenge: { generation: 1, id: 'challenge-1' },
@@ -1591,6 +1600,52 @@ describe('ModerationActionRequestService', () => {
       {
         id: 'captcha-request-1',
         error: 'Security-check actions require current moderation permission.',
+      },
+    ]);
+  });
+
+  it('refuses to issue a CAPTCHA when the queued target does not match the case subject', async () => {
+    const { captchaChallengeService, repository, service, verificationEventRepository } =
+      buildService([requestCaptchaChallengeRequest]);
+    verificationEventRepository.findById.mockResolvedValueOnce({
+      id: 'ver-1',
+      notification_channel_id: 'admin-channel-1',
+      notification_message_id: 'admin-message-1',
+      server_id: 'guild-1',
+      thread_id: 'thread-1',
+      user_id: 'different-user',
+    });
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(captchaChallengeService.requestChallenge).not.toHaveBeenCalled();
+    expect(repository.failed).toEqual([
+      {
+        id: 'captcha-request-1',
+        error: 'Security-check request does not match its case subject.',
+      },
+    ]);
+  });
+
+  it('refuses to bypass a CAPTCHA when the queued target does not match the case subject', async () => {
+    const { captchaChallengeService, repository, service, verificationEventRepository } =
+      buildService([bypassCaptchaChallengeRequest]);
+    verificationEventRepository.findById.mockResolvedValueOnce({
+      id: 'ver-1',
+      notification_channel_id: 'admin-channel-1',
+      notification_message_id: 'admin-message-1',
+      server_id: 'guild-1',
+      thread_id: 'thread-1',
+      user_id: 'different-user',
+    });
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(captchaChallengeService.bypassChallenge).not.toHaveBeenCalled();
+    expect(repository.failed).toEqual([
+      {
+        id: 'captcha-bypass-request-1',
+        error: 'Security-check request does not match its case subject.',
       },
     ]);
   });

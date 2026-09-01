@@ -940,6 +940,11 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     if (!this.captchaChallengeService) {
       throw new Error('Security-check service is unavailable.');
     }
+    await this.requireCaptchaCaseBinding(
+      request.server_id,
+      request.target_user_id,
+      request.verification_event_id
+    );
     await Promise.all([
       this.requireCaptchaModerator(request.server_id, request.actor_id),
       this.fetchGuildMember(request.server_id, request.target_user_id),
@@ -967,6 +972,11 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     if (!this.captchaChallengeService) {
       throw new Error('Security-check service is unavailable.');
     }
+    await this.requireCaptchaCaseBinding(
+      request.server_id,
+      request.target_user_id,
+      request.verification_event_id
+    );
     await this.requireCaptchaModerator(request.server_id, request.actor_id);
     const reason = this.readMetadataString(request.metadata, 'reason')?.trim();
     if (!reason) {
@@ -2054,6 +2064,21 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       !moderator.permissions.has(PermissionFlagsBits.ModerateMembers)
     ) {
       throw new Error('Security-check actions require current moderation permission.');
+    }
+  }
+
+  private async requireCaptchaCaseBinding(
+    serverId: string,
+    userId: string,
+    verificationEventId: string
+  ): Promise<void> {
+    const verificationEvent = await this.verificationEventRepository.findById(verificationEventId);
+    if (
+      !verificationEvent ||
+      verificationEvent.server_id !== serverId ||
+      verificationEvent.user_id !== userId
+    ) {
+      throw new Error('Security-check request does not match its case subject.');
     }
   }
 
