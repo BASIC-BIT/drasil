@@ -1,10 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { getCaptchaOAuthStateCookieName } from '@/lib/captchaSession';
 import { GET } from './route';
 
 describe('CAPTCHA Discord OAuth callback', () => {
   it('returns a safe response when the bound state cookie is missing', async () => {
+    vi.stubEnv('DRASIL_SESSION_SECRET', 'test-session-secret');
     const request = new NextRequest(
       'https://drasil.example/api/captcha/auth/callback?code=code-1&state=state-1'
     );

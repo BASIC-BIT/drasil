@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import {
   CAPTCHA_IDENTITY_COOKIE,
@@ -28,7 +28,7 @@ export type CaptchaOAuthState = z.infer<typeof captchaOAuthStateSchema>;
 export type CaptchaIdentity = z.infer<typeof captchaIdentitySchema>;
 
 function cookieBindingSuffix(value: string): string {
-  return createHash('sha256').update(value).digest('base64url').slice(0, 32);
+  return createHmac('sha256', getSessionSecret()).update(value).digest('base64url').slice(0, 32);
 }
 
 export function getCaptchaOAuthStateCookieName(state: string): string {
