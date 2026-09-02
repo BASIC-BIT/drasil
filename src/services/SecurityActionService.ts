@@ -4066,14 +4066,14 @@ export class SecurityActionService implements ISecurityActionService {
       );
 
       await this.userModerationService.applyCaseRole(member, moderator);
-      await this.threadManager.reopenVerificationThread(verificationEvent);
+      await this.threadManager.reopenVerificationThread(updatedEvent);
       await this.notificationManager.logActionToMessage(
-        verificationEvent,
+        updatedEvent,
         AdminActionType.REOPEN,
         moderator
       );
       await this.notificationManager.updateNotificationButtons(
-        verificationEvent,
+        updatedEvent,
         VerificationStatus.PENDING
       );
       await this.runModerationQueueTask(

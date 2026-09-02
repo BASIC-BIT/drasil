@@ -11,6 +11,12 @@ export interface DiscordMemberPendingStateUpdate {
   pendingChanged: boolean;
 }
 
+export interface VerifiedMemberStateInput {
+  lastStatusChange?: Date;
+  lastVerifiedAt: string;
+  updatedBy: string;
+}
+
 /**
  * Interface for the ServerMemberRepository (Remains the same)
  */
@@ -21,6 +27,11 @@ export interface IServerMemberRepository {
     userId: string,
     data: Partial<ServerMember>
   ): Promise<ServerMember>;
+  markVerifiedIfNoPendingCase(
+    serverId: string,
+    userId: string,
+    input: VerifiedMemberStateInput
+  ): Promise<ServerMember | null>;
   findByServer(serverId: string): Promise<ServerMember[]>;
   findByUser(userId: string): Promise<ServerMember[]>;
   findCaseRoleActiveMembers(serverId: string): Promise<ServerMember[]>;
@@ -157,6 +168,40 @@ export class ServerMemberRepository implements IServerMemberRepository {
       return upserted as ServerMember; // Cast needed if ServerMember type differs slightly
     } catch (error) {
       this.handleError(error, 'upsertMember');
+    }
+  }
+
+  async markVerifiedIfNoPendingCase(
+    serverId: string,
+    userId: string,
+    input: VerifiedMemberStateInput
+  ): Promise<ServerMember | null> {
+    try {
+      const rows = await this.prisma.$queryRaw<ServerMember[]>`
+        UPDATE server_members AS member
+        SET
+          case_role_active = false,
+          verification_status = ${VerificationStatus.VERIFIED}::verification_status,
+          last_verified_at = ${new Date(input.lastVerifiedAt)},
+          last_status_change = COALESCE(
+            ${input.lastStatusChange ?? null}::timestamptz,
+            member.last_status_change
+          ),
+          updated_by = ${input.updatedBy}
+        WHERE member.server_id = ${serverId}
+          AND member.user_id = ${userId}
+          AND NOT EXISTS (
+            SELECT 1
+            FROM verification_events AS pending_case
+            WHERE pending_case.server_id = member.server_id
+              AND pending_case.user_id = member.user_id
+              AND pending_case.status = ${VerificationStatus.PENDING}::verification_status
+          )
+        RETURNING member.*
+      `;
+      return rows[0] ?? null;
+    } catch (error) {
+      this.handleError(error, 'markVerifiedIfNoPendingCase');
     }
   }
 

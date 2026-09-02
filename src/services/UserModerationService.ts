@@ -1379,8 +1379,6 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         throw new Error(`Failed to reconcile case role for ${member.user.tag}`);
       }
     }
-    const memberVerificationStatus =
-      remainingPending.length > 0 ? VerificationStatus.PENDING : VerificationStatus.VERIFIED;
     const restoreResult =
       remainingPending.length === 0
         ? await this.tryRestoreRoleQuarantine(member, completed, { id: actorId } as User, {
@@ -1418,15 +1416,35 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     const memberStateChanged =
       !alreadyResolvedByCaptcha ||
       !storedMember ||
-      storedMember.case_role_active !== remainingPending.length > 0 ||
-      storedMember.verification_status !== memberVerificationStatus;
-    await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
-      case_role_active: remainingPending.length > 0,
-      verification_status: memberVerificationStatus,
-      ...(memberStateChanged ? { last_status_change: new Date() } : {}),
-      ...(remainingPending.length === 0 ? { last_verified_at: resolvedAt.toISOString() } : {}),
-      updated_by: actorId,
-    });
+      storedMember.case_role_active !== false ||
+      storedMember.verification_status !== VerificationStatus.VERIFIED;
+    const finalizedMember = await this.serverMemberRepository.markVerifiedIfNoPendingCase(
+      member.guild.id,
+      member.id,
+      {
+        ...(memberStateChanged ? { lastStatusChange: new Date() } : {}),
+        lastVerifiedAt: resolvedAt.toISOString(),
+        updatedBy: actorId,
+      }
+    );
+    if (!finalizedMember) {
+      const pendingAtFinalWrite = (
+        await this.verificationEventRepository.findByUserAndServer(member.id, member.guild.id)
+      ).filter((event) => event.status === VerificationStatus.PENDING);
+      if (pendingAtFinalWrite.length === 0) {
+        throw new Error(`Failed to finalize member state for CAPTCHA case ${completed.id}.`);
+      }
+      const roleRestored = await this.roleManager.assignCaseRole(member);
+      if (!roleRestored) {
+        throw new Error(`Failed to preserve case role for ${member.user.tag}`);
+      }
+      return {
+        status: 'held',
+        reason: pendingAtFinalWrite.some((event) => event.id === completed.id)
+          ? 'case_changed'
+          : 'other_pending_case',
+      };
+    }
     const current = await this.verificationEventRepository.findById(completed.id);
     const currentCaptchaResolutionValue = this.metadataToRecord(
       current?.metadata ?? null

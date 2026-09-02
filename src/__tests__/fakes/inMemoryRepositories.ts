@@ -1918,6 +1918,20 @@ export class InMemoryServerMemberRepository implements IServerMemberRepository {
     return { ...updated };
   }
 
+  async markVerifiedIfNoPendingCase(
+    serverId: string,
+    userId: string,
+    input: { lastStatusChange?: Date; lastVerifiedAt: string; updatedBy: string }
+  ): Promise<ServerMember | null> {
+    return this.upsertMember(serverId, userId, {
+      case_role_active: false,
+      verification_status: VerificationStatus.VERIFIED,
+      last_verified_at: input.lastVerifiedAt,
+      ...(input.lastStatusChange ? { last_status_change: input.lastStatusChange } : {}),
+      updated_by: input.updatedBy,
+    });
+  }
+
   async findByServer(serverId: string): Promise<ServerMember[]> {
     return Array.from(this.members.values())
       .filter((member) => member.server_id === serverId)

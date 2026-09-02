@@ -137,6 +137,12 @@ describe('captcha completion transaction', () => {
       challenge: expect.objectContaining({ id: challengeRow.id, status: 'failed' }),
     });
     expect(query.mock.calls.some(([statement]) => statement.includes('insert into'))).toBe(false);
+    const limitsQuery = query.mock.calls.find(([statement]) =>
+      statement.includes('generation_count')
+    )?.[0];
+    expect(limitsQuery).toContain(
+      "validation_state <> 'provider_error'::captcha_attempt_validation_state"
+    );
     expect(mocked.insertModerationActionRequestWithReceipt).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({

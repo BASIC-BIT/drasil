@@ -57,6 +57,18 @@ describe('Turnstile server-side validation', () => {
     expect(() => assertCaptchaProviderConfigured('suspicious_join')).not.toThrow();
   });
 
+  it('blocks CAPTCHA enablement when the public URL is not a bare origin', () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://drasil.example/base?preview=1#setup');
+    vi.stubEnv('NEXT_PUBLIC_TURNSTILE_SITE_KEY', 'site-key');
+    vi.stubEnv('TURNSTILE_SECRET_KEY', 'secret-key');
+    vi.stubEnv('TURNSTILE_EXPECTED_HOSTNAME', 'drasil.example');
+    vi.stubEnv('DRASIL_CAPTCHA_BINDING_SECRET', 'binding-secret');
+
+    expect(() => assertCaptchaProviderConfigured('manual')).toThrow(
+      'public web URL must be a bare origin'
+    );
+  });
+
   it('accepts only an exact hostname, action, and challenge binding', async () => {
     configureProvider();
     const fetchMock = vi.fn().mockResolvedValue(

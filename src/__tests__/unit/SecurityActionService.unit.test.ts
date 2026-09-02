@@ -3,6 +3,9 @@ import { SecurityActionService } from '../../services/SecurityActionService';
 import { DetectionResult } from '../../services/DetectionOrchestrator';
 import {
   AdminActionType,
+  CaseAttentionState,
+  CaseContainmentStatus,
+  CaseKind,
   CaptchaChallengeRequestSource,
   DetectionType,
   ModerationOutcomeSource,
@@ -3896,12 +3899,19 @@ describe('SecurityActionService (unit)', () => {
     const moderator = { id: 'admin-2' } as User;
     const member = buildMember(guildId, userId);
 
-    const verificationEvent = await verificationEventRepository.createFromDetection(
+    const createdEvent = await verificationEventRepository.createFromDetection(
       null,
       guildId,
       userId,
       VerificationStatus.VERIFIED
     );
+    const verificationEvent = (await verificationEventRepository.update(createdEvent.id, {
+      attention_state: CaseAttentionState.PARKED,
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      parked_at: new Date(),
+      parked_by: 'admin-quarantine',
+    }))!;
 
     const client = {
       guilds: {
@@ -3933,15 +3943,38 @@ describe('SecurityActionService (unit)', () => {
     expect(updatedEvent?.case_revision).toBe(verificationEvent.case_revision + 1);
     expect(updatedEvent?.resolved_at).toBeNull();
     expect(updatedEvent?.resolved_by).toBeNull();
-    expect(threadManager.reopenVerificationThread).toHaveBeenCalledWith(verificationEvent);
+    expect(threadManager.reopenVerificationThread).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: verificationEvent.id,
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        case_revision: verificationEvent.case_revision + 1,
+        case_kind: CaseKind.STANDARD,
+        containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+        status: VerificationStatus.PENDING,
+      })
+    );
     expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member, moderator);
     expect(notificationManager.logActionToMessage).toHaveBeenCalledWith(
-      verificationEvent,
+      expect.objectContaining({
+        id: verificationEvent.id,
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        case_revision: verificationEvent.case_revision + 1,
+        case_kind: CaseKind.STANDARD,
+        containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+        status: VerificationStatus.PENDING,
+      }),
       AdminActionType.REOPEN,
       moderator
     );
     expect(notificationManager.updateNotificationButtons).toHaveBeenCalledWith(
-      verificationEvent,
+      expect.objectContaining({
+        id: verificationEvent.id,
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        case_revision: verificationEvent.case_revision + 1,
+        case_kind: CaseKind.STANDARD,
+        containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+        status: VerificationStatus.PENDING,
+      }),
       VerificationStatus.PENDING
     );
 

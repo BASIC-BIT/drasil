@@ -397,7 +397,10 @@ describe('UserModerationService (unit)', () => {
     });
     const actionCount = (await adminActionRepository.findByUserAndServer(userId, guildId)).length;
     jest.clearAllMocks();
-    const upsertMember = jest.spyOn(serverMemberRepository, 'upsertMember');
+    const markVerifiedIfNoPendingCase = jest.spyOn(
+      serverMemberRepository,
+      'markVerifiedIfNoPendingCase'
+    );
 
     await expect(service.resolveCaptchaCase(member, input)).resolves.toEqual({
       status: 'resolved',
@@ -406,12 +409,12 @@ describe('UserModerationService (unit)', () => {
     expect(roleManager.removeCaseRole).not.toHaveBeenCalled();
     expect(threadManager.resolveVerificationThread).not.toHaveBeenCalled();
     expect(notificationManager.logActionToMessage).not.toHaveBeenCalled();
-    expect(upsertMember).toHaveBeenCalledWith(
+    expect(markVerifiedIfNoPendingCase).toHaveBeenCalledWith(
       guildId,
       userId,
-      expect.not.objectContaining({ last_status_change: expect.anything() })
+      expect.not.objectContaining({ lastStatusChange: expect.anything() })
     );
-    upsertMember.mockRestore();
+    markVerifiedIfNoPendingCase.mockRestore();
     await expect(adminActionRepository.findByUserAndServer(userId, guildId)).resolves.toHaveLength(
       actionCount
     );
@@ -745,6 +748,61 @@ describe('UserModerationService (unit)', () => {
 
     expect(fenceAllowed).toBe(false);
     expect(roleManager.assignCaseRole).toHaveBeenCalledWith(member);
+    expect(threadManager.resolveVerificationThread).not.toHaveBeenCalled();
+  });
+
+  it('does not overwrite pending member state when a case opens at the final write', async () => {
+    const guildId = 'guild-captcha-final-member-fence';
+    const userId = 'user-captcha-final-member-fence';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    await serverMemberRepository.upsertMember(guildId, userId, {
+      case_role_active: true,
+      verification_status: VerificationStatus.PENDING,
+    });
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    jest
+      .spyOn(serverMemberRepository, 'markVerifiedIfNoPendingCase')
+      .mockImplementationOnce(async () => {
+        await verificationEventRepository.createFromDetection(
+          null,
+          guildId,
+          userId,
+          VerificationStatus.PENDING
+        );
+        return null;
+      });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager
+    );
+
+    await expect(
+      service.resolveCaptchaCase(member, {
+        challengeId: 'challenge-final-member-fence',
+        expectedCaseRevision: verificationEvent.case_revision,
+        generation: 1,
+        verificationEventId: verificationEvent.id,
+      })
+    ).resolves.toEqual({ status: 'held', reason: 'other_pending_case' });
+
+    expect(roleManager.assignCaseRole).toHaveBeenCalledWith(member);
+    await expect(serverMemberRepository.findByServerAndUser(guildId, userId)).resolves.toEqual(
+      expect.objectContaining({
+        case_role_active: true,
+        verification_status: VerificationStatus.PENDING,
+      })
+    );
     expect(threadManager.resolveVerificationThread).not.toHaveBeenCalled();
   });
 

@@ -55,6 +55,15 @@ export function captchaProviderConfigurationIssues(): string[] {
   }
   try {
     const parsed = new URL(publicUrl);
+    if (
+      parsed.username ||
+      parsed.password ||
+      parsed.pathname !== '/' ||
+      parsed.search ||
+      parsed.hash
+    ) {
+      issues.push('public web URL must be a bare origin');
+    }
     if (parsed.protocol !== 'https:' && parsed.hostname !== 'localhost') {
       issues.push('public web URL must use HTTPS');
     }

@@ -298,7 +298,9 @@ async function readAttemptLimits(
     recent_user_count: string;
   }>(
     `select
-       count(*)::text as generation_count,
+       count(*) filter (
+         where validation_state <> 'provider_error'::captcha_attempt_validation_state
+       )::text as generation_count,
        count(*) filter (
          where discord_user_id = $3 and created_at >= $4::timestamptz
        )::text as recent_user_count
