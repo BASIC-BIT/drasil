@@ -3,6 +3,9 @@ import type { Prisma } from '../../db/prisma';
 import { ChannelType } from 'discord.js';
 import {
   AdminActionType,
+  CaseAttentionState,
+  CaseContainmentStatus,
+  CaseKind,
   MessageDeletionBanStatus,
   MessageDeletionCaseFinalizationStatus,
   MessageDeletionCoverage,
@@ -12,6 +15,7 @@ import {
   ModerationActionRequest,
   ModerationActionRequestStatus,
   ModerationActionRequestType,
+  VerificationStatus,
   type MessageDeletionJobWithItems,
 } from '../../repositories/types';
 import type { IModerationActionRequestRepository } from '../../repositories/ModerationActionRequestRepository';
@@ -1033,16 +1037,28 @@ describe('ModerationActionRequestService', () => {
       })),
       previewJob: jest.fn(async () => messageCleanupJob),
     };
+    const pendingVerificationEvent = {
+      id: 'ver-1',
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      case_kind: CaseKind.STANDARD,
+      case_revision: 2,
+      containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+      notification_channel_id: 'admin-channel-1',
+      notification_message_id: 'admin-message-1',
+      server_id: 'guild-1',
+      status: VerificationStatus.PENDING,
+      thread_id: 'thread-1',
+      user_id: 'user-1',
+    } as any;
     const verificationEventRepository = {
-      findById: jest.fn(async () => ({
-        id: 'ver-1',
-        notification_channel_id: 'admin-channel-1',
-        notification_message_id: 'admin-message-1',
-        server_id: 'guild-1',
-        status: 'pending',
-        thread_id: 'thread-1',
-        user_id: 'user-1',
-      })),
+      claimCaptchaPassPresentation: jest.fn(
+        async (): Promise<any> => ({
+          ...pendingVerificationEvent,
+          containment_status: CaseContainmentStatus.IN_PROGRESS,
+          quarantine_attempt_id: 'captcha-pass-presentation:challenge-1:1',
+        })
+      ),
+      findById: jest.fn(async (): Promise<any> => pendingVerificationEvent),
       findActiveByUserAndServer: jest.fn(async () => ({
         id: 'ver-1',
         notification_channel_id: 'admin-channel-1',
@@ -1051,6 +1067,7 @@ describe('ModerationActionRequestService', () => {
         thread_id: 'thread-1',
         user_id: 'user-1',
       })),
+      updateQuarantineAttempt: jest.fn(async () => pendingVerificationEvent),
     };
     const accountQuarantineService = {
       preview: jest.fn(async () => defaultAccountQuarantinePreview),
@@ -1829,6 +1846,57 @@ describe('ModerationActionRequestService', () => {
         error: 'Failed to deliver CAPTCHA completion for case ver-1.',
       },
     ]);
+  });
+
+  it('does not post completion after a moderator resolves the case first', async () => {
+    const {
+      captchaChallengeService,
+      notificationManager,
+      repository,
+      service,
+      threadManager,
+      userModerationService,
+      verificationEventRepository,
+    } = buildService([applyCaptchaPassRequest]);
+    captchaChallengeService.evaluatePassedChallenge.mockResolvedValueOnce({
+      status: 'held',
+      reason: 'case_changed',
+    } as any);
+    verificationEventRepository.findById
+      .mockResolvedValueOnce({
+        id: 'ver-1',
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        case_kind: CaseKind.STANDARD,
+        case_revision: 2,
+        containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+        server_id: 'guild-1',
+        status: VerificationStatus.PENDING,
+        thread_id: 'thread-1',
+        user_id: 'user-1',
+      } as any)
+      .mockResolvedValueOnce({
+        id: 'ver-1',
+        case_revision: 2,
+        resolved_by: 'moderator-1',
+        server_id: 'guild-1',
+        status: VerificationStatus.CLOSED_NO_ACTION,
+        thread_id: 'thread-1',
+        user_id: 'user-1',
+      } as any);
+    verificationEventRepository.claimCaptchaPassPresentation.mockResolvedValueOnce(null);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(threadManager.sendCaptchaStatus).not.toHaveBeenCalled();
+    expect(userModerationService.resolveCaptchaCase).not.toHaveBeenCalled();
+    expect(notificationManager.updateCaptchaChallengePresentation).toHaveBeenCalledWith(
+      expect.objectContaining({ status: VerificationStatus.CLOSED_NO_ACTION }),
+      expect.objectContaining({ id: 'challenge-1' })
+    );
+    expect(repository.completed[0]).toEqual({
+      id: 'captcha-pass-request-1',
+      result: expect.objectContaining({ held_reason: 'case_changed', resolved: false }),
+    });
   });
 
   it('resumes exact-case CAPTCHA finalization after the case commit', async () => {

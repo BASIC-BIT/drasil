@@ -22,6 +22,7 @@ import {
 import {
   CASE_ATTENTION_ATTEMPT_PREFIX,
   CAPTCHA_FINALIZATION_ATTEMPT_PREFIX,
+  CAPTCHA_PASS_PRESENTATION_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_RECONCILIATION_ATTEMPT_PREFIX,
   CASE_TERMINAL_ACTION_ATTEMPT_PREFIX,
@@ -48,6 +49,15 @@ export interface CaptchaVerificationCompletionInput {
   generation: number;
   resolvedBy: string;
   resolvedAt: Date;
+}
+
+export interface CaptchaPassPresentationClaimInput {
+  id: string;
+  serverId: string;
+  userId: string;
+  challengeId: string;
+  generation: number;
+  attemptId: string;
 }
 
 class VerificationReleaseConflictError extends Error {}
@@ -134,6 +144,9 @@ export interface IVerificationEventRepository {
   ): Promise<VerificationEvent[] | null>;
   completeCaptchaVerification(
     input: CaptchaVerificationCompletionInput
+  ): Promise<VerificationEvent | null>;
+  claimCaptchaPassPresentation(
+    input: CaptchaPassPresentationClaimInput
   ): Promise<VerificationEvent | null>;
   claimCaptchaFinalization(
     input: CaptchaVerificationCompletionInput,
@@ -665,6 +678,53 @@ export class VerificationEventRepository implements IVerificationEventRepository
       });
     } catch (error) {
       this.handleError(error, 'completeCaptchaVerification');
+    }
+  }
+
+  public async claimCaptchaPassPresentation(
+    input: CaptchaPassPresentationClaimInput
+  ): Promise<VerificationEvent | null> {
+    if (!input.attemptId.startsWith(CAPTCHA_PASS_PRESENTATION_ATTEMPT_PREFIX)) {
+      throw new RepositoryError('CAPTCHA pass presentation requires a presentation attempt ID.');
+    }
+    try {
+      const rows = await this.prisma.$queryRaw<VerificationEvent[]>`
+        UPDATE verification_events AS target
+        SET
+          containment_status = ${CaseContainmentStatus.IN_PROGRESS}::case_containment_status,
+          quarantine_attempt_id = ${input.attemptId},
+          quarantine_lease_renewed_at = now(),
+          updated_at = now()
+        WHERE target.id = ${input.id}::uuid
+          AND target.server_id = ${input.serverId}
+          AND target.user_id = ${input.userId}
+          AND target.status = ${VerificationStatus.PENDING}::verification_status
+          AND target.case_kind = ${CaseKind.STANDARD}::case_kind
+          AND (
+            (
+              target.containment_status <> ${CaseContainmentStatus.IN_PROGRESS}::case_containment_status
+              AND target.quarantine_attempt_id IS NULL
+            )
+            OR (
+              target.containment_status = ${CaseContainmentStatus.IN_PROGRESS}::case_containment_status
+              AND target.quarantine_attempt_id = ${input.attemptId}
+            )
+          )
+          AND EXISTS (
+            SELECT 1
+            FROM captcha_challenges AS challenge
+            WHERE challenge.id = ${input.challengeId}::uuid
+              AND challenge.verification_event_id = target.id
+              AND challenge.server_id = target.server_id
+              AND challenge.user_id = target.user_id
+              AND challenge.generation = ${input.generation}
+              AND challenge.status = ${CaptchaChallengeStatus.PASSED}::captcha_challenge_status
+          )
+        RETURNING target.*
+      `;
+      return rows[0] ?? null;
+    } catch (error) {
+      this.handleError(error, 'claimCaptchaPassPresentation');
     }
   }
 

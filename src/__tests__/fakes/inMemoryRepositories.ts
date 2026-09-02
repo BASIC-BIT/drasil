@@ -1298,6 +1298,33 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     return { ...updated };
   }
 
+  async claimCaptchaPassPresentation(
+    input: import('../../repositories/VerificationEventRepository').CaptchaPassPresentationClaimInput
+  ): Promise<VerificationEvent | null> {
+    const eventIndex = this.events.findIndex(
+      (event) =>
+        event.id === input.id &&
+        event.server_id === input.serverId &&
+        event.user_id === input.userId &&
+        event.status === VerificationStatus.PENDING &&
+        event.case_kind === CaseKind.STANDARD &&
+        (event.containment_status !== CaseContainmentStatus.IN_PROGRESS ||
+          event.quarantine_attempt_id === input.attemptId)
+    );
+    if (eventIndex === -1) {
+      return null;
+    }
+    const updated = {
+      ...this.events[eventIndex],
+      containment_status: CaseContainmentStatus.IN_PROGRESS,
+      quarantine_attempt_id: input.attemptId,
+      quarantine_lease_renewed_at: new Date(),
+      updated_at: new Date(),
+    };
+    this.events[eventIndex] = updated;
+    return { ...updated };
+  }
+
   async updatePendingAfterMemberLeft(
     id: string,
     expectedQuarantineAttemptId: string | null,

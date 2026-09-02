@@ -46,6 +46,7 @@ import {
   type VerificationChannelPermissionSyncState,
 } from '../repositories/types';
 import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
+import { CAPTCHA_PASS_PRESENTATION_ATTEMPT_PREFIX } from '../utils/caseRoleRelease';
 import { buildReportIntakeAdminActionsCustomId } from '../utils/reportIntakeAdminActions';
 import { IModerationQueueService } from './ModerationQueueService';
 import { CaptchaAttentionReason, INotificationManager } from './NotificationManager';
@@ -1060,14 +1061,14 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       generation,
       expectedCaseRevision,
     });
-    const verificationEvent = await this.verificationEventRepository.findById(
+    let verificationEvent = await this.verificationEventRepository.findById(
       request.verification_event_id
     );
     const challenge = await this.captchaChallengeService.findById(challengeId);
     if (!verificationEvent || !challenge) {
       throw new Error('Security-check completion presentation is unavailable.');
     }
-    await this.requireCaptchaPassPresentation(verificationEvent, challenge);
+    verificationEvent = await this.requireCaptchaPassPresentation(verificationEvent, challenge);
     const captchaResolution = this.readMetadataRecord(
       verificationEvent.metadata,
       'captcha_resolution'
@@ -1151,6 +1152,72 @@ export class ModerationActionRequestService implements IModerationActionRequestS
   private async requireCaptchaPassPresentation(
     verificationEvent: VerificationEvent,
     challenge: CaptchaChallenge
+  ): Promise<VerificationEvent> {
+    if (verificationEvent.status !== VerificationStatus.PENDING) {
+      await this.updateCaptchaPassPresentation(verificationEvent, challenge);
+      return verificationEvent;
+    }
+
+    const attemptId = `${CAPTCHA_PASS_PRESENTATION_ATTEMPT_PREFIX}${challenge.id}:${challenge.generation}`;
+    const claimed = await this.verificationEventRepository.claimCaptchaPassPresentation({
+      id: verificationEvent.id,
+      serverId: verificationEvent.server_id,
+      userId: verificationEvent.user_id,
+      challengeId: challenge.id,
+      generation: challenge.generation,
+      attemptId,
+    });
+    if (!claimed) {
+      const current = await this.verificationEventRepository.findById(verificationEvent.id);
+      if (!current) {
+        throw new Error(`CAPTCHA case ${verificationEvent.id} is unavailable.`);
+      }
+      if (current.status !== VerificationStatus.PENDING) {
+        await this.updateCaptchaPassPresentation(current, challenge);
+        return current;
+      }
+      throw new Error(
+        `CAPTCHA case ${verificationEvent.id} changed before completion could be presented.`
+      );
+    }
+
+    let presentationError: unknown = null;
+    try {
+      await this.updateCaptchaPassPresentation(claimed, challenge);
+      const statusSent = await this.threadManager.sendCaptchaStatus(
+        claimed,
+        'Security check completed.'
+      );
+      if (!statusSent) {
+        throw new Error(`Failed to deliver CAPTCHA completion for case ${claimed.id}.`);
+      }
+    } catch (error) {
+      presentationError = error;
+    }
+
+    const released = await this.verificationEventRepository.updateQuarantineAttempt(
+      claimed.id,
+      attemptId,
+      {
+        case_kind: CaseKind.STANDARD,
+        attention_state: claimed.attention_state,
+        containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+        parked_at: null,
+        parked_by: null,
+      }
+    );
+    if (!released) {
+      throw new Error(`Failed to release CAPTCHA presentation claim for case ${claimed.id}.`);
+    }
+    if (presentationError) {
+      throw presentationError;
+    }
+    return released;
+  }
+
+  private async updateCaptchaPassPresentation(
+    verificationEvent: VerificationEvent,
+    challenge: CaptchaChallenge
   ): Promise<void> {
     const presentationUpdated = this.notificationManager.updateCaptchaChallengePresentation
       ? await this.notificationManager.updateCaptchaChallengePresentation(
@@ -1162,16 +1229,6 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       throw new Error(
         `Failed to refresh passed CAPTCHA presentation for case ${verificationEvent.id}.`
       );
-    }
-    if (verificationEvent.status !== VerificationStatus.PENDING) {
-      return;
-    }
-    const statusSent = await this.threadManager.sendCaptchaStatus(
-      verificationEvent,
-      'Security check completed.'
-    );
-    if (!statusSent) {
-      throw new Error(`Failed to deliver CAPTCHA completion for case ${verificationEvent.id}.`);
     }
   }
 

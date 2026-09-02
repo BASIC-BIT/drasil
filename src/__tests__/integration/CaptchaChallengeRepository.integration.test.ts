@@ -13,6 +13,7 @@ import {
   CaptchaChallengeRequestOutcome,
   CaptchaChallengeRequestSource,
   CaptchaChallengeStatus,
+  CaseAttentionState,
   CaseContainmentStatus,
   CaseKind,
   DetectionType,
@@ -20,7 +21,11 @@ import {
   VerificationStatus,
 } from '../../repositories/types';
 import { getPrismaClient } from '../testDb';
-import { CAPTCHA_FINALIZATION_ATTEMPT_PREFIX } from '../../utils/caseRoleRelease';
+import {
+  CAPTCHA_FINALIZATION_ATTEMPT_PREFIX,
+  CAPTCHA_PASS_PRESENTATION_ATTEMPT_PREFIX,
+  CASE_TERMINAL_ACTION_ATTEMPT_PREFIX,
+} from '../../utils/caseRoleRelease';
 
 const describeIntegration = process.env.JEST_INTEGRATION === '1' ? describe : describe.skip;
 
@@ -1435,6 +1440,84 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     await expect(verifications.findById(verification.id)).resolves.toEqual(
       expect.objectContaining({ status: VerificationStatus.PENDING })
     );
+  });
+
+  it('fences CAPTCHA pass presentation against moderator terminal actions', async () => {
+    const { verification } = await createCase(
+      'guild-captcha-presentation-fence',
+      'user-captcha-presentation-fence'
+    );
+    const challenges = new CaptchaChallengeRepository(prisma);
+    const verifications = new VerificationEventRepository(prisma);
+    const challenge = await challenges.create({
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      caseRevision: verification.case_revision,
+      tokenHash: 'presentation-fence-hash',
+      expiresAt: new Date(Date.now() + 60_000),
+      requestedBy: 'moderator-1',
+    });
+    await prisma.captcha_challenges.update({
+      where: { id: challenge.id },
+      data: { status: CaptchaChallengeStatus.PASSED, passed_at: new Date() },
+    });
+    const presentationAttemptId = `${CAPTCHA_PASS_PRESENTATION_ATTEMPT_PREFIX}${challenge.id}:${challenge.generation}`;
+
+    await expect(
+      verifications.claimCaptchaPassPresentation({
+        id: verification.id,
+        serverId: verification.server_id,
+        userId: verification.user_id,
+        challengeId: challenge.id,
+        generation: challenge.generation,
+        attemptId: presentationAttemptId,
+      })
+    ).resolves.toEqual(
+      expect.objectContaining({
+        containment_status: CaseContainmentStatus.IN_PROGRESS,
+        quarantine_attempt_id: presentationAttemptId,
+      })
+    );
+    await expect(
+      verifications.claimTerminalActions(
+        [verification.id],
+        verification.server_id,
+        verification.user_id,
+        `${CASE_TERMINAL_ACTION_ATTEMPT_PREFIX}moderator`
+      )
+    ).resolves.toBeNull();
+    await expect(
+      verifications.update(verification.id, {
+        status: VerificationStatus.CLOSED_NO_ACTION,
+      })
+    ).resolves.toBeNull();
+
+    await expect(
+      verifications.updateQuarantineAttempt(verification.id, presentationAttemptId, {
+        case_kind: CaseKind.STANDARD,
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+        parked_at: null,
+        parked_by: null,
+      })
+    ).resolves.toEqual(
+      expect.objectContaining({
+        containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+        quarantine_attempt_id: null,
+        status: VerificationStatus.PENDING,
+      })
+    );
+    await expect(
+      verifications.claimTerminalActions(
+        [verification.id],
+        verification.server_id,
+        verification.user_id,
+        `${CASE_TERMINAL_ACTION_ATTEMPT_PREFIX}moderator`
+      )
+    ).resolves.toEqual([expect.objectContaining({ id: verification.id })]);
   });
 
   it('increments case revision only when new evidence is linked', async () => {
