@@ -1068,7 +1068,11 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     if (!verificationEvent || !challenge) {
       throw new Error('Security-check completion presentation is unavailable.');
     }
-    verificationEvent = await this.requireCaptchaPassPresentation(verificationEvent, challenge);
+    verificationEvent = await this.requireCaptchaPassPresentation(
+      request,
+      verificationEvent,
+      challenge
+    );
     const captchaResolution = this.readMetadataRecord(
       verificationEvent.metadata,
       'captcha_resolution'
@@ -1150,6 +1154,7 @@ export class ModerationActionRequestService implements IModerationActionRequestS
   }
 
   private async requireCaptchaPassPresentation(
+    request: ModerationActionRequest,
     verificationEvent: VerificationEvent,
     challenge: CaptchaChallenge
   ): Promise<VerificationEvent> {
@@ -1185,13 +1190,13 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     let presentationError: unknown = null;
     try {
       await this.updateCaptchaPresentation(claimed, challenge);
-      const statusSent = await this.threadManager.sendCaptchaStatus(
+      await this.requireCaptchaThreadStatus(
+        request,
         claimed,
-        'Security check completed.'
+        'Security check completed.',
+        attemptId,
+        `Failed to deliver CAPTCHA completion for case ${claimed.id}.`
       );
-      if (!statusSent) {
-        throw new Error(`Failed to deliver CAPTCHA completion for case ${claimed.id}.`);
-      }
     } catch (error) {
       presentationError = error;
     }
@@ -1234,6 +1239,28 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     }
   }
 
+  private async requireCaptchaThreadStatus(
+    request: ModerationActionRequest,
+    verificationEvent: VerificationEvent,
+    message: string,
+    receipt: string,
+    failureMessage: string
+  ): Promise<void> {
+    if (this.readMetadataString(request.metadata, 'captcha_thread_status_receipt') === receipt) {
+      return;
+    }
+    const statusSent = await this.threadManager.sendCaptchaStatus(verificationEvent, message);
+    if (!statusSent) {
+      throw new Error(failureMessage);
+    }
+    const persisted = await this.repository.mergeMetadata(request.id, {
+      captcha_thread_status_receipt: receipt,
+    });
+    if (!persisted) {
+      throw new Error(`Failed to persist CAPTCHA status receipt for case ${verificationEvent.id}.`);
+    }
+  }
+
   private async requireCaptchaAttention(
     verificationEvent: VerificationEvent,
     reason: CaptchaAttentionReason
@@ -1263,6 +1290,7 @@ export class ModerationActionRequestService implements IModerationActionRequestS
   }
 
   private async requireCaptchaStatusPresentation(
+    request: ModerationActionRequest,
     verificationEvent: VerificationEvent,
     challenge: CaptchaChallenge,
     reason: 'delivery_failed' | 'submission_limit' | 'expired' | 'cancelled' | 'bypassed'
@@ -1317,25 +1345,25 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     try {
       await this.updateCaptchaPresentation(claimed, challenge, reason);
       if (reason === 'cancelled') {
-        const statusSent = await this.threadManager.sendCaptchaStatus(
+        await this.requireCaptchaThreadStatus(
+          request,
           claimed,
-          'This security check is no longer active.'
+          'This security check is no longer active.',
+          attemptId,
+          `Failed to deliver cancelled CAPTCHA status for case ${claimed.id}.`
         );
-        if (!statusSent) {
-          throw new Error(`Failed to deliver cancelled CAPTCHA status for case ${claimed.id}.`);
-        }
       } else if (reason !== 'bypassed') {
-        const statusSent = await this.threadManager.sendCaptchaStatus(
+        await this.requireCaptchaThreadStatus(
+          request,
           claimed,
           reason === 'delivery_failed'
             ? 'This security check link could not be delivered. Ask a moderator to retry.'
             : reason === 'expired'
               ? 'This security check expired. Ask a moderator to issue a new check.'
-              : 'This security check reached its attempt limit. Ask a moderator to issue a new check.'
+              : 'This security check reached its attempt limit. Ask a moderator to issue a new check.',
+          attemptId,
+          `Failed to deliver CAPTCHA status for case ${claimed.id}.`
         );
-        if (!statusSent) {
-          throw new Error(`Failed to deliver CAPTCHA status for case ${claimed.id}.`);
-        }
         await this.requireCaptchaAttention(claimed, reason);
       }
     } catch (error) {
@@ -1425,6 +1453,7 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       return;
     }
     const presented = await this.requireCaptchaStatusPresentation(
+      request,
       verificationEvent,
       challenge,
       reason

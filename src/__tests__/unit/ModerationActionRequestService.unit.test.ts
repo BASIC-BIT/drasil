@@ -1988,15 +1988,25 @@ describe('ModerationActionRequestService', () => {
   });
 
   it('keeps automatic CAPTCHA resolution retryable after a transient member fetch failure', async () => {
-    const { guild, repository, service, userModerationService } = buildService([
+    const { guild, repository, service, threadManager, userModerationService } = buildService([
       applyCaptchaPassRequest,
     ]);
     guild.members.fetch.mockRejectedValueOnce(new Error('Discord unavailable'));
 
     await expect(service.processPendingRequests()).resolves.toBe(1);
 
-    expect(userModerationService.resolveCaptchaCase).not.toHaveBeenCalled();
-    expect(repository.completed).toEqual([]);
+    repository.requests.push(repository.byId.get(applyCaptchaPassRequest.id)!);
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(threadManager.sendCaptchaStatus).toHaveBeenCalledTimes(1);
+    expect(repository.metadataMerges).toContainEqual({
+      id: applyCaptchaPassRequest.id,
+      metadata: {
+        captcha_thread_status_receipt: 'captcha-presentation:challenge-1:1:passed',
+      },
+    });
+    expect(userModerationService.resolveCaptchaCase).toHaveBeenCalledTimes(1);
+    expect(repository.completed).toHaveLength(1);
     expect(repository.failed).toEqual([
       { id: 'captcha-pass-request-1', error: 'Discord unavailable' },
     ]);
@@ -2109,7 +2119,7 @@ describe('ModerationActionRequestService', () => {
   it('keeps expired attention retryable when moderator notification fails', async () => {
     const { captchaChallengeService, notificationManager, repository, service, threadManager } =
       buildService([notifyExpiredCaptchaAttentionRequest]);
-    captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+    captchaChallengeService.findByCaseId.mockResolvedValue({
       delivered_at: new Date(),
       delivery_error_code: null,
       generation: 1,
@@ -2120,15 +2130,26 @@ describe('ModerationActionRequestService', () => {
 
     await expect(service.processPendingRequests()).resolves.toBe(1);
 
+    repository.requests.push(repository.byId.get(notifyExpiredCaptchaAttentionRequest.id)!);
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(threadManager.sendCaptchaStatus).toHaveBeenCalledTimes(1);
     expect(threadManager.sendCaptchaStatus).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'ver-1' }),
       'This security check expired. Ask a moderator to issue a new check.'
     );
-    expect(notificationManager.notifyCaptchaAttention).toHaveBeenCalledWith(
+    expect(repository.metadataMerges).toContainEqual({
+      id: notifyExpiredCaptchaAttentionRequest.id,
+      metadata: {
+        captcha_thread_status_receipt: 'captcha-presentation:challenge-1:1:expired',
+      },
+    });
+    expect(notificationManager.notifyCaptchaAttention).toHaveBeenCalledTimes(2);
+    expect(notificationManager.notifyCaptchaAttention).toHaveBeenLastCalledWith(
       expect.objectContaining({ id: 'ver-1' }),
       'expired'
     );
-    expect(repository.completed).toEqual([]);
+    expect(repository.completed).toHaveLength(1);
     expect(repository.failed).toEqual([
       {
         id: 'captcha-expired-attention-request-1',
