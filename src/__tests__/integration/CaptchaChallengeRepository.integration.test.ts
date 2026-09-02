@@ -486,6 +486,53 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     );
   });
 
+  it('marks an abandoned delivery attempt as retryable after its lease expires', async () => {
+    const { verification } = await createCase(
+      'guild-captcha-interrupted-delivery',
+      'user-captcha-interrupted-delivery'
+    );
+    const challenges = new CaptchaChallengeRepository(prisma);
+    const challenge = await challenges.create({
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      caseRevision: verification.case_revision,
+      tokenHash: 'interrupted-delivery-hash',
+      expiresAt: new Date(Date.now() + 60_000),
+      requestedBy: 'moderator-1',
+    });
+
+    await expect(
+      challenges.markStaleUndelivered(new Date(challenge.updated_at.getTime() - 1), 10)
+    ).resolves.toEqual([]);
+    await expect(
+      challenges.markStaleUndelivered(new Date(challenge.updated_at.getTime() + 1), 10)
+    ).resolves.toEqual([
+      expect.objectContaining({
+        delivery_error_code: 'delivery_interrupted',
+        generation: challenge.generation,
+        status: CaptchaChallengeStatus.PENDING,
+      }),
+    ]);
+    await expect(
+      challenges.retry({
+        expectedChallengeId: challenge.id,
+        expectedGeneration: challenge.generation,
+        verificationEventId: verification.id,
+        serverId: verification.server_id,
+        userId: verification.user_id,
+        requestSource: CaptchaChallengeRequestSource.MODERATOR,
+        passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+        caseRevision: verification.case_revision,
+        tokenHash: 'interrupted-delivery-retry-hash',
+        expiresAt: new Date(Date.now() + 120_000),
+        requestedBy: 'moderator-2',
+      })
+    ).resolves.toEqual(expect.objectContaining({ generation: challenge.generation + 1 }));
+  });
+
   it('cancels pending challenges exactly once after the server disables the feature', async () => {
     const { verification } = await createCase('guild-captcha-disabled', 'user-captcha-disabled');
     const challenges = new CaptchaChallengeRepository(prisma);

@@ -33,6 +33,7 @@ import { IModerationQueueService } from './ModerationQueueService';
 import {
   IRoleQuarantineService,
   RoleQuarantineApplyResult,
+  RoleRestorationFence,
   RoleQuarantineRestoreResult,
 } from './RoleQuarantineService';
 import {
@@ -510,7 +511,8 @@ export class UserModerationService implements IUserModerationService, ICombinedB
   private async tryRestoreRoleQuarantine(
     member: GuildMember,
     verificationEvent: VerificationEvent | null,
-    moderator?: User
+    moderator?: User,
+    fence?: RoleRestorationFence
   ): Promise<{
     verificationEvent: VerificationEvent | null;
     metadata: Record<string, unknown> | null;
@@ -520,7 +522,9 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     }
 
     try {
-      const result = await this.roleQuarantineService.restoreMemberRoles(member, moderator);
+      const result = fence
+        ? await this.roleQuarantineService.restoreMemberRoles(member, moderator, fence)
+        : await this.roleQuarantineService.restoreMemberRoles(member, moderator);
       const metadata = this.buildRoleQuarantineRestoreMetadata(result);
       if (!metadata || !verificationEvent) {
         return { verificationEvent, metadata };
@@ -1335,9 +1339,38 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       remainingPending.length > 0 ? VerificationStatus.PENDING : VerificationStatus.VERIFIED;
     const restoreResult =
       remainingPending.length === 0
-        ? await this.tryRestoreRoleQuarantine(member, completed, { id: actorId } as User)
+        ? await this.tryRestoreRoleQuarantine(member, completed, { id: actorId } as User, {
+            canRestoreRole: async () =>
+              !(
+                await this.verificationEventRepository.findByUserAndServer(
+                  member.id,
+                  member.guild.id
+                )
+              ).some((event) => event.status === VerificationStatus.PENDING),
+          })
         : { verificationEvent: completed, metadata: null };
     completed = restoreResult.verificationEvent ?? completed;
+    const pendingAfterRestoration = (
+      await this.verificationEventRepository.findByUserAndServer(member.id, member.guild.id)
+    ).filter((event) => event.status === VerificationStatus.PENDING);
+    if (pendingAfterRestoration.length > 0) {
+      const roleRestored = await this.roleManager.assignCaseRole(member);
+      if (!roleRestored) {
+        throw new Error(`Failed to preserve case role for ${member.user.tag}`);
+      }
+      await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
+        case_role_active: true,
+        verification_status: VerificationStatus.PENDING,
+        last_status_change: new Date(),
+        updated_by: actorId,
+      });
+      return {
+        status: 'held',
+        reason: pendingAfterRestoration.some((event) => event.id === completed.id)
+          ? 'case_changed'
+          : 'other_pending_case',
+      };
+    }
     const memberStateChanged =
       !alreadyResolvedByCaptcha ||
       !storedMember ||

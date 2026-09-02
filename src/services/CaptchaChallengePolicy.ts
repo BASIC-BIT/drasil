@@ -86,7 +86,7 @@ export function evaluateCaptchaAutoResolution(
   ) {
     return { status: 'evidence_only' };
   }
-  if (input.currentMode === 'off' || input.currentPassAction !== 'verify_join_only') {
+  if (input.currentMode !== 'suspicious_join' || input.currentPassAction !== 'verify_join_only') {
     return { status: 'held', reason: 'policy_changed' };
   }
   if (

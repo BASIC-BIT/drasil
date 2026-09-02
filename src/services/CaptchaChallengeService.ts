@@ -31,6 +31,7 @@ import type { CaptchaAttentionReason, INotificationManager } from './Notificatio
 
 const TOKEN_BYTES = 32;
 const EXPIRY_SWEEP_INTERVAL_MS = 60_000;
+const DELIVERY_LEASE_MS = 5 * 60_000;
 
 export interface RequestCaptchaChallengeInput {
   verificationEventId: string;
@@ -288,6 +289,33 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
 
   private async runExpirySweep(): Promise<void> {
     try {
+      const interrupted = await this.challenges.markStaleUndelivered(
+        new Date(Date.now() - DELIVERY_LEASE_MS),
+        50
+      );
+      for (const challenge of interrupted) {
+        const verificationEvent = await this.verificationEvents.findById(
+          challenge.verification_event_id
+        );
+        if (
+          verificationEvent?.status === VerificationStatus.PENDING &&
+          (await this.isCurrentInterruptedDelivery(challenge))
+        ) {
+          await this.threads
+            .sendCaptchaStatus(
+              verificationEvent,
+              'This security check link could not be delivered. Ask a moderator to retry.'
+            )
+            .catch((error) => {
+              console.warn(
+                `Failed to notify case ${verificationEvent.id} about an interrupted security check delivery:`,
+                error
+              );
+              return false;
+            });
+          await this.notifyAttention(verificationEvent, 'delivery_failed');
+        }
+      }
       const expired = await this.expireChallenges();
       for (const challenge of expired) {
         const verificationEvent = await this.verificationEvents.findById(
@@ -325,6 +353,16 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
   private async isCurrentChallengeState(challenge: CaptchaChallenge): Promise<boolean> {
     const current = await this.challenges.findById(challenge.id);
     return current?.generation === challenge.generation && current.status === challenge.status;
+  }
+
+  private async isCurrentInterruptedDelivery(challenge: CaptchaChallenge): Promise<boolean> {
+    const current = await this.challenges.findById(challenge.id);
+    return (
+      current?.generation === challenge.generation &&
+      current.status === CaptchaChallengeStatus.PENDING &&
+      current.delivered_at === null &&
+      current.delivery_error_code === 'delivery_interrupted'
+    );
   }
 
   private async queueExpiredAttention(challenge: CaptchaChallenge): Promise<void> {

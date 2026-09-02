@@ -98,6 +98,7 @@ function createHarness(settings: Record<string, unknown> = { captcha_mode: 'manu
       .mockResolvedValue(buildChallenge({ status: CaptchaChallengeStatus.BYPASSED })),
     cancelPendingForCase: jest.fn().mockResolvedValue(true),
     cancelPendingForDisabledServers: jest.fn().mockResolvedValue([]),
+    markStaleUndelivered: jest.fn().mockResolvedValue([]),
     expirePending: jest.fn().mockResolvedValue([]),
     findExpiredNeedingAttention: jest.fn().mockResolvedValue([]),
   };
@@ -315,6 +316,47 @@ describe('CaptchaChallengeService', () => {
 
     expect(threads.sendCaptchaStatus).not.toHaveBeenCalled();
     expect(moderationActionRequests.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('makes an interrupted delivery retryable after its delivery lease expires', async () => {
+    const { challenges, notifications, service, threads } = createHarness();
+    const interrupted = buildChallenge({ delivery_error_code: 'delivery_interrupted' });
+    challenges.markStaleUndelivered.mockResolvedValue([interrupted]);
+    challenges.findById.mockResolvedValue(interrupted);
+
+    await (
+      service as unknown as {
+        runExpirySweep(): Promise<void>;
+      }
+    ).runExpirySweep();
+
+    expect(challenges.markStaleUndelivered).toHaveBeenCalledWith(expect.any(Date), 50);
+    expect(threads.sendCaptchaStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'case-1' }),
+      'This security check link could not be delivered. Ask a moderator to retry.'
+    );
+    expect(notifications.notifyCaptchaAttention).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'case-1' }),
+      'delivery_failed'
+    );
+  });
+
+  it('does not alert after an interrupted delivery is concurrently recorded', async () => {
+    const { challenges, notifications, service, threads } = createHarness();
+    const interrupted = buildChallenge({ delivery_error_code: 'delivery_interrupted' });
+    challenges.markStaleUndelivered.mockResolvedValue([interrupted]);
+    challenges.findById.mockResolvedValue(
+      buildChallenge({ delivered_at: new Date(), delivery_error_code: null })
+    );
+
+    await (
+      service as unknown as {
+        runExpirySweep(): Promise<void>;
+      }
+    ).runExpirySweep();
+
+    expect(threads.sendCaptchaStatus).not.toHaveBeenCalled();
+    expect(notifications.notifyCaptchaAttention).not.toHaveBeenCalled();
   });
 
   it('queues expired moderator attention with a stable generation key', async () => {

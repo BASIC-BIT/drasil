@@ -285,9 +285,11 @@ describe('UserModerationService (unit)', () => {
       })
     );
     expect(roleManager.removeCaseRole).toHaveBeenCalledWith(member);
-    expect(roleQuarantineService.restoreMemberRoles).toHaveBeenCalledWith(member, {
-      id: 'drasil:captcha',
-    });
+    expect(roleQuarantineService.restoreMemberRoles).toHaveBeenCalledWith(
+      member,
+      { id: 'drasil:captcha' },
+      expect.objectContaining({ canRestoreRole: expect.any(Function) })
+    );
     expect(threadManager.resolveVerificationThread).toHaveBeenCalledWith(
       expect.objectContaining({ id: verificationEvent.id }),
       VerificationStatus.VERIFIED,
@@ -568,6 +570,70 @@ describe('UserModerationService (unit)', () => {
     await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
       expect.objectContaining({ status: VerificationStatus.PENDING })
     );
+  });
+
+  it('fences role restoration when another case opens during CAPTCHA resolution', async () => {
+    const guildId = 'guild-captcha-restore-fence';
+    const userId = 'user-captcha-restore-fence';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    let fenceAllowed = true;
+    const roleQuarantineService: jest.Mocked<IRoleQuarantineService> = {
+      previewCompromisedAccount: jest.fn(),
+      quarantineCompromisedAccount: jest.fn(),
+      quarantineMember: jest.fn(),
+      enforceActiveCaseRoleUpdate: jest.fn(),
+      restoreMemberRoles: jest.fn().mockImplementation(async (_member, _moderator, fence) => {
+        await verificationEventRepository.createFromDetection(
+          null,
+          guildId,
+          userId,
+          VerificationStatus.PENDING
+        );
+        fenceAllowed = (await fence?.canRestoreRole()) ?? true;
+        return {
+          status: 'held_pending_case',
+          snapshotId: 'captcha-role-quarantine-fence',
+          attemptedRoleIds: ['role-1'],
+          restoredRoleIds: [],
+          skippedRoles: [],
+          failedRestores: [],
+        };
+      }),
+      abandonActiveSnapshot: jest.fn(),
+    };
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService,
+      undefined,
+      roleQuarantineService
+    );
+
+    await expect(
+      service.resolveCaptchaCase(member, {
+        challengeId: 'challenge-restore-fence',
+        expectedCaseRevision: verificationEvent.case_revision,
+        generation: 1,
+        verificationEventId: verificationEvent.id,
+      })
+    ).resolves.toEqual({ status: 'held', reason: 'other_pending_case' });
+
+    expect(fenceAllowed).toBe(false);
+    expect(roleManager.assignCaseRole).toHaveBeenCalledWith(member);
+    expect(threadManager.resolveVerificationThread).not.toHaveBeenCalled();
   });
 
   it('restores the case role when the expected-revision completion loses a race', async () => {

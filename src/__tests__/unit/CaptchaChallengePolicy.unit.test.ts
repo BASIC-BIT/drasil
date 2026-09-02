@@ -98,6 +98,7 @@ describe('CaptchaChallengePolicy', () => {
     ['manual request', { requestSource: CaptchaChallengeRequestSource.MODERATOR }],
     ['evidence-only issue', { issuedPassEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY }],
     ['disabled mode', { currentMode: 'off' as const }],
+    ['manual mode', { currentMode: 'manual' as const }],
     ['policy narrowed', { currentPassAction: 'evidence_only' as const }],
     ['revision changed', { caseRevision: 2 }],
     ['message evidence', { linkedDetectionTypes: [DetectionType.SUSPICIOUS_CONTENT] }],

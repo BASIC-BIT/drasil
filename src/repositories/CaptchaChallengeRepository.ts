@@ -41,6 +41,7 @@ export interface ICaptchaChallengeRepository {
   ): Promise<CaptchaChallenge | null>;
   cancelPendingForCase(verificationEventId: string): Promise<boolean>;
   cancelPendingForDisabledServers(limit: number): Promise<CaptchaChallenge[]>;
+  markStaleUndelivered(staleBefore: Date, limit: number): Promise<CaptchaChallenge[]>;
   expirePending(now: Date, limit: number): Promise<CaptchaChallenge[]>;
   findExpiredNeedingAttention(limit: number): Promise<CaptchaChallenge[]>;
 }
@@ -359,6 +360,46 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
       }
     }
     return expired;
+  }
+
+  public async markStaleUndelivered(staleBefore: Date, limit: number): Promise<CaptchaChallenge[]> {
+    const now = new Date();
+    const candidates = await this.prisma.captcha_challenges.findMany({
+      where: {
+        status: CaptchaChallengeStatus.PENDING,
+        delivered_at: null,
+        delivery_error_code: null,
+        updated_at: { lte: staleBefore },
+        expires_at: { gt: now },
+      },
+      orderBy: { updated_at: 'asc' },
+      take: Math.max(1, Math.min(limit, 100)),
+    });
+    const interrupted: CaptchaChallenge[] = [];
+    for (const candidate of candidates) {
+      const result = await this.prisma.captcha_challenges.updateMany({
+        where: {
+          id: candidate.id,
+          generation: candidate.generation,
+          status: CaptchaChallengeStatus.PENDING,
+          delivered_at: null,
+          delivery_error_code: null,
+          updated_at: candidate.updated_at,
+          expires_at: { gt: now },
+        },
+        data: {
+          delivery_error_code: 'delivery_interrupted',
+          updated_at: new Date(),
+        },
+      });
+      if (result.count === 1) {
+        const refreshed = await this.findById(candidate.id);
+        if (refreshed) {
+          interrupted.push(refreshed);
+        }
+      }
+    }
+    return interrupted;
   }
 
   public async findExpiredNeedingAttention(limit: number): Promise<CaptchaChallenge[]> {
