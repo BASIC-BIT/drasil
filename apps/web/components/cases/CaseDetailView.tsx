@@ -27,6 +27,7 @@ import {
   confidenceStatusClass,
   formatCaseAction,
   formatCaptchaStatus,
+  formatCaptchaHistoryEntry,
   formatConfidence,
   formatDetectionType,
   formatPresenceState,
@@ -169,6 +170,23 @@ function SummaryPanel({
                     'A moderator continued this case without the browser check.')
                   : `Generation ${detail.captchaChallenge.generation}.`}
           </span>
+          {detail.captchaChallenge.history?.length ? (
+            <details>
+              <summary>Security check history</summary>
+              <ul>
+                {detail.captchaChallenge.history.map((entry) => (
+                  <li key={entry.generation}>
+                    {formatCaptchaHistoryEntry(
+                      entry,
+                      entry.generation === detail.captchaChallenge?.generation
+                        ? detail.captchaChallenge.status
+                        : undefined
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          ) : null}
         </div>
       ) : null}
 

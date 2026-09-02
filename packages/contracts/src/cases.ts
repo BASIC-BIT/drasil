@@ -26,6 +26,22 @@ export const caseActionSchema = z.enum([
   'bypass_captcha',
 ]);
 
+export const captchaChallengeGenerationHistorySchema = z.object({
+  generation: z.number().int().positive(),
+  requestSource: z.enum(['moderator', 'automatic_suspicious_join']),
+  passEffect: z.enum(['evidence_only', 'verify_join_only']),
+  caseRevisionAtIssue: z.number().int().min(0),
+  requestedBy: z.string().nullable(),
+  requestedAt: z.string(),
+  presentedAt: z.string().nullable(),
+  outcome: z.enum(['delivery_failed', 'failed', 'expired', 'bypassed', 'cancelled']).nullable(),
+  outcomeAt: z.string().nullable(),
+  deliveryErrorCode: z.string().nullable(),
+  bypassedBy: z.string().nullable(),
+  bypassedAt: z.string().nullable(),
+  bypassReason: z.string().nullable(),
+});
+
 export const captchaChallengeSummarySchema = z.object({
   id: z.string().uuid(),
   status: z.enum(['pending', 'passed', 'failed', 'expired', 'bypassed', 'cancelled']),
@@ -41,6 +57,7 @@ export const captchaChallengeSummarySchema = z.object({
   bypassedAt: z.string().nullable(),
   bypassedBy: z.string().nullable(),
   bypassReason: z.string().nullable(),
+  history: z.array(captchaChallengeGenerationHistorySchema).optional(),
 });
 
 export const caseSurfaceKindSchema = z.enum([
@@ -162,6 +179,9 @@ export type CaseMessageContextItem = z.infer<typeof caseMessageContextItemSchema
 export type CaseModerationOutcome = z.infer<typeof caseModerationOutcomeSchema>;
 export type CaseDetail = z.infer<typeof caseDetailSchema>;
 export type CaptchaChallengeSummary = z.infer<typeof captchaChallengeSummarySchema>;
+export type CaptchaChallengeGenerationHistory = z.infer<
+  typeof captchaChallengeGenerationHistorySchema
+>;
 
 export function sortCaseSummariesForQueue(cases: readonly CaseSummary[]): CaseSummary[] {
   return [...cases].sort((left, right) => {

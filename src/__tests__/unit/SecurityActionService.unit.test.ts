@@ -11,6 +11,7 @@ import {
   ModerationOutcomeSource,
   ModerationOutcomeType,
   ReportIntakeStatus,
+  VerificationEvent,
   VerificationStatus,
 } from '../../repositories/types';
 import {
@@ -395,6 +396,46 @@ describe('SecurityActionService (unit)', () => {
       'delivery_failed'
     );
     warn.mockRestore();
+  });
+
+  it('preserves the existing CAPTCHA notification when the challenge lookup fails', async () => {
+    const member = buildMember('guild-captcha-lookup', 'user-captcha-lookup');
+    const captchaChallengeService = {
+      findByCaseId: jest.fn().mockRejectedValue(new Error('CAPTCHA lookup unavailable')),
+    } as unknown as jest.Mocked<ICaptchaChallengeService>;
+    const service = new SecurityActionService(
+      notificationManager,
+      detectionEventsRepository,
+      serverMemberRepository,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      adminActionService,
+      threadManager,
+      userModerationService,
+      {} as Client,
+      gptService as any,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      captchaChallengeService
+    );
+    const verificationEvent = { id: 'verification-captcha-lookup' } as VerificationEvent;
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 0.9,
+      reasons: ['Suspicious join'],
+      triggerSource: DetectionType.NEW_ACCOUNT,
+      triggerContent: 'New join',
+    };
+
+    await expect(
+      (service as any).upsertNotification(member, detectionResult, verificationEvent)
+    ).rejects.toThrow('CAPTCHA lookup unavailable');
+
+    expect(notificationManager.upsertSuspiciousUserNotification).not.toHaveBeenCalled();
   });
 
   it('auto-kicks high-confidence message detections only when message policy allows it', async () => {

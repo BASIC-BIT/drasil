@@ -178,6 +178,23 @@ describe('activeCaseDataAdapter', () => {
         captcha_bypassed_at: null,
         captcha_bypassed_by: null,
         captcha_bypass_reason: null,
+        captcha_history: [
+          {
+            generation: 1,
+            requestSource: 'automatic_suspicious_join',
+            passEffect: 'verify_join_only',
+            caseRevisionAtIssue: 0,
+            requestedBy: null,
+            requestedAt: '2026-06-03T00:00:00.000Z',
+            presentedAt: '2026-06-03T00:01:00.000Z',
+            outcome: null,
+            outcomeAt: null,
+            deliveryErrorCode: null,
+            bypassedBy: null,
+            bypassedAt: null,
+            bypassReason: null,
+          },
+        ],
       },
       new Date('2026-06-03T01:00:00.000Z')
     );
@@ -185,6 +202,9 @@ describe('activeCaseDataAdapter', () => {
     expect(summary.captchaChallenge).toEqual(
       expect.objectContaining({ status: 'pending', submissionCount: 2, generation: 1 })
     );
+    expect(summary.captchaChallenge?.history).toEqual([
+      expect.objectContaining({ generation: 1, presentedAt: '2026-06-03T00:01:00.000Z' }),
+    ]);
     expect(summary.allowedActions).toContain('bypass_captcha');
     expect(summary.allowedActions).not.toContain('challenge_user');
   });

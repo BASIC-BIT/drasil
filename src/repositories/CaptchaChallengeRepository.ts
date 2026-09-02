@@ -3,6 +3,7 @@ import { Prisma, PrismaClient } from '../db/prisma';
 import { TYPES } from '../di/symbols';
 import {
   CaptchaChallenge,
+  CaptchaChallengeGenerationHistory,
   CaptchaChallengePassEffect,
   CaptchaChallengeRequestOutcome,
   CaptchaChallengeRequestSource,
@@ -45,6 +46,31 @@ interface CaptchaChallengeRetryRecord {
   id: string;
   status: string;
   updated_at: Date;
+}
+
+interface CaptchaChallengeRequestHistoryRecord {
+  generation: number;
+  request_source: CaptchaChallengeRequestSource;
+  pass_effect: CaptchaChallengePassEffect;
+  case_revision_at_issue: number;
+  requested_by: string | null;
+  requested_at: Date;
+  presented_at: Date | null;
+  outcome: CaptchaChallengeRequestOutcome | null;
+  outcome_at: Date | null;
+  delivery_error_code: string | null;
+}
+
+interface CaptchaChallengeBypassHistoryRecord {
+  generation: number;
+  moderator_id: string;
+  reason: string;
+  bypassed_at: Date;
+}
+
+interface CaptchaChallengeWithHistoryRecord extends CaptchaChallenge {
+  requests: CaptchaChallengeRequestHistoryRecord[];
+  bypasses: CaptchaChallengeBypassHistoryRecord[];
 }
 
 function getCaptchaChallengeRetryState(
@@ -134,15 +160,23 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
   public constructor(@inject(TYPES.PrismaClient) private readonly prisma: PrismaClient) {}
 
   public async findById(id: string): Promise<CaptchaChallenge | null> {
-    return (await this.prisma.captcha_challenges.findUnique({
+    const record = await this.prisma.captcha_challenges.findUnique({
       where: { id },
-    })) as CaptchaChallenge | null;
+      include: { requests: { orderBy: { generation: 'asc' } }, bypasses: true },
+    });
+    return record
+      ? this.withGenerationHistory(record as unknown as CaptchaChallengeWithHistoryRecord)
+      : null;
   }
 
   public async findByCaseId(verificationEventId: string): Promise<CaptchaChallenge | null> {
-    return (await this.prisma.captcha_challenges.findUnique({
+    const record = await this.prisma.captcha_challenges.findUnique({
       where: { verification_event_id: verificationEventId },
-    })) as CaptchaChallenge | null;
+      include: { requests: { orderBy: { generation: 'asc' } }, bypasses: true },
+    });
+    return record
+      ? this.withGenerationHistory(record as unknown as CaptchaChallengeWithHistoryRecord)
+      : null;
   }
 
   public async create(input: CaptchaChallengeIssueInput): Promise<CaptchaChallenge> {
@@ -158,7 +192,16 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
             AND verification.status = ${VerificationStatus.PENDING}::verification_status
             AND verification.case_kind = ${CaseKind.STANDARD}::case_kind
             AND verification.case_revision = ${input.caseRevision}
-            AND coalesce(server.settings->>'captcha_mode', 'off') <> 'off'
+            AND (
+              (
+                ${input.requestSource}::captcha_challenge_request_source = ${CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN}::captcha_challenge_request_source
+                AND coalesce(server.settings->>'captcha_mode', 'off') = 'suspicious_join'
+              )
+              OR (
+                ${input.requestSource}::captcha_challenge_request_source = ${CaptchaChallengeRequestSource.MODERATOR}::captcha_challenge_request_source
+                AND coalesce(server.settings->>'captcha_mode', 'off') in ('manual', 'suspicious_join')
+              )
+            )
           FOR UPDATE OF verification, server
         `;
         if (!pendingCase[0]) {
@@ -219,7 +262,16 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
           AND verification.status = ${VerificationStatus.PENDING}::verification_status
           AND verification.case_kind = ${CaseKind.STANDARD}::case_kind
           AND verification.case_revision = ${input.caseRevision}
-          AND coalesce(server.settings->>'captcha_mode', 'off') <> 'off'
+          AND (
+            (
+              ${input.requestSource}::captcha_challenge_request_source = ${CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN}::captcha_challenge_request_source
+              AND coalesce(server.settings->>'captcha_mode', 'off') = 'suspicious_join'
+            )
+            OR (
+              ${input.requestSource}::captcha_challenge_request_source = ${CaptchaChallengeRequestSource.MODERATOR}::captcha_challenge_request_source
+              AND coalesce(server.settings->>'captcha_mode', 'off') in ('manual', 'suspicious_join')
+            )
+          )
         FOR UPDATE OF verification, server
       `;
       if (!pendingCase[0]) {
@@ -803,5 +855,33 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
       order by challenge.updated_at asc nulls first
       limit ${Math.max(1, Math.min(limit, 100))}
     `;
+  }
+
+  private withGenerationHistory(record: CaptchaChallengeWithHistoryRecord): CaptchaChallenge {
+    const bypassByGeneration = new Map(
+      record.bypasses.map((bypass) => [bypass.generation, bypass] as const)
+    );
+    const history: CaptchaChallengeGenerationHistory[] = record.requests.map((request) => {
+      const bypass = bypassByGeneration.get(request.generation);
+      return {
+        generation: request.generation,
+        request_source: request.request_source,
+        pass_effect: request.pass_effect,
+        case_revision_at_issue: request.case_revision_at_issue,
+        requested_by: request.requested_by,
+        requested_at: request.requested_at,
+        presented_at: request.presented_at,
+        outcome: request.outcome,
+        outcome_at: request.outcome_at,
+        delivery_error_code: request.delivery_error_code,
+        bypassed_by: bypass?.moderator_id ?? null,
+        bypassed_at: bypass?.bypassed_at ?? null,
+        bypass_reason: bypass?.reason ?? null,
+      };
+    });
+    const challenge = { ...record };
+    Reflect.deleteProperty(challenge, 'requests');
+    Reflect.deleteProperty(challenge, 'bypasses');
+    return { ...challenge, history };
   }
 }

@@ -565,6 +565,23 @@ export interface CaptchaChallenge {
   cancelled_at: Date | null;
   created_at: Date;
   updated_at: Date;
+  history?: CaptchaChallengeGenerationHistory[];
+}
+
+export interface CaptchaChallengeGenerationHistory {
+  generation: number;
+  request_source: CaptchaChallengeRequestSource;
+  pass_effect: CaptchaChallengePassEffect;
+  case_revision_at_issue: number;
+  requested_by: string | null;
+  requested_at: Date;
+  presented_at: Date | null;
+  outcome: CaptchaChallengeRequestOutcome | null;
+  outcome_at: Date | null;
+  delivery_error_code: string | null;
+  bypassed_by: string | null;
+  bypassed_at: Date | null;
+  bypass_reason: string | null;
 }
 
 export interface CaptchaChallengeAttempt {

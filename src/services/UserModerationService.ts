@@ -586,6 +586,25 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     }
   }
 
+  private async reapplyRoleQuarantineForPendingCase(
+    member: GuildMember,
+    verificationEvent: VerificationEvent,
+    actorId: string
+  ): Promise<void> {
+    if (!this.roleQuarantineService) {
+      return;
+    }
+
+    const result = await this.roleQuarantineService.quarantineMember(member, verificationEvent, {
+      id: actorId,
+    } as User);
+    if (result.failedRemovals.length > 0) {
+      throw new Error(
+        `Failed to restore containment after CAPTCHA resolution raced with case ${verificationEvent.id}`
+      );
+    }
+  }
+
   private async tryAbandonRoleQuarantine(
     guildId: string,
     userId: string,
@@ -1400,6 +1419,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       if (!roleRestored) {
         throw new Error(`Failed to preserve case role for ${member.user.tag}`);
       }
+      await this.reapplyRoleQuarantineForPendingCase(member, pendingAfterRestoration[0], actorId);
       await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
         case_role_active: true,
         verification_status: VerificationStatus.PENDING,
@@ -1438,6 +1458,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       if (!roleRestored) {
         throw new Error(`Failed to preserve case role for ${member.user.tag}`);
       }
+      await this.reapplyRoleQuarantineForPendingCase(member, pendingAtFinalWrite[0], actorId);
       return {
         status: 'held',
         reason: pendingAtFinalWrite.some((event) => event.id === completed.id)

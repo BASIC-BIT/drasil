@@ -144,6 +144,7 @@ interface CaseSummaryRow {
   captcha_bypassed_at?: unknown;
   captcha_bypassed_by?: string | null;
   captcha_bypass_reason?: string | null;
+  captcha_history?: unknown;
 }
 
 interface DetectionHistoryRow {
@@ -579,6 +580,7 @@ export function parseCaseSummaryRow(row: CaseSummaryRow, now = new Date()): Case
           bypassedAt: toNullableIsoString(row.captcha_bypassed_at),
           bypassedBy: row.captcha_bypassed_by,
           bypassReason: row.captcha_bypass_reason,
+          history: row.captcha_history ?? [],
         }
       : null,
   });
@@ -740,12 +742,37 @@ const SUMMARY_QUERY = `
     cc.passed_at as captcha_passed_at,
     cc.bypassed_at as captcha_bypassed_at,
     cc.bypassed_by as captcha_bypassed_by,
-    cc.bypass_reason as captcha_bypass_reason
+    cc.bypass_reason as captcha_bypass_reason,
+    captcha_history.history as captcha_history
   from verification_events ve
   join servers s on s.guild_id = ve.server_id
   left join users u on u.discord_id = ve.user_id
   left join server_members sm on sm.server_id = ve.server_id and sm.user_id = ve.user_id
   left join captcha_challenges cc on cc.verification_event_id = ve.id
+  left join lateral (
+    select jsonb_agg(
+      jsonb_build_object(
+        'generation', captcha_request.generation,
+        'requestSource', captcha_request.request_source,
+        'passEffect', captcha_request.pass_effect,
+        'caseRevisionAtIssue', captcha_request.case_revision_at_issue,
+        'requestedBy', captcha_request.requested_by,
+        'requestedAt', captcha_request.requested_at,
+        'presentedAt', captcha_request.presented_at,
+        'outcome', captcha_request.outcome,
+        'outcomeAt', captcha_request.outcome_at,
+        'deliveryErrorCode', captcha_request.delivery_error_code,
+        'bypassedBy', captcha_bypass.moderator_id,
+        'bypassedAt', captcha_bypass.bypassed_at,
+        'bypassReason', captcha_bypass.reason
+      ) order by captcha_request.generation
+    ) as history
+    from captcha_challenge_requests captcha_request
+    left join captcha_challenge_bypasses captcha_bypass
+      on captcha_bypass.captcha_challenge_id = captcha_request.captcha_challenge_id
+     and captcha_bypass.generation = captcha_request.generation
+    where captcha_request.captcha_challenge_id = cc.id
+  ) captcha_history on true
   left join detection_events opening_de on opening_de.id = ve.detection_event_id
   left join lateral (
     select detection_type, confidence, detected_at, metadata, channel_id, message_id

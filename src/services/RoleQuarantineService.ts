@@ -665,10 +665,6 @@ export class RoleQuarantineService implements IRoleQuarantineService {
       activeSnapshot = null;
     }
 
-    if (activeSnapshot && purpose === RoleQuarantineSnapshotPurpose.STANDARD_CASE) {
-      return this.resultFromActiveSnapshot(activeSnapshot, mode, currentRoleIds);
-    }
-
     if (mode === 'off') {
       return this.emptyApplyResult('off', mode, purpose, currentRoleIds);
     }
@@ -687,6 +683,13 @@ export class RoleQuarantineService implements IRoleQuarantineService {
       .map((classifiedRole) =>
         this.toRoleDetail(classifiedRole.role, classifiedRole.skipReason ?? 'skipped')
       );
+    if (
+      activeSnapshot &&
+      purpose === RoleQuarantineSnapshotPurpose.STANDARD_CASE &&
+      removableRoles.length === 0
+    ) {
+      return this.resultFromActiveSnapshot(activeSnapshot, mode, currentRoleIds);
+    }
     const newlyPlannedRoleIds = removableRoles.map((role) => role.id);
     const continuingCompromisedSnapshot =
       activeSnapshot?.purpose === RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT

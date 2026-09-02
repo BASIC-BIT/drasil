@@ -5,6 +5,7 @@ import {
   AdminActionType,
   CaptchaChallenge,
   CaptchaChallengePassEffect,
+  CaptchaChallengeRequestOutcome,
   CaptchaChallengeRequestSource,
   CaptchaChallengeStatus,
   CaptchaProvider,
@@ -107,6 +108,7 @@ const buildCaptchaChallenge = (overrides: Partial<CaptchaChallenge> = {}): Captc
   cancelled_at: overrides.cancelled_at ?? null,
   created_at: overrides.created_at ?? new Date('2026-01-03T00:00:00Z'),
   updated_at: overrides.updated_at ?? new Date('2026-01-03T00:00:00Z'),
+  history: overrides.history,
 });
 
 const getField = (embed: EmbedBuilder, name: string): string | undefined =>
@@ -176,6 +178,55 @@ describe('NotificationPresentationBuilder (unit)', () => {
     expect(captchaFields[0].value).toContain('by <@moderator-2>');
     expect(captchaFields[0].value).toContain('Bypass reason: Identity confirmed another way');
     expect(captchaFields[0].value).not.toContain('Expires:');
+  });
+
+  it('shows bounded prior CAPTCHA generations in the admin notification', () => {
+    const embed = new EmbedBuilder().setTitle('Suspicious User');
+    builder.upsertCaptchaChallengePresentation(
+      embed,
+      buildCaptchaChallenge({
+        generation: 3,
+        history: [
+          {
+            generation: 1,
+            request_source: CaptchaChallengeRequestSource.MODERATOR,
+            pass_effect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+            case_revision_at_issue: 0,
+            requested_by: 'moderator-1',
+            requested_at: new Date('2026-01-01T00:00:00Z'),
+            presented_at: null,
+            outcome: null,
+            outcome_at: null,
+            delivery_error_code: 'discord_delivery_failed',
+            bypassed_by: null,
+            bypassed_at: null,
+            bypass_reason: null,
+          },
+          {
+            generation: 2,
+            request_source: CaptchaChallengeRequestSource.MODERATOR,
+            pass_effect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+            case_revision_at_issue: 0,
+            requested_by: 'moderator-2',
+            requested_at: new Date('2026-01-02T00:00:00Z'),
+            presented_at: new Date('2026-01-02T00:01:00Z'),
+            outcome: CaptchaChallengeRequestOutcome.BYPASSED,
+            outcome_at: new Date('2026-01-02T00:02:00Z'),
+            delivery_error_code: null,
+            bypassed_by: 'moderator-2',
+            bypassed_at: new Date('2026-01-02T00:02:00Z'),
+            bypass_reason: 'Identity confirmed',
+          },
+        ],
+      })
+    );
+
+    const field = getField(embed, NotificationPresentationBuilder.CAPTCHA_FIELD_NAME);
+    expect(field).toContain('Previous generations:');
+    expect(field).toContain('• 1: no outcome recorded, delivery failed (discord delivery failed)');
+    expect(field).toContain(
+      '• 2: bypassed, no delivery failure recorded, bypass: Identity confirmed'
+    );
   });
 
   it('formats case thread links and newest-first detection history labels', () => {

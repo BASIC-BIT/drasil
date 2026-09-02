@@ -849,6 +849,24 @@ export class NotificationPresentationBuilder {
         : null,
       challenge.bypass_reason ? `Bypass reason: ${challenge.bypass_reason}` : null,
     ].filter((line): line is string => Boolean(line));
+    const priorGenerationHistory = (challenge.history ?? []).filter(
+      (entry) => entry.generation < challenge.generation
+    );
+    const priorHistory = priorGenerationHistory.slice(-3);
+    if (priorHistory.length > 0) {
+      const omittedCount = priorGenerationHistory.length - priorHistory.length;
+      lines.push(
+        'Previous generations:',
+        ...priorHistory.map((entry) => {
+          const outcome = entry.outcome?.replace(/_/g, ' ') ?? 'no outcome recorded';
+          const delivery = entry.delivery_error_code
+            ? `delivery failed (${entry.delivery_error_code.replace(/_/g, ' ')})`
+            : 'no delivery failure recorded';
+          return `• ${entry.generation}: ${outcome}, ${delivery}${entry.bypass_reason ? `, bypass: ${entry.bypass_reason}` : ''}`;
+        }),
+        ...(omittedCount > 0 ? [`• ${omittedCount} earlier generation(s) not shown`] : [])
+      );
+    }
     fields.push({
       name: NotificationPresentationBuilder.CAPTCHA_FIELD_NAME,
       value: this.truncateEmbedFieldValue(lines.join('\n')),

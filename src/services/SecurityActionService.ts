@@ -596,7 +596,7 @@ export class SecurityActionService implements ISecurityActionService {
     sourceMessage?: Message
   ): Promise<Message> {
     const captchaChallenge = this.captchaChallengeService
-      ? await this.captchaChallengeService.findByCaseId(verificationEvent.id).catch(() => null)
+      ? await this.captchaChallengeService.findByCaseId(verificationEvent.id)
       : null;
     const notificationMessage = await this.notificationManager.upsertSuspiciousUserNotification(
       member,

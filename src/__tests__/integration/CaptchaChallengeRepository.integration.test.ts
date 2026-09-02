@@ -188,6 +188,84 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
         requested_by: 'moderator-2',
       }),
     ]);
+    await expect(challenges.findByCaseId(verification.id)).resolves.toEqual(
+      expect.objectContaining({
+        history: [
+          expect.objectContaining({
+            generation: 1,
+            outcome: CaptchaChallengeRequestOutcome.BYPASSED,
+            bypassed_by: 'moderator-bypass',
+            bypass_reason: 'Manual review',
+          }),
+          expect.objectContaining({ generation: 2, requested_by: 'moderator-2' }),
+        ],
+      })
+    );
+  });
+
+  it('requires suspicious-join mode for automatic creation while preserving manual challenges', async () => {
+    const { verification } = await createCase('guild-captcha-mode-create', 'user-mode-create');
+    const challenges = new CaptchaChallengeRepository(prisma);
+
+    await expect(
+      challenges.create({
+        verificationEventId: verification.id,
+        serverId: verification.server_id,
+        userId: verification.user_id,
+        requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
+        passEffect: CaptchaChallengePassEffect.VERIFY_JOIN_ONLY,
+        caseRevision: verification.case_revision,
+        tokenHash: 'automatic-manual-mode-hash',
+        expiresAt: new Date(Date.now() + 60_000),
+      })
+    ).rejects.toThrow('The case changed before the security check could be created.');
+
+    await expect(
+      challenges.create({
+        verificationEventId: verification.id,
+        serverId: verification.server_id,
+        userId: verification.user_id,
+        requestSource: CaptchaChallengeRequestSource.MODERATOR,
+        passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+        caseRevision: verification.case_revision,
+        tokenHash: 'moderator-manual-mode-hash',
+        expiresAt: new Date(Date.now() + 60_000),
+        requestedBy: 'moderator-1',
+      })
+    ).resolves.toEqual(expect.objectContaining({ request_source: 'moderator' }));
+  });
+
+  it('rechecks suspicious-join mode before an automatic retry', async () => {
+    const { verification } = await createCase('guild-captcha-mode-retry', 'user-mode-retry');
+    const challenges = new CaptchaChallengeRepository(prisma);
+    await enableAutomaticCaptchaResolution(verification.server_id);
+    const initial = await challenges.create({
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
+      passEffect: CaptchaChallengePassEffect.VERIFY_JOIN_ONLY,
+      caseRevision: verification.case_revision,
+      tokenHash: 'automatic-retry-initial-hash',
+      expiresAt: new Date(Date.now() - 60_000),
+    });
+    await challenges.expirePending(new Date(), 10);
+    await enableManualCaptcha(verification.server_id);
+
+    await expect(
+      challenges.retry({
+        expectedChallengeId: initial.id,
+        expectedGeneration: initial.generation,
+        verificationEventId: verification.id,
+        serverId: verification.server_id,
+        userId: verification.user_id,
+        requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
+        passEffect: CaptchaChallengePassEffect.VERIFY_JOIN_ONLY,
+        caseRevision: verification.case_revision,
+        tokenHash: 'automatic-retry-manual-mode-hash',
+        expiresAt: new Date(Date.now() + 60_000),
+      })
+    ).rejects.toThrow('The case changed before the security check could be retried.');
   });
 
   it('refuses a stale retry after another moderator advances the challenge', async () => {
@@ -785,7 +863,7 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
   it('expires a generation exactly once', async () => {
     const { verification } = await createCase('guild-captcha-expiry', 'user-captcha-expiry');
     const challenges = new CaptchaChallengeRepository(prisma);
-    await enableManualCaptcha(verification.server_id);
+    await enableAutomaticCaptchaResolution(verification.server_id);
     const challenge = await challenges.create({
       verificationEventId: verification.id,
       serverId: verification.server_id,

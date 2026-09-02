@@ -1,4 +1,5 @@
 import type {
+  CaptchaChallengeGenerationHistory,
   CaptchaChallengeSummary,
   CaseAction,
   CasePresenceState,
@@ -76,6 +77,27 @@ export function formatCaptchaStatus(status: CaptchaChallengeSummary['status']): 
     case 'cancelled':
       return 'Security check cancelled';
   }
+}
+
+export function formatCaptchaHistoryEntry(
+  entry: CaptchaChallengeGenerationHistory,
+  currentStatus?: CaptchaChallengeSummary['status']
+): string {
+  const source =
+    entry.requestSource === 'automatic_suspicious_join'
+      ? 'Automatic suspicious-join check'
+      : entry.requestedBy
+        ? `Moderator ${entry.requestedBy}`
+        : 'Moderator';
+  const outcome = (entry.outcome ?? currentStatus ?? 'no outcome recorded').replace(/_/g, ' ');
+  const delivery = entry.deliveryErrorCode
+    ? `delivery failed (${entry.deliveryErrorCode.replace(/_/g, ' ')})`
+    : 'no delivery failure recorded';
+  const presentation = entry.presentedAt
+    ? `, moderator notice updated ${formatUtc(entry.presentedAt)}`
+    : '';
+  const bypass = entry.bypassReason ? `, bypass reason: ${entry.bypassReason}` : '';
+  return `Generation ${entry.generation}: ${source}, requested ${formatUtc(entry.requestedAt)}, ${delivery}${presentation}, outcome ${outcome}${bypass}.`;
 }
 
 export function presenceStatusClass(state: CasePresenceState): string {

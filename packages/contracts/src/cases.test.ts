@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  captchaChallengeSummarySchema,
   caseActionSchema,
   caseDetailSchema,
   type CaseSummary,
@@ -38,6 +39,44 @@ describe('case contracts', () => {
     expect(caseActionSchema.parse('quarantine_compromised_account')).toBe(
       'quarantine_compromised_account'
     );
+  });
+
+  it('validates per-generation CAPTCHA history', () => {
+    expect(() =>
+      captchaChallengeSummarySchema.parse({
+        id: '11111111-1111-4111-8111-111111111111',
+        status: 'bypassed',
+        requestSource: 'moderator',
+        passEffect: 'evidence_only',
+        generation: 2,
+        submissionCount: 0,
+        expiresAt: '2026-06-03T01:00:00.000Z',
+        requestedAt: '2026-06-03T00:00:00.000Z',
+        deliveredAt: null,
+        deliveryErrorCode: null,
+        passedAt: null,
+        bypassedAt: '2026-06-03T00:10:00.000Z',
+        bypassedBy: 'moderator-2',
+        bypassReason: 'Identity confirmed',
+        history: [
+          {
+            generation: 1,
+            requestSource: 'moderator',
+            passEffect: 'evidence_only',
+            caseRevisionAtIssue: 0,
+            requestedBy: 'moderator-1',
+            requestedAt: '2026-06-02T00:00:00.000Z',
+            presentedAt: null,
+            outcome: 'delivery_failed',
+            outcomeAt: '2026-06-02T00:01:00.000Z',
+            deliveryErrorCode: 'discord_delivery_failed',
+            bypassedBy: null,
+            bypassedAt: null,
+            bypassReason: null,
+          },
+        ],
+      })
+    ).not.toThrow();
   });
 
   it('sorts queue summaries with stale cases first and oldest movement first', () => {

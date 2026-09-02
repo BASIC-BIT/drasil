@@ -20,6 +20,7 @@ import { InboxActionForm, type InboxStateAction } from './InboxActionForm';
 import { InboxActionRequestPollingProvider } from './InboxActionRequestPoller';
 import {
   formatCaptchaStatus,
+  formatCaptchaHistoryEntry,
   formatDetectionType,
   formatUtc,
   freshnessStatusClass,
@@ -835,6 +836,24 @@ function InboxDetailPanel({
           />
         ) : null}
       </div>
+
+      {item.captchaChallenge?.history?.length ? (
+        <div className="inbox-detail-section">
+          <h3>Security check history</h3>
+          <ul>
+            {item.captchaChallenge.history.map((entry) => (
+              <li key={entry.generation}>
+                {formatCaptchaHistoryEntry(
+                  entry,
+                  entry.generation === item.captchaChallenge?.generation
+                    ? item.captchaChallenge.status
+                    : undefined
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       <div className="inbox-detail-section">
         <h3>Links</h3>
