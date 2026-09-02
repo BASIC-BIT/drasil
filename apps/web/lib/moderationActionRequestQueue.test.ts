@@ -10,7 +10,10 @@ vi.mock('./setupDataAdapter', () => ({
   getPostgresPool: () => ({ connect: mocks.connect, query: mocks.query }),
 }));
 
-import { queueSerializedModerationActionRequestWithReceipt } from './moderationActionRequestQueue';
+import {
+  insertModerationActionRequestWithReceipt,
+  queueSerializedModerationActionRequestWithReceipt,
+} from './moderationActionRequestQueue';
 
 describe('queueSerializedModerationActionRequestWithReceipt', () => {
   beforeEach(() => {
@@ -90,11 +93,34 @@ describe('queueSerializedModerationActionRequestWithReceipt', () => {
     expect(result).toEqual({ id: 'request-2', status: 'queued' });
     const insertSql = String(mocks.query.mock.calls[3]?.[0]);
     expect(insertSql).toContain('insert into moderation_action_requests');
-    expect(insertSql).toContain('actor_id = case');
-    expect(insertSql).toContain('else excluded.actor_id');
-    expect(insertSql).toContain('actor_surface = case');
-    expect(insertSql).toContain('else excluded.actor_surface');
+    expect(insertSql).toContain('actor_id = excluded.actor_id');
+    expect(insertSql).toContain('actor_surface = excluded.actor_surface');
+    expect(insertSql).toContain("where moderation_action_requests.status = 'failed'");
     expect(mocks.query).toHaveBeenLastCalledWith('commit');
     expect(mocks.release).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('insertModerationActionRequestWithReceipt', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('leaves queued, processing, and completed stable-key requests untouched', async () => {
+    mocks.query.mockResolvedValueOnce({ rows: [{ id: 'active-1', status: 'processing' }] });
+
+    await expect(
+      insertModerationActionRequestWithReceipt({ query: mocks.query } as never, {
+        actionType: 'apply_captcha_pass',
+        actorId: 'drasil:captcha',
+        actorSurface: 'captcha',
+        idempotencyKey: 'captcha:apply:challenge-1:1',
+        serverId: 'guild-1',
+      })
+    ).resolves.toEqual({ id: 'active-1', status: 'processing' });
+
+    const statement = String(mocks.query.mock.calls[0]?.[0]);
+    expect(statement).toContain("where moderation_action_requests.status = 'failed'");
+    expect(statement).toContain('and not exists (select 1 from upserted)');
   });
 });

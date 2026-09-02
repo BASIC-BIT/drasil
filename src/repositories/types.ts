@@ -513,6 +513,14 @@ export enum CaptchaChallengeStatus {
   CANCELLED = 'cancelled',
 }
 
+export enum CaptchaChallengeRequestOutcome {
+  DELIVERY_FAILED = 'delivery_failed',
+  FAILED = 'failed',
+  EXPIRED = 'expired',
+  BYPASSED = 'bypassed',
+  CANCELLED = 'cancelled',
+}
+
 export enum CaptchaChallengeRequestSource {
   MODERATOR = 'moderator',
   AUTOMATIC_SUSPICIOUS_JOIN = 'automatic_suspicious_join',

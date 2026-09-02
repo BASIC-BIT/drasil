@@ -521,15 +521,18 @@ model captcha_challenges {
 }
 
 model captcha_challenge_requests {
-  id                     String                           @id @default(dbgenerated("extensions.uuid_generate_v4()")) @db.Uuid
-  captcha_challenge_id   String                           @db.Uuid
+  id                     String                             @id @default(dbgenerated("extensions.uuid_generate_v4()")) @db.Uuid
+  captcha_challenge_id   String                             @db.Uuid
   generation             Int
   request_source         captcha_challenge_request_source
   pass_effect            captcha_challenge_pass_effect
   case_revision_at_issue Int
   requested_by           String?
-  requested_at           DateTime                         @default(now()) @db.Timestamptz(6)
-  captcha_challenges     captcha_challenges               @relation(fields: [captcha_challenge_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  requested_at           DateTime                           @default(now()) @db.Timestamptz(6)
+  outcome                captcha_challenge_request_outcome?
+  outcome_at             DateTime?                          @db.Timestamptz(6)
+  delivery_error_code    String?
+  captcha_challenges     captcha_challenges                 @relation(fields: [captcha_challenge_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@unique([captcha_challenge_id, generation], map: "captcha_requests_challenge_generation_key")
   @@index([captcha_challenge_id, requested_at], map: "idx_captcha_requests_challenge_time")
@@ -692,6 +695,14 @@ enum captcha_challenge_request_source {
 enum captcha_challenge_pass_effect {
   evidence_only
   verify_join_only
+}
+
+enum captcha_challenge_request_outcome {
+  delivery_failed
+  failed
+  expired
+  bypassed
+  cancelled
 }
 
 enum captcha_attempt_validation_state {

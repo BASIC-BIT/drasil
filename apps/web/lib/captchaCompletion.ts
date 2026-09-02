@@ -506,7 +506,7 @@ export async function completeCaptchaAttempt(input: {
        join verification_events v on v.id = c.verification_event_id
        join servers s on s.guild_id = c.server_id
        where a.id = $1::uuid
-       for update of a, c`,
+       for update of a, c, v, s`,
       [input.attemptId]
     );
     const row = result.rows[0];

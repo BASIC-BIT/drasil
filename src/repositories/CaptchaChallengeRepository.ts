@@ -4,6 +4,7 @@ import { TYPES } from '../di/symbols';
 import {
   CaptchaChallenge,
   CaptchaChallengePassEffect,
+  CaptchaChallengeRequestOutcome,
   CaptchaChallengeRequestSource,
   CaptchaChallengeStatus,
   CaseKind,
@@ -72,14 +73,17 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
     try {
       return (await this.prisma.$transaction(async (transaction) => {
         const pendingCase = await transaction.$queryRaw<Array<{ id: string }>>`
-          SELECT id::text
-          FROM verification_events
-          WHERE id = ${input.verificationEventId}::uuid
-            AND server_id = ${input.serverId}
-            AND user_id = ${input.userId}
-            AND status = ${VerificationStatus.PENDING}::verification_status
-            AND case_revision = ${input.caseRevision}
-          FOR UPDATE
+          SELECT verification.id::text
+          FROM verification_events AS verification
+          JOIN servers AS server ON server.guild_id = verification.server_id
+          WHERE verification.id = ${input.verificationEventId}::uuid
+            AND verification.server_id = ${input.serverId}
+            AND verification.user_id = ${input.userId}
+            AND verification.status = ${VerificationStatus.PENDING}::verification_status
+            AND verification.case_kind = ${CaseKind.STANDARD}::case_kind
+            AND verification.case_revision = ${input.caseRevision}
+            AND coalesce(server.settings->>'captcha_mode', 'off') <> 'off'
+          FOR UPDATE OF verification, server
         `;
         if (!pendingCase[0]) {
           throw new Error('The case changed before the security check could be created.');
@@ -130,14 +134,17 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
   public async retry(input: CaptchaChallengeRetryInput): Promise<CaptchaChallenge> {
     return (await this.prisma.$transaction(async (transaction) => {
       const pendingCase = await transaction.$queryRaw<Array<{ id: string }>>`
-        SELECT id::text
-        FROM verification_events
-        WHERE id = ${input.verificationEventId}::uuid
-          AND server_id = ${input.serverId}
-          AND user_id = ${input.userId}
-          AND status = ${VerificationStatus.PENDING}::verification_status
-          AND case_revision = ${input.caseRevision}
-        FOR UPDATE
+        SELECT verification.id::text
+        FROM verification_events AS verification
+        JOIN servers AS server ON server.guild_id = verification.server_id
+        WHERE verification.id = ${input.verificationEventId}::uuid
+          AND verification.server_id = ${input.serverId}
+          AND verification.user_id = ${input.userId}
+          AND verification.status = ${VerificationStatus.PENDING}::verification_status
+          AND verification.case_kind = ${CaseKind.STANDARD}::case_kind
+          AND verification.case_revision = ${input.caseRevision}
+          AND coalesce(server.settings->>'captcha_mode', 'off') <> 'off'
+        FOR UPDATE OF verification, server
       `;
       if (!pendingCase[0]) {
         throw new Error('The case changed before the security check could be retried.');
@@ -167,18 +174,20 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
       if (!pendingDeliveryFailure && !retryableStatus) {
         throw new Error('This CAPTCHA challenge is not eligible for retry.');
       }
-      const attentionReasonKey = pendingDeliveryFailure
-        ? 'delivery-failed'
+      const activePresentationRequestKey = pendingDeliveryFailure
+        ? `captcha:attention:${existing.id}:${existing.generation}:delivery-failed`
         : existing.status === CaptchaChallengeStatus.FAILED
-          ? 'submission-limit'
+          ? `captcha:attention:${existing.id}:${existing.generation}:submission-limit`
           : existing.status === CaptchaChallengeStatus.EXPIRED
-            ? 'expired'
-            : null;
-      if (attentionReasonKey) {
+            ? `captcha:attention:${existing.id}:${existing.generation}:expired`
+            : existing.status === CaptchaChallengeStatus.CANCELLED
+              ? `captcha:presentation:${existing.id}:${existing.generation}:cancelled`
+              : null;
+      if (activePresentationRequestKey) {
         const activeAttention = await transaction.$queryRaw<Array<{ id: string }>>`
           select request.id::text
           from moderation_action_requests as request
-          where request.idempotency_key = ${`captcha:attention:${existing.id}:${existing.generation}:${attentionReasonKey}`}
+          where request.idempotency_key = ${activePresentationRequestKey}
             and request.status in (
               ${ModerationActionRequestStatus.QUEUED}::moderation_action_request_status,
               ${ModerationActionRequestStatus.PROCESSING}::moderation_action_request_status
@@ -190,6 +199,37 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
             'The current security-check status is still being delivered. Wait a moment and try again.'
           );
         }
+      }
+
+      const generationOutcome = pendingDeliveryFailure
+        ? CaptchaChallengeRequestOutcome.DELIVERY_FAILED
+        : existing.status === CaptchaChallengeStatus.FAILED
+          ? CaptchaChallengeRequestOutcome.FAILED
+          : existing.status === CaptchaChallengeStatus.EXPIRED
+            ? CaptchaChallengeRequestOutcome.EXPIRED
+            : existing.status === CaptchaChallengeStatus.BYPASSED
+              ? CaptchaChallengeRequestOutcome.BYPASSED
+              : CaptchaChallengeRequestOutcome.CANCELLED;
+      const outcomeAt =
+        generationOutcome === CaptchaChallengeRequestOutcome.BYPASSED
+          ? (existing.bypassed_at ?? existing.updated_at)
+          : generationOutcome === CaptchaChallengeRequestOutcome.CANCELLED
+            ? (existing.cancelled_at ?? existing.updated_at)
+            : existing.updated_at;
+      const archivedGeneration = await transaction.captcha_challenge_requests.updateMany({
+        where: {
+          captcha_challenge_id: existing.id,
+          generation: existing.generation,
+          outcome: null,
+        },
+        data: {
+          outcome: generationOutcome,
+          outcome_at: outcomeAt,
+          delivery_error_code: pendingDeliveryFailure ? existing.delivery_error_code : null,
+        },
+      });
+      if (archivedGeneration.count !== 1) {
+        throw new Error('The CAPTCHA challenge history changed while retrying.');
       }
 
       const updated = await transaction.captcha_challenges.updateMany({

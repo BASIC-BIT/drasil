@@ -10,6 +10,7 @@ import {
 } from '../../repositories/VerificationEventRepository';
 import {
   CaptchaChallengePassEffect,
+  CaptchaChallengeRequestOutcome,
   CaptchaChallengeRequestSource,
   CaptchaChallengeStatus,
   CaseContainmentStatus,
@@ -36,6 +37,7 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     const detections = new DetectionEventsRepository(prisma);
     const verifications = new VerificationEventRepository(prisma);
     await servers.getOrCreateServer(serverId);
+    await servers.updateSettings(serverId, { captcha_mode: 'manual' });
     await users.getOrCreateUser(userId, 'captcha-target');
     const detection = await detections.create({
       server_id: serverId,
@@ -127,6 +129,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       expect.objectContaining({
         captcha_challenge_id: initial.id,
         generation: 1,
+        outcome: CaptchaChallengeRequestOutcome.BYPASSED,
+        outcome_at: expect.any(Date),
         request_source: CaptchaChallengeRequestSource.MODERATOR,
         requested_by: 'moderator-1',
       }),
@@ -473,6 +477,90 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     );
   });
 
+  it('requires a standard case and enabled current mode when creating or retrying', async () => {
+    const challenges = new CaptchaChallengeRepository(prisma);
+    const servers = new ServerRepository(prisma);
+    const compromised = await createCase(
+      'guild-captcha-create-compromised',
+      'user-captcha-create-compromised'
+    );
+    await prisma.verification_events.update({
+      where: { id: compromised.verification.id },
+      data: { case_kind: CaseKind.COMPROMISED_ACCOUNT },
+    });
+
+    await expect(
+      challenges.create({
+        verificationEventId: compromised.verification.id,
+        serverId: compromised.verification.server_id,
+        userId: compromised.verification.user_id,
+        requestSource: CaptchaChallengeRequestSource.MODERATOR,
+        passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+        caseRevision: compromised.verification.case_revision,
+        tokenHash: 'compromised-create-guard',
+        expiresAt: new Date(Date.now() + 60_000),
+        requestedBy: 'moderator-1',
+      })
+    ).rejects.toThrow('The case changed before the security check could be created.');
+
+    const disabled = await createCase(
+      'guild-captcha-create-disabled',
+      'user-captcha-create-disabled'
+    );
+    await servers.updateSettings(disabled.verification.server_id, { captcha_mode: 'off' });
+    await expect(
+      challenges.create({
+        verificationEventId: disabled.verification.id,
+        serverId: disabled.verification.server_id,
+        userId: disabled.verification.user_id,
+        requestSource: CaptchaChallengeRequestSource.MODERATOR,
+        passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+        caseRevision: disabled.verification.case_revision,
+        tokenHash: 'disabled-create-guard',
+        expiresAt: new Date(Date.now() + 60_000),
+        requestedBy: 'moderator-1',
+      })
+    ).rejects.toThrow('The case changed before the security check could be created.');
+
+    const retryCase = await createCase(
+      'guild-captcha-retry-disabled',
+      'user-captcha-retry-disabled'
+    );
+    const challenge = await challenges.create({
+      verificationEventId: retryCase.verification.id,
+      serverId: retryCase.verification.server_id,
+      userId: retryCase.verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      caseRevision: retryCase.verification.case_revision,
+      tokenHash: 'disabled-retry-initial',
+      expiresAt: new Date(Date.now() + 60_000),
+      requestedBy: 'moderator-1',
+    });
+    await challenges.recordDeliveryFailure(
+      challenge.id,
+      challenge.generation,
+      'discord_delivery_failed'
+    );
+    await servers.updateSettings(retryCase.verification.server_id, { captcha_mode: 'off' });
+
+    await expect(
+      challenges.retry({
+        expectedChallengeId: challenge.id,
+        expectedGeneration: challenge.generation,
+        verificationEventId: retryCase.verification.id,
+        serverId: retryCase.verification.server_id,
+        userId: retryCase.verification.user_id,
+        requestSource: CaptchaChallengeRequestSource.MODERATOR,
+        passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+        caseRevision: retryCase.verification.case_revision,
+        tokenHash: 'disabled-retry-replacement',
+        expiresAt: new Date(Date.now() + 120_000),
+        requestedBy: 'moderator-2',
+      })
+    ).rejects.toThrow('The case changed before the security check could be retried.');
+  });
+
   it('expires a generation exactly once', async () => {
     const { verification } = await createCase('guild-captcha-expiry', 'user-captcha-expiry');
     const challenges = new CaptchaChallengeRepository(prisma);
@@ -736,6 +824,22 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     await expect(challenges.retry(retryInput)).resolves.toEqual(
       expect.objectContaining({ generation: initial.generation + 1 })
     );
+    await expect(
+      prisma.captcha_challenge_requests.findUnique({
+        where: {
+          captcha_challenge_id_generation: {
+            captcha_challenge_id: initial.id,
+            generation: initial.generation,
+          },
+        },
+      })
+    ).resolves.toEqual(
+      expect.objectContaining({
+        delivery_error_code: 'discord_delivery_failed',
+        outcome: CaptchaChallengeRequestOutcome.DELIVERY_FAILED,
+        outcome_at: expect.any(Date),
+      })
+    );
   });
 
   it('marks an abandoned delivery attempt as retryable after its lease expires', async () => {
@@ -897,6 +1001,7 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
   it('retries a cancelled challenge after its case is reopened', async () => {
     const { verification } = await createCase('guild-captcha-reopened', 'user-captcha-reopened');
     const challenges = new CaptchaChallengeRepository(prisma);
+    const requests = new ModerationActionRequestRepository(prisma);
     const challenge = await challenges.create({
       verificationEventId: verification.id,
       serverId: verification.server_id,
@@ -910,25 +1015,60 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     });
     await challenges.cancelPendingForCase(verification.id);
 
-    await expect(
-      challenges.retry({
-        expectedChallengeId: challenge.id,
-        expectedGeneration: challenge.generation,
-        verificationEventId: verification.id,
-        serverId: verification.server_id,
-        userId: verification.user_id,
-        requestSource: CaptchaChallengeRequestSource.MODERATOR,
-        passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
-        caseRevision: verification.case_revision,
-        tokenHash: 'reopened-hash',
-        expiresAt: new Date(Date.now() + 120_000),
-        requestedBy: 'moderator-2',
-      })
-    ).resolves.toEqual(
+    const cancellationPresentation = await requests.enqueue({
+      serverId: verification.server_id,
+      actionType: ModerationActionRequestType.NOTIFY_CAPTCHA_ATTENTION,
+      actorId: 'drasil:captcha',
+      actorSurface: 'captcha',
+      targetUserId: verification.user_id,
+      verificationEventId: verification.id,
+      idempotencyKey: `captcha:presentation:${challenge.id}:${challenge.generation}:cancelled`,
+      metadata: {
+        challenge_id: challenge.id,
+        generation: challenge.generation,
+        reason: 'cancelled',
+      },
+    });
+
+    const retryInput = {
+      expectedChallengeId: challenge.id,
+      expectedGeneration: challenge.generation,
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      caseRevision: verification.case_revision,
+      tokenHash: 'reopened-hash',
+      expiresAt: new Date(Date.now() + 120_000),
+      requestedBy: 'moderator-2',
+    };
+
+    await expect(challenges.retry(retryInput)).rejects.toThrow(
+      'The current security-check status is still being delivered. Wait a moment and try again.'
+    );
+    await requests.complete(cancellationPresentation.id, { presented: true });
+
+    await expect(challenges.retry(retryInput)).resolves.toEqual(
       expect.objectContaining({
         cancelled_at: null,
         generation: challenge.generation + 1,
         status: CaptchaChallengeStatus.PENDING,
+      })
+    );
+    await expect(
+      prisma.captcha_challenge_requests.findUnique({
+        where: {
+          captcha_challenge_id_generation: {
+            captcha_challenge_id: challenge.id,
+            generation: challenge.generation,
+          },
+        },
+      })
+    ).resolves.toEqual(
+      expect.objectContaining({
+        outcome: CaptchaChallengeRequestOutcome.CANCELLED,
+        outcome_at: expect.any(Date),
       })
     );
   });

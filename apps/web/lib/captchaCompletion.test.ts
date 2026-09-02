@@ -220,6 +220,10 @@ describe('captcha completion transaction', () => {
       })
     ).resolves.toBe('passed');
 
+    const completionSelect = query.mock.calls.find(([statement]) =>
+      statement.includes('from captcha_challenge_attempts a')
+    );
+    expect(completionSelect?.[0]).toContain('for update of a, c, v, s');
     expect(mocked.insertModerationActionRequestWithReceipt).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
