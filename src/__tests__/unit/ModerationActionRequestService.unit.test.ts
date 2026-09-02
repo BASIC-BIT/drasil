@@ -201,6 +201,17 @@ const updateCancelledCaptchaPresentationRequest: ModerationActionRequest = {
   },
 };
 
+const updateBypassedCaptchaPresentationRequest: ModerationActionRequest = {
+  ...notifyCaptchaAttentionRequest,
+  id: 'captcha-bypassed-presentation-request-1',
+  idempotency_key: 'captcha:presentation:challenge-1:1:bypassed',
+  metadata: {
+    challenge_id: 'challenge-1',
+    generation: 1,
+    reason: 'bypassed',
+  },
+};
+
 const accountQuarantinePreviewRequest: ModerationActionRequest = {
   ...verifyRequest,
   action_type: ModerationActionRequestType.PREVIEW_ACCOUNT_QUARANTINE,
@@ -2060,6 +2071,52 @@ describe('ModerationActionRequestService', () => {
       {
         id: 'captcha-cancelled-presentation-request-1',
         error: 'Failed to refresh cancelled CAPTCHA presentation for case ver-1.',
+      },
+    ]);
+  });
+
+  it('completes bypassed presentation after refreshing the case embed', async () => {
+    const { captchaChallengeService, notificationManager, repository, service, threadManager } =
+      buildService([updateBypassedCaptchaPresentationRequest]);
+    captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+      delivered_at: new Date(),
+      delivery_error_code: null,
+      generation: 1,
+      id: 'challenge-1',
+      status: 'bypassed',
+    });
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(notificationManager.updateCaptchaChallengePresentation).toHaveBeenCalled();
+    expect(threadManager.sendCaptchaStatus).not.toHaveBeenCalled();
+    expect(notificationManager.notifyCaptchaAttention).not.toHaveBeenCalled();
+    expect(repository.completed[0]).toEqual({
+      id: 'captcha-bypassed-presentation-request-1',
+      result: expect.objectContaining({ presented: true, reason: 'bypassed' }),
+    });
+  });
+
+  it('keeps bypassed presentation retryable when the embed refresh fails', async () => {
+    const { captchaChallengeService, notificationManager, repository, service, threadManager } =
+      buildService([updateBypassedCaptchaPresentationRequest]);
+    captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+      delivered_at: new Date(),
+      delivery_error_code: null,
+      generation: 1,
+      id: 'challenge-1',
+      status: 'bypassed',
+    });
+    notificationManager.updateCaptchaChallengePresentation.mockResolvedValueOnce(false);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(threadManager.sendCaptchaStatus).not.toHaveBeenCalled();
+    expect(repository.completed).toEqual([]);
+    expect(repository.failed).toEqual([
+      {
+        id: 'captcha-bypassed-presentation-request-1',
+        error: 'Failed to refresh bypassed CAPTCHA presentation for case ver-1.',
       },
     ]);
   });

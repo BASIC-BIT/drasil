@@ -266,6 +266,129 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     );
   });
 
+  it('rejects a bypass after the case becomes a compromised-account case', async () => {
+    const { verification } = await createCase(
+      'guild-captcha-bypass-compromised',
+      'user-captcha-bypass-compromised'
+    );
+    const challenges = new CaptchaChallengeRepository(prisma);
+    const challenge = await challenges.create({
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      caseRevision: verification.case_revision,
+      tokenHash: 'bypass-compromised-hash',
+      expiresAt: new Date(Date.now() + 60_000),
+      requestedBy: 'moderator-1',
+    });
+    await prisma.verification_events.update({
+      where: { id: verification.id },
+      data: { case_kind: CaseKind.COMPROMISED_ACCOUNT },
+    });
+
+    await expect(
+      challenges.bypass(challenge.id, challenge.generation, 'moderator-1', 'Reviewed manually')
+    ).resolves.toBeNull();
+    await expect(challenges.findById(challenge.id)).resolves.toEqual(
+      expect.objectContaining({ status: CaptchaChallengeStatus.PENDING })
+    );
+  });
+
+  it('rejects a bypass while CAPTCHA attention is being delivered', async () => {
+    const { verification } = await createCase(
+      'guild-captcha-bypass-attention',
+      'user-captcha-bypass-attention'
+    );
+    const challenges = new CaptchaChallengeRepository(prisma);
+    const requests = new ModerationActionRequestRepository(prisma);
+    const challenge = await challenges.create({
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      caseRevision: verification.case_revision,
+      tokenHash: 'bypass-attention-hash',
+      expiresAt: new Date(Date.now() - 60_000),
+      requestedBy: 'moderator-1',
+    });
+    await challenges.expirePending(new Date(), 10);
+    await requests.enqueue({
+      serverId: verification.server_id,
+      actionType: ModerationActionRequestType.NOTIFY_CAPTCHA_ATTENTION,
+      actorId: 'drasil:captcha',
+      actorSurface: 'captcha',
+      targetUserId: verification.user_id,
+      verificationEventId: verification.id,
+      idempotencyKey: `captcha:attention:${challenge.id}:${challenge.generation}:expired`,
+      metadata: {
+        challenge_id: challenge.id,
+        generation: challenge.generation,
+        reason: 'expired',
+      },
+    });
+    await expect(requests.claimNext()).resolves.toEqual(
+      expect.objectContaining({ idempotency_key: expect.stringContaining(':expired') })
+    );
+
+    await expect(
+      challenges.bypass(challenge.id, challenge.generation, 'moderator-1', 'Reviewed manually')
+    ).resolves.toBeNull();
+    await expect(challenges.findById(challenge.id)).resolves.toEqual(
+      expect.objectContaining({ status: CaptchaChallengeStatus.EXPIRED })
+    );
+  });
+
+  it('rediscovers a failed bypass presentation until it completes', async () => {
+    const { verification } = await createCase(
+      'guild-captcha-bypass-presentation',
+      'user-captcha-bypass-presentation'
+    );
+    const challenges = new CaptchaChallengeRepository(prisma);
+    const requests = new ModerationActionRequestRepository(prisma);
+    const challenge = await challenges.create({
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      caseRevision: verification.case_revision,
+      tokenHash: 'bypass-presentation-hash',
+      expiresAt: new Date(Date.now() + 60_000),
+      requestedBy: 'moderator-1',
+    });
+    await challenges.bypass(challenge.id, challenge.generation, 'moderator-1', 'Reviewed manually');
+    const requestInput = {
+      serverId: verification.server_id,
+      actionType: ModerationActionRequestType.NOTIFY_CAPTCHA_ATTENTION,
+      actorId: 'drasil:captcha',
+      actorSurface: 'captcha',
+      targetUserId: verification.user_id,
+      verificationEventId: verification.id,
+      idempotencyKey: `captcha:presentation:${challenge.id}:${challenge.generation}:bypassed`,
+      metadata: {
+        challenge_id: challenge.id,
+        generation: challenge.generation,
+        reason: 'bypassed',
+      },
+    };
+
+    await expect(challenges.findBypassedNeedingPresentation(10)).resolves.toEqual([
+      expect.objectContaining({ id: challenge.id }),
+    ]);
+    const queued = await requests.enqueue(requestInput);
+    await expect(challenges.findBypassedNeedingPresentation(10)).resolves.toEqual([]);
+    await requests.fail(queued.id, 'Discord unavailable');
+    await expect(challenges.findBypassedNeedingPresentation(10)).resolves.toEqual([
+      expect.objectContaining({ id: challenge.id }),
+    ]);
+    const requeued = await requests.enqueue(requestInput);
+    await requests.complete(requeued.id, { presented: true });
+    await expect(challenges.findBypassedNeedingPresentation(10)).resolves.toEqual([]);
+  });
+
   it('invalidates a passed generation when its resolved case is reopened', async () => {
     const { verification } = await createCase(
       'guild-captcha-reopen-revision',

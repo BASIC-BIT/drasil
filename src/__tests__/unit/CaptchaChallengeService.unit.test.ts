@@ -105,6 +105,7 @@ function createHarness(settings: Record<string, unknown> = { captcha_mode: 'manu
     findFailedNeedingAttention: jest.fn().mockResolvedValue([]),
     findExpiredNeedingAttention: jest.fn().mockResolvedValue([]),
     findCancelledNeedingPresentation: jest.fn().mockResolvedValue([]),
+    findBypassedNeedingPresentation: jest.fn().mockResolvedValue([]),
   };
   const verificationEvents = {
     findById: jest.fn().mockResolvedValue(buildCase()),
@@ -363,6 +364,27 @@ describe('CaptchaChallengeService', () => {
     expect(challenges.bypass).not.toHaveBeenCalled();
   });
 
+  it('queues bypassed presentation with a stable generation key', async () => {
+    const { challenges, moderationActionRequests, service } = createHarness();
+    challenges.findByCaseId.mockResolvedValue(buildChallenge());
+
+    await service.bypassChallenge({
+      verificationEventId: 'case-1',
+      moderatorId: 'moderator-1',
+      reason: 'Reviewed manually',
+      expectedChallengeId: 'challenge-1',
+      expectedGeneration: 1,
+    });
+
+    expect(moderationActionRequests.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionType: 'notify_captcha_attention',
+        idempotencyKey: 'captcha:presentation:challenge-1:1:bypassed',
+        metadata: expect.objectContaining({ reason: 'bypassed' }),
+      })
+    );
+  });
+
   it('does not post expiry status after the challenge generation is retried', async () => {
     const { challenges, moderationActionRequests, service, threads } = createHarness();
     const expired = buildChallenge({ status: CaptchaChallengeStatus.EXPIRED, generation: 1 });
@@ -422,6 +444,25 @@ describe('CaptchaChallengeService', () => {
       })
     );
     expect(threads.sendCaptchaStatus).not.toHaveBeenCalled();
+  });
+
+  it('recovers a bypassed presentation that has no active request', async () => {
+    const { challenges, moderationActionRequests, service } = createHarness();
+    const bypassed = buildChallenge({ status: CaptchaChallengeStatus.BYPASSED });
+    challenges.findBypassedNeedingPresentation.mockResolvedValue([bypassed]);
+
+    await (
+      service as unknown as {
+        runExpirySweep(): Promise<void>;
+      }
+    ).runExpirySweep();
+
+    expect(moderationActionRequests.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        idempotencyKey: 'captcha:presentation:challenge-1:1:bypassed',
+        metadata: expect.objectContaining({ reason: 'bypassed' }),
+      })
+    );
   });
 
   it('queues durable attention after an interrupted delivery lease expires', async () => {

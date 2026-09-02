@@ -1185,7 +1185,8 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       reason !== 'delivery_failed' &&
       reason !== 'submission_limit' &&
       reason !== 'expired' &&
-      reason !== 'cancelled'
+      reason !== 'cancelled' &&
+      reason !== 'bypassed'
     ) {
       throw new Error('Security-check attention reason is invalid.');
     }
@@ -1217,10 +1218,16 @@ export class ModerationActionRequestService implements IModerationActionRequestS
           Boolean(challenge.delivery_error_code)
         : reason === 'cancelled'
           ? challenge?.status === CaptchaChallengeStatus.CANCELLED
-          : challenge?.status ===
-            (reason === 'expired' ? CaptchaChallengeStatus.EXPIRED : CaptchaChallengeStatus.FAILED);
+          : reason === 'bypassed'
+            ? challenge?.status === CaptchaChallengeStatus.BYPASSED
+            : challenge?.status ===
+              (reason === 'expired'
+                ? CaptchaChallengeStatus.EXPIRED
+                : CaptchaChallengeStatus.FAILED);
     if (
-      (reason !== 'cancelled' && verificationEvent.status !== VerificationStatus.PENDING) ||
+      (reason !== 'cancelled' &&
+        reason !== 'bypassed' &&
+        verificationEvent.status !== VerificationStatus.PENDING) ||
       !challenge ||
       challenge.id !== challengeId ||
       challenge.generation !== generation ||
@@ -1238,7 +1245,7 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       });
       return;
     }
-    if (reason === 'cancelled') {
+    if (reason === 'cancelled' || reason === 'bypassed') {
       const presentationUpdated = this.notificationManager.updateCaptchaChallengePresentation
         ? await this.notificationManager.updateCaptchaChallengePresentation(
             verificationEvent,
@@ -1247,10 +1254,10 @@ export class ModerationActionRequestService implements IModerationActionRequestS
         : false;
       if (!presentationUpdated) {
         throw new Error(
-          `Failed to refresh cancelled CAPTCHA presentation for case ${verificationEvent.id}.`
+          `Failed to refresh ${reason} CAPTCHA presentation for case ${verificationEvent.id}.`
         );
       }
-      if (verificationEvent.status === VerificationStatus.PENDING) {
+      if (reason === 'cancelled' && verificationEvent.status === VerificationStatus.PENDING) {
         const statusSent = await this.threadManager.sendCaptchaStatus(
           verificationEvent,
           'This security check is no longer active.'

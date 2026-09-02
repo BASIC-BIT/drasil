@@ -252,7 +252,14 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     if (!bypassed) {
       throw new Error('The security check changed before it could be bypassed.');
     }
-    await this.refreshCaptchaPresentation(verificationEvent, bypassed);
+    try {
+      await this.queueBypassedPresentation(bypassed);
+    } catch (error) {
+      console.warn(
+        `Failed to queue bypassed browser security-check presentation for case ${verificationEvent.id}:`,
+        error
+      );
+    }
     return bypassed;
   }
 
@@ -328,17 +335,22 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
       }
       const [
         cancelledNeedingPresentation,
+        bypassedNeedingPresentation,
         deliveryFailuresNeedingAttention,
         failedNeedingAttention,
         expiredNeedingAttention,
       ] = await Promise.all([
         this.challenges.findCancelledNeedingPresentation(50),
+        this.challenges.findBypassedNeedingPresentation(50),
         this.challenges.findDeliveryFailuresNeedingAttention(50),
         this.challenges.findFailedNeedingAttention(50),
         this.challenges.findExpiredNeedingAttention(50),
       ]);
       for (const challenge of cancelledNeedingPresentation) {
         await this.queueCancelledPresentation(challenge);
+      }
+      for (const challenge of bypassedNeedingPresentation) {
+        await this.queueBypassedPresentation(challenge);
       }
       for (const challenge of deliveryFailuresNeedingAttention) {
         await this.queueAttention(challenge, 'delivery_failed');
@@ -387,6 +399,17 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
   }
 
   private async queueCancelledPresentation(challenge: CaptchaChallenge): Promise<void> {
+    await this.queueTerminalPresentation(challenge, 'cancelled');
+  }
+
+  private async queueBypassedPresentation(challenge: CaptchaChallenge): Promise<void> {
+    await this.queueTerminalPresentation(challenge, 'bypassed');
+  }
+
+  private async queueTerminalPresentation(
+    challenge: CaptchaChallenge,
+    reason: 'bypassed' | 'cancelled'
+  ): Promise<void> {
     if (!this.moderationActionRequests) {
       throw new Error('Moderation action requests are unavailable for CAPTCHA presentation.');
     }
@@ -397,11 +420,11 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
       actorSurface: 'captcha',
       targetUserId: challenge.user_id,
       verificationEventId: challenge.verification_event_id,
-      idempotencyKey: `captcha:presentation:${challenge.id}:${challenge.generation}:cancelled`,
+      idempotencyKey: `captcha:presentation:${challenge.id}:${challenge.generation}:${reason}`,
       metadata: {
         challenge_id: challenge.id,
         generation: challenge.generation,
-        reason: 'cancelled',
+        reason,
       },
     });
   }

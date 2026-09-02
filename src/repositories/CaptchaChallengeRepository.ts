@@ -82,7 +82,7 @@ function getCaptchaChallengeRetryState(
       };
     case CaptchaChallengeStatus.BYPASSED:
       return {
-        activePresentationRequestKey: null,
+        activePresentationRequestKey: `captcha:presentation:${keyPrefix}:bypassed`,
         deliveryErrorCode: null,
         outcome: CaptchaChallengeRequestOutcome.BYPASSED,
         outcomeAt: challenge.bypassed_at ?? challenge.updated_at,
@@ -123,6 +123,7 @@ export interface ICaptchaChallengeRepository {
   findFailedNeedingAttention(limit: number): Promise<CaptchaChallenge[]>;
   findExpiredNeedingAttention(limit: number): Promise<CaptchaChallenge[]>;
   findCancelledNeedingPresentation(limit: number): Promise<CaptchaChallenge[]>;
+  findBypassedNeedingPresentation(limit: number): Promise<CaptchaChallenge[]>;
 }
 
 @injectable()
@@ -361,8 +362,14 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
     const boundedReason = normalizedReason.slice(0, 1000);
     const bypassedAt = new Date();
     return (await this.prisma.$transaction(async (transaction) => {
-      const eligible = await transaction.$queryRaw<Array<{ id: string }>>`
-        select challenge.id::text
+      const eligible = await transaction.$queryRaw<
+        Array<{
+          delivery_error_code: string | null;
+          id: string;
+          status: CaptchaChallengeStatus;
+        }>
+      >`
+        select challenge.id::text, challenge.status, challenge.delivery_error_code
         from captcha_challenges as challenge
         join verification_events as verification
           on verification.id = challenge.verification_event_id
@@ -376,11 +383,35 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
             ${CaptchaChallengeStatus.EXPIRED}::captcha_challenge_status
           )
           and verification.status = ${VerificationStatus.PENDING}::verification_status
+          and verification.case_kind = ${CaseKind.STANDARD}::case_kind
           and coalesce(server.settings->>'captcha_mode', 'off') <> 'off'
         for update of verification, challenge, server
       `;
       if (!eligible[0]) {
         return null;
+      }
+      const attentionReason =
+        eligible[0].status === CaptchaChallengeStatus.FAILED
+          ? 'submission-limit'
+          : eligible[0].status === CaptchaChallengeStatus.EXPIRED
+            ? 'expired'
+            : eligible[0].delivery_error_code
+              ? 'delivery-failed'
+              : null;
+      if (attentionReason) {
+        const activeAttention = await transaction.$queryRaw<Array<{ id: string }>>`
+          select request.id::text
+          from moderation_action_requests as request
+          where request.idempotency_key = ${`captcha:attention:${id}:${generation}:${attentionReason}`}
+            and request.status in (
+              ${ModerationActionRequestStatus.QUEUED}::moderation_action_request_status,
+              ${ModerationActionRequestStatus.PROCESSING}::moderation_action_request_status
+            )
+          for update
+        `;
+        if (activeAttention[0]) {
+          return null;
+        }
       }
       const result = await transaction.captcha_challenges.updateMany({
         where: {
@@ -613,6 +644,32 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
             ':',
             challenge.generation::text,
             ':cancelled'
+          )
+            and request.status in (
+              'queued'::moderation_action_request_status,
+              'processing'::moderation_action_request_status,
+              'completed'::moderation_action_request_status
+            )
+        )
+      order by challenge.updated_at asc nulls first
+      limit ${Math.max(1, Math.min(limit, 100))}
+    `;
+  }
+
+  public async findBypassedNeedingPresentation(limit: number): Promise<CaptchaChallenge[]> {
+    return await this.prisma.$queryRaw<CaptchaChallenge[]>`
+      select challenge.*
+      from captcha_challenges as challenge
+      where challenge.status = ${CaptchaChallengeStatus.BYPASSED}::captcha_challenge_status
+        and not exists (
+          select 1
+          from moderation_action_requests as request
+          where request.idempotency_key = concat(
+            'captcha:presentation:',
+            challenge.id::text,
+            ':',
+            challenge.generation::text,
+            ':bypassed'
           )
             and request.status in (
               'queued'::moderation_action_request_status,
