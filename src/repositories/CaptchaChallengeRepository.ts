@@ -48,6 +48,7 @@ export interface ICaptchaChallengeRepository {
   findDeliveryFailuresNeedingAttention(limit: number): Promise<CaptchaChallenge[]>;
   findFailedNeedingAttention(limit: number): Promise<CaptchaChallenge[]>;
   findExpiredNeedingAttention(limit: number): Promise<CaptchaChallenge[]>;
+  findCancelledNeedingPresentation(limit: number): Promise<CaptchaChallenge[]>;
 }
 
 @injectable()
@@ -348,37 +349,42 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
   }
 
   public async cancelPendingForDisabledServers(limit: number): Promise<CaptchaChallenge[]> {
-    const candidates = await this.prisma.$queryRaw<CaptchaChallenge[]>`
-      select c.*
-      from captcha_challenges c
-      join servers s on s.guild_id = c.server_id
-      where c.status = ${CaptchaChallengeStatus.PENDING}::captcha_challenge_status
-        and coalesce(s.settings->>'captcha_mode', 'off') = 'off'
-      order by c.requested_at asc
-      limit ${Math.max(1, Math.min(limit, 100))}
-    `;
-    const cancelled: CaptchaChallenge[] = [];
-    for (const candidate of candidates) {
-      const result = await this.prisma.captcha_challenges.updateMany({
-        where: {
-          id: candidate.id,
-          generation: candidate.generation,
-          status: CaptchaChallengeStatus.PENDING,
-        },
-        data: {
-          status: CaptchaChallengeStatus.CANCELLED,
-          cancelled_at: new Date(),
-          updated_at: new Date(),
-        },
-      });
-      if (result.count === 1) {
-        const refreshed = await this.findById(candidate.id);
-        if (refreshed) {
-          cancelled.push(refreshed);
+    return (await this.prisma.$transaction(async (transaction) => {
+      const candidates = await transaction.$queryRaw<CaptchaChallenge[]>`
+        select challenge.*
+        from captcha_challenges as challenge
+        join servers as server on server.guild_id = challenge.server_id
+        where challenge.status = ${CaptchaChallengeStatus.PENDING}::captcha_challenge_status
+          and coalesce(server.settings->>'captcha_mode', 'off') = 'off'
+        order by challenge.requested_at asc
+        limit ${Math.max(1, Math.min(limit, 100))}
+        for update of challenge, server skip locked
+      `;
+      const cancelled: CaptchaChallenge[] = [];
+      for (const candidate of candidates) {
+        const cancelledAt = new Date();
+        const result = await transaction.captcha_challenges.updateMany({
+          where: {
+            id: candidate.id,
+            generation: candidate.generation,
+            status: CaptchaChallengeStatus.PENDING,
+          },
+          data: {
+            status: CaptchaChallengeStatus.CANCELLED,
+            cancelled_at: cancelledAt,
+            updated_at: cancelledAt,
+          },
+        });
+        if (result.count === 1) {
+          cancelled.push(
+            (await transaction.captcha_challenges.findUniqueOrThrow({
+              where: { id: candidate.id },
+            })) as CaptchaChallenge
+          );
         }
       }
-    }
-    return cancelled;
+      return cancelled;
+    })) as CaptchaChallenge[];
   }
 
   public async cancelPendingForTerminalCases(limit: number): Promise<CaptchaChallenge[]> {
@@ -422,35 +428,42 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
   }
 
   public async expirePending(now: Date, limit: number): Promise<CaptchaChallenge[]> {
-    const candidates = await this.prisma.captcha_challenges.findMany({
-      where: {
-        status: CaptchaChallengeStatus.PENDING,
-        expires_at: { lte: now },
-        verification_events: { status: VerificationStatus.PENDING },
-      },
-      orderBy: { expires_at: 'asc' },
-      take: Math.max(1, Math.min(limit, 100)),
-    });
-    const expired: CaptchaChallenge[] = [];
-    for (const candidate of candidates) {
-      const result = await this.prisma.captcha_challenges.updateMany({
-        where: {
-          id: candidate.id,
-          generation: candidate.generation,
-          status: CaptchaChallengeStatus.PENDING,
-          expires_at: { lte: now },
-          verification_events: { status: VerificationStatus.PENDING },
-        },
-        data: { status: CaptchaChallengeStatus.EXPIRED, updated_at: now },
-      });
-      if (result.count === 1) {
-        const refreshed = await this.findById(candidate.id);
-        if (refreshed) {
-          expired.push(refreshed);
+    return (await this.prisma.$transaction(async (transaction) => {
+      const candidates = await transaction.$queryRaw<CaptchaChallenge[]>`
+        select challenge.*
+        from captcha_challenges as challenge
+        join verification_events as verification
+          on verification.id = challenge.verification_event_id
+        join servers as server on server.guild_id = challenge.server_id
+        where challenge.status = ${CaptchaChallengeStatus.PENDING}::captcha_challenge_status
+          and challenge.expires_at <= ${now}
+          and verification.status = ${VerificationStatus.PENDING}::verification_status
+          and coalesce(server.settings->>'captcha_mode', 'off') <> 'off'
+        order by challenge.expires_at asc
+        limit ${Math.max(1, Math.min(limit, 100))}
+        for update of challenge, verification, server skip locked
+      `;
+      const expired: CaptchaChallenge[] = [];
+      for (const candidate of candidates) {
+        const result = await transaction.captcha_challenges.updateMany({
+          where: {
+            id: candidate.id,
+            generation: candidate.generation,
+            status: CaptchaChallengeStatus.PENDING,
+            expires_at: { lte: now },
+          },
+          data: { status: CaptchaChallengeStatus.EXPIRED, updated_at: now },
+        });
+        if (result.count === 1) {
+          expired.push(
+            (await transaction.captcha_challenges.findUniqueOrThrow({
+              where: { id: candidate.id },
+            })) as CaptchaChallenge
+          );
         }
       }
-    }
-    return expired;
+      return expired;
+    })) as CaptchaChallenge[];
   }
 
   public async markStaleUndelivered(staleBefore: Date, limit: number): Promise<CaptchaChallenge[]> {
@@ -495,6 +508,32 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
 
   public async findExpiredNeedingAttention(limit: number): Promise<CaptchaChallenge[]> {
     return this.findNeedingAttention(CaptchaChallengeStatus.EXPIRED, 'expired', limit);
+  }
+
+  public async findCancelledNeedingPresentation(limit: number): Promise<CaptchaChallenge[]> {
+    return await this.prisma.$queryRaw<CaptchaChallenge[]>`
+      select challenge.*
+      from captcha_challenges as challenge
+      where challenge.status = ${CaptchaChallengeStatus.CANCELLED}::captcha_challenge_status
+        and not exists (
+          select 1
+          from moderation_action_requests as request
+          where request.idempotency_key = concat(
+            'captcha:presentation:',
+            challenge.id::text,
+            ':',
+            challenge.generation::text,
+            ':cancelled'
+          )
+            and request.status in (
+              'queued'::moderation_action_request_status,
+              'processing'::moderation_action_request_status,
+              'completed'::moderation_action_request_status
+            )
+        )
+      order by challenge.updated_at asc nulls first
+      limit ${Math.max(1, Math.min(limit, 100))}
+    `;
   }
 
   public async findFailedNeedingAttention(limit: number): Promise<CaptchaChallenge[]> {

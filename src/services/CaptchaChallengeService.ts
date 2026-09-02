@@ -302,36 +302,30 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
       await this.challenges.markStaleUndelivered(new Date(Date.now() - DELIVERY_LEASE_MS), 50);
       const completed = await this.expireChallenges();
       for (const challenge of completed) {
+        if (challenge.status === CaptchaChallengeStatus.CANCELLED) {
+          continue;
+        }
         const verificationEvent = await this.verificationEvents.findById(
           challenge.verification_event_id
         );
         if (verificationEvent) {
           await this.refreshCaptchaPresentation(verificationEvent, challenge);
         }
-        if (challenge.status !== CaptchaChallengeStatus.CANCELLED) {
-          continue;
-        }
-        if (
-          verificationEvent?.status === VerificationStatus.PENDING &&
-          (await this.isCurrentChallengeState(challenge))
-        ) {
-          await this.threads
-            .sendCaptchaStatus(verificationEvent, 'This security check is no longer active.')
-            .catch((error) => {
-              console.warn(
-                `Failed to notify case ${verificationEvent.id} about a cancelled security check:`,
-                error
-              );
-              return false;
-            });
-        }
       }
-      const [deliveryFailuresNeedingAttention, failedNeedingAttention, expiredNeedingAttention] =
-        await Promise.all([
-          this.challenges.findDeliveryFailuresNeedingAttention(50),
-          this.challenges.findFailedNeedingAttention(50),
-          this.challenges.findExpiredNeedingAttention(50),
-        ]);
+      const [
+        cancelledNeedingPresentation,
+        deliveryFailuresNeedingAttention,
+        failedNeedingAttention,
+        expiredNeedingAttention,
+      ] = await Promise.all([
+        this.challenges.findCancelledNeedingPresentation(50),
+        this.challenges.findDeliveryFailuresNeedingAttention(50),
+        this.challenges.findFailedNeedingAttention(50),
+        this.challenges.findExpiredNeedingAttention(50),
+      ]);
+      for (const challenge of cancelledNeedingPresentation) {
+        await this.queueCancelledPresentation(challenge);
+      }
       for (const challenge of deliveryFailuresNeedingAttention) {
         await this.queueAttention(challenge, 'delivery_failed');
       }
@@ -344,11 +338,6 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     } catch (error) {
       console.error('Failed to expire CAPTCHA challenges:', error);
     }
-  }
-
-  private async isCurrentChallengeState(challenge: CaptchaChallenge): Promise<boolean> {
-    const current = await this.challenges.findById(challenge.id);
-    return current?.generation === challenge.generation && current.status === challenge.status;
   }
 
   private async queueAttention(
@@ -379,6 +368,26 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
         challenge_id: challenge.id,
         generation: challenge.generation,
         reason,
+      },
+    });
+  }
+
+  private async queueCancelledPresentation(challenge: CaptchaChallenge): Promise<void> {
+    if (!this.moderationActionRequests) {
+      throw new Error('Moderation action requests are unavailable for CAPTCHA presentation.');
+    }
+    await this.moderationActionRequests.enqueue({
+      serverId: challenge.server_id,
+      actionType: ModerationActionRequestType.NOTIFY_CAPTCHA_ATTENTION,
+      actorId: 'drasil:captcha',
+      actorSurface: 'captcha',
+      targetUserId: challenge.user_id,
+      verificationEventId: challenge.verification_event_id,
+      idempotencyKey: `captcha:presentation:${challenge.id}:${challenge.generation}:cancelled`,
+      metadata: {
+        challenge_id: challenge.id,
+        generation: challenge.generation,
+        reason: 'cancelled',
       },
     });
   }

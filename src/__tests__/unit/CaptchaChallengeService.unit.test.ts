@@ -104,6 +104,7 @@ function createHarness(settings: Record<string, unknown> = { captcha_mode: 'manu
     findDeliveryFailuresNeedingAttention: jest.fn().mockResolvedValue([]),
     findFailedNeedingAttention: jest.fn().mockResolvedValue([]),
     findExpiredNeedingAttention: jest.fn().mockResolvedValue([]),
+    findCancelledNeedingPresentation: jest.fn().mockResolvedValue([]),
   };
   const verificationEvents = {
     findById: jest.fn().mockResolvedValue(buildCase()),
@@ -384,6 +385,28 @@ describe('CaptchaChallengeService', () => {
     await service.expireChallenges();
 
     expect(calls).toEqual(['disabled', 'terminal', 'expire']);
+  });
+
+  it('queues cancelled presentation with a stable generation key', async () => {
+    const { challenges, moderationActionRequests, service, threads } = createHarness();
+    const cancelled = buildChallenge({ status: CaptchaChallengeStatus.CANCELLED });
+    challenges.cancelPendingForDisabledServers.mockResolvedValue([cancelled]);
+    challenges.findCancelledNeedingPresentation.mockResolvedValue([cancelled]);
+
+    await (
+      service as unknown as {
+        runExpirySweep(): Promise<void>;
+      }
+    ).runExpirySweep();
+
+    expect(moderationActionRequests.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionType: 'notify_captcha_attention',
+        idempotencyKey: 'captcha:presentation:challenge-1:1:cancelled',
+        metadata: expect.objectContaining({ reason: 'cancelled' }),
+      })
+    );
+    expect(threads.sendCaptchaStatus).not.toHaveBeenCalled();
   });
 
   it('queues durable attention after an interrupted delivery lease expires', async () => {

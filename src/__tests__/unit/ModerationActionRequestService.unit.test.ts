@@ -190,6 +190,17 @@ const notifyDeliveryFailedCaptchaAttentionRequest: ModerationActionRequest = {
   },
 };
 
+const updateCancelledCaptchaPresentationRequest: ModerationActionRequest = {
+  ...notifyCaptchaAttentionRequest,
+  id: 'captcha-cancelled-presentation-request-1',
+  idempotency_key: 'captcha:presentation:challenge-1:1:cancelled',
+  metadata: {
+    challenge_id: 'challenge-1',
+    generation: 1,
+    reason: 'cancelled',
+  },
+};
+
 const accountQuarantinePreviewRequest: ModerationActionRequest = {
   ...verifyRequest,
   action_type: ModerationActionRequestType.PREVIEW_ACCOUNT_QUARANTINE,
@@ -1969,6 +1980,55 @@ describe('ModerationActionRequestService', () => {
       id: 'captcha-delivery-attention-request-1',
       result: expect.objectContaining({ notified: true, reason: 'delivery_failed' }),
     });
+  });
+
+  it('completes cancelled presentation only after both Discord surfaces update', async () => {
+    const { captchaChallengeService, notificationManager, repository, service, threadManager } =
+      buildService([updateCancelledCaptchaPresentationRequest]);
+    captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+      delivered_at: new Date(),
+      delivery_error_code: null,
+      generation: 1,
+      id: 'challenge-1',
+      status: 'cancelled',
+    });
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(notificationManager.updateCaptchaChallengePresentation).toHaveBeenCalled();
+    expect(threadManager.sendCaptchaStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'ver-1' }),
+      'This security check is no longer active.'
+    );
+    expect(notificationManager.notifyCaptchaAttention).not.toHaveBeenCalled();
+    expect(repository.completed[0]).toEqual({
+      id: 'captcha-cancelled-presentation-request-1',
+      result: expect.objectContaining({ presented: true, reason: 'cancelled' }),
+    });
+  });
+
+  it('keeps cancelled presentation retryable when the embed refresh fails', async () => {
+    const { captchaChallengeService, notificationManager, repository, service, threadManager } =
+      buildService([updateCancelledCaptchaPresentationRequest]);
+    captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+      delivered_at: new Date(),
+      delivery_error_code: null,
+      generation: 1,
+      id: 'challenge-1',
+      status: 'cancelled',
+    });
+    notificationManager.updateCaptchaChallengePresentation.mockResolvedValueOnce(false);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(threadManager.sendCaptchaStatus).not.toHaveBeenCalled();
+    expect(repository.completed).toEqual([]);
+    expect(repository.failed).toEqual([
+      {
+        id: 'captcha-cancelled-presentation-request-1',
+        error: 'Failed to refresh cancelled CAPTCHA presentation for case ver-1.',
+      },
+    ]);
   });
 
   it('discards submission-limit attention after the challenge generation changes', async () => {

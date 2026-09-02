@@ -475,6 +475,7 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
   it('expires a generation exactly once', async () => {
     const { verification } = await createCase('guild-captcha-expiry', 'user-captcha-expiry');
     const challenges = new CaptchaChallengeRepository(prisma);
+    await enableManualCaptcha(verification.server_id);
     const challenge = await challenges.create({
       verificationEventId: verification.id,
       serverId: verification.server_id,
@@ -499,6 +500,7 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     );
     const challenges = new CaptchaChallengeRepository(prisma);
     const requests = new ModerationActionRequestRepository(prisma);
+    await enableManualCaptcha(verification.server_id);
     const challenge = await challenges.create({
       verificationEventId: verification.id,
       serverId: verification.server_id,
@@ -784,7 +786,10 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
 
   it('cancels pending challenges exactly once after the server disables the feature', async () => {
     const { verification } = await createCase('guild-captcha-disabled', 'user-captcha-disabled');
+    const servers = new ServerRepository(prisma);
     const challenges = new CaptchaChallengeRepository(prisma);
+    const requests = new ModerationActionRequestRepository(prisma);
+    await enableManualCaptcha(verification.server_id);
     const challenge = await challenges.create({
       verificationEventId: verification.id,
       serverId: verification.server_id,
@@ -793,14 +798,40 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
       caseRevision: verification.case_revision,
       tokenHash: 'disabled-hash',
-      expiresAt: new Date(Date.now() + 60_000),
+      expiresAt: new Date(Date.now() - 60_000),
       requestedBy: 'moderator-1',
     });
+    await servers.updateSettings(verification.server_id, { captcha_mode: 'off' });
 
+    await expect(challenges.expirePending(new Date(), 10)).resolves.toEqual([]);
     await expect(challenges.cancelPendingForDisabledServers(10)).resolves.toEqual([
       expect.objectContaining({ id: challenge.id, status: CaptchaChallengeStatus.CANCELLED }),
     ]);
     await expect(challenges.cancelPendingForDisabledServers(10)).resolves.toEqual([]);
+
+    const idempotencyKey = `captcha:presentation:${challenge.id}:1:cancelled`;
+    const requestInput = {
+      serverId: verification.server_id,
+      actionType: ModerationActionRequestType.NOTIFY_CAPTCHA_ATTENTION,
+      actorId: 'drasil:captcha',
+      actorSurface: 'captcha',
+      targetUserId: verification.user_id,
+      verificationEventId: verification.id,
+      idempotencyKey,
+      metadata: { challenge_id: challenge.id, generation: 1, reason: 'cancelled' },
+    };
+    await expect(challenges.findCancelledNeedingPresentation(10)).resolves.toEqual([
+      expect.objectContaining({ id: challenge.id }),
+    ]);
+    const queued = await requests.enqueue(requestInput);
+    await expect(challenges.findCancelledNeedingPresentation(10)).resolves.toEqual([]);
+    await requests.fail(queued.id, 'Discord unavailable');
+    await expect(challenges.findCancelledNeedingPresentation(10)).resolves.toEqual([
+      expect.objectContaining({ id: challenge.id }),
+    ]);
+    const requeued = await requests.enqueue(requestInput);
+    await requests.complete(requeued.id, { presented: true });
+    await expect(challenges.findCancelledNeedingPresentation(10)).resolves.toEqual([]);
   });
 
   it('cancels a pending challenge for a terminal case before it can expire', async () => {
@@ -809,6 +840,7 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       'user-captcha-terminal-case'
     );
     const challenges = new CaptchaChallengeRepository(prisma);
+    await enableManualCaptcha(verification.server_id);
     const challenge = await challenges.create({
       verificationEventId: verification.id,
       serverId: verification.server_id,

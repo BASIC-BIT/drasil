@@ -89,7 +89,10 @@ The stack creates Vercel DNS defaults by default:
 - `drasilbot.com` A -> `76.76.21.21`
 - `www.drasilbot.com` CNAME -> `cname.vercel-dns.com`
 
-When Vercel is configured for the custom domain, also set `NEXT_PUBLIC_APP_URL=https://drasilbot.com`
+When Vercel is configured for the custom domain, also set `NEXT_PUBLIC_APP_URL=https://drasilbot.com`.
+The managed ECS task sets `DRASIL_WEB_PUBLIC_URL` from the Terraform
+`drasil_web_public_url` variable so bot-authored CAPTCHA and dashboard links use the same public
+origin.
 and add `https://drasilbot.com/api/auth/discord/callback` to the Discord OAuth redirect list.
 
 If Route 53 already created the hosted zone during domain registration, adopt it into Terraform state

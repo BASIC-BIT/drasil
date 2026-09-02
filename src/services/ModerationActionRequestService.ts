@@ -1174,7 +1174,12 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       throw new Error('Security-check attention request is invalid.');
     }
     const reason = this.readMetadataString(request.metadata, 'reason');
-    if (reason !== 'delivery_failed' && reason !== 'submission_limit' && reason !== 'expired') {
+    if (
+      reason !== 'delivery_failed' &&
+      reason !== 'submission_limit' &&
+      reason !== 'expired' &&
+      reason !== 'cancelled'
+    ) {
       throw new Error('Security-check attention reason is invalid.');
     }
     if (!this.captchaChallengeService) {
@@ -1203,10 +1208,12 @@ export class ModerationActionRequestService implements IModerationActionRequestS
         ? challenge?.status === CaptchaChallengeStatus.PENDING &&
           challenge.delivered_at === null &&
           Boolean(challenge.delivery_error_code)
-        : challenge?.status ===
-          (reason === 'expired' ? CaptchaChallengeStatus.EXPIRED : CaptchaChallengeStatus.FAILED);
+        : reason === 'cancelled'
+          ? challenge?.status === CaptchaChallengeStatus.CANCELLED
+          : challenge?.status ===
+            (reason === 'expired' ? CaptchaChallengeStatus.EXPIRED : CaptchaChallengeStatus.FAILED);
     if (
-      verificationEvent.status !== VerificationStatus.PENDING ||
+      (reason !== 'cancelled' && verificationEvent.status !== VerificationStatus.PENDING) ||
       !challenge ||
       challenge.id !== challengeId ||
       challenge.generation !== generation ||
@@ -1219,6 +1226,40 @@ export class ModerationActionRequestService implements IModerationActionRequestS
         notified: false,
         reason,
         stale: true,
+        target_user_id: request.target_user_id,
+        verification_event_id: request.verification_event_id,
+      });
+      return;
+    }
+    if (reason === 'cancelled') {
+      const presentationUpdated = this.notificationManager.updateCaptchaChallengePresentation
+        ? await this.notificationManager.updateCaptchaChallengePresentation(
+            verificationEvent,
+            challenge
+          )
+        : false;
+      if (!presentationUpdated) {
+        throw new Error(
+          `Failed to refresh cancelled CAPTCHA presentation for case ${verificationEvent.id}.`
+        );
+      }
+      if (verificationEvent.status === VerificationStatus.PENDING) {
+        const statusSent = await this.threadManager.sendCaptchaStatus(
+          verificationEvent,
+          'This security check is no longer active.'
+        );
+        if (!statusSent) {
+          throw new Error(
+            `Failed to deliver cancelled CAPTCHA status for case ${verificationEvent.id}.`
+          );
+        }
+      }
+      await this.repository.complete(request.id, {
+        action_type: request.action_type,
+        challenge_id: challengeId,
+        generation,
+        presented: true,
+        reason,
         target_user_id: request.target_user_id,
         verification_event_id: request.verification_event_id,
       });
