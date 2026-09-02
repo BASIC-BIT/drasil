@@ -1,6 +1,11 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { z } from 'zod';
-import { CAPTCHA_IDENTITY_MAX_AGE_SECONDS, OAUTH_STATE_MAX_AGE_SECONDS } from './cookies';
+import {
+  CAPTCHA_IDENTITY_COOKIE,
+  CAPTCHA_IDENTITY_MAX_AGE_SECONDS,
+  CAPTCHA_OAUTH_STATE_COOKIE,
+  OAUTH_STATE_MAX_AGE_SECONDS,
+} from './cookies';
 import { decodeSignedJson, decryptJson, encodeSignedJson, encryptJson } from './crypto';
 import { getOauthEncryptionSecret, getSessionSecret } from './session';
 
@@ -21,6 +26,18 @@ const captchaIdentitySchema = z.object({
 
 export type CaptchaOAuthState = z.infer<typeof captchaOAuthStateSchema>;
 export type CaptchaIdentity = z.infer<typeof captchaIdentitySchema>;
+
+function cookieBindingSuffix(value: string): string {
+  return createHash('sha256').update(value).digest('base64url').slice(0, 32);
+}
+
+export function getCaptchaOAuthStateCookieName(state: string): string {
+  return `${CAPTCHA_OAUTH_STATE_COOKIE}_${cookieBindingSuffix(state)}`;
+}
+
+export function getCaptchaIdentityCookieName(challengeId: string, generation: number): string {
+  return `${CAPTCHA_IDENTITY_COOKIE}_${cookieBindingSuffix(`${challengeId}:${generation}`)}`;
+}
 
 export function createCaptchaOAuthState(token: string): CaptchaOAuthState {
   const issuedAt = Date.now();

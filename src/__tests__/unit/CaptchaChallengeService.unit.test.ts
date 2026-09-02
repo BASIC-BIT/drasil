@@ -93,6 +93,7 @@ function createHarness(settings: Record<string, unknown> = { captcha_mode: 'manu
     retry: jest.fn().mockResolvedValue(challenge),
     recordDelivery: jest.fn().mockResolvedValue(true),
     recordPresentation: jest.fn().mockResolvedValue(true),
+    recordPresentationAttempt: jest.fn().mockResolvedValue(true),
     recordDeliveryFailure: jest.fn().mockResolvedValue(true),
     bypass: jest
       .fn()
@@ -227,6 +228,8 @@ describe('CaptchaChallengeService', () => {
     ).runExpirySweep();
 
     expect(updatePresentation).toHaveBeenCalledTimes(2);
+    expect(challenges.recordPresentationAttempt).toHaveBeenCalledTimes(1);
+    expect(challenges.recordPresentationAttempt).toHaveBeenCalledWith('challenge-1', 1);
     expect(challenges.recordPresentation).toHaveBeenCalledTimes(1);
     expect(challenges.recordPresentation).toHaveBeenCalledWith('challenge-1', 1);
   });

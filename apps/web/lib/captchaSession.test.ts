@@ -6,8 +6,15 @@ import {
   decodeCaptchaOAuthState,
   encodeCaptchaIdentity,
   encodeCaptchaOAuthState,
+  getCaptchaIdentityCookieName,
+  getCaptchaOAuthStateCookieName,
 } from './captchaSession';
-import { CAPTCHA_IDENTITY_MAX_AGE_SECONDS, OAUTH_STATE_MAX_AGE_SECONDS } from './cookies';
+import {
+  CAPTCHA_IDENTITY_COOKIE,
+  CAPTCHA_IDENTITY_MAX_AGE_SECONDS,
+  CAPTCHA_OAUTH_STATE_COOKIE,
+  OAUTH_STATE_MAX_AGE_SECONDS,
+} from './cookies';
 
 describe('CAPTCHA browser session cookies', () => {
   it('encrypts the opaque challenge token in OAuth state', () => {
@@ -58,5 +65,18 @@ describe('CAPTCHA browser session cookies', () => {
 
     expect(decodeCaptchaOAuthState(encodeCaptchaOAuthState(state))).toBeNull();
     expect(decodeCaptchaIdentity(encodeCaptchaIdentity(identity))).toBeNull();
+  });
+
+  it('isolates OAuth state and identity cookies for concurrent challenge tabs', () => {
+    const firstStateCookie = getCaptchaOAuthStateCookieName('state-1');
+    const secondStateCookie = getCaptchaOAuthStateCookieName('state-2');
+    const firstIdentityCookie = getCaptchaIdentityCookieName('challenge-1', 1);
+    const secondIdentityCookie = getCaptchaIdentityCookieName('challenge-1', 2);
+
+    expect(firstStateCookie).toBe(getCaptchaOAuthStateCookieName('state-1'));
+    expect(firstStateCookie).not.toBe(secondStateCookie);
+    expect(firstStateCookie).toMatch(new RegExp(`^${CAPTCHA_OAUTH_STATE_COOKIE}_[A-Za-z0-9_-]+$`));
+    expect(firstIdentityCookie).not.toBe(secondIdentityCookie);
+    expect(firstIdentityCookie).toMatch(new RegExp(`^${CAPTCHA_IDENTITY_COOKIE}_[A-Za-z0-9_-]+$`));
   });
 });

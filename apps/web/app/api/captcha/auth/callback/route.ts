@@ -1,14 +1,12 @@
 import { createHash } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
-import {
-  CAPTCHA_IDENTITY_COOKIE,
-  CAPTCHA_IDENTITY_MAX_AGE_SECONDS,
-  CAPTCHA_OAUTH_STATE_COOKIE,
-} from '@/lib/cookies';
+import { CAPTCHA_IDENTITY_MAX_AGE_SECONDS } from '@/lib/cookies';
 import {
   createCaptchaIdentity,
   decodeCaptchaOAuthState,
   encodeCaptchaIdentity,
+  getCaptchaIdentityCookieName,
+  getCaptchaOAuthStateCookieName,
 } from '@/lib/captchaSession';
 import { getCaptchaPublicChallenge, recordCaptchaIdentityMismatch } from '@/lib/captchaCompletion';
 import { exchangeDiscordCode, fetchDiscordUser } from '@/lib/discordApi';
@@ -21,8 +19,10 @@ function challengeRedirect(request: Request, token: string, result: string): Nex
   );
 }
 
-function clearOAuthState(response: NextResponse): NextResponse {
-  response.cookies.set(CAPTCHA_OAUTH_STATE_COOKIE, '', buildSessionCookieOptions(0));
+function clearOAuthState(response: NextResponse, cookieName: string | null): NextResponse {
+  if (cookieName) {
+    response.cookies.set(cookieName, '', buildSessionCookieOptions(0));
+  }
   return response;
 }
 
@@ -30,8 +30,9 @@ export async function GET(request: NextRequest) {
   const url = new URL(request.url);
   const code = url.searchParams.get('code');
   const state = url.searchParams.get('state');
+  const stateCookieName = state ? getCaptchaOAuthStateCookieName(state) : null;
   const cookieState = decodeCaptchaOAuthState(
-    request.cookies.get(CAPTCHA_OAUTH_STATE_COOKIE)?.value
+    stateCookieName ? request.cookies.get(stateCookieName)?.value : undefined
   );
   const token = cookieState?.token ?? '';
 
@@ -40,18 +41,19 @@ export async function GET(request: NextRequest) {
       new NextResponse(
         'Discord account confirmation expired. Return to the security check link and try again.',
         { status: 400 }
-      )
+      ),
+      stateCookieName
     );
   }
 
   if (!code || !state || cookieState.state !== state) {
-    return clearOAuthState(challengeRedirect(request, token, 'failed'));
+    return clearOAuthState(challengeRedirect(request, token, 'failed'), stateCookieName);
   }
 
   try {
     const challenge = await getCaptchaPublicChallenge(token);
     if (!challenge || challenge.status !== 'pending') {
-      return clearOAuthState(challengeRedirect(request, token, 'stale'));
+      return clearOAuthState(challengeRedirect(request, token, 'stale'), stateCookieName);
     }
     const redirectUri = `${getPublicAppUrl(request.url)}/api/captcha/auth/callback`;
     const oauthToken = await exchangeDiscordCode({ code, redirectUri });
@@ -62,12 +64,12 @@ export async function GET(request: NextRequest) {
         discordUserId: user.id,
         idempotencyKey: `captcha-oauth:${createHash('sha256').update(state).digest('hex')}`,
       });
-      return clearOAuthState(challengeRedirect(request, token, 'mismatch'));
+      return clearOAuthState(challengeRedirect(request, token, 'mismatch'), stateCookieName);
     }
 
     const response = challengeRedirect(request, token, 'confirmed');
     response.cookies.set(
-      CAPTCHA_IDENTITY_COOKIE,
+      getCaptchaIdentityCookieName(challenge.id, challenge.generation),
       encodeCaptchaIdentity(
         createCaptchaIdentity({
           challengeId: challenge.id,
@@ -77,9 +79,9 @@ export async function GET(request: NextRequest) {
       ),
       buildSessionCookieOptions(CAPTCHA_IDENTITY_MAX_AGE_SECONDS)
     );
-    return clearOAuthState(response);
+    return clearOAuthState(response, stateCookieName);
   } catch (error) {
     console.error('CAPTCHA Discord account confirmation failed:', error);
-    return clearOAuthState(challengeRedirect(request, token, 'failed'));
+    return clearOAuthState(challengeRedirect(request, token, 'failed'), stateCookieName);
   }
 }

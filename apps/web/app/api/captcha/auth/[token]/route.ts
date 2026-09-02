@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
-import { CAPTCHA_OAUTH_STATE_COOKIE, OAUTH_STATE_MAX_AGE_SECONDS } from '@/lib/cookies';
-import { createCaptchaOAuthState, encodeCaptchaOAuthState } from '@/lib/captchaSession';
+import { OAUTH_STATE_MAX_AGE_SECONDS } from '@/lib/cookies';
+import {
+  createCaptchaOAuthState,
+  encodeCaptchaOAuthState,
+  getCaptchaOAuthStateCookieName,
+} from '@/lib/captchaSession';
 import { getCaptchaPublicChallenge } from '@/lib/captchaCompletion';
 import { getPublicAppUrl, requireEnv } from '@/lib/env';
 import { buildSessionCookieOptions } from '@/lib/session';
@@ -23,7 +27,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ toke
 
   const response = NextResponse.redirect(authorizeUrl);
   response.cookies.set(
-    CAPTCHA_OAUTH_STATE_COOKIE,
+    getCaptchaOAuthStateCookieName(state.state),
     encodeCaptchaOAuthState(state),
     buildSessionCookieOptions(OAUTH_STATE_MAX_AGE_SECONDS)
   );

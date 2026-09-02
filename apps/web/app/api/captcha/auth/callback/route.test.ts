@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { NextRequest } from 'next/server';
+import { getCaptchaOAuthStateCookieName } from '@/lib/captchaSession';
 import { GET } from './route';
 
 describe('CAPTCHA Discord OAuth callback', () => {
@@ -12,6 +13,9 @@ describe('CAPTCHA Discord OAuth callback', () => {
 
     expect(response.status).toBe(400);
     expect(response.headers.get('location')).toBeNull();
+    expect(response.headers.get('set-cookie')).toContain(
+      `${getCaptchaOAuthStateCookieName('state-1')}=`
+    );
     await expect(response.text()).resolves.toContain('Return to the security check link');
   });
 });

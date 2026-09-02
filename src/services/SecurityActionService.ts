@@ -83,6 +83,7 @@ const PROFILE_IMAGE_HASH_TIMEOUT_MS = 5000;
 const EVIDENCE_BUNDLE_MESSAGE_LIMIT = 1900;
 const EVIDENCE_BUNDLE_RECENT_MESSAGE_LIMIT = 10;
 const EVIDENCE_BUNDLE_DETECTION_HISTORY_LIMIT = 8;
+const CASE_ROUTING_RETRY_LIMIT = 3;
 const AUTO_KICK_DEFAULT_REASON =
   'Suspected compromised account: high-confidence scam activity detected by Drasil.';
 
@@ -108,6 +109,7 @@ interface SuspiciousMemberOptions {
   readonly moderator?: User;
   readonly notificationSourceDetectionEvent?: DetectionEvent;
   readonly automaticCaptchaForNewCase?: boolean;
+  readonly caseRoutingAttempt?: number;
 }
 /**
  * Interface for the SecurityActionService
@@ -1599,7 +1601,8 @@ export class SecurityActionService implements ISecurityActionService {
     member: GuildMember,
     detectionResult: DetectionResult,
     detectionEventId: string,
-    sourceMessage?: Message
+    sourceMessage?: Message,
+    caseRoutingAttempt = 0
   ): Promise<void> {
     const activeVerificationEvent =
       await this.verificationEventRepository.findActiveByUserAndServer(member.id, member.guild.id);
@@ -1629,9 +1632,19 @@ export class SecurityActionService implements ISecurityActionService {
       activeVerificationEvent.id
     );
     if (!linkedDetectionEvent) {
-      throw new Error(
-        `Failed to link report detection event ${detectionEventId} to verification event ${activeVerificationEvent.id}`
+      if (caseRoutingAttempt >= CASE_ROUTING_RETRY_LIMIT) {
+        throw new Error(
+          `Failed to route report detection event ${detectionEventId} after repeated case changes.`
+        );
+      }
+      await this.upsertReportObservedAlertOrActiveCase(
+        member,
+        detectionResult,
+        detectionEventId,
+        sourceMessage,
+        caseRoutingAttempt + 1
       );
+      return;
     }
 
     await this.upsertNotification(member, detectionResult, activeVerificationEvent);
@@ -2374,6 +2387,7 @@ export class SecurityActionService implements ISecurityActionService {
       moderator,
       notificationSourceDetectionEvent,
       automaticCaptchaForNewCase = false,
+      caseRoutingAttempt = 0,
     } = options;
     const shouldUseReviewThread = useReportReviewThread ?? this.shouldUseReportReviewThread();
 
@@ -2397,14 +2411,6 @@ export class SecurityActionService implements ISecurityActionService {
       await this.verificationEventRepository.findActiveByUserAndServer(member.id, member.guild.id);
 
     if (activeVerificationEvent) {
-      let notificationVerificationEvent = await this.refreshVerificationUserSnapshot(
-        activeVerificationEvent,
-        member
-      );
-      notificationVerificationEvent = await this.adoptObservedNotificationForCase(
-        notificationVerificationEvent,
-        notificationSourceDetectionEvent
-      );
       console.log(
         `Active verification ${activeVerificationEvent.id} found for user ${member.user.tag}. Updating notification.`
       );
@@ -2413,10 +2419,23 @@ export class SecurityActionService implements ISecurityActionService {
         activeVerificationEvent.id
       );
       if (!linkedDetectionEvent) {
-        throw new Error(
-          `Failed to link detection event ${detectionEventId} to verification event ${activeVerificationEvent.id}`
+        return this.retrySuspiciousMemberRouting(
+          member,
+          detectionResult,
+          detectionEventId,
+          activeVerificationEvent.id,
+          options,
+          caseRoutingAttempt
         );
       }
+      let notificationVerificationEvent = await this.refreshVerificationUserSnapshot(
+        activeVerificationEvent,
+        member
+      );
+      notificationVerificationEvent = await this.adoptObservedNotificationForCase(
+        notificationVerificationEvent,
+        notificationSourceDetectionEvent
+      );
       const serverMember = await this.serverMemberRepository.findByServerAndUser(
         member.guild.id,
         member.id
@@ -2489,21 +2508,25 @@ export class SecurityActionService implements ISecurityActionService {
       member.id,
       VerificationStatus.PENDING
     );
-    newVerificationEvent = await this.refreshVerificationUserSnapshot(newVerificationEvent, member);
-    newVerificationEvent = await this.adoptObservedNotificationForCase(
-      newVerificationEvent,
-      notificationSourceDetectionEvent
-    );
-
     const linkedDetectionEvent = await this.detectionEventsRepository.linkToVerificationEvent(
       detectionEventId,
       newVerificationEvent.id
     );
     if (!linkedDetectionEvent) {
-      throw new Error(
-        `Failed to link detection event ${detectionEventId} to verification event ${newVerificationEvent.id}`
+      return this.retrySuspiciousMemberRouting(
+        member,
+        detectionResult,
+        detectionEventId,
+        newVerificationEvent.id,
+        options,
+        caseRoutingAttempt
       );
     }
+    newVerificationEvent = await this.refreshVerificationUserSnapshot(newVerificationEvent, member);
+    newVerificationEvent = await this.adoptObservedNotificationForCase(
+      newVerificationEvent,
+      notificationSourceDetectionEvent
+    );
 
     newVerificationEvent = await this.tryApplyCaseRole(member, newVerificationEvent, moderator);
 
@@ -2551,6 +2574,33 @@ export class SecurityActionService implements ISecurityActionService {
     }
 
     return true;
+  }
+
+  private async retrySuspiciousMemberRouting(
+    member: GuildMember,
+    detectionResult: DetectionResult,
+    detectionEventId: string,
+    changedVerificationEventId: string,
+    options: SuspiciousMemberOptions,
+    caseRoutingAttempt: number
+  ): Promise<boolean> {
+    if (caseRoutingAttempt >= CASE_ROUTING_RETRY_LIMIT) {
+      throw new Error(
+        `Failed to route detection event ${detectionEventId} after repeated case changes.`
+      );
+    }
+    console.warn(
+      `Verification event ${changedVerificationEventId} changed before detection ${detectionEventId} could be linked. Retrying routing.`
+    );
+    return this.handleSuspiciousMember(
+      member,
+      { ...detectionResult, detectionEventId },
+      {
+        ...options,
+        entitiesAlreadyEnsured: true,
+        caseRoutingAttempt: caseRoutingAttempt + 1,
+      }
+    );
   }
 
   private async maybeRequestAutomaticCaptcha(verificationEvent: VerificationEvent): Promise<void> {

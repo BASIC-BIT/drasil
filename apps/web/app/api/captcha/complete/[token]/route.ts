@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { CAPTCHA_IDENTITY_COOKIE } from '@/lib/cookies';
-import { decodeCaptchaIdentity } from '@/lib/captchaSession';
+import { decodeCaptchaIdentity, getCaptchaIdentityCookieName } from '@/lib/captchaSession';
 import {
   beginCaptchaAttempt,
   buildCaptchaCdata,
@@ -46,7 +45,11 @@ export async function POST(
       await requeueCaptchaPassEffect(challenge);
       return redirectToChallenge(request, token, 'completed');
     }
-    const identity = decodeCaptchaIdentity(request.cookies.get(CAPTCHA_IDENTITY_COOKIE)?.value);
+    if (!challenge) {
+      return redirectToChallenge(request, token, 'stale');
+    }
+    const identityCookieName = getCaptchaIdentityCookieName(challenge.id, challenge.generation);
+    const identity = decodeCaptchaIdentity(request.cookies.get(identityCookieName)?.value);
     if (!identity) {
       return redirectToChallenge(request, token, 'authenticate');
     }
@@ -91,7 +94,7 @@ export async function POST(
       completed === 'passed' ? 'completed' : completed
     );
     if (completed === 'passed') {
-      response.cookies.set(CAPTCHA_IDENTITY_COOKIE, '', buildSessionCookieOptions(0));
+      response.cookies.set(identityCookieName, '', buildSessionCookieOptions(0));
     }
     return response;
   } catch (error) {

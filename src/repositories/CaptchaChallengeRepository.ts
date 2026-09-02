@@ -135,6 +135,7 @@ export interface ICaptchaChallengeRepository {
   retry(input: CaptchaChallengeRetryInput): Promise<CaptchaChallenge>;
   recordDelivery(id: string, generation: number): Promise<boolean>;
   recordPresentation(id: string, generation: number): Promise<boolean>;
+  recordPresentationAttempt(id: string, generation: number): Promise<boolean>;
   recordDeliveryFailure(id: string, generation: number, code: string): Promise<boolean>;
   bypass(
     id: string,
@@ -435,6 +436,33 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
       data: { presented_at: new Date() },
     });
     return result.count === 1;
+  }
+
+  public async recordPresentationAttempt(id: string, generation: number): Promise<boolean> {
+    const touched = await this.prisma.$queryRaw<Array<{ id: string }>>`
+      update captcha_challenges as challenge
+      set updated_at = now()
+      where challenge.id = ${id}::uuid
+        and challenge.generation = ${generation}
+        and challenge.status = ${CaptchaChallengeStatus.PENDING}::captcha_challenge_status
+        and challenge.delivered_at is not null
+        and challenge.delivery_error_code is null
+        and exists (
+          select 1
+          from captcha_challenge_requests as request
+          where request.captcha_challenge_id = challenge.id
+            and request.generation = challenge.generation
+            and request.presented_at is null
+        )
+        and exists (
+          select 1
+          from verification_events as verification
+          where verification.id = challenge.verification_event_id
+            and verification.status = ${VerificationStatus.PENDING}::verification_status
+        )
+      returning challenge.id::text
+    `;
+    return touched.length === 1;
   }
 
   public async recordDeliveryFailure(
@@ -806,7 +834,7 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
         and challenge.delivery_error_code is null
         and request.presented_at is null
         and verification.status = ${VerificationStatus.PENDING}::verification_status
-      order by challenge.delivered_at asc
+      order by challenge.updated_at asc, challenge.id asc
       limit ${Math.max(1, Math.min(limit, 100))}
     `;
   }

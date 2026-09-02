@@ -117,6 +117,66 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     ).resolves.toEqual(expect.objectContaining({ presented_at: expect.any(Date) }));
   });
 
+  it('rotates failed delivered-presentation retries behind newer eligible rows', async () => {
+    const first = await createCase(
+      'guild-captcha-presentation-rotation-1',
+      'user-captcha-presentation-rotation-1'
+    );
+    const second = await createCase(
+      'guild-captcha-presentation-rotation-2',
+      'user-captcha-presentation-rotation-2'
+    );
+    const challenges = new CaptchaChallengeRepository(prisma);
+    await Promise.all([
+      enableManualCaptcha(first.verification.server_id),
+      enableManualCaptcha(second.verification.server_id),
+    ]);
+    const firstChallenge = await challenges.create({
+      verificationEventId: first.verification.id,
+      serverId: first.verification.server_id,
+      userId: first.verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      caseRevision: first.verification.case_revision,
+      tokenHash: 'presentation-rotation-hash-1',
+      expiresAt: new Date(Date.now() + 60_000),
+      requestedBy: 'moderator-1',
+    });
+    const secondChallenge = await challenges.create({
+      verificationEventId: second.verification.id,
+      serverId: second.verification.server_id,
+      userId: second.verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      caseRevision: second.verification.case_revision,
+      tokenHash: 'presentation-rotation-hash-2',
+      expiresAt: new Date(Date.now() + 60_000),
+      requestedBy: 'moderator-1',
+    });
+    await Promise.all([
+      challenges.recordDelivery(firstChallenge.id, firstChallenge.generation),
+      challenges.recordDelivery(secondChallenge.id, secondChallenge.generation),
+    ]);
+    await prisma.captcha_challenges.update({
+      where: { id: firstChallenge.id },
+      data: { updated_at: new Date('2026-08-18T10:00:00.000Z') },
+    });
+    await prisma.captcha_challenges.update({
+      where: { id: secondChallenge.id },
+      data: { updated_at: new Date('2026-08-18T11:00:00.000Z') },
+    });
+
+    await expect(challenges.findDeliveredNeedingPresentation(1)).resolves.toEqual([
+      expect.objectContaining({ id: firstChallenge.id }),
+    ]);
+    await expect(
+      challenges.recordPresentationAttempt(firstChallenge.id, firstChallenge.generation)
+    ).resolves.toBe(true);
+    await expect(challenges.findDeliveredNeedingPresentation(1)).resolves.toEqual([
+      expect.objectContaining({ id: secondChallenge.id }),
+    ]);
+  });
+
   it('keeps one aggregate per case and preserves per-generation bypass audit on retry', async () => {
     const { verification } = await createCase('guild-captcha-retry', 'user-captcha-retry');
     const challenges = new CaptchaChallengeRepository(prisma);

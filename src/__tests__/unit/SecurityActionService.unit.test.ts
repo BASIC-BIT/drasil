@@ -2517,6 +2517,56 @@ describe('SecurityActionService (unit)', () => {
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
   });
 
+  it('falls back to an observed alert when the active case closes before a report can link', async () => {
+    const guildId = 'guild-report-link-race';
+    const userId = 'user-report-link-race';
+    const member = buildMember(guildId, userId);
+    const initialDetection = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.8,
+      reasons: ['Initial detection'],
+      detected_at: new Date(),
+    });
+    const activeCase = await verificationEventRepository.createFromDetection(
+      initialDetection.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const originalLink =
+      detectionEventsRepository.linkToVerificationEvent.bind(detectionEventsRepository);
+    jest
+      .spyOn(detectionEventsRepository, 'linkToVerificationEvent')
+      .mockImplementationOnce(async () => {
+        await verificationEventRepository.update(activeCase.id, {
+          status: VerificationStatus.VERIFIED,
+          resolved_at: new Date(),
+        });
+        return null;
+      })
+      .mockImplementation((detectionEventId, verificationEventId) =>
+        originalLink(detectionEventId, verificationEventId)
+      );
+
+    await expect(
+      buildService().handleUserReport(
+        member,
+        { id: 'reporter-link-race' } as User,
+        'follow-up report'
+      )
+    ).resolves.toBe(true);
+
+    const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
+    const reportEvent = detectionEvents.find(
+      (event) => event.detection_type === DetectionType.USER_REPORT
+    );
+    expect(reportEvent?.latest_verification_event_id).toBeNull();
+    expect(notificationManager.upsertObservedDetectionNotification).toHaveBeenCalledTimes(1);
+    expect(notificationManager.upsertSuspiciousUserNotification).not.toHaveBeenCalled();
+  });
+
   it('adds a manual flag to an existing review-only pending case and restricts the user', async () => {
     const guildId = 'guild-4b';
     const userId = 'user-4b';
@@ -2609,6 +2659,74 @@ describe('SecurityActionService (unit)', () => {
     expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member);
     expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(2);
+  });
+
+  it('reroutes a detection when the active case closes before the detection can link', async () => {
+    const guildId = 'guild-detection-link-race';
+    const userId = 'user-detection-link-race';
+    const member = buildMember(guildId, userId);
+    const message = buildMessage(guildId, 'channel-detection-link-race');
+    const initialDetection = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.USER_REPORT,
+      confidence: 1,
+      reasons: ['Initial report'],
+      detected_at: new Date(),
+    });
+    const activeCase = await verificationEventRepository.createFromDetection(
+      initialDetection.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const originalLink =
+      detectionEventsRepository.linkToVerificationEvent.bind(detectionEventsRepository);
+    jest
+      .spyOn(detectionEventsRepository, 'linkToVerificationEvent')
+      .mockImplementationOnce(async () => {
+        await verificationEventRepository.update(activeCase.id, {
+          status: VerificationStatus.VERIFIED,
+          resolved_at: new Date(),
+        });
+        return null;
+      })
+      .mockImplementation((detectionEventId, verificationEventId) =>
+        originalLink(detectionEventId, verificationEventId)
+      );
+    const consoleWarn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 0.88,
+      reasons: ['Suspicious content after report'],
+      triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+      triggerContent: message.content,
+    };
+
+    try {
+      await expect(
+        buildService().handleSuspiciousMessage(member, detectionResult, message)
+      ).resolves.toBe(true);
+    } finally {
+      consoleWarn.mockRestore();
+    }
+
+    const verificationEvents = await verificationEventRepository.findByUserAndServer(
+      userId,
+      guildId
+    );
+    const replacementCase = verificationEvents.find(
+      (event) => event.status === VerificationStatus.PENDING
+    );
+    const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
+    const routedDetection = detectionEvents.find(
+      (event) => event.detection_type === DetectionType.SUSPICIOUS_CONTENT
+    );
+    expect(verificationEvents).toHaveLength(2);
+    expect(replacementCase).toBeDefined();
+    expect(routedDetection?.latest_verification_event_id).toBe(replacementCase?.id);
+    expect(userModerationService.applyCaseRole).toHaveBeenCalledTimes(1);
+    expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
   });
 
   it('posts an observed alert when a user report follows a resolved case', async () => {

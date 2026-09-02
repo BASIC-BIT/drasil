@@ -528,6 +528,7 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     if (!this.notifications?.updateCaptchaChallengePresentation) {
       return;
     }
+    let presentationRecorded = false;
     try {
       const current = (await this.challenges.findById(challenge.id)) ?? challenge;
       const presented = await this.notifications.updateCaptchaChallengePresentation(
@@ -535,13 +536,27 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
         current
       );
       if (presented) {
-        await this.challenges.recordPresentation(current.id, current.generation);
+        presentationRecorded = await this.challenges.recordPresentation(
+          current.id,
+          current.generation
+        );
       }
     } catch (error) {
       console.warn(
         `Failed to refresh browser security-check presentation for case ${verificationEvent.id}:`,
         error
       );
+    } finally {
+      if (!presentationRecorded) {
+        await this.challenges
+          .recordPresentationAttempt(challenge.id, challenge.generation)
+          .catch((error) => {
+            console.warn(
+              `Failed to defer browser security-check presentation retry for case ${verificationEvent.id}:`,
+              error
+            );
+          });
+      }
     }
   }
 

@@ -1,8 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import Link from 'next/link';
 import { cookies } from 'next/headers';
-import { CAPTCHA_IDENTITY_COOKIE } from '@/lib/cookies';
-import { decodeCaptchaIdentity } from '@/lib/captchaSession';
+import { decodeCaptchaIdentity, getCaptchaIdentityCookieName } from '@/lib/captchaSession';
 import {
   getCaptchaFormConfiguration,
   getCaptchaPublicChallenge,
@@ -78,7 +77,9 @@ export default async function CaptchaChallengePage({
   }
 
   const cookieStore = await cookies();
-  const identity = decodeCaptchaIdentity(cookieStore.get(CAPTCHA_IDENTITY_COOKIE)?.value);
+  const identity = decodeCaptchaIdentity(
+    cookieStore.get(getCaptchaIdentityCookieName(challenge.id, challenge.generation))?.value
+  );
   const identityMatches =
     identity?.challengeId === challenge.id &&
     identity.generation === challenge.generation &&
