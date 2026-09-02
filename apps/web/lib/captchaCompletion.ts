@@ -13,6 +13,7 @@ const CAPTCHA_ATTEMPT_ID_PATTERN =
 const CAPTCHA_ATTEMPT_RATE_WINDOW_MS = 60_000;
 const CAPTCHA_ATTEMPT_RATE_LIMIT = 10;
 const CAPTCHA_CHALLENGE_ATTEMPT_LIMIT = 100;
+const CAPTCHA_ATTEMPT_ABANDONED_AFTER_MS = 60_000;
 const CAPTCHA_SYSTEM_ACTOR_ID = 'drasil:captcha';
 
 export type CaptchaPublicStatus =
@@ -293,6 +294,21 @@ async function readAttemptLimits(
   challenge: CaptchaChallengeRow,
   discordUserId: string
 ): Promise<{ generationCount: number; recentUserCount: number }> {
+  // A process exit or provider setup exception can strand a committed attempt before validation.
+  // Retire it after the provider request's bounded lifetime so infrastructure failures cannot
+  // permanently exhaust the generation cap.
+  await client.query(
+    `update captcha_challenge_attempts
+     set validation_state = 'provider_error',
+         provider_success = null,
+         provider_error_codes = array['internal-error']::text[],
+         validated_at = now()
+     where captcha_challenge_id = $1::uuid
+       and generation = $2
+       and validation_state = 'started'
+       and created_at < $3::timestamptz`,
+    [challenge.id, challenge.generation, new Date(Date.now() - CAPTCHA_ATTEMPT_ABANDONED_AFTER_MS)]
+  );
   const result = await client.query<{
     generation_count: string;
     recent_user_count: string;

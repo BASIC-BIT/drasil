@@ -102,7 +102,7 @@ describe('captcha completion transaction', () => {
   });
 
   it('bounds attempts across all identities for one challenge generation', async () => {
-    const query = vi.fn(async (statement: string) => {
+    const query = vi.fn(async (statement: string, _parameters?: readonly unknown[]) => {
       if (statement.includes('from captcha_challenges c')) {
         return { rows: [challengeRow] };
       }
@@ -137,6 +137,16 @@ describe('captcha completion transaction', () => {
       challenge: expect.objectContaining({ id: challengeRow.id, status: 'failed' }),
     });
     expect(query.mock.calls.some(([statement]) => statement.includes('insert into'))).toBe(false);
+    const abandonedAttemptUpdate = query.mock.calls.find(([statement]) =>
+      statement.includes("validation_state = 'provider_error'")
+    );
+    expect(abandonedAttemptUpdate?.[0]).toContain("validation_state = 'started'");
+    expect(abandonedAttemptUpdate?.[0]).toContain('created_at < $3::timestamptz');
+    expect(abandonedAttemptUpdate?.[1]).toEqual([
+      challengeRow.id,
+      challengeRow.generation,
+      expect.any(Date),
+    ]);
     const limitsQuery = query.mock.calls.find(([statement]) =>
       statement.includes('generation_count')
     )?.[0];
