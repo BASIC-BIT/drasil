@@ -946,6 +946,9 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     if (!this.captchaChallengeService) {
       throw new Error('Security-check service is unavailable.');
     }
+    if (await this.completeRecordedCaptchaMutation(request, retry ? 'retry' : 'request')) {
+      return;
+    }
     await this.requireCaptchaCaseBinding(
       request.server_id,
       request.target_user_id,
@@ -965,6 +968,7 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       throw new Error('Security-check retry metadata is invalid.');
     }
     const result = await this.captchaChallengeService.requestChallenge({
+      actionRequestId: request.id,
       verificationEventId: request.verification_event_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       requestedBy: request.actor_id,
@@ -993,6 +997,9 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     if (!this.captchaChallengeService) {
       throw new Error('Security-check service is unavailable.');
     }
+    if (await this.completeRecordedCaptchaMutation(request, 'bypass')) {
+      return;
+    }
     await this.requireCaptchaCaseBinding(
       request.server_id,
       request.target_user_id,
@@ -1009,6 +1016,7 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       throw new Error('Security-check bypass metadata is invalid.');
     }
     const challenge = await this.captchaChallengeService.bypassChallenge({
+      actionRequestId: request.id,
       verificationEventId: request.verification_event_id,
       moderatorId: request.actor_id,
       reason,
@@ -1023,6 +1031,80 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       target_user_id: request.target_user_id,
       verification_event_id: request.verification_event_id,
     });
+  }
+
+  private async completeRecordedCaptchaMutation(
+    request: ModerationActionRequest,
+    operation: 'request' | 'retry' | 'bypass'
+  ): Promise<boolean> {
+    const receipt = this.readMetadataRecord(request.metadata, 'captcha_mutation_receipt');
+    if (!receipt) {
+      return false;
+    }
+    if (
+      !request.target_user_id ||
+      !request.verification_event_id ||
+      !this.captchaChallengeService
+    ) {
+      throw new Error('Security-check mutation receipt is invalid.');
+    }
+    const challengeId = typeof receipt.challenge_id === 'string' ? receipt.challenge_id : null;
+    const generation =
+      typeof receipt.generation === 'number' &&
+      Number.isInteger(receipt.generation) &&
+      receipt.generation >= 1
+        ? receipt.generation
+        : null;
+    if (receipt.operation !== operation || !challengeId || generation === null) {
+      throw new Error('Security-check mutation receipt is invalid.');
+    }
+    const challenge = await this.captchaChallengeService.findByCaseId(
+      request.verification_event_id
+    );
+    if (
+      !challenge ||
+      challenge.id !== challengeId ||
+      challenge.verification_event_id !== request.verification_event_id ||
+      challenge.server_id !== request.server_id ||
+      challenge.user_id !== request.target_user_id
+    ) {
+      throw new Error('The recorded security-check mutation no longer matches its case.');
+    }
+    const generationHistory = challenge.history?.find((entry) => entry.generation === generation);
+    const currentGeneration = challenge.generation === generation;
+    const expectedBypassReason = this.readMetadataString(request.metadata, 'reason')
+      ?.trim()
+      .slice(0, 1000);
+    const requestMatches =
+      operation !== 'bypass' &&
+      ((generationHistory?.request_source === CaptchaChallengeRequestSource.MODERATOR &&
+        generationHistory.requested_by === request.actor_id) ||
+        (currentGeneration &&
+          challenge.request_source === CaptchaChallengeRequestSource.MODERATOR &&
+          challenge.requested_by === request.actor_id));
+    const bypassMatches =
+      operation === 'bypass' &&
+      ((generationHistory?.bypassed_by === request.actor_id &&
+        generationHistory.bypass_reason === expectedBypassReason) ||
+        (currentGeneration &&
+          challenge.status === CaptchaChallengeStatus.BYPASSED &&
+          challenge.bypassed_by === request.actor_id &&
+          challenge.bypass_reason === expectedBypassReason));
+    if (!requestMatches && !bypassMatches) {
+      throw new Error('The recorded security-check mutation could not be verified.');
+    }
+    await this.repository.complete(request.id, {
+      action_type: request.action_type,
+      challenge_id: challengeId,
+      generation,
+      resumed: true,
+      ...(operation === 'bypass'
+        ? { bypassed: true }
+        : { delivered: currentGeneration && challenge.delivered_at !== null }),
+      target_user_id: request.target_user_id,
+      verification_event_id: request.verification_event_id,
+    });
+    return true;
   }
 
   private async applyCaptchaPass(request: ModerationActionRequest): Promise<void> {
@@ -1088,9 +1170,13 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       captchaResolution.generation === generation;
     if (decision.status !== 'eligible' && !resumesCommittedResolution) {
       if (verificationEvent.status === VerificationStatus.PENDING) {
+        const attentionReason =
+          decision.status === 'held' ? 'automatic_resolution_held' : 'evidence_only_pass';
         await this.requireCaptchaAttention(
+          request,
           verificationEvent,
-          decision.status === 'held' ? 'automatic_resolution_held' : 'evidence_only_pass'
+          attentionReason,
+          `captcha-attention:${challengeId}:${generation}:${attentionReason}`
         );
       }
       await this.repository.complete(request.id, {
@@ -1117,7 +1203,12 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     }
     if (!member) {
       if (verificationEvent.status === VerificationStatus.PENDING) {
-        await this.requireCaptchaAttention(verificationEvent, 'automatic_resolution_held');
+        await this.requireCaptchaAttention(
+          request,
+          verificationEvent,
+          'automatic_resolution_held',
+          `captcha-attention:${challengeId}:${generation}:automatic_resolution_held`
+        );
       }
       await this.repository.complete(request.id, {
         action_type: request.action_type,
@@ -1139,7 +1230,12 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       expectedCaseRevision,
     });
     if (result.status === 'held' && verificationEvent.status === VerificationStatus.PENDING) {
-      await this.requireCaptchaAttention(verificationEvent, 'automatic_resolution_held');
+      await this.requireCaptchaAttention(
+        request,
+        verificationEvent,
+        'automatic_resolution_held',
+        `captcha-attention:${challengeId}:${generation}:automatic_resolution_held`
+      );
     }
     await this.repository.complete(request.id, {
       action_type: request.action_type,
@@ -1262,14 +1358,27 @@ export class ModerationActionRequestService implements IModerationActionRequestS
   }
 
   private async requireCaptchaAttention(
+    request: ModerationActionRequest,
     verificationEvent: VerificationEvent,
-    reason: CaptchaAttentionReason
+    reason: CaptchaAttentionReason,
+    receipt: string
   ): Promise<void> {
+    if (this.readMetadataString(request.metadata, 'captcha_attention_receipt') === receipt) {
+      return;
+    }
     const notified = this.notificationManager.notifyCaptchaAttention
       ? await this.notificationManager.notifyCaptchaAttention(verificationEvent, reason)
       : false;
     if (!notified) {
       throw new Error(`Failed to notify moderators about CAPTCHA case ${verificationEvent.id}.`);
+    }
+    const persisted = await this.repository.mergeMetadata(request.id, {
+      captcha_attention_receipt: receipt,
+    });
+    if (!persisted) {
+      throw new Error(
+        `Failed to persist CAPTCHA attention receipt for case ${verificationEvent.id}.`
+      );
     }
   }
 
@@ -1364,7 +1473,7 @@ export class ModerationActionRequestService implements IModerationActionRequestS
           attemptId,
           `Failed to deliver CAPTCHA status for case ${claimed.id}.`
         );
-        await this.requireCaptchaAttention(claimed, reason);
+        await this.requireCaptchaAttention(request, claimed, reason, `${attemptId}:attention`);
       }
     } catch (error) {
       presentationError = error;

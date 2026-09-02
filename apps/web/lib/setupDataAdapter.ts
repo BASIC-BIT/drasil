@@ -293,7 +293,8 @@ export class PostgresSetupDataAdapter implements SetupDataAdapter {
     const updatedBy = update.updatedBy ?? current?.updated_by ?? null;
 
     const result = await getPostgresPool().query(
-      `insert into servers (
+      `with updated_server as (
+        insert into servers (
         guild_id,
         case_role_id,
         admin_channel_id,
@@ -302,16 +303,28 @@ export class PostgresSetupDataAdapter implements SetupDataAdapter {
         settings,
         updated_by,
         updated_at
-      ) values ($1, $2, $3, $4, $5, $6::jsonb, $7, now())
-      on conflict (guild_id) do update set
-        case_role_id = excluded.case_role_id,
-        admin_channel_id = excluded.admin_channel_id,
-        verification_channel_id = excluded.verification_channel_id,
-        admin_notification_role_id = excluded.admin_notification_role_id,
-        settings = coalesce(servers.settings, '{}'::jsonb) || excluded.settings,
-        updated_by = excluded.updated_by,
-        updated_at = now()
-      returning *`,
+        ) values ($1, $2, $3, $4, $5, $6::jsonb, $7, now())
+        on conflict (guild_id) do update set
+          case_role_id = excluded.case_role_id,
+          admin_channel_id = excluded.admin_channel_id,
+          verification_channel_id = excluded.verification_channel_id,
+          admin_notification_role_id = excluded.admin_notification_role_id,
+          settings = coalesce(servers.settings, '{}'::jsonb) || excluded.settings,
+          updated_by = excluded.updated_by,
+          updated_at = now()
+        returning *
+      ), cancelled_challenges as (
+        update captcha_challenges
+        set status = 'cancelled'::captcha_challenge_status,
+            cancelled_at = now(),
+            updated_at = now()
+        where server_id = $1
+          and status = 'pending'::captcha_challenge_status
+          and $8::boolean
+        returning id
+      )
+      select updated_server.*
+      from updated_server`,
       [
         update.guildId,
         nextOptionalId(update.caseRoleId, current?.case_role_id),
@@ -320,6 +333,7 @@ export class PostgresSetupDataAdapter implements SetupDataAdapter {
         nextOptionalId(update.adminNotificationRoleId, current?.admin_notification_role_id),
         JSON.stringify(settingsPatch),
         updatedBy,
+        update.captchaMode === 'off',
       ]
     );
 

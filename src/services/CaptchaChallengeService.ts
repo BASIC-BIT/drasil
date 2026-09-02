@@ -34,6 +34,7 @@ const EXPIRY_SWEEP_INTERVAL_MS = 60_000;
 const DELIVERY_LEASE_MS = 5 * 60_000;
 
 export interface RequestCaptchaChallengeInput {
+  actionRequestId?: string;
   verificationEventId: string;
   requestSource: CaptchaChallengeRequestSource;
   requestedBy?: string | null;
@@ -57,6 +58,7 @@ export interface EvaluateCaptchaPassInput {
 }
 
 export interface BypassCaptchaChallengeInput {
+  actionRequestId?: string;
   verificationEventId: string;
   moderatorId: string;
   reason: string;
@@ -134,6 +136,7 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     const settings = getCaptchaSettings(server.settings);
     const token = randomBytes(TOKEN_BYTES).toString('base64url');
     const challengeInput: CaptchaChallengeIssueInput = {
+      actionRequestId: input.actionRequestId,
       verificationEventId: verificationEvent.id,
       serverId: verificationEvent.server_id,
       userId: verificationEvent.user_id,
@@ -247,7 +250,8 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
       challenge.id,
       challenge.generation,
       input.moderatorId,
-      input.reason
+      input.reason,
+      input.actionRequestId
     );
     if (!bypassed) {
       throw new Error('The security check changed before it could be bypassed.');

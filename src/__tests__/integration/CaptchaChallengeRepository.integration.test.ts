@@ -235,6 +235,100 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     ).resolves.toEqual(expect.objectContaining({ request_source: 'moderator' }));
   });
 
+  it('derives the automatic pass effect from settings while holding the server lock', async () => {
+    const { verification } = await createCase(
+      'guild-captcha-pass-effect-lock',
+      'user-pass-effect-lock'
+    );
+    const servers = new ServerRepository(prisma);
+    const challenges = new CaptchaChallengeRepository(prisma);
+    await enableAutomaticCaptchaResolution(verification.server_id);
+
+    const initial = await challenges.create({
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      caseRevision: verification.case_revision,
+      tokenHash: 'locked-pass-effect-create',
+      expiresAt: new Date(Date.now() - 60_000),
+    });
+    expect(initial.pass_effect).toBe(CaptchaChallengePassEffect.VERIFY_JOIN_ONLY);
+
+    await challenges.expirePending(new Date(), 10);
+    await servers.updateSettings(verification.server_id, {
+      captcha_mode: 'suspicious_join',
+      captcha_pass_action: 'evidence_only',
+    });
+    const retried = await challenges.retry({
+      expectedChallengeId: initial.id,
+      expectedGeneration: initial.generation,
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
+      passEffect: CaptchaChallengePassEffect.VERIFY_JOIN_ONLY,
+      caseRevision: verification.case_revision,
+      tokenHash: 'locked-pass-effect-retry',
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    expect(retried.pass_effect).toBe(CaptchaChallengePassEffect.EVIDENCE_ONLY);
+    await expect(
+      prisma.captcha_challenge_requests.findMany({
+        where: { captcha_challenge_id: initial.id },
+        orderBy: { generation: 'asc' },
+      })
+    ).resolves.toEqual([
+      expect.objectContaining({ pass_effect: CaptchaChallengePassEffect.VERIFY_JOIN_ONLY }),
+      expect.objectContaining({ pass_effect: CaptchaChallengePassEffect.EVIDENCE_ONLY }),
+    ]);
+  });
+
+  it('records the queue mutation receipt in the challenge transaction', async () => {
+    const { verification } = await createCase(
+      'guild-captcha-mutation-receipt',
+      'user-mutation-receipt'
+    );
+    const challenges = new CaptchaChallengeRepository(prisma);
+    const requests = new ModerationActionRequestRepository(prisma);
+    const queued = await requests.enqueue({
+      serverId: verification.server_id,
+      actionType: ModerationActionRequestType.REQUEST_CAPTCHA_CHALLENGE,
+      actorId: 'moderator-receipt',
+      actorSurface: 'web',
+      targetUserId: verification.user_id,
+      verificationEventId: verification.id,
+      idempotencyKey: 'captcha-mutation-receipt-request',
+    });
+    await expect(requests.claimNext()).resolves.toEqual(expect.objectContaining({ id: queued.id }));
+
+    const challenge = await challenges.create({
+      actionRequestId: queued.id,
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      caseRevision: verification.case_revision,
+      tokenHash: 'mutation-receipt-token',
+      expiresAt: new Date(Date.now() + 60_000),
+      requestedBy: 'moderator-receipt',
+    });
+
+    await expect(requests.findById(queued.id)).resolves.toEqual(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          captcha_mutation_receipt: {
+            challenge_id: challenge.id,
+            generation: challenge.generation,
+            operation: 'request',
+          },
+        }),
+      })
+    );
+  });
+
   it('rechecks suspicious-join mode before an automatic retry', async () => {
     const { verification } = await createCase('guild-captcha-mode-retry', 'user-mode-retry');
     const challenges = new CaptchaChallengeRepository(prisma);

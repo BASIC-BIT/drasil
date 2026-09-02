@@ -1722,6 +1722,7 @@ describe('ModerationActionRequestService', () => {
     await expect(service.processPendingRequests()).resolves.toBe(1);
 
     expect(captchaChallengeService.requestChallenge).toHaveBeenCalledWith({
+      actionRequestId: 'captcha-retry-request-1',
       expectedChallengeId: 'challenge-1',
       expectedGeneration: 4,
       requestedBy: 'moderator-1',
@@ -1764,12 +1765,104 @@ describe('ModerationActionRequestService', () => {
     await expect(service.processPendingRequests()).resolves.toBe(1);
 
     expect(captchaChallengeService.bypassChallenge).toHaveBeenCalledWith({
+      actionRequestId: 'captcha-bypass-request-1',
       expectedChallengeId: 'challenge-1',
       expectedGeneration: 1,
       moderatorId: 'moderator-1',
       reason: 'Moderator confirmed access another way.',
       verificationEventId: 'ver-1',
     });
+    expect(repository.failed).toEqual([]);
+  });
+
+  it('reconciles an already-committed CAPTCHA request mutation on queue retry', async () => {
+    const request = {
+      ...requestCaptchaChallengeRequest,
+      metadata: {
+        captcha_mutation_receipt: {
+          challenge_id: 'challenge-1',
+          generation: 1,
+          operation: 'request',
+        },
+      },
+    };
+    const { captchaChallengeService, repository, service } = buildService([request]);
+    captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+      bypass_reason: null,
+      bypassed_by: null,
+      delivered_at: new Date(),
+      generation: 1,
+      history: [
+        {
+          generation: 1,
+          request_source: 'moderator',
+          requested_by: 'moderator-1',
+        },
+      ],
+      id: 'challenge-1',
+      request_source: 'moderator',
+      requested_by: 'moderator-1',
+      server_id: 'guild-1',
+      status: 'pending',
+      user_id: 'user-1',
+      verification_event_id: 'ver-1',
+    } as any);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(captchaChallengeService.requestChallenge).not.toHaveBeenCalled();
+    expect(repository.completed).toEqual([
+      {
+        id: 'captcha-request-1',
+        result: expect.objectContaining({ delivered: true, resumed: true }),
+      },
+    ]);
+    expect(repository.failed).toEqual([]);
+  });
+
+  it('reconciles an already-committed CAPTCHA bypass mutation on queue retry', async () => {
+    const request = {
+      ...bypassCaptchaChallengeRequest,
+      metadata: {
+        ...(bypassCaptchaChallengeRequest.metadata as Prisma.JsonObject),
+        captcha_mutation_receipt: {
+          challenge_id: 'challenge-1',
+          generation: 1,
+          operation: 'bypass',
+        },
+      },
+    };
+    const { captchaChallengeService, repository, service } = buildService([request]);
+    captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+      bypass_reason: 'Moderator confirmed access another way.',
+      bypassed_by: 'moderator-1',
+      delivered_at: new Date(),
+      generation: 1,
+      history: [
+        {
+          bypass_reason: 'Moderator confirmed access another way.',
+          bypassed_by: 'moderator-1',
+          generation: 1,
+        },
+      ],
+      id: 'challenge-1',
+      request_source: 'moderator',
+      requested_by: 'moderator-1',
+      server_id: 'guild-1',
+      status: 'bypassed',
+      user_id: 'user-1',
+      verification_event_id: 'ver-1',
+    } as any);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(captchaChallengeService.bypassChallenge).not.toHaveBeenCalled();
+    expect(repository.completed).toEqual([
+      {
+        id: 'captcha-bypass-request-1',
+        result: expect.objectContaining({ bypassed: true, resumed: true }),
+      },
+    ]);
     expect(repository.failed).toEqual([]);
   });
 
@@ -2154,6 +2247,46 @@ describe('ModerationActionRequestService', () => {
       {
         id: 'captcha-expired-attention-request-1',
         error: 'Failed to notify moderators about CAPTCHA case ver-1.',
+      },
+    ]);
+  });
+
+  it('does not duplicate moderator attention after a later presentation failure', async () => {
+    const {
+      captchaChallengeService,
+      notificationManager,
+      repository,
+      service,
+      verificationEventRepository,
+    } = buildService([notifyExpiredCaptchaAttentionRequest]);
+    captchaChallengeService.findByCaseId.mockResolvedValue({
+      delivered_at: new Date(),
+      delivery_error_code: null,
+      generation: 1,
+      id: 'challenge-1',
+      status: 'expired',
+    });
+    verificationEventRepository.updateQuarantineAttempt
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 'ver-1' } as any);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    repository.requests.push(repository.byId.get(notifyExpiredCaptchaAttentionRequest.id)!);
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(notificationManager.notifyCaptchaAttention).toHaveBeenCalledTimes(1);
+    expect(repository.metadataMerges).toContainEqual({
+      id: notifyExpiredCaptchaAttentionRequest.id,
+      metadata: {
+        captcha_attention_receipt: 'captcha-presentation:challenge-1:1:expired:attention',
+      },
+    });
+    expect(repository.completed).toHaveLength(1);
+    expect(repository.failed).toEqual([
+      {
+        id: 'captcha-expired-attention-request-1',
+        error: 'Failed to release CAPTCHA presentation claim for case ver-1.',
       },
     ]);
   });

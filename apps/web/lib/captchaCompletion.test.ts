@@ -153,6 +153,9 @@ describe('captcha completion transaction', () => {
     expect(limitsQuery).toContain(
       "validation_state <> 'provider_error'::captcha_attempt_validation_state"
     );
+    expect(query).toHaveBeenCalledWith('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+      challengeRow.user_id,
+    ]);
     expect(mocked.insertModerationActionRequestWithReceipt).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
@@ -160,6 +163,53 @@ describe('captcha completion transaction', () => {
       })
     );
     expect(query.mock.calls.at(-1)?.[0]).toBe('commit');
+  });
+
+  it('applies the authenticated-user rate limit across all challenge rows', async () => {
+    const query = vi.fn(async (statement: string, _parameters?: readonly unknown[]) => {
+      if (statement.includes('from captcha_challenges c')) {
+        return { rows: [challengeRow] };
+      }
+      if (statement.includes('where idempotency_key = $1')) {
+        return { rows: [] };
+      }
+      if (statement.includes('generation_count')) {
+        return { rows: [{ generation_count: '1', recent_user_count: '10' }] };
+      }
+      return { rows: [] };
+    });
+    const client = { query, release: vi.fn() };
+    mocked.getPostgresPool.mockReturnValue({ connect: vi.fn(async () => client) });
+
+    await expect(
+      beginCaptchaAttempt({
+        token: 'a'.repeat(43),
+        identity: {
+          challengeId: challengeRow.id,
+          expiresAt: Date.now() + 60_000,
+          generation: challengeRow.generation,
+          issuedAt: Date.now(),
+          userId: challengeRow.user_id,
+        },
+        idempotencyKey: '00000000-0000-4000-8000-000000000005',
+      })
+    ).resolves.toEqual({
+      state: 'rate_limited',
+      challenge: expect.objectContaining({ id: challengeRow.id }),
+    });
+
+    const lockIndex = query.mock.calls.findIndex(([statement]) =>
+      statement.includes('pg_advisory_xact_lock')
+    );
+    const limitsIndex = query.mock.calls.findIndex(([statement]) =>
+      statement.includes('generation_count')
+    );
+    expect(lockIndex).toBeGreaterThan(-1);
+    expect(lockIndex).toBeLessThan(limitsIndex);
+    const limitsQuery = query.mock.calls[limitsIndex]?.[0] ?? '';
+    expect(limitsQuery.match(/from captcha_challenge_attempts/g)).toHaveLength(2);
+    expect(limitsQuery).toContain('where discord_user_id = $3');
+    expect(query.mock.calls.some(([statement]) => statement.includes('insert into'))).toBe(false);
   });
 
   it('marks the generation failed and queues moderator attention at the submission limit', async () => {

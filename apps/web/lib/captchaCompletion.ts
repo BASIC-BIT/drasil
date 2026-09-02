@@ -314,15 +314,19 @@ async function readAttemptLimits(
     recent_user_count: string;
   }>(
     `select
-       count(*) filter (
-         where validation_state <> 'provider_error'::captcha_attempt_validation_state
-       )::text as generation_count,
-       count(*) filter (
-         where discord_user_id = $3 and created_at >= $4::timestamptz
-       )::text as recent_user_count
-     from captcha_challenge_attempts
-     where captcha_challenge_id = $1::uuid
-       and generation = $2`,
+       (
+         select count(*)::text
+         from captcha_challenge_attempts
+         where captcha_challenge_id = $1::uuid
+           and generation = $2
+           and validation_state <> 'provider_error'::captcha_attempt_validation_state
+       ) as generation_count,
+       (
+         select count(*)::text
+         from captcha_challenge_attempts
+         where discord_user_id = $3
+           and created_at >= $4::timestamptz
+       ) as recent_user_count`,
     [
       challenge.id,
       challenge.generation,
@@ -335,6 +339,10 @@ async function readAttemptLimits(
     generationCount: Number(counts?.generation_count ?? 0),
     recentUserCount: Number(counts?.recent_user_count ?? 0),
   };
+}
+
+async function lockCaptchaAttemptUser(client: PoolClient, discordUserId: string): Promise<void> {
+  await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [discordUserId]);
 }
 
 async function failExhaustedGeneration(
@@ -381,6 +389,7 @@ export async function recordCaptchaIdentityMismatch(input: {
     await client.query('begin');
     const challenge = await selectChallenge(client, tokenHash, true);
     if (challenge && toPublicChallenge(challenge).status === 'pending') {
+      await lockCaptchaAttemptUser(client, input.discordUserId);
       const limits = await readAttemptLimits(client, challenge, input.discordUserId);
       if (
         limits.recentUserCount < CAPTCHA_ATTEMPT_RATE_LIMIT &&
@@ -448,6 +457,7 @@ export async function beginCaptchaAttempt(input: {
         challenge: publicChallenge,
       };
     }
+    await lockCaptchaAttemptUser(client, input.identity.userId);
     const limits = await readAttemptLimits(client, challenge, input.identity.userId);
     if (limits.generationCount >= CAPTCHA_CHALLENGE_ATTEMPT_LIMIT) {
       await failExhaustedGeneration(client, challenge);

@@ -14,6 +14,7 @@ import {
 } from './types';
 
 export interface CaptchaChallengeIssueInput {
+  actionRequestId?: string;
   verificationEventId: string;
   serverId: string;
   userId: string;
@@ -139,7 +140,8 @@ export interface ICaptchaChallengeRepository {
     id: string,
     generation: number,
     moderatorId: string,
-    reason: string
+    reason: string,
+    actionRequestId?: string
   ): Promise<CaptchaChallenge | null>;
   cancelPendingForCase(verificationEventId: string): Promise<boolean>;
   cancelPendingForDisabledServers(limit: number): Promise<CaptchaChallenge[]>;
@@ -182,8 +184,16 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
   public async create(input: CaptchaChallengeIssueInput): Promise<CaptchaChallenge> {
     try {
       return (await this.prisma.$transaction(async (transaction) => {
-        const pendingCase = await transaction.$queryRaw<Array<{ id: string }>>`
-          SELECT verification.id::text
+        const pendingCase = await transaction.$queryRaw<
+          Array<{ id: string; pass_effect: CaptchaChallengePassEffect }>
+        >`
+          SELECT verification.id::text,
+            case
+              when ${input.requestSource}::captcha_challenge_request_source = ${CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN}::captcha_challenge_request_source
+                and coalesce(server.settings->>'captcha_pass_action', 'evidence_only') = 'verify_join_only'
+              then ${CaptchaChallengePassEffect.VERIFY_JOIN_ONLY}::captcha_challenge_pass_effect
+              else ${CaptchaChallengePassEffect.EVIDENCE_ONLY}::captcha_challenge_pass_effect
+            end as pass_effect
           FROM verification_events AS verification
           JOIN servers AS server ON server.guild_id = verification.server_id
           WHERE verification.id = ${input.verificationEventId}::uuid
@@ -213,7 +223,7 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
             server_id: input.serverId,
             user_id: input.userId,
             request_source: input.requestSource,
-            pass_effect: input.passEffect,
+            pass_effect: pendingCase[0].pass_effect,
             case_revision_at_issue: input.caseRevision,
             link_token_hash: input.tokenHash,
             expires_at: input.expiresAt,
@@ -230,6 +240,11 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
             requested_by: challenge.requested_by,
             requested_at: challenge.requested_at,
           },
+        });
+        await this.persistMutationReceipt(transaction, input.actionRequestId, {
+          challenge_id: challenge.id,
+          generation: challenge.generation,
+          operation: 'request',
         });
         return challenge;
       })) as CaptchaChallenge;
@@ -252,8 +267,16 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
 
   public async retry(input: CaptchaChallengeRetryInput): Promise<CaptchaChallenge> {
     return (await this.prisma.$transaction(async (transaction) => {
-      const pendingCase = await transaction.$queryRaw<Array<{ id: string }>>`
-        SELECT verification.id::text
+      const pendingCase = await transaction.$queryRaw<
+        Array<{ id: string; pass_effect: CaptchaChallengePassEffect }>
+      >`
+        SELECT verification.id::text,
+          case
+            when ${input.requestSource}::captcha_challenge_request_source = ${CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN}::captcha_challenge_request_source
+              and coalesce(server.settings->>'captcha_pass_action', 'evidence_only') = 'verify_join_only'
+            then ${CaptchaChallengePassEffect.VERIFY_JOIN_ONLY}::captcha_challenge_pass_effect
+            else ${CaptchaChallengePassEffect.EVIDENCE_ONLY}::captcha_challenge_pass_effect
+          end as pass_effect
         FROM verification_events AS verification
         JOIN servers AS server ON server.guild_id = verification.server_id
         WHERE verification.id = ${input.verificationEventId}::uuid
@@ -342,7 +365,7 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
         data: {
           status: CaptchaChallengeStatus.PENDING,
           request_source: input.requestSource,
-          pass_effect: input.passEffect,
+          pass_effect: pendingCase[0].pass_effect,
           generation: { increment: 1 },
           case_revision_at_issue: input.caseRevision,
           link_token_hash: input.tokenHash,
@@ -375,6 +398,11 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
           requested_by: retried.requested_by,
           requested_at: retried.requested_at,
         },
+      });
+      await this.persistMutationReceipt(transaction, input.actionRequestId, {
+        challenge_id: retried.id,
+        generation: retried.generation,
+        operation: 'retry',
       });
       return retried;
     })) as CaptchaChallenge;
@@ -416,7 +444,8 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
     id: string,
     generation: number,
     moderatorId: string,
-    reason: string
+    reason: string,
+    actionRequestId?: string
   ): Promise<CaptchaChallenge | null> {
     const normalizedReason = reason.trim();
     if (!normalizedReason) {
@@ -507,6 +536,11 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
           reason: boundedReason,
           bypassed_at: bypassedAt,
         },
+      });
+      await this.persistMutationReceipt(transaction, actionRequestId, {
+        challenge_id: id,
+        generation,
+        operation: 'bypass',
       });
       return await transaction.captcha_challenges.findUnique({ where: { id } });
     })) as CaptchaChallenge | null;
@@ -883,5 +917,27 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
     Reflect.deleteProperty(challenge, 'requests');
     Reflect.deleteProperty(challenge, 'bypasses');
     return { ...challenge, history };
+  }
+
+  private async persistMutationReceipt(
+    transaction: Prisma.TransactionClient,
+    actionRequestId: string | undefined,
+    receipt: Prisma.JsonObject
+  ): Promise<void> {
+    if (!actionRequestId) {
+      return;
+    }
+    const updated = await transaction.$executeRaw`
+      update moderation_action_requests
+      set metadata = coalesce(metadata, '{}'::jsonb) || ${JSON.stringify({
+        captcha_mutation_receipt: receipt,
+      })}::jsonb,
+          updated_at = now()
+      where id = ${actionRequestId}::uuid
+        and status = ${ModerationActionRequestStatus.PROCESSING}::moderation_action_request_status
+    `;
+    if (updated !== 1) {
+      throw new Error('The security-check action changed before its mutation was recorded.');
+    }
   }
 }
