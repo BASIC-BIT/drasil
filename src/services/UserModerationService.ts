@@ -1286,16 +1286,39 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         throw new Error(`Failed to remove case role from ${member.user.tag}`);
       }
       resolvedAt = new Date();
-      const committed = await this.verificationEventRepository.completeCaptchaVerification({
-        id: verificationEvent.id,
-        serverId: member.guild.id,
-        userId: member.id,
-        expectedCaseRevision: input.expectedCaseRevision,
-        challengeId: input.challengeId,
-        generation: input.generation,
-        resolvedBy: actorId,
-        resolvedAt,
-      });
+      let committed: VerificationEvent | null;
+      try {
+        committed = await this.verificationEventRepository.completeCaptchaVerification({
+          id: verificationEvent.id,
+          serverId: member.guild.id,
+          userId: member.id,
+          expectedCaseRevision: input.expectedCaseRevision,
+          challengeId: input.challengeId,
+          generation: input.generation,
+          resolvedBy: actorId,
+          resolvedAt,
+        });
+      } catch (error) {
+        const currentPendingEvents = await this.verificationEventRepository
+          .findByUserAndServer(member.id, member.guild.id)
+          .then((events) => events.filter((event) => event.status === VerificationStatus.PENDING))
+          .catch((reloadError) => {
+            console.error(
+              `Failed to reload CAPTCHA case state for ${member.user.tag} after completion failed:`,
+              reloadError
+            );
+            return null;
+          });
+        if (currentPendingEvents === null || currentPendingEvents.length > 0) {
+          const roleRestored = await this.roleManager.assignCaseRole(member).catch(() => false);
+          if (!roleRestored) {
+            console.error(
+              `Failed to restore case role for ${member.user.tag} after CAPTCHA completion failed.`
+            );
+          }
+        }
+        throw error;
+      }
       if (!committed) {
         const currentPendingEvents = (
           await this.verificationEventRepository.findByUserAndServer(member.id, member.guild.id)

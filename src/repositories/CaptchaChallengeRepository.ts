@@ -248,6 +248,24 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
     const boundedReason = normalizedReason.slice(0, 1000);
     const bypassedAt = new Date();
     return (await this.prisma.$transaction(async (transaction) => {
+      const eligible = await transaction.$queryRaw<Array<{ id: string }>>`
+        select challenge.id::text
+        from captcha_challenges as challenge
+        join verification_events as verification
+          on verification.id = challenge.verification_event_id
+        where challenge.id = ${id}::uuid
+          and challenge.generation = ${generation}
+          and challenge.status in (
+            ${CaptchaChallengeStatus.PENDING}::captcha_challenge_status,
+            ${CaptchaChallengeStatus.FAILED}::captcha_challenge_status,
+            ${CaptchaChallengeStatus.EXPIRED}::captcha_challenge_status
+          )
+          and verification.status = ${VerificationStatus.PENDING}::verification_status
+        for update of verification, challenge
+      `;
+      if (!eligible[0]) {
+        return null;
+      }
       const result = await transaction.captcha_challenges.updateMany({
         where: {
           id,

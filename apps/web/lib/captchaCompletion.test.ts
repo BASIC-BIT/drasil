@@ -11,6 +11,7 @@ vi.mock('./moderationActionRequestQueue', () => ({
 }));
 
 import {
+  beginCaptchaAttempt,
   completeCaptchaAttempt,
   getCaptchaFormConfiguration,
   requeueCaptchaPassEffect,
@@ -84,6 +85,42 @@ describe('captcha completion transaction', () => {
     delete process.env.DRASIL_CAPTCHA_BINDING_SECRET;
 
     expect(getCaptchaFormConfiguration(challengeRow.id, 1)).toBeNull();
+  });
+
+  it('bounds attempts across all identities for one challenge generation', async () => {
+    const query = vi.fn(async (statement: string) => {
+      if (statement.includes('from captcha_challenges c')) {
+        return { rows: [challengeRow] };
+      }
+      if (statement.includes('where idempotency_key = $1')) {
+        return { rows: [] };
+      }
+      if (statement.includes('generation_count')) {
+        return { rows: [{ generation_count: '100', recent_user_count: '0' }] };
+      }
+      return { rows: [] };
+    });
+    const client = { query, release: vi.fn() };
+    mocked.getPostgresPool.mockReturnValue({ connect: vi.fn(async () => client) });
+
+    await expect(
+      beginCaptchaAttempt({
+        token: 'a'.repeat(43),
+        identity: {
+          challengeId: challengeRow.id,
+          expiresAt: Date.now() + 60_000,
+          generation: challengeRow.generation,
+          issuedAt: Date.now(),
+          userId: challengeRow.user_id,
+        },
+        idempotencyKey: '00000000-0000-4000-8000-000000000004',
+      })
+    ).resolves.toEqual({
+      state: 'rate_limited',
+      challenge: expect.objectContaining({ id: challengeRow.id }),
+    });
+    expect(query.mock.calls.some(([statement]) => statement.includes('insert into'))).toBe(false);
+    expect(query.mock.calls.at(-1)?.[0]).toBe('commit');
   });
 
   it('marks the generation failed and queues moderator attention at the submission limit', async () => {

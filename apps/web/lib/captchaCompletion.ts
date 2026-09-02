@@ -12,6 +12,7 @@ const CAPTCHA_ATTEMPT_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CAPTCHA_ATTEMPT_RATE_WINDOW_MS = 60_000;
 const CAPTCHA_ATTEMPT_RATE_LIMIT = 10;
+const CAPTCHA_CHALLENGE_ATTEMPT_LIMIT = 100;
 const CAPTCHA_SYSTEM_ACTOR_ID = 'drasil:captcha';
 
 export type CaptchaPublicStatus =
@@ -289,13 +290,18 @@ async function isAttemptRateLimited(
   challenge: CaptchaChallengeRow,
   discordUserId: string
 ): Promise<boolean> {
-  const result = await client.query<{ count: string }>(
-    `select count(*)::text as count
+  const result = await client.query<{
+    generation_count: string;
+    recent_user_count: string;
+  }>(
+    `select
+       count(*)::text as generation_count,
+       count(*) filter (
+         where discord_user_id = $3 and created_at >= $4::timestamptz
+       )::text as recent_user_count
      from captcha_challenge_attempts
      where captcha_challenge_id = $1::uuid
-       and generation = $2
-       and discord_user_id = $3
-       and created_at >= $4::timestamptz`,
+       and generation = $2`,
     [
       challenge.id,
       challenge.generation,
@@ -303,7 +309,11 @@ async function isAttemptRateLimited(
       new Date(Date.now() - CAPTCHA_ATTEMPT_RATE_WINDOW_MS),
     ]
   );
-  return Number(result.rows[0]?.count ?? 0) >= CAPTCHA_ATTEMPT_RATE_LIMIT;
+  const counts = result.rows[0];
+  return (
+    Number(counts?.recent_user_count ?? 0) >= CAPTCHA_ATTEMPT_RATE_LIMIT ||
+    Number(counts?.generation_count ?? 0) >= CAPTCHA_CHALLENGE_ATTEMPT_LIMIT
+  );
 }
 
 export async function recordCaptchaIdentityMismatch(input: {

@@ -671,6 +671,43 @@ describe('UserModerationService (unit)', () => {
     expect(roleManager.assignCaseRole).toHaveBeenCalledWith(member);
   });
 
+  it('restores the case role when CAPTCHA completion throws before committing', async () => {
+    const guildId = 'guild-captcha-commit-error';
+    const userId = 'user-captcha-commit-error';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    jest
+      .spyOn(verificationEventRepository, 'completeCaptchaVerification')
+      .mockRejectedValue(new Error('Database unavailable'));
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager
+    );
+
+    await expect(
+      service.resolveCaptchaCase(member, {
+        challengeId: 'challenge-1',
+        expectedCaseRevision: 0,
+        generation: 1,
+        verificationEventId: verificationEvent.id,
+      })
+    ).rejects.toThrow('Database unavailable');
+
+    expect(roleManager.removeCaseRole).toHaveBeenCalledWith(member);
+    expect(roleManager.assignCaseRole).toHaveBeenCalledWith(member);
+  });
+
   it('does not restore the case role when another resolution wins the race', async () => {
     const guildId = 'guild-captcha-terminal-race';
     const userId = 'user-captcha-terminal-race';

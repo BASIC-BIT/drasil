@@ -180,6 +180,41 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     );
   });
 
+  it('refuses a bypass when the bound case is no longer pending', async () => {
+    const { verification } = await createCase(
+      'guild-captcha-bypass-closed-case',
+      'user-captcha-bypass-closed-case'
+    );
+    const challenges = new CaptchaChallengeRepository(prisma);
+    const challenge = await challenges.create({
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      caseRevision: verification.case_revision,
+      tokenHash: 'bypass-closed-case-hash',
+      expiresAt: new Date(Date.now() + 60_000),
+      requestedBy: 'moderator-1',
+    });
+    await prisma.verification_events.update({
+      where: { id: verification.id },
+      data: {
+        resolved_at: new Date(),
+        resolved_by: 'moderator-2',
+        status: VerificationStatus.VERIFIED,
+      },
+    });
+
+    await expect(
+      challenges.bypass(challenge.id, challenge.generation, 'moderator-1', 'Reviewed manually')
+    ).resolves.toBeNull();
+    await expect(prisma.captcha_challenge_bypasses.count()).resolves.toBe(0);
+    await expect(challenges.findById(challenge.id)).resolves.toEqual(
+      expect.objectContaining({ status: CaptchaChallengeStatus.PENDING })
+    );
+  });
+
   it('invalidates a passed generation when its resolved case is reopened', async () => {
     const { verification } = await createCase(
       'guild-captcha-reopen-revision',

@@ -110,4 +110,13 @@ describe('VerificationHistoryFormatter (unit)', () => {
     expect(output).toContain('Compromised account quarantined by <@admin-1>');
     expect(output).not.toContain('Status changed');
   });
+
+  it('formats the CAPTCHA system actor as a product label', () => {
+    const event = buildEvent({}, [buildAction({ admin_id: 'drasil:captcha' })]);
+
+    const output = VerificationHistoryFormatter.formatForDiscord([event], 'user-1');
+
+    expect(output).toContain('Verified by Drasil browser check');
+    expect(output).not.toContain('<@drasil:captcha>');
+  });
 });

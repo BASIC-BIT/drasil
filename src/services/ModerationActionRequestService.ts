@@ -1061,7 +1061,19 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     const verificationEvent = await this.verificationEventRepository.findById(
       request.verification_event_id
     );
-    if (verificationEvent) {
+    const captchaResolution = verificationEvent
+      ? this.readMetadataRecord(verificationEvent.metadata, 'captcha_resolution')
+      : null;
+    const resumesCommittedResolution =
+      decision.status === 'held' &&
+      verificationEvent?.status === VerificationStatus.VERIFIED &&
+      verificationEvent.resolved_by === 'drasil:captcha' &&
+      verificationEvent.server_id === request.server_id &&
+      verificationEvent.user_id === request.target_user_id &&
+      verificationEvent.case_revision === expectedCaseRevision &&
+      captchaResolution?.challenge_id === challengeId &&
+      captchaResolution.generation === generation;
+    if (verificationEvent?.status === VerificationStatus.PENDING) {
       await this.threadManager
         .sendCaptchaStatus(verificationEvent, 'Security check completed.')
         .catch((error) => {
@@ -1073,7 +1085,7 @@ export class ModerationActionRequestService implements IModerationActionRequestS
         });
     }
 
-    if (decision.status !== 'eligible') {
+    if (decision.status !== 'eligible' && !resumesCommittedResolution) {
       if (verificationEvent?.status === VerificationStatus.PENDING) {
         await this.requireCaptchaAttention(
           verificationEvent,

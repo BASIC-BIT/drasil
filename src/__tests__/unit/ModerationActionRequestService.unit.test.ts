@@ -1758,6 +1758,49 @@ describe('ModerationActionRequestService', () => {
     expect(repository.failed).toEqual([]);
   });
 
+  it('resumes exact-case CAPTCHA finalization after the case commit', async () => {
+    const {
+      captchaChallengeService,
+      member,
+      notificationManager,
+      repository,
+      service,
+      threadManager,
+      userModerationService,
+      verificationEventRepository,
+    } = buildService([applyCaptchaPassRequest]);
+    captchaChallengeService.evaluatePassedChallenge.mockResolvedValueOnce({
+      status: 'held',
+      reason: 'case_changed',
+    } as any);
+    verificationEventRepository.findById.mockResolvedValueOnce({
+      id: 'ver-1',
+      server_id: 'guild-1',
+      user_id: 'user-1',
+      status: 'verified',
+      case_revision: 2,
+      resolved_by: 'drasil:captcha',
+      metadata: {
+        captcha_resolution: { challenge_id: 'challenge-1', generation: 1 },
+      },
+    } as any);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(userModerationService.resolveCaptchaCase).toHaveBeenCalledWith(member, {
+      challengeId: 'challenge-1',
+      expectedCaseRevision: 2,
+      generation: 1,
+      verificationEventId: 'ver-1',
+    });
+    expect(threadManager.sendCaptchaStatus).not.toHaveBeenCalled();
+    expect(notificationManager.notifyCaptchaAttention).not.toHaveBeenCalled();
+    expect(repository.completed[0]).toEqual({
+      id: 'captcha-pass-request-1',
+      result: expect.objectContaining({ resolved: true }),
+    });
+  });
+
   it('records a moderator-issued CAPTCHA pass as evidence without resolving the case', async () => {
     const {
       captchaChallengeService,

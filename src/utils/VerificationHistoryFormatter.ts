@@ -1,5 +1,8 @@
 import { VerificationEventWithActions, AdminAction, AdminActionType } from '../repositories/types';
 
+const CAPTCHA_SYSTEM_ACTOR_ID = 'drasil:captcha';
+const CAPTCHA_SYSTEM_ACTOR_LABEL = 'Drasil browser check';
+
 export class VerificationHistoryFormatter {
   static formatHistory(
     events: VerificationEventWithActions[],
@@ -47,7 +50,12 @@ export class VerificationHistoryFormatter {
 
   private static formatAdminAction(action: AdminAction, includeMarkdown: boolean): string {
     const timestamp = new Date(action.action_at).toLocaleString();
-    const adminMention = includeMarkdown ? `<@${action.admin_id}>` : `@${action.admin_id}`;
+    const adminMention =
+      action.admin_id === CAPTCHA_SYSTEM_ACTOR_ID
+        ? CAPTCHA_SYSTEM_ACTOR_LABEL
+        : includeMarkdown
+          ? `<@${action.admin_id}>`
+          : `@${action.admin_id}`;
     let output = '';
 
     switch (action.action_type) {
