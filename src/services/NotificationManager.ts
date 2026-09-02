@@ -23,6 +23,7 @@ import { DetectionResult } from './DetectionOrchestrator';
 import { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
 import {
   CaseKind,
+  CaptchaChallenge,
   DetectionEvent,
   DetectionType,
   VerificationStatus,
@@ -88,7 +89,8 @@ export interface INotificationManager {
     member: GuildMember,
     detectionResult: DetectionResult,
     verificationEvent: VerificationEvent,
-    sourceMessage?: Message
+    sourceMessage?: Message,
+    captchaChallenge?: CaptchaChallenge | null
   ): Promise<Message | null>;
 
   /**
@@ -154,6 +156,11 @@ export interface INotificationManager {
     verificationEvent: VerificationEvent,
     newStatus: VerificationStatus
   ): Promise<void>;
+
+  updateCaptchaChallengePresentation?(
+    verificationEvent: VerificationEvent,
+    challenge: CaptchaChallenge
+  ): Promise<boolean>;
 
   updateVerificationThreadAnalysis(
     verificationEvent: VerificationEvent,
@@ -265,7 +272,8 @@ export class NotificationManager implements INotificationManager {
     member: GuildMember,
     detectionResult: DetectionResult,
     verificationEvent: VerificationEvent,
-    sourceMessage?: Message
+    sourceMessage?: Message,
+    captchaChallenge?: CaptchaChallenge | null
   ): Promise<Message | null> {
     const serverConfig = await this.configService.getServerConfig(member.guild.id);
     const responseSettings = getDetectionResponseSettings(serverConfig.settings);
@@ -288,7 +296,8 @@ export class NotificationManager implements INotificationManager {
         detectionResult,
         verificationEvent,
         detectionEvents,
-        sourceMessage
+        sourceMessage,
+        captchaChallenge
       );
       this.presentationBuilder.upsertAccountQuarantinePresentation(embed, verificationEvent);
       const actionRows = this.presentationBuilder.createAdminNotificationActionRows(member.id, {
@@ -1595,6 +1604,31 @@ export class NotificationManager implements INotificationManager {
       ),
       ...(updatedEmbed ? { embeds: [updatedEmbed] } : {}),
     });
+  }
+
+  public async updateCaptchaChallengePresentation(
+    verificationEvent: VerificationEvent,
+    challenge: CaptchaChallenge
+  ): Promise<boolean> {
+    if (!verificationEvent.notification_message_id) {
+      return true;
+    }
+    try {
+      const message = await this.getMessageForVerificationEvent(verificationEvent);
+      if (!message.embeds[0]) {
+        return false;
+      }
+      const updatedEmbed = EmbedBuilder.from(message.embeds[0]);
+      this.presentationBuilder.upsertCaptchaChallengePresentation(updatedEmbed, challenge);
+      await message.edit({ allowedMentions: { parse: [] }, embeds: [updatedEmbed] });
+      return true;
+    } catch (error) {
+      console.warn(
+        `Failed to update browser security-check presentation for case ${verificationEvent.id}:`,
+        error
+      );
+      return false;
+    }
   }
 
   private formatVerificationThreadMessageMirror(

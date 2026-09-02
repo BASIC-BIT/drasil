@@ -935,6 +935,7 @@ describe('ModerationActionRequestService', () => {
     };
     const notificationManager = {
       notifyCaptchaAttention: jest.fn(async () => true),
+      updateCaptchaChallengePresentation: jest.fn(async () => true),
       restoreVerificationChannelPermissions: jest.fn(async () => true),
       setupVerificationChannel: jest.fn(async (...args: unknown[]) => {
         const configuredChannelId = args[4];
@@ -1042,6 +1043,7 @@ describe('ModerationActionRequestService', () => {
     const captchaChallengeService = {
       bypassChallenge: jest.fn(async () => ({ generation: 1, id: 'challenge-1' })),
       evaluatePassedChallenge: jest.fn(async () => ({ status: 'eligible' as const })),
+      findById: jest.fn(async () => ({ generation: 1, id: 'challenge-1', status: 'passed' })),
       findByCaseId: jest.fn(async () => ({
         delivered_at: null as Date | null,
         delivery_error_code: null as string | null,

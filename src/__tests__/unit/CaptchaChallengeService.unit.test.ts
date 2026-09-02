@@ -121,6 +121,7 @@ function createHarness(settings: Record<string, unknown> = { captcha_mode: 'manu
   } as unknown as jest.Mocked<IThreadManager>;
   const notifications = {
     notifyCaptchaAttention: jest.fn().mockResolvedValue(true),
+    updateCaptchaChallengePresentation: jest.fn().mockResolvedValue(true),
   } as unknown as jest.Mocked<INotificationManager>;
   const moderationActionRequests = {
     enqueue: jest.fn().mockResolvedValue({}),
@@ -164,7 +165,7 @@ describe('CaptchaChallengeService', () => {
   });
 
   it('creates a case-scoped challenge and stores only the link token hash', async () => {
-    const { challenges, service, threads } = createHarness();
+    const { challenges, notifications, service, threads } = createHarness();
 
     await expect(
       service.requestChallenge({
@@ -183,6 +184,10 @@ describe('CaptchaChallengeService', () => {
     expect(input.tokenHash).not.toBe(token);
     expect(input.tokenHash).toBe(createHash('sha256').update(token).digest('hex'));
     expect(challenges.recordDelivery).toHaveBeenCalledWith('challenge-1', 1);
+    expect(notifications.updateCaptchaChallengePresentation).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'case-1' }),
+      expect.objectContaining({ id: 'challenge-1' })
+    );
   });
 
   it('reports delivery as stale when the generation changes during the Discord send', async () => {
@@ -231,7 +236,8 @@ describe('CaptchaChallengeService', () => {
   it('records a delivery failure when the public URL is unavailable', async () => {
     delete process.env.DRASIL_WEB_PUBLIC_URL;
     delete process.env.NEXT_PUBLIC_APP_URL;
-    const { challenges, moderationActionRequests, service, threads } = createHarness();
+    const { challenges, moderationActionRequests, notifications, service, threads } =
+      createHarness();
     challenges.findById.mockResolvedValue(
       buildChallenge({ delivery_error_code: 'public_url_unavailable' })
     );
@@ -254,6 +260,10 @@ describe('CaptchaChallengeService', () => {
         idempotencyKey: 'captcha:attention:challenge-1:1:delivery-failed',
         metadata: expect.objectContaining({ reason: 'delivery_failed' }),
       })
+    );
+    expect(notifications.updateCaptchaChallengePresentation).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'case-1' }),
+      expect.objectContaining({ delivery_error_code: 'public_url_unavailable' })
     );
   });
 

@@ -1307,7 +1307,8 @@ describe('SecurityActionService (unit)', () => {
       member,
       expect.any(Object),
       expect.any(Object),
-      sourceMessage
+      sourceMessage,
+      null
     );
   });
 
@@ -3593,7 +3594,8 @@ describe('SecurityActionService (unit)', () => {
       member,
       expect.objectContaining({ triggerSource: DetectionType.USER_REPORT }),
       expect.objectContaining({ id: existingCase.id, thread_id: null }),
-      undefined
+      undefined,
+      null
     );
     expect(notificationManager.markObservedDetectionActionTaken).toHaveBeenCalledWith(
       detectionEvent.id,

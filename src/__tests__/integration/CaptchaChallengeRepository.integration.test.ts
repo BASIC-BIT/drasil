@@ -53,6 +53,14 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     return { detection, detections, verification };
   }
 
+  async function enableAutomaticCaptchaResolution(serverId: string): Promise<void> {
+    const servers = new ServerRepository(prisma);
+    await servers.updateSettings(serverId, {
+      captcha_mode: 'suspicious_join',
+      captcha_pass_action: 'verify_join_only',
+    });
+  }
+
   it('keeps one aggregate per case and preserves per-generation bypass audit on retry', async () => {
     const { verification } = await createCase('guild-captcha-retry', 'user-captcha-retry');
     const challenges = new CaptchaChallengeRepository(prisma);
@@ -222,6 +230,7 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     );
     const challenges = new CaptchaChallengeRepository(prisma);
     const verifications = new VerificationEventRepository(prisma);
+    await enableAutomaticCaptchaResolution(verification.server_id);
     const challenge = await challenges.create({
       verificationEventId: verification.id,
       serverId: verification.server_id,
@@ -266,6 +275,7 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     );
     const challenges = new CaptchaChallengeRepository(prisma);
     const verifications = new VerificationEventRepository(prisma);
+    await enableAutomaticCaptchaResolution(verification.server_id);
     const challenge = await challenges.create({
       verificationEventId: verification.id,
       serverId: verification.server_id,
@@ -612,6 +622,66 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     );
   });
 
+  it('waits for durable delivery-failure attention before retrying a challenge', async () => {
+    const { verification } = await createCase(
+      'guild-captcha-delivery-retry-fence',
+      'user-captcha-delivery-retry-fence'
+    );
+    const challenges = new CaptchaChallengeRepository(prisma);
+    const requests = new ModerationActionRequestRepository(prisma);
+    const initial = await challenges.create({
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      caseRevision: verification.case_revision,
+      tokenHash: 'delivery-retry-fence-hash',
+      expiresAt: new Date(Date.now() + 60_000),
+      requestedBy: 'moderator-1',
+    });
+    await challenges.recordDeliveryFailure(
+      initial.id,
+      initial.generation,
+      'discord_delivery_failed'
+    );
+    const attention = await requests.enqueue({
+      serverId: verification.server_id,
+      actionType: ModerationActionRequestType.NOTIFY_CAPTCHA_ATTENTION,
+      actorId: 'drasil:captcha',
+      actorSurface: 'captcha',
+      targetUserId: verification.user_id,
+      verificationEventId: verification.id,
+      idempotencyKey: `captcha:attention:${initial.id}:${initial.generation}:delivery-failed`,
+      metadata: {
+        challenge_id: initial.id,
+        generation: initial.generation,
+        reason: 'delivery_failed',
+      },
+    });
+    const retryInput = {
+      expectedChallengeId: initial.id,
+      expectedGeneration: initial.generation,
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      caseRevision: verification.case_revision,
+      tokenHash: 'delivery-retry-after-attention-hash',
+      expiresAt: new Date(Date.now() + 120_000),
+      requestedBy: 'moderator-2',
+    };
+
+    await expect(challenges.retry(retryInput)).rejects.toThrow(
+      'The current security-check status is still being delivered. Wait a moment and try again.'
+    );
+    await requests.complete(attention.id, { notified: true });
+    await expect(challenges.retry(retryInput)).resolves.toEqual(
+      expect.objectContaining({ generation: initial.generation + 1 })
+    );
+  });
+
   it('marks an abandoned delivery attempt as retryable after its lease expires', async () => {
     const { verification } = await createCase(
       'guild-captcha-interrupted-delivery',
@@ -755,6 +825,7 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     );
     const verifications = new VerificationEventRepository(prisma);
     const challenges = new CaptchaChallengeRepository(prisma);
+    await enableAutomaticCaptchaResolution(verification.server_id);
     const challenge = await challenges.create({
       verificationEventId: verification.id,
       serverId: verification.server_id,
@@ -829,6 +900,55 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     );
   });
 
+  it('rechecks automatic CAPTCHA resolution policy in the completion transaction', async () => {
+    const { verification } = await createCase(
+      'guild-captcha-policy-fence',
+      'user-captcha-policy-fence'
+    );
+    const servers = new ServerRepository(prisma);
+    const challenges = new CaptchaChallengeRepository(prisma);
+    const verifications = new VerificationEventRepository(prisma);
+    await enableAutomaticCaptchaResolution(verification.server_id);
+    const challenge = await challenges.create({
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
+      passEffect: CaptchaChallengePassEffect.VERIFY_JOIN_ONLY,
+      caseRevision: verification.case_revision,
+      tokenHash: 'policy-fence-hash',
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    await prisma.captcha_challenges.update({
+      where: { id: challenge.id },
+      data: { status: CaptchaChallengeStatus.PASSED, passed_at: new Date() },
+    });
+    const completion = {
+      challengeId: challenge.id,
+      expectedCaseRevision: verification.case_revision,
+      generation: challenge.generation,
+      id: verification.id,
+      resolvedAt: new Date(),
+      resolvedBy: 'drasil:captcha',
+      serverId: verification.server_id,
+      userId: verification.user_id,
+    };
+
+    await servers.updateSettings(verification.server_id, {
+      captcha_pass_action: 'evidence_only',
+    });
+    await expect(verifications.completeCaptchaVerification(completion)).resolves.toBeNull();
+    await servers.updateSettings(verification.server_id, {
+      captcha_mode: 'off',
+      captcha_pass_action: 'verify_join_only',
+    });
+    await expect(verifications.completeCaptchaVerification(completion)).resolves.toBeNull();
+    await enableAutomaticCaptchaResolution(verification.server_id);
+    await expect(verifications.completeCaptchaVerification(completion)).resolves.toEqual(
+      expect.objectContaining({ status: VerificationStatus.VERIFIED })
+    );
+  });
+
   it('increments case revision only when new evidence is linked', async () => {
     const { detections, verification } = await createCase(
       'guild-captcha-revision',
@@ -873,6 +993,39 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     ).resolves.toBeNull();
     await expect(
       verifications.recordSubjectCaseEvidence(verification.id, 'message-2')
+    ).resolves.toEqual(expect.objectContaining({ case_revision: 2 }));
+  });
+
+  it('serializes concurrent subject evidence without losing accepted message IDs', async () => {
+    const { verification } = await createCase(
+      'guild-captcha-subject-evidence-concurrent',
+      'user-captcha-subject-evidence-concurrent'
+    );
+    const verifications = new VerificationEventRepository(prisma);
+
+    const results = await Promise.all([
+      verifications.recordSubjectCaseEvidence(verification.id, 'message-concurrent-1'),
+      verifications.recordSubjectCaseEvidence(verification.id, 'message-concurrent-2'),
+    ]);
+    const updated = await prisma.verification_events.findUniqueOrThrow({
+      where: { id: verification.id },
+    });
+    const storedMessageIds = (updated.metadata as { subject_evidence_message_ids?: unknown })
+      .subject_evidence_message_ids;
+
+    expect(results).toEqual([expect.anything(), expect.anything()]);
+    expect(updated.case_revision).toBe(2);
+    expect(storedMessageIds).toEqual(
+      expect.arrayContaining(['message-concurrent-1', 'message-concurrent-2'])
+    );
+    await expect(
+      Promise.all([
+        verifications.recordSubjectCaseEvidence(verification.id, 'message-concurrent-1'),
+        verifications.recordSubjectCaseEvidence(verification.id, 'message-concurrent-2'),
+      ])
+    ).resolves.toEqual([null, null]);
+    await expect(
+      prisma.verification_events.findUniqueOrThrow({ where: { id: verification.id } })
     ).resolves.toEqual(expect.objectContaining({ case_revision: 2 }));
   });
 

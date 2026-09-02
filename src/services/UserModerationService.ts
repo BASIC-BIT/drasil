@@ -254,12 +254,33 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     this.captchaChallengeRepository = captchaChallengeRepository;
   }
 
-  private async cancelPendingCaptchaChallenge(verificationEventId: string): Promise<void> {
+  private async cancelPendingCaptchaChallenge(verificationEvent: VerificationEvent): Promise<void> {
+    let cancelled = false;
     try {
-      await this.captchaChallengeRepository?.cancelPendingForCase(verificationEventId);
+      cancelled =
+        (await this.captchaChallengeRepository?.cancelPendingForCase(verificationEvent.id)) ??
+        false;
     } catch (error) {
       console.warn(
-        `Failed to cancel pending security check for case ${verificationEventId}:`,
+        `Failed to cancel pending security check for case ${verificationEvent.id}:`,
+        error
+      );
+      return;
+    }
+    if (!cancelled || !this.notificationManager.updateCaptchaChallengePresentation) {
+      return;
+    }
+    try {
+      const challenge = await this.captchaChallengeRepository?.findByCaseId(verificationEvent.id);
+      if (challenge) {
+        await this.notificationManager.updateCaptchaChallengePresentation(
+          verificationEvent,
+          challenge
+        );
+      }
+    } catch (error) {
+      console.warn(
+        `Failed to refresh cancelled security-check presentation for case ${verificationEvent.id}:`,
         error
       );
     }
@@ -865,7 +886,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     source: ModerationOutcomeSource,
     actorId?: string | null
   ): Promise<void> {
-    await this.cancelPendingCaptchaChallenge(verificationEvent.id);
+    await this.cancelPendingCaptchaChallenge(verificationEvent);
     await this.threadManager.resolveVerificationThread(
       verificationEvent,
       newStatus,
@@ -902,7 +923,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
   ): Promise<void> {
     const actionType = getResolutionAdminActionType(newStatus);
 
-    await this.cancelPendingCaptchaChallenge(verificationEvent.id);
+    await this.cancelPendingCaptchaChallenge(verificationEvent);
     await this.threadManager.resolveVerificationThread(verificationEvent, newStatus, moderator.id);
 
     const logged = await this.notificationManager.logActionToMessage(

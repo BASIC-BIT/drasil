@@ -175,6 +175,7 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
       if (recorded) {
         await this.queueDeliveryFailureAttention(challenge, verificationEvent);
       }
+      await this.refreshCaptchaPresentation(verificationEvent, challenge);
       return { challenge, delivered: false };
     }
 
@@ -189,9 +190,11 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
         if (recorded) {
           await this.queueDeliveryFailureAttention(challenge, verificationEvent);
         }
+        await this.refreshCaptchaPresentation(verificationEvent, challenge);
         return { challenge, delivered: false };
       }
       const recorded = await this.challenges.recordDelivery(challenge.id, challenge.generation);
+      await this.refreshCaptchaPresentation(verificationEvent, challenge);
       return { challenge, delivered: recorded };
     } catch (error) {
       const recorded = await this.challenges.recordDeliveryFailure(
@@ -202,6 +205,7 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
       if (recorded) {
         await this.queueDeliveryFailureAttention(challenge, verificationEvent);
       }
+      await this.refreshCaptchaPresentation(verificationEvent, challenge);
       throw error;
     }
   }
@@ -234,6 +238,7 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     if (!bypassed) {
       throw new Error('The security check changed before it could be bypassed.');
     }
+    await this.refreshCaptchaPresentation(verificationEvent, bypassed);
     return bypassed;
   }
 
@@ -297,12 +302,15 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
       await this.challenges.markStaleUndelivered(new Date(Date.now() - DELIVERY_LEASE_MS), 50);
       const completed = await this.expireChallenges();
       for (const challenge of completed) {
-        if (challenge.status !== CaptchaChallengeStatus.CANCELLED) {
-          continue;
-        }
         const verificationEvent = await this.verificationEvents.findById(
           challenge.verification_event_id
         );
+        if (verificationEvent) {
+          await this.refreshCaptchaPresentation(verificationEvent, challenge);
+        }
+        if (challenge.status !== CaptchaChallengeStatus.CANCELLED) {
+          continue;
+        }
         if (
           verificationEvent?.status === VerificationStatus.PENDING &&
           (await this.isCurrentChallengeState(challenge))
@@ -425,6 +433,24 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
       return 'delivery-failed';
     }
     return reason === 'submission_limit' ? 'submission-limit' : 'expired';
+  }
+
+  private async refreshCaptchaPresentation(
+    verificationEvent: VerificationEvent,
+    challenge: CaptchaChallenge
+  ): Promise<void> {
+    if (!this.notifications?.updateCaptchaChallengePresentation) {
+      return;
+    }
+    try {
+      const current = (await this.challenges.findById(challenge.id)) ?? challenge;
+      await this.notifications.updateCaptchaChallengePresentation(verificationEvent, current);
+    } catch (error) {
+      console.warn(
+        `Failed to refresh browser security-check presentation for case ${verificationEvent.id}:`,
+        error
+      );
+    }
   }
 
   private async requireEligibleCase(

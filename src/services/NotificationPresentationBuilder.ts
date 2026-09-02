@@ -12,6 +12,9 @@ import type { ReportAIAnalysis, VerificationThreadAnalysisResult } from './GPTSe
 import { CASE_STAFF_ROUTING_METADATA_KEY } from './ThreadManager';
 import {
   AdminActionType,
+  CaptchaChallenge,
+  CaptchaChallengeRequestSource,
+  CaptchaChallengeStatus,
   CaseAttentionState,
   CaseContainmentStatus,
   CaseKind,
@@ -84,13 +87,15 @@ export class NotificationPresentationBuilder {
   public static readonly MODERATION_ACTION_WARNING_FIELD_NAME = 'Moderation Action Warning';
   public static readonly RESOLUTION_FIELD_NAME = 'Resolution';
   public static readonly ACCOUNT_QUARANTINE_FIELD_NAME = 'Account Quarantine';
+  public static readonly CAPTCHA_FIELD_NAME = 'Browser Security Check';
 
   public createSuspiciousUserEmbed(
     member: GuildMember,
     detectionResult: DetectionResult,
     verificationEvent: VerificationEvent,
     detectionEvents: DetectionEvent[],
-    sourceMessage?: Message
+    sourceMessage?: Message,
+    captchaChallenge?: CaptchaChallenge | null
   ): EmbedBuilder {
     const accountCreatedAt = new Date(member.user.createdTimestamp);
     const joinedServerAt = member.joinedAt;
@@ -226,6 +231,10 @@ export class NotificationPresentationBuilder {
         value: this.formatThreadAnalysisFieldValue(persistedThreadAnalysis.latestAnalysis),
         inline: false,
       });
+    }
+
+    if (captchaChallenge !== undefined) {
+      this.upsertCaptchaChallengePresentation(embed, captchaChallenge);
     }
 
     return embed;
@@ -788,6 +797,61 @@ export class NotificationPresentationBuilder {
         ? 'Account Quarantine Parked'
         : 'Account Quarantine Needs Review'
     );
+    embed.setFields(...fields);
+  }
+
+  public upsertCaptchaChallengePresentation(
+    embed: EmbedBuilder,
+    challenge: CaptchaChallenge | null
+  ): void {
+    const fields = (embed.data.fields ?? []).filter(
+      (field) => field.name !== NotificationPresentationBuilder.CAPTCHA_FIELD_NAME
+    );
+    if (!challenge) {
+      embed.setFields(...fields);
+      return;
+    }
+
+    const statusLabels: Record<CaptchaChallengeStatus, string> = {
+      [CaptchaChallengeStatus.PENDING]: 'Pending',
+      [CaptchaChallengeStatus.PASSED]: 'Passed',
+      [CaptchaChallengeStatus.FAILED]: 'Attempt limit reached',
+      [CaptchaChallengeStatus.EXPIRED]: 'Expired',
+      [CaptchaChallengeStatus.BYPASSED]: 'Bypassed by moderator',
+      [CaptchaChallengeStatus.CANCELLED]: 'Cancelled',
+    };
+    const requestedAt = Math.floor(challenge.requested_at.getTime() / 1000);
+    const expiresAt = Math.floor(challenge.expires_at.getTime() / 1000);
+    const lines = [
+      `Status: ${statusLabels[challenge.status]}`,
+      `Generation: ${challenge.generation} · Submissions: ${challenge.submission_count}`,
+      `Requested: <t:${requestedAt}:F> (<t:${requestedAt}:R>)`,
+      challenge.status === CaptchaChallengeStatus.PENDING
+        ? `Expires: <t:${expiresAt}:F> (<t:${expiresAt}:R>)`
+        : null,
+      challenge.requested_by
+        ? `Requested by: ${this.formatActorReference(challenge.requested_by)}`
+        : challenge.request_source === CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN
+          ? 'Requested by: Drasil suspicious-join policy'
+          : null,
+      challenge.delivered_at
+        ? `Link delivered: <t:${Math.floor(challenge.delivered_at.getTime() / 1000)}:R>`
+        : challenge.delivery_error_code
+          ? `Link delivery: failed (${challenge.delivery_error_code.replace(/_/g, ' ')})`
+          : 'Link delivery: pending',
+      challenge.passed_at
+        ? `Passed: <t:${Math.floor(challenge.passed_at.getTime() / 1000)}:F>`
+        : null,
+      challenge.bypassed_at
+        ? `Bypassed: <t:${Math.floor(challenge.bypassed_at.getTime() / 1000)}:F>${challenge.bypassed_by ? ` by ${this.formatActorReference(challenge.bypassed_by)}` : ''}`
+        : null,
+      challenge.bypass_reason ? `Bypass reason: ${challenge.bypass_reason}` : null,
+    ].filter((line): line is string => Boolean(line));
+    fields.push({
+      name: NotificationPresentationBuilder.CAPTCHA_FIELD_NAME,
+      value: this.truncateEmbedFieldValue(lines.join('\n')),
+      inline: false,
+    });
     embed.setFields(...fields);
   }
 

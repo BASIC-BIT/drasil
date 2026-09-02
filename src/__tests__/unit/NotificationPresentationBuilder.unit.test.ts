@@ -3,6 +3,11 @@ import { NotificationPresentationBuilder } from '../../services/NotificationPres
 import { DetectionResult } from '../../services/DetectionOrchestrator';
 import {
   AdminActionType,
+  CaptchaChallenge,
+  CaptchaChallengePassEffect,
+  CaptchaChallengeRequestSource,
+  CaptchaChallengeStatus,
+  CaptchaProvider,
   CaseAttentionState,
   CaseContainmentStatus,
   CaseKind,
@@ -77,6 +82,33 @@ const buildVerificationEvent = (overrides: Partial<VerificationEvent> = {}): Ver
   metadata: overrides.metadata ?? null,
 });
 
+const buildCaptchaChallenge = (overrides: Partial<CaptchaChallenge> = {}): CaptchaChallenge => ({
+  id: overrides.id ?? 'challenge-1',
+  verification_event_id: overrides.verification_event_id ?? 'ver-1',
+  server_id: overrides.server_id ?? 'guild-1',
+  user_id: overrides.user_id ?? 'user-1',
+  provider: overrides.provider ?? CaptchaProvider.TURNSTILE,
+  status: overrides.status ?? CaptchaChallengeStatus.PENDING,
+  request_source: overrides.request_source ?? CaptchaChallengeRequestSource.MODERATOR,
+  pass_effect: overrides.pass_effect ?? CaptchaChallengePassEffect.EVIDENCE_ONLY,
+  generation: overrides.generation ?? 1,
+  case_revision_at_issue: overrides.case_revision_at_issue ?? 0,
+  link_token_hash: overrides.link_token_hash ?? 'token-hash',
+  expires_at: overrides.expires_at ?? new Date('2026-01-04T00:00:00Z'),
+  submission_count: overrides.submission_count ?? 0,
+  requested_by: overrides.requested_by ?? 'moderator-1',
+  requested_at: overrides.requested_at ?? new Date('2026-01-03T00:00:00Z'),
+  delivered_at: overrides.delivered_at ?? null,
+  delivery_error_code: overrides.delivery_error_code ?? null,
+  passed_at: overrides.passed_at ?? null,
+  bypassed_by: overrides.bypassed_by ?? null,
+  bypassed_at: overrides.bypassed_at ?? null,
+  bypass_reason: overrides.bypass_reason ?? null,
+  cancelled_at: overrides.cancelled_at ?? null,
+  created_at: overrides.created_at ?? new Date('2026-01-03T00:00:00Z'),
+  updated_at: overrides.updated_at ?? new Date('2026-01-03T00:00:00Z'),
+});
+
 const getField = (embed: EmbedBuilder, name: string): string | undefined =>
   embed.data.fields?.find((field) => field.name === name)?.value;
 
@@ -102,6 +134,48 @@ describe('NotificationPresentationBuilder (unit)', () => {
     } else {
       process.env.NEXT_PUBLIC_APP_URL = originalNextPublicAppUrl;
     }
+  });
+
+  it('replaces the typed browser security-check field as the challenge advances', () => {
+    const embed = new EmbedBuilder().setTitle('Suspicious User');
+    builder.upsertCaptchaChallengePresentation(
+      embed,
+      buildCaptchaChallenge({
+        generation: 2,
+        submission_count: 1,
+        delivery_error_code: 'discord_delivery_failed',
+      })
+    );
+
+    expect(getField(embed, NotificationPresentationBuilder.CAPTCHA_FIELD_NAME)).toContain(
+      'Status: Pending'
+    );
+    expect(getField(embed, NotificationPresentationBuilder.CAPTCHA_FIELD_NAME)).toContain(
+      'Generation: 2 · Submissions: 1'
+    );
+    expect(getField(embed, NotificationPresentationBuilder.CAPTCHA_FIELD_NAME)).toContain(
+      'Link delivery: failed (discord delivery failed)'
+    );
+
+    builder.upsertCaptchaChallengePresentation(
+      embed,
+      buildCaptchaChallenge({
+        generation: 2,
+        status: CaptchaChallengeStatus.BYPASSED,
+        bypassed_at: new Date('2026-01-03T01:00:00Z'),
+        bypassed_by: 'moderator-2',
+        bypass_reason: 'Identity confirmed another way',
+      })
+    );
+
+    const captchaFields = (embed.data.fields ?? []).filter(
+      (field) => field.name === NotificationPresentationBuilder.CAPTCHA_FIELD_NAME
+    );
+    expect(captchaFields).toHaveLength(1);
+    expect(captchaFields[0].value).toContain('Status: Bypassed by moderator');
+    expect(captchaFields[0].value).toContain('by <@moderator-2>');
+    expect(captchaFields[0].value).toContain('Bypass reason: Identity confirmed another way');
+    expect(captchaFields[0].value).not.toContain('Expires:');
   });
 
   it('formats case thread links and newest-first detection history labels', () => {

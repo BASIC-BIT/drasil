@@ -4,6 +4,7 @@ import { AdminActionService } from '../../services/AdminActionService';
 import { ModerationOutcomeService } from '../../services/ModerationOutcomeService';
 import {
   AdminActionType,
+  CaptchaChallengeStatus,
   CaseAttentionState,
   CaseContainmentStatus,
   CaseKind,
@@ -27,6 +28,7 @@ import { IRoleManager } from '../../services/RoleManager';
 import { IThreadManager } from '../../services/ThreadManager';
 import type { IModerationQueueService } from '../../services/ModerationQueueService';
 import type { IRoleQuarantineService } from '../../services/RoleQuarantineService';
+import type { ICaptchaChallengeRepository } from '../../repositories/CaptchaChallengeRepository';
 import {
   CASE_ROLE_RELEASE_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_LEASE_MS,
@@ -128,6 +130,7 @@ describe('UserModerationService (unit)', () => {
       upsertObservedDetectionNotification: jest.fn().mockResolvedValue({} as any),
       markObservedDetectionActionTaken: jest.fn().mockResolvedValue(true),
       restoreObservedDetectionActions: jest.fn().mockResolvedValue(true),
+      updateCaptchaChallengePresentation: jest.fn().mockResolvedValue(true),
     };
     threadManager = {
       sendCaptchaChallenge: jest.fn().mockResolvedValue(true),
@@ -223,6 +226,51 @@ describe('UserModerationService (unit)', () => {
     );
     expect(notificationManager.logActionToMessage).toHaveBeenCalled();
     expect(notificationManager.updateNotificationButtons).toHaveBeenCalled();
+  });
+
+  it('shows a cancelled browser check when another moderation action resolves the case', async () => {
+    const guildId = 'guild-captcha-cancel-presentation';
+    const userId = 'user-captcha-cancel-presentation';
+    const moderator = { id: 'mod-captcha-cancel-presentation' } as User;
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const cancelledChallenge = {
+      id: 'challenge-cancelled',
+      verification_event_id: verificationEvent.id,
+      status: CaptchaChallengeStatus.CANCELLED,
+    };
+    const captchaChallenges = {
+      cancelPendingForCase: jest.fn().mockResolvedValue(true),
+      findByCaseId: jest.fn().mockResolvedValue(cancelledChallenge),
+    } as unknown as jest.Mocked<ICaptchaChallengeRepository>;
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService,
+      undefined,
+      undefined,
+      captchaChallenges
+    );
+
+    await service.verifyUser(member, moderator);
+
+    expect(captchaChallenges.cancelPendingForCase).toHaveBeenCalledWith(verificationEvent.id);
+    expect(notificationManager.updateCaptchaChallengePresentation).toHaveBeenCalledWith(
+      expect.objectContaining({ id: verificationEvent.id }),
+      cancelledChallenge
+    );
   });
 
   it('resolves only the exact CAPTCHA-bound case with the system actor', async () => {

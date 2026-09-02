@@ -6,6 +6,7 @@ import {
   CaptchaChallengePassEffect,
   CaptchaChallengeRequestSource,
   CaptchaChallengeStatus,
+  ModerationActionRequestStatus,
   VerificationStatus,
 } from './types';
 
@@ -163,6 +164,30 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
         existing.status === CaptchaChallengeStatus.CANCELLED;
       if (!pendingDeliveryFailure && !retryableStatus) {
         throw new Error('This CAPTCHA challenge is not eligible for retry.');
+      }
+      const attentionReasonKey = pendingDeliveryFailure
+        ? 'delivery-failed'
+        : existing.status === CaptchaChallengeStatus.FAILED
+          ? 'submission-limit'
+          : existing.status === CaptchaChallengeStatus.EXPIRED
+            ? 'expired'
+            : null;
+      if (attentionReasonKey) {
+        const activeAttention = await transaction.$queryRaw<Array<{ id: string }>>`
+          select request.id::text
+          from moderation_action_requests as request
+          where request.idempotency_key = ${`captcha:attention:${existing.id}:${existing.generation}:${attentionReasonKey}`}
+            and request.status in (
+              ${ModerationActionRequestStatus.QUEUED}::moderation_action_request_status,
+              ${ModerationActionRequestStatus.PROCESSING}::moderation_action_request_status
+            )
+          for update
+        `;
+        if (activeAttention[0]) {
+          throw new Error(
+            'The current security-check status is still being delivered. Wait a moment and try again.'
+          );
+        }
       }
 
       const updated = await transaction.captcha_challenges.updateMany({

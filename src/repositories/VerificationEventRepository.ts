@@ -10,6 +10,8 @@ import {
 import { TYPES } from '../di/symbols';
 import { RepositoryError } from './BaseRepository';
 import {
+  CaptchaChallengePassEffect,
+  CaptchaChallengeRequestSource,
   CaptchaChallengeStatus,
   CaseAttentionState,
   CaseContainmentStatus,
@@ -634,6 +636,15 @@ export class VerificationEventRepository implements IVerificationEventRepository
               AND challenge.generation = ${input.generation}
               AND challenge.case_revision_at_issue = ${input.expectedCaseRevision}
               AND challenge.status = ${CaptchaChallengeStatus.PASSED}::captcha_challenge_status
+              AND challenge.request_source = ${CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN}::captcha_challenge_request_source
+              AND challenge.pass_effect = ${CaptchaChallengePassEffect.VERIFY_JOIN_ONLY}::captcha_challenge_pass_effect
+          )
+          AND EXISTS (
+            SELECT 1
+            FROM servers AS server
+            WHERE server.guild_id = target.server_id
+              AND server.settings->>'captcha_mode' = 'suspicious_join'
+              AND server.settings->>'captcha_pass_action' = 'verify_join_only'
           )
           AND NOT EXISTS (
             SELECT 1
@@ -792,6 +803,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
           FROM verification_events AS target
           WHERE target.id = ${id}::uuid
             AND target.status = ${VerificationStatus.PENDING}::verification_status
+          FOR UPDATE OF target
         )
         UPDATE verification_events AS target
         SET

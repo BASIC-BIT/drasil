@@ -1061,6 +1061,12 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     const verificationEvent = await this.verificationEventRepository.findById(
       request.verification_event_id
     );
+    const challenge = await this.captchaChallengeService.findById(challengeId).catch(() => null);
+    if (verificationEvent && challenge) {
+      await this.notificationManager
+        .updateCaptchaChallengePresentation?.(verificationEvent, challenge)
+        .catch(() => false);
+    }
     const captchaResolution = verificationEvent
       ? this.readMetadataRecord(verificationEvent.metadata, 'captcha_resolution')
       : null;
@@ -1218,6 +1224,9 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       });
       return;
     }
+    await this.notificationManager
+      .updateCaptchaChallengePresentation?.(verificationEvent, challenge)
+      .catch(() => false);
     await this.threadManager
       .sendCaptchaStatus(
         verificationEvent,
