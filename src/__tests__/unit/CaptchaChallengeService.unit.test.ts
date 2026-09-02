@@ -92,6 +92,7 @@ function createHarness(settings: Record<string, unknown> = { captcha_mode: 'manu
     })),
     retry: jest.fn().mockResolvedValue(challenge),
     recordDelivery: jest.fn().mockResolvedValue(true),
+    recordPresentation: jest.fn().mockResolvedValue(true),
     recordDeliveryFailure: jest.fn().mockResolvedValue(true),
     bypass: jest
       .fn()
@@ -106,6 +107,7 @@ function createHarness(settings: Record<string, unknown> = { captcha_mode: 'manu
     findExpiredNeedingAttention: jest.fn().mockResolvedValue([]),
     findCancelledNeedingPresentation: jest.fn().mockResolvedValue([]),
     findBypassedNeedingPresentation: jest.fn().mockResolvedValue([]),
+    findDeliveredNeedingPresentation: jest.fn().mockResolvedValue([]),
     findPassedNeedingApplication: jest.fn().mockResolvedValue([]),
   };
   const verificationEvents = {
@@ -195,6 +197,37 @@ describe('CaptchaChallengeService', () => {
       expect.objectContaining({ id: 'case-1' }),
       expect.objectContaining({ id: 'challenge-1' })
     );
+    expect(challenges.recordPresentation).toHaveBeenCalledWith('challenge-1', 1);
+  });
+
+  it('retries a delivered challenge presentation until the notification update succeeds', async () => {
+    const { challenges, notifications, service } = createHarness();
+    const delivered = buildChallenge({ delivered_at: new Date() });
+    const updatePresentation = jest.mocked(
+      notifications.updateCaptchaChallengePresentation as NonNullable<
+        INotificationManager['updateCaptchaChallengePresentation']
+      >
+    );
+    challenges.findDeliveredNeedingPresentation.mockResolvedValue([delivered]);
+    challenges.findById.mockResolvedValue(delivered);
+    updatePresentation
+      .mockRejectedValueOnce(new Error('Discord unavailable'))
+      .mockResolvedValueOnce(true);
+
+    await (
+      service as unknown as {
+        runExpirySweep(): Promise<void>;
+      }
+    ).runExpirySweep();
+    await (
+      service as unknown as {
+        runExpirySweep(): Promise<void>;
+      }
+    ).runExpirySweep();
+
+    expect(updatePresentation).toHaveBeenCalledTimes(2);
+    expect(challenges.recordPresentation).toHaveBeenCalledTimes(1);
+    expect(challenges.recordPresentation).toHaveBeenCalledWith('challenge-1', 1);
   });
 
   it('compensates and recloses a terminal case when delivery loses the case race', async () => {

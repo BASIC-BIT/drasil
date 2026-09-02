@@ -74,6 +74,48 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     await servers.updateSettings(serverId, { captcha_mode: 'manual' });
   }
 
+  it('keeps a delivered generation recoverable until its presentation is recorded', async () => {
+    const { verification } = await createCase(
+      'guild-captcha-presentation-recovery',
+      'user-captcha-presentation-recovery'
+    );
+    const challenges = new CaptchaChallengeRepository(prisma);
+    const challenge = await challenges.create({
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      caseRevision: verification.case_revision,
+      tokenHash: 'presentation-recovery-hash',
+      expiresAt: new Date(Date.now() + 60_000),
+      requestedBy: 'moderator-1',
+    });
+
+    await expect(challenges.recordDelivery(challenge.id, challenge.generation)).resolves.toBe(true);
+    await expect(challenges.findDeliveredNeedingPresentation(10)).resolves.toEqual([
+      expect.objectContaining({ id: challenge.id, generation: challenge.generation }),
+    ]);
+
+    await expect(challenges.recordPresentation(challenge.id, challenge.generation)).resolves.toBe(
+      true
+    );
+    await expect(challenges.recordPresentation(challenge.id, challenge.generation)).resolves.toBe(
+      false
+    );
+    await expect(challenges.findDeliveredNeedingPresentation(10)).resolves.toEqual([]);
+    await expect(
+      prisma.captcha_challenge_requests.findUnique({
+        where: {
+          captcha_challenge_id_generation: {
+            captcha_challenge_id: challenge.id,
+            generation: challenge.generation,
+          },
+        },
+      })
+    ).resolves.toEqual(expect.objectContaining({ presented_at: expect.any(Date) }));
+  });
+
   it('keeps one aggregate per case and preserves per-generation bypass audit on retry', async () => {
     const { verification } = await createCase('guild-captcha-retry', 'user-captcha-retry');
     const challenges = new CaptchaChallengeRepository(prisma);

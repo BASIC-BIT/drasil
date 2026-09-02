@@ -529,6 +529,7 @@ model captcha_challenge_requests {
   case_revision_at_issue Int
   requested_by           String?
   requested_at           DateTime                           @default(now()) @db.Timestamptz(6)
+  presented_at           DateTime?                          @db.Timestamptz(6)
   outcome                captcha_challenge_request_outcome?
   outcome_at             DateTime?                          @db.Timestamptz(6)
   delivery_error_code    String?

@@ -334,6 +334,7 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
         }
       }
       const [
+        deliveredNeedingPresentation,
         cancelledNeedingPresentation,
         bypassedNeedingPresentation,
         passedNeedingApplication,
@@ -341,6 +342,7 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
         failedNeedingAttention,
         expiredNeedingAttention,
       ] = await Promise.all([
+        this.challenges.findDeliveredNeedingPresentation(50),
         this.challenges.findCancelledNeedingPresentation(50),
         this.challenges.findBypassedNeedingPresentation(50),
         this.challenges.findPassedNeedingApplication(50),
@@ -348,6 +350,14 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
         this.challenges.findFailedNeedingAttention(50),
         this.challenges.findExpiredNeedingAttention(50),
       ]);
+      for (const challenge of deliveredNeedingPresentation) {
+        const verificationEvent = await this.verificationEvents.findById(
+          challenge.verification_event_id
+        );
+        if (verificationEvent?.status === VerificationStatus.PENDING) {
+          await this.refreshCaptchaPresentation(verificationEvent, challenge);
+        }
+      }
       for (const challenge of cancelledNeedingPresentation) {
         await this.queueCancelledPresentation(challenge);
       }
@@ -515,7 +525,13 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     }
     try {
       const current = (await this.challenges.findById(challenge.id)) ?? challenge;
-      await this.notifications.updateCaptchaChallengePresentation(verificationEvent, current);
+      const presented = await this.notifications.updateCaptchaChallengePresentation(
+        verificationEvent,
+        current
+      );
+      if (presented) {
+        await this.challenges.recordPresentation(current.id, current.generation);
+      }
     } catch (error) {
       console.warn(
         `Failed to refresh browser security-check presentation for case ${verificationEvent.id}:`,

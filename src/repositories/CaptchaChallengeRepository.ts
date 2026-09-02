@@ -107,6 +107,7 @@ export interface ICaptchaChallengeRepository {
   create(input: CaptchaChallengeIssueInput): Promise<CaptchaChallenge>;
   retry(input: CaptchaChallengeRetryInput): Promise<CaptchaChallenge>;
   recordDelivery(id: string, generation: number): Promise<boolean>;
+  recordPresentation(id: string, generation: number): Promise<boolean>;
   recordDeliveryFailure(id: string, generation: number, code: string): Promise<boolean>;
   bypass(
     id: string,
@@ -124,6 +125,7 @@ export interface ICaptchaChallengeRepository {
   findExpiredNeedingAttention(limit: number): Promise<CaptchaChallenge[]>;
   findCancelledNeedingPresentation(limit: number): Promise<CaptchaChallenge[]>;
   findBypassedNeedingPresentation(limit: number): Promise<CaptchaChallenge[]>;
+  findDeliveredNeedingPresentation(limit: number): Promise<CaptchaChallenge[]>;
   findPassedNeedingApplication(limit: number): Promise<CaptchaChallenge[]>;
 }
 
@@ -330,6 +332,14 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
     const result = await this.prisma.captcha_challenges.updateMany({
       where: { id, generation, status: CaptchaChallengeStatus.PENDING },
       data: { delivered_at: new Date(), delivery_error_code: null, updated_at: new Date() },
+    });
+    return result.count === 1;
+  }
+
+  public async recordPresentation(id: string, generation: number): Promise<boolean> {
+    const result = await this.prisma.captcha_challenge_requests.updateMany({
+      where: { captcha_challenge_id: id, generation, presented_at: null },
+      data: { presented_at: new Date() },
     });
     return result.count === 1;
   }
@@ -679,6 +689,25 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
             )
         )
       order by challenge.updated_at asc nulls first
+      limit ${Math.max(1, Math.min(limit, 100))}
+    `;
+  }
+
+  public async findDeliveredNeedingPresentation(limit: number): Promise<CaptchaChallenge[]> {
+    return await this.prisma.$queryRaw<CaptchaChallenge[]>`
+      select challenge.*
+      from captcha_challenges as challenge
+      join captcha_challenge_requests as request
+        on request.captcha_challenge_id = challenge.id
+        and request.generation = challenge.generation
+      join verification_events as verification
+        on verification.id = challenge.verification_event_id
+      where challenge.status = ${CaptchaChallengeStatus.PENDING}::captcha_challenge_status
+        and challenge.delivered_at is not null
+        and challenge.delivery_error_code is null
+        and request.presented_at is null
+        and verification.status = ${VerificationStatus.PENDING}::verification_status
+      order by challenge.delivered_at asc
       limit ${Math.max(1, Math.min(limit, 100))}
     `;
   }

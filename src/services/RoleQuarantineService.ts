@@ -350,10 +350,53 @@ export class RoleQuarantineService implements IRoleQuarantineService {
 
       try {
         await member.roles.add(role, this.formatRestoreReason(moderator));
-        restoredRoleIds.push(role.id);
       } catch (error) {
         failedRestores.push(this.toRoleDetail(role, this.formatError(error)));
+        continue;
       }
+
+      let postRestoreFenceError: unknown = null;
+      let canKeepRestoredRole = true;
+      if (fence) {
+        try {
+          canKeepRestoredRole = await fence.canRestoreRole();
+        } catch (error) {
+          postRestoreFenceError = error;
+          canKeepRestoredRole = false;
+        }
+      }
+      if (!canKeepRestoredRole) {
+        try {
+          await member.roles.remove(role, 'Drasil role quarantine restore halted by pending case');
+        } catch (error) {
+          restoredRoleIds.push(role.id);
+          failedRestores.push(
+            this.toRoleDetail(role, `pending-case compensation failed: ${this.formatError(error)}`)
+          );
+        }
+        await this.snapshotRepository.update(snapshot.id, {
+          status: RoleQuarantineSnapshotStatus.ACTIVE,
+          restoredRoleIds,
+          failedRestores: failedRestores as unknown as Prisma.JsonValue,
+          metadata: {
+            ...this.metadataToRecord(snapshot.metadata),
+            restore_skipped_roles: skippedRoles,
+            restore_held_pending_case_at: new Date().toISOString(),
+          } as unknown as Prisma.JsonValue,
+        });
+        if (postRestoreFenceError) {
+          throw postRestoreFenceError;
+        }
+        return {
+          status: 'held_pending_case',
+          snapshotId: snapshot.id,
+          attemptedRoleIds,
+          restoredRoleIds,
+          skippedRoles,
+          failedRestores,
+        };
+      }
+      restoredRoleIds.push(role.id);
     }
 
     const retryableSkippedRoles = skippedRoles.filter((role) =>
