@@ -845,33 +845,48 @@ export class VerificationEventRepository implements IVerificationEventRepository
 
   public async reopen(id: string): Promise<VerificationEvent | null> {
     try {
-      const reopened = await this.prisma.verification_events.updateMany({
-        where: {
-          id,
-          status: { not: VerificationStatus.PENDING },
-          containment_status: { not: CaseContainmentStatus.IN_PROGRESS },
-        },
-        data: {
-          status: VerificationStatus.PENDING,
-          case_revision: { increment: 1 },
-          case_kind: CaseKind.STANDARD,
-          attention_state: CaseAttentionState.REVIEW_REQUIRED,
-          containment_status: CaseContainmentStatus.NOT_APPLICABLE,
-          quarantine_attempt_id: null,
-          quarantine_lease_renewed_at: null,
-          quarantine_case_role_id: null,
-          parked_at: null,
-          parked_by: null,
-          resolved_at: null,
-          resolved_by: null,
-          updated_at: new Date(),
-        },
-      });
-      if (reopened.count !== 1) {
-        return null;
-      }
-      return (await this.prisma.verification_events.findUnique({
-        where: { id },
+      return (await this.prisma.$transaction(async (transaction) => {
+        const candidates = await transaction.$queryRaw<Array<{ id: string }>>`
+          select verification.id::text
+          from verification_events as verification
+          where verification.id = ${id}::uuid
+            and verification.status <> ${VerificationStatus.PENDING}::verification_status
+            and verification.containment_status <> ${CaseContainmentStatus.IN_PROGRESS}::case_containment_status
+          for update of verification
+        `;
+        if (!candidates[0]) {
+          return null;
+        }
+        const reopenedAt = new Date();
+        await transaction.captcha_challenges.updateMany({
+          where: {
+            verification_event_id: id,
+            status: CaptchaChallengeStatus.PENDING,
+          },
+          data: {
+            status: CaptchaChallengeStatus.CANCELLED,
+            cancelled_at: reopenedAt,
+            updated_at: reopenedAt,
+          },
+        });
+        return await transaction.verification_events.update({
+          where: { id },
+          data: {
+            status: VerificationStatus.PENDING,
+            case_revision: { increment: 1 },
+            case_kind: CaseKind.STANDARD,
+            attention_state: CaseAttentionState.REVIEW_REQUIRED,
+            containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+            quarantine_attempt_id: null,
+            quarantine_lease_renewed_at: null,
+            quarantine_case_role_id: null,
+            parked_at: null,
+            parked_by: null,
+            resolved_at: null,
+            resolved_by: null,
+            updated_at: reopenedAt,
+          },
+        });
       })) as VerificationEvent | null;
     } catch (error) {
       this.handleError(error, 'reopenVerification');

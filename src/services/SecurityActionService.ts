@@ -2624,15 +2624,6 @@ export class SecurityActionService implements ISecurityActionService {
       }
     } catch (error) {
       console.warn(`Failed to issue CAPTCHA for case ${verificationEvent.id}:`, error);
-      await this.notificationManager
-        .notifyCaptchaAttention?.(verificationEvent, 'delivery_failed')
-        .catch((notificationError) => {
-          console.warn(
-            `Failed to notify moderators about automatic CAPTCHA issuance for case ${verificationEvent.id}:`,
-            notificationError
-          );
-          return false;
-        });
       throw error;
     }
   }

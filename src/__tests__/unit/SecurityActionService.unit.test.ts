@@ -339,7 +339,7 @@ describe('SecurityActionService (unit)', () => {
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(2);
   });
 
-  it('surfaces automatic CAPTCHA issuance failures after notifying moderators', async () => {
+  it('does not duplicate durable CAPTCHA attention when automatic issuance fails', async () => {
     const guildId = 'guild-automatic-captcha-failure';
     const userId = 'user-automatic-captcha-failure';
     await serverRepository.upsertByGuildId(guildId, {
@@ -392,10 +392,7 @@ describe('SecurityActionService (unit)', () => {
       requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
       caseWasCreatedBySuspiciousJoin: true,
     });
-    expect(notificationManager.notifyCaptchaAttention).toHaveBeenCalledWith(
-      expect.objectContaining({ id: verificationEvent.id }),
-      'delivery_failed'
-    );
+    expect(notificationManager.notifyCaptchaAttention).not.toHaveBeenCalled();
     warn.mockRestore();
   });
 

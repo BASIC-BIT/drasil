@@ -789,7 +789,22 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
               'completed'::moderation_action_request_status
             )
         )
-      order by challenge.updated_at asc nulls first
+      order by coalesce(
+        (
+          select max(request.updated_at)
+          from moderation_action_requests as request
+          where request.idempotency_key = concat(
+            'captcha:presentation:',
+            challenge.id::text,
+            ':',
+            challenge.generation::text,
+            ':cancelled'
+          )
+            and request.status = 'failed'::moderation_action_request_status
+        ),
+        challenge.updated_at
+      ) asc nulls first,
+      challenge.id asc
       limit ${Math.max(1, Math.min(limit, 100))}
     `;
   }
@@ -815,7 +830,22 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
               'completed'::moderation_action_request_status
             )
         )
-      order by challenge.updated_at asc nulls first
+      order by coalesce(
+        (
+          select max(request.updated_at)
+          from moderation_action_requests as request
+          where request.idempotency_key = concat(
+            'captcha:presentation:',
+            challenge.id::text,
+            ':',
+            challenge.generation::text,
+            ':bypassed'
+          )
+            and request.status = 'failed'::moderation_action_request_status
+        ),
+        challenge.updated_at
+      ) asc nulls first,
+      challenge.id asc
       limit ${Math.max(1, Math.min(limit, 100))}
     `;
   }

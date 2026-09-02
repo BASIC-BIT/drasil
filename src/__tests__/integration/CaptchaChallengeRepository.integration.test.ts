@@ -1428,6 +1428,76 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     await expect(challenges.findCancelledNeedingPresentation(10)).resolves.toEqual([]);
   });
 
+  it('rotates failed cancelled-presentation retries behind newer eligible rows', async () => {
+    const first = await createCase(
+      'guild-captcha-cancelled-rotation-1',
+      'user-captcha-cancelled-rotation-1'
+    );
+    const second = await createCase(
+      'guild-captcha-cancelled-rotation-2',
+      'user-captcha-cancelled-rotation-2'
+    );
+    const challenges = new CaptchaChallengeRepository(prisma);
+    const requests = new ModerationActionRequestRepository(prisma);
+    const firstChallenge = await challenges.create({
+      verificationEventId: first.verification.id,
+      serverId: first.verification.server_id,
+      userId: first.verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      caseRevision: first.verification.case_revision,
+      tokenHash: 'cancelled-rotation-hash-1',
+      expiresAt: new Date(Date.now() + 60_000),
+      requestedBy: 'moderator-1',
+    });
+    const secondChallenge = await challenges.create({
+      verificationEventId: second.verification.id,
+      serverId: second.verification.server_id,
+      userId: second.verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      caseRevision: second.verification.case_revision,
+      tokenHash: 'cancelled-rotation-hash-2',
+      expiresAt: new Date(Date.now() + 60_000),
+      requestedBy: 'moderator-1',
+    });
+    await Promise.all([
+      challenges.cancelPendingForCase(first.verification.id),
+      challenges.cancelPendingForCase(second.verification.id),
+    ]);
+    await prisma.captcha_challenges.update({
+      where: { id: firstChallenge.id },
+      data: { updated_at: new Date('2026-08-18T10:00:00.000Z') },
+    });
+    await prisma.captcha_challenges.update({
+      where: { id: secondChallenge.id },
+      data: { updated_at: new Date('2026-08-18T11:00:00.000Z') },
+    });
+
+    await expect(challenges.findCancelledNeedingPresentation(1)).resolves.toEqual([
+      expect.objectContaining({ id: firstChallenge.id }),
+    ]);
+    const request = await requests.enqueue({
+      serverId: first.verification.server_id,
+      actionType: ModerationActionRequestType.NOTIFY_CAPTCHA_ATTENTION,
+      actorId: 'drasil:captcha',
+      actorSurface: 'captcha',
+      targetUserId: first.verification.user_id,
+      verificationEventId: first.verification.id,
+      idempotencyKey: `captcha:presentation:${firstChallenge.id}:${firstChallenge.generation}:cancelled`,
+      metadata: {
+        challenge_id: firstChallenge.id,
+        generation: firstChallenge.generation,
+        reason: 'cancelled',
+      },
+    });
+    await requests.fail(request.id, 'Discord unavailable');
+
+    await expect(challenges.findCancelledNeedingPresentation(1)).resolves.toEqual([
+      expect.objectContaining({ id: secondChallenge.id }),
+    ]);
+  });
+
   it('cancels a pending challenge for a terminal case before it can expire', async () => {
     const { verification } = await createCase(
       'guild-captcha-terminal-case',
@@ -1456,6 +1526,50 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       expect.objectContaining({ id: challenge.id, status: CaptchaChallengeStatus.CANCELLED }),
     ]);
     await expect(challenges.cancelPendingForTerminalCases(10)).resolves.toEqual([]);
+  });
+
+  it('cancels a surviving pending challenge in the same transaction that reopens its case', async () => {
+    const { verification } = await createCase(
+      'guild-captcha-reopen-pending',
+      'user-captcha-reopen-pending'
+    );
+    const challenges = new CaptchaChallengeRepository(prisma);
+    const verifications = new VerificationEventRepository(prisma);
+    const challenge = await challenges.create({
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      caseRevision: verification.case_revision,
+      tokenHash: 'reopen-pending-hash',
+      expiresAt: new Date(Date.now() + 60_000),
+      requestedBy: 'moderator-1',
+    });
+    await prisma.verification_events.update({
+      where: { id: verification.id },
+      data: {
+        status: VerificationStatus.VERIFIED,
+        resolved_at: new Date(),
+        resolved_by: 'moderator-1',
+      },
+    });
+
+    await expect(challenges.findById(challenge.id)).resolves.toEqual(
+      expect.objectContaining({ status: CaptchaChallengeStatus.PENDING })
+    );
+    await expect(verifications.reopen(verification.id)).resolves.toEqual(
+      expect.objectContaining({
+        case_revision: verification.case_revision + 1,
+        status: VerificationStatus.PENDING,
+      })
+    );
+    await expect(challenges.findById(challenge.id)).resolves.toEqual(
+      expect.objectContaining({
+        cancelled_at: expect.any(Date),
+        status: CaptchaChallengeStatus.CANCELLED,
+      })
+    );
   });
 
   it('cancels a pending challenge after its case becomes compromised-account review', async () => {

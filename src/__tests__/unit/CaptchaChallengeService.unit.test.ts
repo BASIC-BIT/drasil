@@ -351,6 +351,37 @@ describe('CaptchaChallengeService', () => {
     warn.mockRestore();
   });
 
+  it('queues one durable attention request when Discord challenge delivery throws', async () => {
+    const { challenges, moderationActionRequests, service, threads } = createHarness({
+      captcha_mode: 'suspicious_join',
+    });
+    threads.sendCaptchaChallenge.mockRejectedValueOnce(new Error('Discord unavailable'));
+    challenges.findById.mockResolvedValue(
+      buildChallenge({ delivery_error_code: 'discord_delivery_failed' })
+    );
+
+    await expect(
+      service.requestChallenge({
+        verificationEventId: 'case-1',
+        requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
+        caseWasCreatedBySuspiciousJoin: true,
+      })
+    ).rejects.toThrow('Discord unavailable');
+
+    expect(challenges.recordDeliveryFailure).toHaveBeenCalledWith(
+      'challenge-1',
+      1,
+      'discord_delivery_failed'
+    );
+    expect(moderationActionRequests.enqueue).toHaveBeenCalledTimes(1);
+    expect(moderationActionRequests.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        idempotencyKey: 'captcha:attention:challenge-1:1:delivery-failed',
+        metadata: expect.objectContaining({ reason: 'delivery_failed' }),
+      })
+    );
+  });
+
   it('binds a retry to the displayed challenge generation', async () => {
     const { challenges, service } = createHarness();
 
