@@ -336,12 +336,14 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
       const [
         cancelledNeedingPresentation,
         bypassedNeedingPresentation,
+        passedNeedingApplication,
         deliveryFailuresNeedingAttention,
         failedNeedingAttention,
         expiredNeedingAttention,
       ] = await Promise.all([
         this.challenges.findCancelledNeedingPresentation(50),
         this.challenges.findBypassedNeedingPresentation(50),
+        this.challenges.findPassedNeedingApplication(50),
         this.challenges.findDeliveryFailuresNeedingAttention(50),
         this.challenges.findFailedNeedingAttention(50),
         this.challenges.findExpiredNeedingAttention(50),
@@ -351,6 +353,9 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
       }
       for (const challenge of bypassedNeedingPresentation) {
         await this.queueBypassedPresentation(challenge);
+      }
+      for (const challenge of passedNeedingApplication) {
+        await this.queuePassedApplication(challenge);
       }
       for (const challenge of deliveryFailuresNeedingAttention) {
         await this.queueAttention(challenge, 'delivery_failed');
@@ -425,6 +430,26 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
         challenge_id: challenge.id,
         generation: challenge.generation,
         reason,
+      },
+    });
+  }
+
+  private async queuePassedApplication(challenge: CaptchaChallenge): Promise<void> {
+    if (!this.moderationActionRequests) {
+      throw new Error('Moderation action requests are unavailable for CAPTCHA completion.');
+    }
+    await this.moderationActionRequests.enqueue({
+      serverId: challenge.server_id,
+      actionType: ModerationActionRequestType.APPLY_CAPTCHA_PASS,
+      actorId: 'drasil:captcha',
+      actorSurface: 'captcha',
+      targetUserId: challenge.user_id,
+      verificationEventId: challenge.verification_event_id,
+      idempotencyKey: `captcha:apply:${challenge.id}:${challenge.generation}`,
+      metadata: {
+        challenge_id: challenge.id,
+        generation: challenge.generation,
+        expected_case_revision: challenge.case_revision_at_issue,
       },
     });
   }

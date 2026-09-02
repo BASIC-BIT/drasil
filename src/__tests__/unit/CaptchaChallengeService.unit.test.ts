@@ -106,6 +106,7 @@ function createHarness(settings: Record<string, unknown> = { captcha_mode: 'manu
     findExpiredNeedingAttention: jest.fn().mockResolvedValue([]),
     findCancelledNeedingPresentation: jest.fn().mockResolvedValue([]),
     findBypassedNeedingPresentation: jest.fn().mockResolvedValue([]),
+    findPassedNeedingApplication: jest.fn().mockResolvedValue([]),
   };
   const verificationEvents = {
     findById: jest.fn().mockResolvedValue(buildCase()),
@@ -461,6 +462,30 @@ describe('CaptchaChallengeService', () => {
       expect.objectContaining({
         idempotencyKey: 'captcha:presentation:challenge-1:1:bypassed',
         metadata: expect.objectContaining({ reason: 'bypassed' }),
+      })
+    );
+  });
+
+  it('recovers a passed challenge whose application request failed', async () => {
+    const { challenges, moderationActionRequests, service } = createHarness();
+    const passed = buildChallenge({ status: CaptchaChallengeStatus.PASSED });
+    challenges.findPassedNeedingApplication.mockResolvedValue([passed]);
+
+    await (
+      service as unknown as {
+        runExpirySweep(): Promise<void>;
+      }
+    ).runExpirySweep();
+
+    expect(moderationActionRequests.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionType: 'apply_captcha_pass',
+        idempotencyKey: 'captcha:apply:challenge-1:1',
+        metadata: {
+          challenge_id: 'challenge-1',
+          expected_case_revision: 2,
+          generation: 1,
+        },
       })
     );
   });

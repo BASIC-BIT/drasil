@@ -124,6 +124,7 @@ export interface ICaptchaChallengeRepository {
   findExpiredNeedingAttention(limit: number): Promise<CaptchaChallenge[]>;
   findCancelledNeedingPresentation(limit: number): Promise<CaptchaChallenge[]>;
   findBypassedNeedingPresentation(limit: number): Promise<CaptchaChallenge[]>;
+  findPassedNeedingApplication(limit: number): Promise<CaptchaChallenge[]>;
 }
 
 @injectable()
@@ -670,6 +671,31 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
             ':',
             challenge.generation::text,
             ':bypassed'
+          )
+            and request.status in (
+              'queued'::moderation_action_request_status,
+              'processing'::moderation_action_request_status,
+              'completed'::moderation_action_request_status
+            )
+        )
+      order by challenge.updated_at asc nulls first
+      limit ${Math.max(1, Math.min(limit, 100))}
+    `;
+  }
+
+  public async findPassedNeedingApplication(limit: number): Promise<CaptchaChallenge[]> {
+    return await this.prisma.$queryRaw<CaptchaChallenge[]>`
+      select challenge.*
+      from captcha_challenges as challenge
+      where challenge.status = ${CaptchaChallengeStatus.PASSED}::captcha_challenge_status
+        and not exists (
+          select 1
+          from moderation_action_requests as request
+          where request.idempotency_key = concat(
+            'captcha:apply:',
+            challenge.id::text,
+            ':',
+            challenge.generation::text
           )
             and request.status in (
               'queued'::moderation_action_request_status,

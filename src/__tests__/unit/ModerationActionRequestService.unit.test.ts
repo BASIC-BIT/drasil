@@ -1795,6 +1795,42 @@ describe('ModerationActionRequestService', () => {
     expect(repository.failed).toEqual([]);
   });
 
+  it('keeps a passed challenge retryable when the case presentation cannot update', async () => {
+    const { notificationManager, repository, service, threadManager, userModerationService } =
+      buildService([applyCaptchaPassRequest]);
+    notificationManager.updateCaptchaChallengePresentation.mockResolvedValueOnce(false);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(threadManager.sendCaptchaStatus).not.toHaveBeenCalled();
+    expect(userModerationService.resolveCaptchaCase).not.toHaveBeenCalled();
+    expect(repository.completed).toEqual([]);
+    expect(repository.failed).toEqual([
+      {
+        id: 'captcha-pass-request-1',
+        error: 'Failed to refresh passed CAPTCHA presentation for case ver-1.',
+      },
+    ]);
+  });
+
+  it('keeps a passed challenge retryable when its completion status cannot be delivered', async () => {
+    const { repository, service, threadManager, userModerationService } = buildService([
+      applyCaptchaPassRequest,
+    ]);
+    threadManager.sendCaptchaStatus.mockResolvedValueOnce(false);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(userModerationService.resolveCaptchaCase).not.toHaveBeenCalled();
+    expect(repository.completed).toEqual([]);
+    expect(repository.failed).toEqual([
+      {
+        id: 'captcha-pass-request-1',
+        error: 'Failed to deliver CAPTCHA completion for case ver-1.',
+      },
+    ]);
+  });
+
   it('resumes exact-case CAPTCHA finalization after the case commit', async () => {
     const {
       captchaChallengeService,

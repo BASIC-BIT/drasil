@@ -594,7 +594,19 @@ export class VerificationEventRepository implements IVerificationEventRepository
     input: CaptchaVerificationCompletionInput
   ): Promise<VerificationEvent | null> {
     try {
-      const rows = await this.prisma.$queryRaw<VerificationEvent[]>`
+      return await this.prisma.$transaction(async (transaction) => {
+        const policy = await transaction.$queryRaw<Array<{ guild_id: string }>>`
+          SELECT server.guild_id
+          FROM servers AS server
+          WHERE server.guild_id = ${input.serverId}
+            AND server.settings->>'captcha_mode' = 'suspicious_join'
+            AND server.settings->>'captcha_pass_action' = 'verify_join_only'
+          FOR UPDATE
+        `;
+        if (!policy[0]) {
+          return null;
+        }
+        const rows = await transaction.$queryRaw<VerificationEvent[]>`
         UPDATE verification_events AS target
         SET
           status = ${VerificationStatus.VERIFIED}::verification_status,
@@ -639,13 +651,6 @@ export class VerificationEventRepository implements IVerificationEventRepository
               AND challenge.request_source = ${CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN}::captcha_challenge_request_source
               AND challenge.pass_effect = ${CaptchaChallengePassEffect.VERIFY_JOIN_ONLY}::captcha_challenge_pass_effect
           )
-          AND EXISTS (
-            SELECT 1
-            FROM servers AS server
-            WHERE server.guild_id = target.server_id
-              AND server.settings->>'captcha_mode' = 'suspicious_join'
-              AND server.settings->>'captcha_pass_action' = 'verify_join_only'
-          )
           AND NOT EXISTS (
             SELECT 1
             FROM verification_events AS other
@@ -656,7 +661,8 @@ export class VerificationEventRepository implements IVerificationEventRepository
           )
         RETURNING target.*
       `;
-      return rows[0] ?? null;
+        return rows[0] ?? null;
+      });
     } catch (error) {
       this.handleError(error, 'completeCaptchaVerification');
     }
