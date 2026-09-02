@@ -439,6 +439,53 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     await expect(challenges.findExpiredNeedingAttention(10)).resolves.toEqual([]);
   });
 
+  it('rediscovers failed submission-limit attention but excludes active and completed requests', async () => {
+    const { verification } = await createCase(
+      'guild-captcha-submission-attention',
+      'user-captcha-submission-attention'
+    );
+    const challenges = new CaptchaChallengeRepository(prisma);
+    const requests = new ModerationActionRequestRepository(prisma);
+    const challenge = await challenges.create({
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      caseRevision: verification.case_revision,
+      tokenHash: 'submission-attention-hash',
+      expiresAt: new Date(Date.now() + 60_000),
+      requestedBy: 'moderator-1',
+    });
+    await prisma.captcha_challenges.update({
+      where: { id: challenge.id },
+      data: { status: CaptchaChallengeStatus.FAILED, updated_at: new Date() },
+    });
+    const requestInput = {
+      serverId: verification.server_id,
+      actionType: ModerationActionRequestType.NOTIFY_CAPTCHA_ATTENTION,
+      actorId: 'drasil:captcha',
+      actorSurface: 'captcha',
+      targetUserId: verification.user_id,
+      verificationEventId: verification.id,
+      idempotencyKey: `captcha:attention:${challenge.id}:1:submission-limit`,
+      metadata: { challenge_id: challenge.id, generation: 1, reason: 'submission_limit' },
+    };
+
+    await expect(challenges.findFailedNeedingAttention(10)).resolves.toEqual([
+      expect.objectContaining({ id: challenge.id }),
+    ]);
+    const queued = await requests.enqueue(requestInput);
+    await expect(challenges.findFailedNeedingAttention(10)).resolves.toEqual([]);
+    await requests.fail(queued.id, 'Discord unavailable');
+    await expect(challenges.findFailedNeedingAttention(10)).resolves.toEqual([
+      expect.objectContaining({ id: challenge.id }),
+    ]);
+    const requeued = await requests.enqueue(requestInput);
+    await requests.complete(requeued.id, { notified: true });
+    await expect(challenges.findFailedNeedingAttention(10)).resolves.toEqual([]);
+  });
+
   it('allows an immediate retry after challenge delivery fails', async () => {
     const { verification } = await createCase(
       'guild-captcha-delivery-retry',

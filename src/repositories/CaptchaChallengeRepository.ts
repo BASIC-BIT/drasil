@@ -43,6 +43,7 @@ export interface ICaptchaChallengeRepository {
   cancelPendingForDisabledServers(limit: number): Promise<CaptchaChallenge[]>;
   markStaleUndelivered(staleBefore: Date, limit: number): Promise<CaptchaChallenge[]>;
   expirePending(now: Date, limit: number): Promise<CaptchaChallenge[]>;
+  findFailedNeedingAttention(limit: number): Promise<CaptchaChallenge[]>;
   findExpiredNeedingAttention(limit: number): Promise<CaptchaChallenge[]>;
 }
 
@@ -403,12 +404,24 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
   }
 
   public async findExpiredNeedingAttention(limit: number): Promise<CaptchaChallenge[]> {
+    return this.findNeedingAttention(CaptchaChallengeStatus.EXPIRED, 'expired', limit);
+  }
+
+  public async findFailedNeedingAttention(limit: number): Promise<CaptchaChallenge[]> {
+    return this.findNeedingAttention(CaptchaChallengeStatus.FAILED, 'submission-limit', limit);
+  }
+
+  private async findNeedingAttention(
+    status: CaptchaChallengeStatus,
+    reasonKey: string,
+    limit: number
+  ): Promise<CaptchaChallenge[]> {
     return await this.prisma.$queryRaw<CaptchaChallenge[]>`
       select challenge.*
       from captcha_challenges as challenge
       join verification_events as verification
         on verification.id = challenge.verification_event_id
-      where challenge.status = ${CaptchaChallengeStatus.EXPIRED}::captcha_challenge_status
+      where challenge.status = ${status}::captcha_challenge_status
         and verification.status = 'pending'::verification_status
         and not exists (
           select 1
@@ -418,7 +431,7 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
             challenge.id::text,
             ':',
             challenge.generation::text,
-            ':expired'
+            ${`:${reasonKey}`}::text
           )
             and request.status in (
               'queued'::moderation_action_request_status,

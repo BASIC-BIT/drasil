@@ -232,10 +232,8 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
   }
 
   public async expireChallenges(limit = 50): Promise<CaptchaChallenge[]> {
-    const [cancelled, expired] = await Promise.all([
-      this.challenges.cancelPendingForDisabledServers(limit),
-      this.challenges.expirePending(new Date(), limit),
-    ]);
+    const cancelled = await this.challenges.cancelPendingForDisabledServers(limit);
+    const expired = await this.challenges.expirePending(new Date(), limit);
     return [...cancelled, ...expired];
   }
 
@@ -316,8 +314,11 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
           await this.notifyAttention(verificationEvent, 'delivery_failed');
         }
       }
-      const expired = await this.expireChallenges();
-      for (const challenge of expired) {
+      const completed = await this.expireChallenges();
+      for (const challenge of completed) {
+        if (challenge.status !== CaptchaChallengeStatus.CANCELLED) {
+          continue;
+        }
         const verificationEvent = await this.verificationEvents.findById(
           challenge.verification_event_id
         );
@@ -326,24 +327,25 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
           (await this.isCurrentChallengeState(challenge))
         ) {
           await this.threads
-            .sendCaptchaStatus(
-              verificationEvent,
-              challenge.status === CaptchaChallengeStatus.CANCELLED
-                ? 'This security check is no longer active.'
-                : 'This security check expired. Ask a moderator to issue a new check.'
-            )
+            .sendCaptchaStatus(verificationEvent, 'This security check is no longer active.')
             .catch((error) => {
               console.warn(
-                `Failed to notify case ${verificationEvent.id} about an expired security check:`,
+                `Failed to notify case ${verificationEvent.id} about a cancelled security check:`,
                 error
               );
               return false;
             });
         }
       }
-      const needingAttention = await this.challenges.findExpiredNeedingAttention(50);
-      for (const challenge of needingAttention) {
-        await this.queueExpiredAttention(challenge);
+      const [failedNeedingAttention, expiredNeedingAttention] = await Promise.all([
+        this.challenges.findFailedNeedingAttention(50),
+        this.challenges.findExpiredNeedingAttention(50),
+      ]);
+      for (const challenge of failedNeedingAttention) {
+        await this.queueAttention(challenge, 'submission_limit');
+      }
+      for (const challenge of expiredNeedingAttention) {
+        await this.queueAttention(challenge, 'expired');
       }
     } catch (error) {
       console.error('Failed to expire CAPTCHA challenges:', error);
@@ -365,9 +367,12 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     );
   }
 
-  private async queueExpiredAttention(challenge: CaptchaChallenge): Promise<void> {
+  private async queueAttention(
+    challenge: CaptchaChallenge,
+    reason: 'submission_limit' | 'expired'
+  ): Promise<void> {
     if (!this.moderationActionRequests) {
-      throw new Error('Moderation action requests are unavailable for CAPTCHA expiry attention.');
+      throw new Error('Moderation action requests are unavailable for CAPTCHA attention.');
     }
     const verificationEvent = await this.verificationEvents.findById(
       challenge.verification_event_id
@@ -385,11 +390,11 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
       actorSurface: 'captcha',
       targetUserId: challenge.user_id,
       verificationEventId: challenge.verification_event_id,
-      idempotencyKey: `captcha:attention:${challenge.id}:${challenge.generation}:expired`,
+      idempotencyKey: `captcha:attention:${challenge.id}:${challenge.generation}:${reason === 'submission_limit' ? 'submission-limit' : 'expired'}`,
       metadata: {
         challenge_id: challenge.id,
         generation: challenge.generation,
-        reason: 'expired',
+        reason,
       },
     });
   }

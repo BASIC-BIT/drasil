@@ -100,6 +100,7 @@ function createHarness(settings: Record<string, unknown> = { captcha_mode: 'manu
     cancelPendingForDisabledServers: jest.fn().mockResolvedValue([]),
     markStaleUndelivered: jest.fn().mockResolvedValue([]),
     expirePending: jest.fn().mockResolvedValue([]),
+    findFailedNeedingAttention: jest.fn().mockResolvedValue([]),
     findExpiredNeedingAttention: jest.fn().mockResolvedValue([]),
   };
   const verificationEvents = {
@@ -318,6 +319,23 @@ describe('CaptchaChallengeService', () => {
     expect(moderationActionRequests.enqueue).not.toHaveBeenCalled();
   });
 
+  it('cancels disabled checks before expiring the remaining pending checks', async () => {
+    const { challenges, service } = createHarness();
+    const calls: string[] = [];
+    challenges.cancelPendingForDisabledServers.mockImplementation(async () => {
+      calls.push('cancel');
+      return [];
+    });
+    challenges.expirePending.mockImplementation(async () => {
+      calls.push('expire');
+      return [];
+    });
+
+    await service.expireChallenges();
+
+    expect(calls).toEqual(['cancel', 'expire']);
+  });
+
   it('makes an interrupted delivery retryable after its delivery lease expires', async () => {
     const { challenges, notifications, service, threads } = createHarness();
     const interrupted = buildChallenge({ delivery_error_code: 'delivery_interrupted' });
@@ -360,7 +378,7 @@ describe('CaptchaChallengeService', () => {
   });
 
   it('queues expired moderator attention with a stable generation key', async () => {
-    const { challenges, moderationActionRequests, service } = createHarness();
+    const { challenges, moderationActionRequests, service, threads } = createHarness();
     const expired = buildChallenge({ status: CaptchaChallengeStatus.EXPIRED });
     challenges.expirePending.mockResolvedValue([expired]);
     challenges.findExpiredNeedingAttention.mockResolvedValue([expired]);
@@ -377,6 +395,28 @@ describe('CaptchaChallengeService', () => {
         actionType: 'notify_captcha_attention',
         idempotencyKey: 'captcha:attention:challenge-1:1:expired',
         metadata: expect.objectContaining({ reason: 'expired' }),
+      })
+    );
+    expect(threads.sendCaptchaStatus).not.toHaveBeenCalled();
+  });
+
+  it('requeues failed submission-limit attention with a stable generation key', async () => {
+    const { challenges, moderationActionRequests, service } = createHarness();
+    const failed = buildChallenge({ status: CaptchaChallengeStatus.FAILED });
+    challenges.findFailedNeedingAttention.mockResolvedValue([failed]);
+    challenges.findById.mockResolvedValue(failed);
+
+    await (
+      service as unknown as {
+        runExpirySweep(): Promise<void>;
+      }
+    ).runExpirySweep();
+
+    expect(moderationActionRequests.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionType: 'notify_captcha_attention',
+        idempotencyKey: 'captcha:attention:challenge-1:1:submission-limit',
+        metadata: expect.objectContaining({ reason: 'submission_limit' }),
       })
     );
   });
