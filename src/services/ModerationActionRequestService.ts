@@ -1168,7 +1168,7 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       throw new Error('Security-check attention request is invalid.');
     }
     const reason = this.readMetadataString(request.metadata, 'reason');
-    if (reason !== 'submission_limit' && reason !== 'expired') {
+    if (reason !== 'delivery_failed' && reason !== 'submission_limit' && reason !== 'expired') {
       throw new Error('Security-check attention reason is invalid.');
     }
     if (!this.captchaChallengeService) {
@@ -1192,13 +1192,19 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     ) {
       throw new Error('Security-check attention case binding is invalid.');
     }
+    const challengeStateMatches =
+      reason === 'delivery_failed'
+        ? challenge?.status === CaptchaChallengeStatus.PENDING &&
+          challenge.delivered_at === null &&
+          Boolean(challenge.delivery_error_code)
+        : challenge?.status ===
+          (reason === 'expired' ? CaptchaChallengeStatus.EXPIRED : CaptchaChallengeStatus.FAILED);
     if (
       verificationEvent.status !== VerificationStatus.PENDING ||
       !challenge ||
       challenge.id !== challengeId ||
       challenge.generation !== generation ||
-      challenge.status !==
-        (reason === 'expired' ? CaptchaChallengeStatus.EXPIRED : CaptchaChallengeStatus.FAILED)
+      !challengeStateMatches
     ) {
       await this.repository.complete(request.id, {
         action_type: request.action_type,
@@ -1215,9 +1221,11 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     await this.threadManager
       .sendCaptchaStatus(
         verificationEvent,
-        reason === 'expired'
-          ? 'This security check expired. Ask a moderator to issue a new check.'
-          : 'This security check reached its attempt limit. Ask a moderator to issue a new check.'
+        reason === 'delivery_failed'
+          ? 'This security check link could not be delivered. Ask a moderator to retry.'
+          : reason === 'expired'
+            ? 'This security check expired. Ask a moderator to issue a new check.'
+            : 'This security check reached its attempt limit. Ask a moderator to issue a new check.'
       )
       .catch(() => false);
     await this.requireCaptchaAttention(verificationEvent, reason);

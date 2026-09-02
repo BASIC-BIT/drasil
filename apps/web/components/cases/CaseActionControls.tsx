@@ -78,6 +78,11 @@ export const executableCaseActions: readonly WebCaseAction[] = [
 
 const executableCaseActionSet = new Set<CaseAction>(executableCaseActions);
 const destructiveCaseActionSet = new Set<WebCaseAction>(['kick_user', 'ban_user', 'ban_by_id']);
+const captchaConfirmationActionSet = new Set<WebCaseAction>([
+  'challenge_user',
+  'retry_captcha',
+  'bypass_captcha',
+]);
 
 export function isExecutableCaseAction(action: string): action is WebCaseAction {
   return executableCaseActionSet.has(action as CaseAction);
@@ -299,15 +304,14 @@ export function CaseActionControls({
   const standardActions = ordinaryExecutableActions.filter(
     (action) =>
       !destructiveCaseActionSet.has(action) &&
+      !captchaConfirmationActionSet.has(action) &&
       !(action === 'verify_user' && requiresVerificationReleaseConfirmation)
   );
   const confirmationActions = ordinaryExecutableActions.filter(
     (action) =>
       destructiveCaseActionSet.has(action) ||
       (action === 'verify_user' && requiresVerificationReleaseConfirmation) ||
-      action === 'challenge_user' ||
-      action === 'retry_captcha' ||
-      action === 'bypass_captcha'
+      captchaConfirmationActionSet.has(action)
   );
 
   return (

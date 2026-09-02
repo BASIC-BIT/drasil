@@ -27,7 +27,7 @@ import {
   selectCaptchaPassEffect,
 } from './CaptchaChallengePolicy';
 import { IThreadManager } from './ThreadManager';
-import type { CaptchaAttentionReason, INotificationManager } from './NotificationManager';
+import type { INotificationManager } from './NotificationManager';
 
 const TOKEN_BYTES = 32;
 const EXPIRY_SWEEP_INTERVAL_MS = 60_000;
@@ -167,35 +167,41 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     }
     const url = buildCaptchaChallengeUrl(token);
     if (!url) {
-      await this.challenges.recordDeliveryFailure(
+      const recorded = await this.challenges.recordDeliveryFailure(
         challenge.id,
         challenge.generation,
         'public_url_unavailable'
       );
-      await this.notifyAttention(verificationEvent, 'delivery_failed');
+      if (recorded) {
+        await this.queueDeliveryFailureAttention(challenge, verificationEvent);
+      }
       return { challenge, delivered: false };
     }
 
     try {
       const delivered = await this.threads.sendCaptchaChallenge(verificationEvent, url);
       if (!delivered) {
-        await this.challenges.recordDeliveryFailure(
+        const recorded = await this.challenges.recordDeliveryFailure(
           challenge.id,
           challenge.generation,
           'case_thread_unavailable'
         );
-        await this.notifyAttention(verificationEvent, 'delivery_failed');
+        if (recorded) {
+          await this.queueDeliveryFailureAttention(challenge, verificationEvent);
+        }
         return { challenge, delivered: false };
       }
       const recorded = await this.challenges.recordDelivery(challenge.id, challenge.generation);
       return { challenge, delivered: recorded };
     } catch (error) {
-      await this.challenges.recordDeliveryFailure(
+      const recorded = await this.challenges.recordDeliveryFailure(
         challenge.id,
         challenge.generation,
         'discord_delivery_failed'
       );
-      await this.notifyAttention(verificationEvent, 'delivery_failed');
+      if (recorded) {
+        await this.queueDeliveryFailureAttention(challenge, verificationEvent);
+      }
       throw error;
     }
   }
@@ -232,9 +238,10 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
   }
 
   public async expireChallenges(limit = 50): Promise<CaptchaChallenge[]> {
-    const cancelled = await this.challenges.cancelPendingForDisabledServers(limit);
+    const disabled = await this.challenges.cancelPendingForDisabledServers(limit);
+    const terminal = await this.challenges.cancelPendingForTerminalCases(limit);
     const expired = await this.challenges.expirePending(new Date(), limit);
-    return [...cancelled, ...expired];
+    return [...disabled, ...terminal, ...expired];
   }
 
   public async evaluatePassedChallenge(
@@ -287,33 +294,7 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
 
   private async runExpirySweep(): Promise<void> {
     try {
-      const interrupted = await this.challenges.markStaleUndelivered(
-        new Date(Date.now() - DELIVERY_LEASE_MS),
-        50
-      );
-      for (const challenge of interrupted) {
-        const verificationEvent = await this.verificationEvents.findById(
-          challenge.verification_event_id
-        );
-        if (
-          verificationEvent?.status === VerificationStatus.PENDING &&
-          (await this.isCurrentInterruptedDelivery(challenge))
-        ) {
-          await this.threads
-            .sendCaptchaStatus(
-              verificationEvent,
-              'This security check link could not be delivered. Ask a moderator to retry.'
-            )
-            .catch((error) => {
-              console.warn(
-                `Failed to notify case ${verificationEvent.id} about an interrupted security check delivery:`,
-                error
-              );
-              return false;
-            });
-          await this.notifyAttention(verificationEvent, 'delivery_failed');
-        }
-      }
+      await this.challenges.markStaleUndelivered(new Date(Date.now() - DELIVERY_LEASE_MS), 50);
       const completed = await this.expireChallenges();
       for (const challenge of completed) {
         if (challenge.status !== CaptchaChallengeStatus.CANCELLED) {
@@ -337,10 +318,15 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
             });
         }
       }
-      const [failedNeedingAttention, expiredNeedingAttention] = await Promise.all([
-        this.challenges.findFailedNeedingAttention(50),
-        this.challenges.findExpiredNeedingAttention(50),
-      ]);
+      const [deliveryFailuresNeedingAttention, failedNeedingAttention, expiredNeedingAttention] =
+        await Promise.all([
+          this.challenges.findDeliveryFailuresNeedingAttention(50),
+          this.challenges.findFailedNeedingAttention(50),
+          this.challenges.findExpiredNeedingAttention(50),
+        ]);
+      for (const challenge of deliveryFailuresNeedingAttention) {
+        await this.queueAttention(challenge, 'delivery_failed');
+      }
       for (const challenge of failedNeedingAttention) {
         await this.queueAttention(challenge, 'submission_limit');
       }
@@ -357,19 +343,9 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     return current?.generation === challenge.generation && current.status === challenge.status;
   }
 
-  private async isCurrentInterruptedDelivery(challenge: CaptchaChallenge): Promise<boolean> {
-    const current = await this.challenges.findById(challenge.id);
-    return (
-      current?.generation === challenge.generation &&
-      current.status === CaptchaChallengeStatus.PENDING &&
-      current.delivered_at === null &&
-      current.delivery_error_code === 'delivery_interrupted'
-    );
-  }
-
   private async queueAttention(
     challenge: CaptchaChallenge,
-    reason: 'submission_limit' | 'expired'
+    reason: 'delivery_failed' | 'submission_limit' | 'expired'
   ): Promise<void> {
     if (!this.moderationActionRequests) {
       throw new Error('Moderation action requests are unavailable for CAPTCHA attention.');
@@ -379,7 +355,7 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     );
     if (
       verificationEvent?.status !== VerificationStatus.PENDING ||
-      !(await this.isCurrentChallengeState(challenge))
+      !(await this.isCurrentAttentionState(challenge, reason))
     ) {
       return;
     }
@@ -390,7 +366,7 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
       actorSurface: 'captcha',
       targetUserId: challenge.user_id,
       verificationEventId: challenge.verification_event_id,
-      idempotencyKey: `captcha:attention:${challenge.id}:${challenge.generation}:${reason === 'submission_limit' ? 'submission-limit' : 'expired'}`,
+      idempotencyKey: `captcha:attention:${challenge.id}:${challenge.generation}:${this.attentionReasonKey(reason)}`,
       metadata: {
         challenge_id: challenge.id,
         generation: challenge.generation,
@@ -399,20 +375,56 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     });
   }
 
-  private async notifyAttention(
-    verificationEvent: VerificationEvent,
-    reason: CaptchaAttentionReason
+  private async queueDeliveryFailureAttention(
+    challenge: CaptchaChallenge,
+    verificationEvent: VerificationEvent
   ): Promise<void> {
-    if (!this.notifications?.notifyCaptchaAttention) {
+    if (!this.moderationActionRequests) {
+      if (!this.notifications?.notifyCaptchaAttention) {
+        return;
+      }
+      await this.notifications
+        .notifyCaptchaAttention(verificationEvent, 'delivery_failed')
+        .catch((error) => {
+          console.warn(
+            `Failed to notify moderators about browser security-check delivery for case ${verificationEvent.id}:`,
+            error
+          );
+          return false;
+        });
       return;
     }
-    await this.notifications.notifyCaptchaAttention(verificationEvent, reason).catch((error) => {
+    await this.queueAttention(challenge, 'delivery_failed').catch((error) => {
       console.warn(
-        `Failed to queue browser security-check attention for case ${verificationEvent.id}:`,
+        `Failed to persist browser security-check delivery attention for case ${verificationEvent.id}:`,
         error
       );
-      return false;
     });
+  }
+
+  private async isCurrentAttentionState(
+    challenge: CaptchaChallenge,
+    reason: 'delivery_failed' | 'submission_limit' | 'expired'
+  ): Promise<boolean> {
+    const current = await this.challenges.findById(challenge.id);
+    if (!current || current.generation !== challenge.generation) {
+      return false;
+    }
+    if (reason === 'delivery_failed') {
+      return (
+        current.status === CaptchaChallengeStatus.PENDING &&
+        current.delivered_at === null &&
+        Boolean(current.delivery_error_code)
+      );
+    }
+    return current.status === challenge.status;
+  }
+
+  private attentionReasonKey(reason: 'delivery_failed' | 'submission_limit' | 'expired'): string {
+    if (reason === 'delivery_failed') {
+      return 'delivery-failed';
+    }
+    return reason === 'submission_limit' ? 'submission-limit' : 'expired';
   }
 
   private async requireEligibleCase(

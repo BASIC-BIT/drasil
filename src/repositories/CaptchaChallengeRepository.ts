@@ -41,8 +41,10 @@ export interface ICaptchaChallengeRepository {
   ): Promise<CaptchaChallenge | null>;
   cancelPendingForCase(verificationEventId: string): Promise<boolean>;
   cancelPendingForDisabledServers(limit: number): Promise<CaptchaChallenge[]>;
+  cancelPendingForTerminalCases(limit: number): Promise<CaptchaChallenge[]>;
   markStaleUndelivered(staleBefore: Date, limit: number): Promise<CaptchaChallenge[]>;
   expirePending(now: Date, limit: number): Promise<CaptchaChallenge[]>;
+  findDeliveryFailuresNeedingAttention(limit: number): Promise<CaptchaChallenge[]>;
   findFailedNeedingAttention(limit: number): Promise<CaptchaChallenge[]>;
   findExpiredNeedingAttention(limit: number): Promise<CaptchaChallenge[]>;
 }
@@ -351,11 +353,52 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
     return cancelled;
   }
 
+  public async cancelPendingForTerminalCases(limit: number): Promise<CaptchaChallenge[]> {
+    return (await this.prisma.$transaction(async (transaction) => {
+      const candidates = await transaction.$queryRaw<CaptchaChallenge[]>`
+        select challenge.*
+        from captcha_challenges as challenge
+        join verification_events as verification
+          on verification.id = challenge.verification_event_id
+        where challenge.status = ${CaptchaChallengeStatus.PENDING}::captcha_challenge_status
+          and verification.status <> ${VerificationStatus.PENDING}::verification_status
+        order by challenge.updated_at asc
+        limit ${Math.max(1, Math.min(limit, 100))}
+        for update of verification, challenge skip locked
+      `;
+      const cancelled: CaptchaChallenge[] = [];
+      for (const candidate of candidates) {
+        const cancelledAt = new Date();
+        const result = await transaction.captcha_challenges.updateMany({
+          where: {
+            id: candidate.id,
+            generation: candidate.generation,
+            status: CaptchaChallengeStatus.PENDING,
+          },
+          data: {
+            status: CaptchaChallengeStatus.CANCELLED,
+            cancelled_at: cancelledAt,
+            updated_at: cancelledAt,
+          },
+        });
+        if (result.count === 1) {
+          cancelled.push(
+            (await transaction.captcha_challenges.findUniqueOrThrow({
+              where: { id: candidate.id },
+            })) as CaptchaChallenge
+          );
+        }
+      }
+      return cancelled;
+    })) as CaptchaChallenge[];
+  }
+
   public async expirePending(now: Date, limit: number): Promise<CaptchaChallenge[]> {
     const candidates = await this.prisma.captcha_challenges.findMany({
       where: {
         status: CaptchaChallengeStatus.PENDING,
         expires_at: { lte: now },
+        verification_events: { status: VerificationStatus.PENDING },
       },
       orderBy: { expires_at: 'asc' },
       take: Math.max(1, Math.min(limit, 100)),
@@ -368,6 +411,7 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
           generation: candidate.generation,
           status: CaptchaChallengeStatus.PENDING,
           expires_at: { lte: now },
+          verification_events: { status: VerificationStatus.PENDING },
         },
         data: { status: CaptchaChallengeStatus.EXPIRED, updated_at: now },
       });
@@ -427,6 +471,37 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
 
   public async findFailedNeedingAttention(limit: number): Promise<CaptchaChallenge[]> {
     return this.findNeedingAttention(CaptchaChallengeStatus.FAILED, 'submission-limit', limit);
+  }
+
+  public async findDeliveryFailuresNeedingAttention(limit: number): Promise<CaptchaChallenge[]> {
+    return await this.prisma.$queryRaw<CaptchaChallenge[]>`
+      select challenge.*
+      from captcha_challenges as challenge
+      join verification_events as verification
+        on verification.id = challenge.verification_event_id
+      where challenge.status = ${CaptchaChallengeStatus.PENDING}::captcha_challenge_status
+        and challenge.delivered_at is null
+        and challenge.delivery_error_code is not null
+        and verification.status = ${VerificationStatus.PENDING}::verification_status
+        and not exists (
+          select 1
+          from moderation_action_requests as request
+          where request.idempotency_key = concat(
+            'captcha:attention:',
+            challenge.id::text,
+            ':',
+            challenge.generation::text,
+            ':delivery-failed'
+          )
+            and request.status in (
+              'queued'::moderation_action_request_status,
+              'processing'::moderation_action_request_status,
+              'completed'::moderation_action_request_status
+            )
+        )
+      order by challenge.updated_at asc nulls first
+      limit ${Math.max(1, Math.min(limit, 100))}
+    `;
   }
 
   private async findNeedingAttention(

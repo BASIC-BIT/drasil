@@ -521,6 +521,50 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     await expect(challenges.findFailedNeedingAttention(10)).resolves.toEqual([]);
   });
 
+  it('rediscovers delivery-failure attention but excludes active and completed requests', async () => {
+    const { verification } = await createCase(
+      'guild-captcha-delivery-attention',
+      'user-captcha-delivery-attention'
+    );
+    const challenges = new CaptchaChallengeRepository(prisma);
+    const requests = new ModerationActionRequestRepository(prisma);
+    const challenge = await challenges.create({
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      caseRevision: verification.case_revision,
+      tokenHash: 'delivery-attention-hash',
+      expiresAt: new Date(Date.now() + 60_000),
+      requestedBy: 'moderator-1',
+    });
+    await challenges.recordDeliveryFailure(challenge.id, 1, 'discord_delivery_failed');
+    const requestInput = {
+      serverId: verification.server_id,
+      actionType: ModerationActionRequestType.NOTIFY_CAPTCHA_ATTENTION,
+      actorId: 'drasil:captcha',
+      actorSurface: 'captcha',
+      targetUserId: verification.user_id,
+      verificationEventId: verification.id,
+      idempotencyKey: `captcha:attention:${challenge.id}:1:delivery-failed`,
+      metadata: { challenge_id: challenge.id, generation: 1, reason: 'delivery_failed' },
+    };
+
+    await expect(challenges.findDeliveryFailuresNeedingAttention(10)).resolves.toEqual([
+      expect.objectContaining({ id: challenge.id }),
+    ]);
+    const queued = await requests.enqueue(requestInput);
+    await expect(challenges.findDeliveryFailuresNeedingAttention(10)).resolves.toEqual([]);
+    await requests.fail(queued.id, 'Discord unavailable');
+    await expect(challenges.findDeliveryFailuresNeedingAttention(10)).resolves.toEqual([
+      expect.objectContaining({ id: challenge.id }),
+    ]);
+    const requeued = await requests.enqueue(requestInput);
+    await requests.complete(requeued.id, { notified: true });
+    await expect(challenges.findDeliveryFailuresNeedingAttention(10)).resolves.toEqual([]);
+  });
+
   it('allows an immediate retry after challenge delivery fails', async () => {
     const { verification } = await createCase(
       'guild-captcha-delivery-retry',
@@ -634,6 +678,35 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       expect.objectContaining({ id: challenge.id, status: CaptchaChallengeStatus.CANCELLED }),
     ]);
     await expect(challenges.cancelPendingForDisabledServers(10)).resolves.toEqual([]);
+  });
+
+  it('cancels a pending challenge for a terminal case before it can expire', async () => {
+    const { verification } = await createCase(
+      'guild-captcha-terminal-case',
+      'user-captcha-terminal-case'
+    );
+    const challenges = new CaptchaChallengeRepository(prisma);
+    const challenge = await challenges.create({
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      caseRevision: verification.case_revision,
+      tokenHash: 'terminal-case-hash',
+      expiresAt: new Date(Date.now() - 60_000),
+      requestedBy: 'moderator-1',
+    });
+    await prisma.verification_events.update({
+      where: { id: verification.id },
+      data: { status: VerificationStatus.VERIFIED },
+    });
+
+    await expect(challenges.expirePending(new Date(), 10)).resolves.toEqual([]);
+    await expect(challenges.cancelPendingForTerminalCases(10)).resolves.toEqual([
+      expect.objectContaining({ id: challenge.id, status: CaptchaChallengeStatus.CANCELLED }),
+    ]);
+    await expect(challenges.cancelPendingForTerminalCases(10)).resolves.toEqual([]);
   });
 
   it('retries a cancelled challenge after its case is reopened', async () => {

@@ -150,6 +150,9 @@ describe('CaseActionControls account quarantine', () => {
         'type="hidden" name="expectedCaptchaChallengeId" value="11111111-1111-4111-8111-111111111111"'
       );
       expect(markup).toContain('type="hidden" name="expectedCaptchaGeneration" value="3"');
+      expect(markup).not.toContain(
+        '<button class="button secondary compact-button" type="submit">Continue Without Browser Check</button>'
+      );
     }
   );
 });

@@ -179,6 +179,17 @@ const notifyExpiredCaptchaAttentionRequest: ModerationActionRequest = {
   },
 };
 
+const notifyDeliveryFailedCaptchaAttentionRequest: ModerationActionRequest = {
+  ...notifyCaptchaAttentionRequest,
+  id: 'captcha-delivery-attention-request-1',
+  idempotency_key: 'captcha:attention:challenge-1:1:delivery-failed',
+  metadata: {
+    challenge_id: 'challenge-1',
+    generation: 1,
+    reason: 'delivery_failed',
+  },
+};
+
 const accountQuarantinePreviewRequest: ModerationActionRequest = {
   ...verifyRequest,
   action_type: ModerationActionRequestType.PREVIEW_ACCOUNT_QUARANTINE,
@@ -1032,6 +1043,8 @@ describe('ModerationActionRequestService', () => {
       bypassChallenge: jest.fn(async () => ({ generation: 1, id: 'challenge-1' })),
       evaluatePassedChallenge: jest.fn(async () => ({ status: 'eligible' as const })),
       findByCaseId: jest.fn(async () => ({
+        delivered_at: null as Date | null,
+        delivery_error_code: null as string | null,
         generation: 1,
         id: 'challenge-1',
         status: 'failed',
@@ -1902,6 +1915,8 @@ describe('ModerationActionRequestService', () => {
     const { captchaChallengeService, notificationManager, repository, service, threadManager } =
       buildService([notifyExpiredCaptchaAttentionRequest]);
     captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+      delivered_at: new Date(),
+      delivery_error_code: null,
       generation: 1,
       id: 'challenge-1',
       status: 'expired',
@@ -1927,10 +1942,39 @@ describe('ModerationActionRequestService', () => {
     ]);
   });
 
+  it('delivers durable attention for a failed security-check link', async () => {
+    const { captchaChallengeService, notificationManager, repository, service, threadManager } =
+      buildService([notifyDeliveryFailedCaptchaAttentionRequest]);
+    captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+      delivered_at: null,
+      delivery_error_code: 'discord_delivery_failed',
+      generation: 1,
+      id: 'challenge-1',
+      status: 'pending',
+    });
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(threadManager.sendCaptchaStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'ver-1' }),
+      'This security check link could not be delivered. Ask a moderator to retry.'
+    );
+    expect(notificationManager.notifyCaptchaAttention).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'ver-1' }),
+      'delivery_failed'
+    );
+    expect(repository.completed[0]).toEqual({
+      id: 'captcha-delivery-attention-request-1',
+      result: expect.objectContaining({ notified: true, reason: 'delivery_failed' }),
+    });
+  });
+
   it('discards submission-limit attention after the challenge generation changes', async () => {
     const { captchaChallengeService, notificationManager, repository, service, threadManager } =
       buildService([notifyCaptchaAttentionRequest]);
     captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+      delivered_at: new Date(),
+      delivery_error_code: null,
       generation: 2,
       id: 'challenge-1',
       status: 'pending',
