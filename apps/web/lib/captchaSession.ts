@@ -37,15 +37,15 @@ export function getCaptchaOAuthStateCookieName(state: string): string | null {
     : null;
 }
 
-export function getCaptchaIdentityCookieName(
-  challengeId: string,
-  generation: number
-): string | null {
-  return captchaChallengeIdSchema.safeParse(challengeId).success &&
-    Number.isSafeInteger(generation) &&
-    generation > 0
-    ? `${CAPTCHA_IDENTITY_COOKIE}_${challengeId}_${generation}`
-    : null;
+export function getCaptchaIdentityCookieName(challengeId: string, generation: number): string {
+  if (
+    !captchaChallengeIdSchema.safeParse(challengeId).success ||
+    !Number.isSafeInteger(generation) ||
+    generation <= 0
+  ) {
+    throw new Error('CAPTCHA challenge identity is invalid.');
+  }
+  return `${CAPTCHA_IDENTITY_COOKIE}_${challengeId}_${generation}`;
 }
 
 export function createCaptchaOAuthState(token: string): CaptchaOAuthState {

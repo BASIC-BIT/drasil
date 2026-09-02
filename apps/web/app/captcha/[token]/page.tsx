@@ -77,9 +77,8 @@ export default async function CaptchaChallengePage({
   }
 
   const cookieStore = await cookies();
-  const identityCookieName = getCaptchaIdentityCookieName(challenge.id, challenge.generation);
   const identity = decodeCaptchaIdentity(
-    identityCookieName ? cookieStore.get(identityCookieName)?.value : undefined
+    cookieStore.get(getCaptchaIdentityCookieName(challenge.id, challenge.generation))?.value
   );
   const identityMatches =
     identity?.challengeId === challenge.id &&

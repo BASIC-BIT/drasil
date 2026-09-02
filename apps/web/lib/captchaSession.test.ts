@@ -82,6 +82,8 @@ describe('CAPTCHA browser session cookies', () => {
     expect(firstIdentityCookie).not.toBe(secondIdentityCookie);
     expect(firstIdentityCookie).toMatch(new RegExp(`^${CAPTCHA_IDENTITY_COOKIE}_[A-Za-z0-9_-]+$`));
     expect(getCaptchaOAuthStateCookieName('invalid state')).toBeNull();
-    expect(getCaptchaIdentityCookieName('invalid challenge', 1)).toBeNull();
+    expect(() => getCaptchaIdentityCookieName('invalid challenge', 1)).toThrow(
+      'CAPTCHA challenge identity is invalid.'
+    );
   });
 });

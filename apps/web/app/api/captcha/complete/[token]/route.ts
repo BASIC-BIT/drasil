@@ -49,9 +49,6 @@ export async function POST(
       return redirectToChallenge(request, token, 'stale');
     }
     const identityCookieName = getCaptchaIdentityCookieName(challenge.id, challenge.generation);
-    if (!identityCookieName) {
-      return redirectToChallenge(request, token, 'stale');
-    }
     const identity = decodeCaptchaIdentity(request.cookies.get(identityCookieName)?.value);
     if (!identity) {
       return redirectToChallenge(request, token, 'authenticate');
