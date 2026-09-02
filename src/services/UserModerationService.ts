@@ -1426,11 +1426,24 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         last_status_change: new Date(),
         updated_by: actorId,
       });
+      const heldReason = pendingAfterRestoration.some((event) => event.id === completed.id)
+        ? 'case_changed'
+        : 'other_pending_case';
+      const finalization = await this.finalizeCommittedCaptchaResolution(
+        member,
+        completed,
+        input,
+        resolvedAt,
+        actorId,
+        actorLabel,
+        restoreResult.metadata
+      );
+      if (finalization.status !== 'resolved') {
+        return finalization;
+      }
       return {
         status: 'held',
-        reason: pendingAfterRestoration.some((event) => event.id === completed.id)
-          ? 'case_changed'
-          : 'other_pending_case',
+        reason: heldReason,
       };
     }
     const memberStateChanged =
@@ -1459,13 +1472,52 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         throw new Error(`Failed to preserve case role for ${member.user.tag}`);
       }
       await this.reapplyRoleQuarantineForPendingCase(member, pendingAtFinalWrite[0], actorId);
+      const heldReason = pendingAtFinalWrite.some((event) => event.id === completed.id)
+        ? 'case_changed'
+        : 'other_pending_case';
+      const finalization = await this.finalizeCommittedCaptchaResolution(
+        member,
+        completed,
+        input,
+        resolvedAt,
+        actorId,
+        actorLabel,
+        restoreResult.metadata
+      );
+      if (finalization.status !== 'resolved') {
+        return finalization;
+      }
       return {
         status: 'held',
-        reason: pendingAtFinalWrite.some((event) => event.id === completed.id)
-          ? 'case_changed'
-          : 'other_pending_case',
+        reason: heldReason,
       };
     }
+
+    return this.finalizeCommittedCaptchaResolution(
+      member,
+      completed,
+      input,
+      resolvedAt,
+      actorId,
+      actorLabel,
+      restoreResult.metadata
+    );
+  }
+
+  private async finalizeCommittedCaptchaResolution(
+    member: GuildMember,
+    completed: VerificationEvent,
+    input: {
+      verificationEventId: string;
+      challengeId: string;
+      generation: number;
+      expectedCaseRevision: number;
+    },
+    resolvedAt: Date,
+    actorId: string,
+    actorLabel: string,
+    roleQuarantineMetadata: Record<string, unknown> | null
+  ): Promise<CaptchaCaseResolutionResult> {
     const current = await this.verificationEventRepository.findById(completed.id);
     const currentCaptchaResolutionValue = this.metadataToRecord(
       current?.metadata ?? null
@@ -1511,14 +1563,14 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         claimed,
         actorId,
         actorLabel,
-        restoreResult.metadata
+        roleQuarantineMetadata
       );
       await this.ensureCaptchaModerationOutcome(
         member,
         claimed,
         actorId,
         input.challengeId,
-        restoreResult.metadata
+        roleQuarantineMetadata
       );
     } catch (error) {
       await this.verificationEventRepository

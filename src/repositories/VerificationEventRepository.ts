@@ -1267,19 +1267,34 @@ export class VerificationEventRepository implements IVerificationEventRepository
       return (await this.prisma.verification_events.findMany({
         where: {
           status: VerificationStatus.PENDING,
-          case_kind: CaseKind.COMPROMISED_ACCOUNT,
           containment_status: CaseContainmentStatus.IN_PROGRESS,
           quarantine_attempt_id: { not: null },
-          OR: [
-            { quarantine_lease_renewed_at: null },
-            { quarantine_lease_renewed_at: { lte: staleBefore } },
-          ],
-          NOT: [
-            { quarantine_attempt_id: { startsWith: CASE_ROLE_RELEASE_ATTEMPT_PREFIX } },
+          AND: [
             {
-              quarantine_attempt_id: {
-                startsWith: CASE_ROLE_RELEASE_RECONCILIATION_ATTEMPT_PREFIX,
-              },
+              OR: [
+                { quarantine_lease_renewed_at: null },
+                { quarantine_lease_renewed_at: { lte: staleBefore } },
+              ],
+            },
+            {
+              OR: [
+                {
+                  quarantine_attempt_id: {
+                    startsWith: CAPTCHA_PRESENTATION_ATTEMPT_PREFIX,
+                  },
+                },
+                {
+                  case_kind: CaseKind.COMPROMISED_ACCOUNT,
+                  NOT: [
+                    { quarantine_attempt_id: { startsWith: CASE_ROLE_RELEASE_ATTEMPT_PREFIX } },
+                    {
+                      quarantine_attempt_id: {
+                        startsWith: CASE_ROLE_RELEASE_RECONCILIATION_ATTEMPT_PREFIX,
+                      },
+                    },
+                  ],
+                },
+              ],
             },
           ],
         },

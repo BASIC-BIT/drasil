@@ -765,7 +765,14 @@ describe('UserModerationService (unit)', () => {
       expect.objectContaining({ status: VerificationStatus.PENDING }),
       expect.objectContaining({ id: 'drasil:captcha' })
     );
-    expect(threadManager.resolveVerificationThread).not.toHaveBeenCalled();
+    expect(threadManager.resolveVerificationThread).toHaveBeenCalledWith(
+      expect.objectContaining({ id: verificationEvent.id }),
+      VerificationStatus.VERIFIED,
+      'Drasil browser check'
+    );
+    await expect(adminActionRepository.findByUserAndServer(userId, guildId)).resolves.toHaveLength(
+      1
+    );
   });
 
   it('does not overwrite pending member state when a case opens at the final write', async () => {
@@ -854,7 +861,14 @@ describe('UserModerationService (unit)', () => {
         verification_status: VerificationStatus.PENDING,
       })
     );
-    expect(threadManager.resolveVerificationThread).not.toHaveBeenCalled();
+    expect(threadManager.resolveVerificationThread).toHaveBeenCalledWith(
+      expect.objectContaining({ id: verificationEvent.id }),
+      VerificationStatus.VERIFIED,
+      'Drasil browser check'
+    );
+    await expect(adminActionRepository.findByUserAndServer(userId, guildId)).resolves.toHaveLength(
+      1
+    );
   });
 
   it('restores the case role when the expected-revision completion loses a race', async () => {

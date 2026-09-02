@@ -14,6 +14,10 @@ export function isCaseTerminalActionAttempt(attemptId: string | null | undefined
   return attemptId?.startsWith(CASE_TERMINAL_ACTION_ATTEMPT_PREFIX) === true;
 }
 
+export function isCaptchaPresentationAttempt(attemptId: string | null | undefined): boolean {
+  return attemptId?.startsWith(CAPTCHA_PRESENTATION_ATTEMPT_PREFIX) === true;
+}
+
 export function isCaseRoleReleaseRecoveryAttempt(attemptId: string | null | undefined): boolean {
   return (
     attemptId?.startsWith(CASE_ROLE_RELEASE_ATTEMPT_PREFIX) === true ||

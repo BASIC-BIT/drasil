@@ -1732,6 +1732,21 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
         quarantine_attempt_id: presentationAttemptId,
       })
     );
+    const stalePresentationLease = new Date('2026-08-18T11:00:00.000Z');
+    await prisma.verification_events.update({
+      where: { id: verification.id },
+      data: { quarantine_lease_renewed_at: stalePresentationLease },
+    });
+    await expect(
+      verifications.findExpiredQuarantineAttempts(new Date('2026-08-18T12:00:00.000Z'))
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: verification.id,
+          quarantine_attempt_id: presentationAttemptId,
+        }),
+      ])
+    );
     await expect(
       verifications.claimQuarantineAttempt(
         verification.id,

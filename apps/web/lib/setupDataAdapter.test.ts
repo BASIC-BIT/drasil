@@ -1,16 +1,30 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocked = vi.hoisted(() => ({ query: vi.fn() }));
+const mocked = vi.hoisted(() => ({
+  clientQuery: vi.fn(),
+  connect: vi.fn(),
+  query: vi.fn(),
+  release: vi.fn(),
+}));
 
 vi.mock('pg', () => ({
   Pool: class {
     public readonly query = mocked.query;
+    public readonly connect = mocked.connect;
   },
 }));
 
 import { buildSetupSettingsPatch, PostgresSetupDataAdapter } from './setupDataAdapter';
 
 describe('createSetupDataAdapter', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocked.connect.mockResolvedValue({
+      query: mocked.clientQuery,
+      release: mocked.release,
+    });
+  });
+
   it('defaults to the postgres adapter', async () => {
     vi.stubEnv('DRASIL_WEB_DATA_PROVIDER', '');
     const { createSetupDataAdapter } = await import('./setupDataAdapter');
@@ -142,25 +156,27 @@ describe('createSetupDataAdapter', () => {
 
   it('cancels pending CAPTCHA generations in the mode-off settings write', async () => {
     vi.stubEnv('DATABASE_URL', 'postgresql://test:test@localhost:5432/test');
-    mocked.query.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({
-      rows: [
-        {
-          guild_id: 'guild-1',
-          case_role_id: null,
-          admin_channel_id: null,
-          verification_channel_id: null,
-          admin_notification_role_id: null,
-          heuristic_message_threshold: 5,
-          heuristic_message_timeframe_seconds: 10,
-          heuristic_suspicious_keywords: [],
-          created_at: new Date(),
-          updated_at: new Date(),
-          updated_by: 'moderator-1',
-          settings: { captcha_mode: 'off' },
-          is_active: true,
-        },
-      ],
-    });
+    const server = {
+      guild_id: 'guild-1',
+      case_role_id: null,
+      admin_channel_id: null,
+      verification_channel_id: null,
+      admin_notification_role_id: null,
+      heuristic_message_threshold: 5,
+      heuristic_message_timeframe_seconds: 10,
+      heuristic_suspicious_keywords: [],
+      created_at: new Date(),
+      updated_at: new Date(),
+      updated_by: 'moderator-1',
+      settings: { captcha_mode: 'off' },
+      is_active: true,
+    };
+    mocked.query.mockResolvedValueOnce({ rows: [] });
+    mocked.clientQuery
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [server] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
 
     await new PostgresSetupDataAdapter().updateGuildSetup({
       guildId: 'guild-1',
@@ -168,11 +184,16 @@ describe('createSetupDataAdapter', () => {
       updatedBy: 'moderator-1',
     });
 
-    const [statement, parameters] = mocked.query.mock.calls[1] ?? [];
-    expect(statement).toContain('cancelled_challenges as');
-    expect(statement).toContain("status = 'cancelled'::captcha_challenge_status");
-    expect(statement).toContain("status = 'pending'::captcha_challenge_status");
-    expect(statement).toContain('and $8::boolean');
-    expect(parameters?.at(-1)).toBe(true);
+    expect(mocked.clientQuery.mock.calls.map(([statement]) => statement)).toEqual([
+      'begin',
+      expect.stringContaining('insert into servers'),
+      expect.stringContaining('update captcha_challenges'),
+      'commit',
+    ]);
+    const [cancelStatement, cancelParameters] = mocked.clientQuery.mock.calls[2] ?? [];
+    expect(cancelStatement).toContain("status = 'cancelled'::captcha_challenge_status");
+    expect(cancelStatement).toContain("status = 'pending'::captcha_challenge_status");
+    expect(cancelParameters).toEqual(['guild-1']);
+    expect(mocked.release).toHaveBeenCalledTimes(1);
   });
 });

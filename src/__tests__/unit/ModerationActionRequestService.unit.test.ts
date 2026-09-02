@@ -2087,6 +2087,44 @@ describe('ModerationActionRequestService', () => {
     });
   });
 
+  it('keeps committed CAPTCHA finalization retryable while the member is unavailable', async () => {
+    const {
+      captchaChallengeService,
+      guild,
+      repository,
+      service,
+      userModerationService,
+      verificationEventRepository,
+    } = buildService([applyCaptchaPassRequest]);
+    captchaChallengeService.evaluatePassedChallenge.mockResolvedValueOnce({
+      status: 'held',
+      reason: 'case_changed',
+    } as any);
+    verificationEventRepository.findById.mockResolvedValueOnce({
+      id: 'ver-1',
+      server_id: 'guild-1',
+      user_id: 'user-1',
+      status: 'verified',
+      case_revision: 2,
+      resolved_by: 'drasil:captcha',
+      metadata: {
+        captcha_resolution: { challenge_id: 'challenge-1', generation: 1 },
+      },
+    } as any);
+    guild.members.fetch.mockRejectedValueOnce({ code: 10007 });
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(userModerationService.resolveCaptchaCase).not.toHaveBeenCalled();
+    expect(repository.completed).toEqual([]);
+    expect(repository.failed).toEqual([
+      {
+        id: 'captcha-pass-request-1',
+        error: 'CAPTCHA case ver-1 was resolved, but the member is unavailable for finalization.',
+      },
+    ]);
+  });
+
   it('records a moderator-issued CAPTCHA pass as evidence without resolving the case', async () => {
     const {
       captchaChallengeService,

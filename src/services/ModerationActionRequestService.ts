@@ -1202,6 +1202,11 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       member = null;
     }
     if (!member) {
+      if (resumesCommittedResolution) {
+        throw new Error(
+          `CAPTCHA case ${verificationEvent.id} was resolved, but the member is unavailable for finalization.`
+        );
+      }
       if (verificationEvent.status === VerificationStatus.PENDING) {
         await this.requireCaptchaAttention(
           request,

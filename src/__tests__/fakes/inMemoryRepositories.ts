@@ -62,6 +62,7 @@ import {
 import {
   CAPTCHA_FINALIZATION_ATTEMPT_PREFIX,
   isCaseRoleReleaseRecoveryAttempt,
+  isCaptchaPresentationAttempt,
 } from '../../utils/caseRoleRelease';
 import {
   DEFAULT_USER_REPORT_EXTERNAL_RESPONSE_MODE,
@@ -569,11 +570,12 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       .filter(
         (event) =>
           event.status === VerificationStatus.PENDING &&
-          event.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
           event.containment_status === CaseContainmentStatus.IN_PROGRESS &&
           event.quarantine_attempt_id !== null &&
           event.quarantine_attempt_id !== undefined &&
-          !isCaseRoleReleaseRecoveryAttempt(event.quarantine_attempt_id) &&
+          (isCaptchaPresentationAttempt(event.quarantine_attempt_id) ||
+            (event.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
+              !isCaseRoleReleaseRecoveryAttempt(event.quarantine_attempt_id))) &&
           (event.quarantine_lease_renewed_at === null ||
             event.quarantine_lease_renewed_at === undefined ||
             event.quarantine_lease_renewed_at <= staleBefore)

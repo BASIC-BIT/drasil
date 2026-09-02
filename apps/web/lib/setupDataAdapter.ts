@@ -291,18 +291,19 @@ export class PostgresSetupDataAdapter implements SetupDataAdapter {
     const current = await this.getServer(update.guildId);
     const settingsPatch = buildSetupSettingsPatch(update);
     const updatedBy = update.updatedBy ?? current?.updated_by ?? null;
-
-    const result = await getPostgresPool().query(
-      `with updated_server as (
-        insert into servers (
-        guild_id,
-        case_role_id,
-        admin_channel_id,
-        verification_channel_id,
-        admin_notification_role_id,
-        settings,
-        updated_by,
-        updated_at
+    const client = await getPostgresPool().connect();
+    try {
+      await client.query('begin');
+      let result = await client.query(
+        `insert into servers (
+          guild_id,
+          case_role_id,
+          admin_channel_id,
+          verification_channel_id,
+          admin_notification_role_id,
+          settings,
+          updated_by,
+          updated_at
         ) values ($1, $2, $3, $4, $5, $6::jsonb, $7, now())
         on conflict (guild_id) do update set
           case_role_id = excluded.case_role_id,
@@ -312,53 +313,57 @@ export class PostgresSetupDataAdapter implements SetupDataAdapter {
           settings = coalesce(servers.settings, '{}'::jsonb) || excluded.settings,
           updated_by = excluded.updated_by,
           updated_at = now()
-        returning *
-      ), cancelled_challenges as (
-        update captcha_challenges
-        set status = 'cancelled'::captcha_challenge_status,
-            cancelled_at = now(),
+        returning *`,
+        [
+          update.guildId,
+          nextOptionalId(update.caseRoleId, current?.case_role_id),
+          nextOptionalId(update.adminChannelId, current?.admin_channel_id),
+          nextOptionalId(update.verificationChannelId, current?.verification_channel_id),
+          nextOptionalId(update.adminNotificationRoleId, current?.admin_notification_role_id),
+          JSON.stringify(settingsPatch),
+          updatedBy,
+        ]
+      );
+
+      if (update.captchaMode === 'off') {
+        await client.query(
+          `update captcha_challenges
+           set status = 'cancelled'::captcha_challenge_status,
+               cancelled_at = now(),
+               updated_at = now()
+           where server_id = $1
+             and status = 'pending'::captcha_challenge_status`,
+          [update.guildId]
+        );
+      }
+
+      if (hasHeuristicColumnsPatch(update)) {
+        result = await client.query(
+          `update servers set
+            heuristic_message_threshold = coalesce($2::integer, heuristic_message_threshold),
+            heuristic_message_timeframe_seconds = coalesce($3::integer, heuristic_message_timeframe_seconds),
+            heuristic_suspicious_keywords = coalesce($4::text[], heuristic_suspicious_keywords),
+            updated_by = $5,
             updated_at = now()
-        where server_id = $1
-          and status = 'pending'::captcha_challenge_status
-          and $8::boolean
-        returning id
-      )
-      select updated_server.*
-      from updated_server`,
-      [
-        update.guildId,
-        nextOptionalId(update.caseRoleId, current?.case_role_id),
-        nextOptionalId(update.adminChannelId, current?.admin_channel_id),
-        nextOptionalId(update.verificationChannelId, current?.verification_channel_id),
-        nextOptionalId(update.adminNotificationRoleId, current?.admin_notification_role_id),
-        JSON.stringify(settingsPatch),
-        updatedBy,
-        update.captchaMode === 'off',
-      ]
-    );
-
-    if (!hasHeuristicColumnsPatch(update)) {
+          where guild_id = $1
+          returning *`,
+          [
+            update.guildId,
+            update.heuristicMessageThreshold ?? null,
+            update.heuristicMessageTimeframeSeconds ?? null,
+            update.heuristicSuspiciousKeywords ?? null,
+            updatedBy,
+          ]
+        );
+      }
+      await client.query('commit');
       return parseServerRow(result.rows[0] as Record<string, unknown>);
+    } catch (error) {
+      await client.query('rollback').catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
     }
-
-    const heuristicResult = await getPostgresPool().query(
-      `update servers set
-        heuristic_message_threshold = coalesce($2::integer, heuristic_message_threshold),
-        heuristic_message_timeframe_seconds = coalesce($3::integer, heuristic_message_timeframe_seconds),
-        heuristic_suspicious_keywords = coalesce($4::text[], heuristic_suspicious_keywords),
-        updated_by = $5,
-        updated_at = now()
-      where guild_id = $1
-      returning *`,
-      [
-        update.guildId,
-        update.heuristicMessageThreshold ?? null,
-        update.heuristicMessageTimeframeSeconds ?? null,
-        update.heuristicSuspiciousKeywords ?? null,
-        updatedBy,
-      ]
-    );
-    return parseServerRow(heuristicResult.rows[0] as Record<string, unknown>);
   }
 }
 

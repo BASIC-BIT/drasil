@@ -19,6 +19,7 @@ import {
   CASE_ROLE_RELEASE_LEASE_MS,
   isCaseAttentionAttempt,
   isCaseTerminalActionAttempt,
+  isCaptchaPresentationAttempt,
 } from '../utils/caseRoleRelease';
 import { CaseRoleLockdownAuditContext, ICaseRoleLockdownService } from './CaseRoleLockdownService';
 import { IModerationQueueService } from './ModerationQueueService';
@@ -122,6 +123,24 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
   ): Promise<void> {
     const attemptId = verificationEvent.quarantine_attempt_id;
     if (!attemptId) {
+      return;
+    }
+    if (isCaptchaPresentationAttempt(attemptId)) {
+      const recovered = await this.verificationEventRepository.recoverExpiredQuarantineAttempt(
+        verificationEvent.id,
+        attemptId,
+        staleBefore,
+        {
+          attention_state: verificationEvent.attention_state,
+          containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+          parked_at: verificationEvent.parked_at,
+          parked_by: verificationEvent.parked_by,
+          metadata: verificationEvent.metadata,
+        }
+      );
+      if (recovered) {
+        await this.moderationQueueService.upsertCaseMirror(recovered);
+      }
       return;
     }
     if (isCaseAttentionAttempt(attemptId)) {

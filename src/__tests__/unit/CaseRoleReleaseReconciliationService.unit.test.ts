@@ -1,6 +1,7 @@
 import { CaseRoleReleaseReconciliationService } from '../../services/CaseRoleReleaseReconciliationService';
 import {
   CASE_ATTENTION_ATTEMPT_PREFIX,
+  CAPTCHA_PRESENTATION_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_LEASE_MS,
   CASE_ROLE_RELEASE_RECONCILIATION_ATTEMPT_PREFIX,
@@ -296,6 +297,48 @@ describe('CaseRoleReleaseReconciliationService (unit)', () => {
       recovered,
       'containment_incomplete'
     );
+    expect(queue.upsertCaseMirror).toHaveBeenCalledWith(recovered);
+  });
+
+  it('releases an expired CAPTCHA presentation claim without changing case review state', async () => {
+    const now = new Date('2026-08-18T12:00:00.000Z');
+    const verificationEvents = new InMemoryVerificationEventRepository();
+    const verificationEvent = await verificationEvents.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationEvents.update(verificationEvent.id, {
+      case_kind: CaseKind.STANDARD,
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      containment_status: CaseContainmentStatus.IN_PROGRESS,
+      quarantine_attempt_id: `${CAPTCHA_PRESENTATION_ATTEMPT_PREFIX}challenge-1:1:request-1`,
+      quarantine_lease_renewed_at: new Date('2026-08-18T11:00:00.000Z'),
+    });
+    const notifications = {
+      notifyAccountQuarantineAttention: jest.fn().mockResolvedValue(true),
+    };
+    const queue = { upsertCaseMirror: jest.fn().mockResolvedValue(undefined) };
+    const service = buildService({
+      client: { guilds: { cache: new Map(), fetch: jest.fn() } },
+      verificationEvents,
+      notifications,
+      queue,
+    });
+
+    await service.runOnce(now);
+
+    const recovered = await verificationEvents.findById(verificationEvent.id);
+    expect(recovered).toEqual(
+      expect.objectContaining({
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+        quarantine_attempt_id: null,
+        quarantine_lease_renewed_at: null,
+      })
+    );
+    expect(notifications.notifyAccountQuarantineAttention).not.toHaveBeenCalled();
     expect(queue.upsertCaseMirror).toHaveBeenCalledWith(recovered);
   });
 
