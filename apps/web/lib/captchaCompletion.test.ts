@@ -110,7 +110,9 @@ describe('captcha completion transaction', () => {
         return { rows: [] };
       }
       if (statement.includes('generation_count')) {
-        return { rows: [{ generation_count: '100', recent_user_count: '0' }] };
+        return {
+          rows: [{ generation_count: '100', recent_service_count: '0', recent_user_count: '0' }],
+        };
       }
       if (statement.includes("set status = 'failed'")) {
         return { rows: [{ id: challengeRow.id }] };
@@ -174,7 +176,9 @@ describe('captcha completion transaction', () => {
         return { rows: [] };
       }
       if (statement.includes('generation_count')) {
-        return { rows: [{ generation_count: '1', recent_user_count: '10' }] };
+        return {
+          rows: [{ generation_count: '1', recent_service_count: '0', recent_user_count: '10' }],
+        };
       }
       return { rows: [] };
     });
@@ -207,8 +211,49 @@ describe('captcha completion transaction', () => {
     expect(lockIndex).toBeGreaterThan(-1);
     expect(lockIndex).toBeLessThan(limitsIndex);
     const limitsQuery = query.mock.calls[limitsIndex]?.[0] ?? '';
-    expect(limitsQuery.match(/from captcha_challenge_attempts/g)).toHaveLength(2);
+    expect(limitsQuery.match(/from captcha_challenge_attempts/g)).toHaveLength(3);
     expect(limitsQuery).toContain('where discord_user_id = $3');
+    expect(query.mock.calls.some(([statement]) => statement.includes('insert into'))).toBe(false);
+  });
+
+  it('applies a coarse provider budget across authenticated users', async () => {
+    const query = vi.fn(async (statement: string, _parameters?: readonly unknown[]) => {
+      if (statement.includes('from captcha_challenges c')) {
+        return { rows: [challengeRow] };
+      }
+      if (statement.includes('where idempotency_key = $1')) {
+        return { rows: [] };
+      }
+      if (statement.includes('generation_count')) {
+        return {
+          rows: [{ generation_count: '1', recent_service_count: '100', recent_user_count: '1' }],
+        };
+      }
+      return { rows: [] };
+    });
+    const client = { query, release: vi.fn() };
+    mocked.getPostgresPool.mockReturnValue({ connect: vi.fn(async () => client) });
+
+    await expect(
+      beginCaptchaAttempt({
+        token: 'a'.repeat(43),
+        identity: {
+          challengeId: challengeRow.id,
+          expiresAt: Date.now() + 60_000,
+          generation: challengeRow.generation,
+          issuedAt: Date.now(),
+          userId: challengeRow.user_id,
+        },
+        idempotencyKey: '00000000-0000-4000-8000-000000000006',
+      })
+    ).resolves.toEqual({
+      state: 'rate_limited',
+      challenge: expect.objectContaining({ id: challengeRow.id }),
+    });
+
+    expect(query).toHaveBeenCalledWith('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+      'drasil:captcha:provider-budget',
+    ]);
     expect(query.mock.calls.some(([statement]) => statement.includes('insert into'))).toBe(false);
   });
 

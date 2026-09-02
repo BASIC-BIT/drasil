@@ -1274,7 +1274,10 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       if (!current) {
         throw new Error(`CAPTCHA case ${verificationEvent.id} is unavailable.`);
       }
-      if (current.status !== VerificationStatus.PENDING) {
+      if (
+        current.status !== VerificationStatus.PENDING ||
+        current.case_kind !== CaseKind.STANDARD
+      ) {
         await this.updateCaptchaPresentation(current, challenge);
         return current;
       }

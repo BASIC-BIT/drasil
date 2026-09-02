@@ -91,7 +91,12 @@ export interface IThreadManager {
     verificationEvent: VerificationEvent
   ): Promise<ThreadChannel | null>;
 
-  sendCaptchaChallenge(verificationEvent: VerificationEvent, url: string): Promise<boolean>;
+  sendCaptchaChallenge(verificationEvent: VerificationEvent, url: string): Promise<string | null>;
+
+  retractCaptchaChallenge(
+    verificationEvent: VerificationEvent,
+    messageId: string
+  ): Promise<boolean>;
 
   sendCaptchaStatus(verificationEvent: VerificationEvent, message: string): Promise<boolean>;
 
@@ -194,20 +199,20 @@ export class ThreadManager implements IThreadManager {
   public async sendCaptchaChallenge(
     verificationEvent: VerificationEvent,
     url: string
-  ): Promise<boolean> {
+  ): Promise<string | null> {
     if (!verificationEvent.thread_id) {
-      return false;
+      return null;
     }
     try {
       const channel = await this.client.channels.fetch(verificationEvent.thread_id);
       if (!channel?.isThread()) {
-        return false;
+        return null;
       }
       await channel.members.fetch(verificationEvent.user_id);
       if (channel.archived) {
         await channel.setArchived(false, 'Deliver CAPTCHA case challenge');
       }
-      await channel.send({
+      const message = await channel.send({
         content: 'Complete this browser check to confirm access to your Discord account.',
         components: [
           new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -218,11 +223,35 @@ export class ThreadManager implements IThreadManager {
           ),
         ],
       });
-      return true;
+      return message.id;
     } catch (error) {
       const code = getDiscordErrorCode(error);
       console.warn(
         `Failed to deliver CAPTCHA challenge for case ${verificationEvent.id} (Discord code: ${String(code ?? 'unknown')}).`
+      );
+      return null;
+    }
+  }
+
+  public async retractCaptchaChallenge(
+    verificationEvent: VerificationEvent,
+    messageId: string
+  ): Promise<boolean> {
+    if (!verificationEvent.thread_id) {
+      return false;
+    }
+    try {
+      const channel = await this.client.channels.fetch(verificationEvent.thread_id);
+      if (!channel?.isThread()) {
+        return false;
+      }
+      const message = await channel.messages.fetch(messageId);
+      await message.delete();
+      return true;
+    } catch (error) {
+      const code = getDiscordErrorCode(error);
+      console.warn(
+        `Failed to retract stale CAPTCHA challenge for case ${verificationEvent.id} (Discord code: ${String(code ?? 'unknown')}).`
       );
       return false;
     }

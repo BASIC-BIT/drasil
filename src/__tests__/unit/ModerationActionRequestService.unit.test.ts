@@ -1992,6 +1992,58 @@ describe('ModerationActionRequestService', () => {
     });
   });
 
+  it('records a held pass when the pending case becomes nonstandard before presentation', async () => {
+    const {
+      captchaChallengeService,
+      notificationManager,
+      repository,
+      service,
+      threadManager,
+      userModerationService,
+      verificationEventRepository,
+    } = buildService([applyCaptchaPassRequest]);
+    captchaChallengeService.evaluatePassedChallenge.mockResolvedValueOnce({
+      status: 'held',
+      reason: 'case_kind_changed',
+    } as any);
+    const compromisedCase = {
+      id: 'ver-1',
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      case_revision: 2,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      server_id: 'guild-1',
+      status: VerificationStatus.PENDING,
+      thread_id: 'thread-1',
+      user_id: 'user-1',
+    } as any;
+    verificationEventRepository.findById
+      .mockResolvedValueOnce(compromisedCase)
+      .mockResolvedValueOnce(compromisedCase);
+    verificationEventRepository.claimCaptchaPresentation.mockResolvedValueOnce(null);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(notificationManager.updateCaptchaChallengePresentation).toHaveBeenCalledWith(
+      compromisedCase,
+      expect.objectContaining({ id: 'challenge-1' })
+    );
+    expect(threadManager.sendCaptchaStatus).not.toHaveBeenCalled();
+    expect(notificationManager.notifyCaptchaAttention).toHaveBeenCalledWith(
+      compromisedCase,
+      'automatic_resolution_held'
+    );
+    expect(userModerationService.resolveCaptchaCase).not.toHaveBeenCalled();
+    expect(repository.completed[0]).toEqual({
+      id: 'captcha-pass-request-1',
+      result: expect.objectContaining({
+        effect: 'held',
+        held_reason: 'case_kind_changed',
+        resolved: false,
+      }),
+    });
+  });
+
   it('resumes exact-case CAPTCHA finalization after the case commit', async () => {
     const {
       captchaChallengeService,

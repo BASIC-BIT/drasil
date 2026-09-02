@@ -12,6 +12,7 @@ const CAPTCHA_ATTEMPT_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CAPTCHA_ATTEMPT_RATE_WINDOW_MS = 60_000;
 const CAPTCHA_ATTEMPT_RATE_LIMIT = 10;
+const CAPTCHA_SERVICE_ATTEMPT_RATE_LIMIT = 100;
 const CAPTCHA_CHALLENGE_ATTEMPT_LIMIT = 100;
 const CAPTCHA_ATTEMPT_ABANDONED_AFTER_MS = 60_000;
 const CAPTCHA_SYSTEM_ACTOR_ID = 'drasil:captcha';
@@ -293,7 +294,7 @@ async function readAttemptLimits(
   client: PoolClient,
   challenge: CaptchaChallengeRow,
   discordUserId: string
-): Promise<{ generationCount: number; recentUserCount: number }> {
+): Promise<{ generationCount: number; recentServiceCount: number; recentUserCount: number }> {
   // A process exit or provider setup exception can strand a committed attempt before validation.
   // Retire it after the provider request's bounded lifetime so infrastructure failures cannot
   // permanently exhaust the generation cap.
@@ -311,6 +312,7 @@ async function readAttemptLimits(
   );
   const result = await client.query<{
     generation_count: string;
+    recent_service_count: string;
     recent_user_count: string;
   }>(
     `select
@@ -326,7 +328,13 @@ async function readAttemptLimits(
          from captcha_challenge_attempts
          where discord_user_id = $3
            and created_at >= $4::timestamptz
-       ) as recent_user_count`,
+        ) as recent_user_count,
+        (
+          select count(*)::text
+          from captcha_challenge_attempts
+          where created_at >= $4::timestamptz
+            and validation_state <> 'identity_mismatch'::captcha_attempt_validation_state
+        ) as recent_service_count`,
     [
       challenge.id,
       challenge.generation,
@@ -337,12 +345,19 @@ async function readAttemptLimits(
   const counts = result.rows[0];
   return {
     generationCount: Number(counts?.generation_count ?? 0),
+    recentServiceCount: Number(counts?.recent_service_count ?? 0),
     recentUserCount: Number(counts?.recent_user_count ?? 0),
   };
 }
 
 async function lockCaptchaAttemptUser(client: PoolClient, discordUserId: string): Promise<void> {
   await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [discordUserId]);
+}
+
+async function lockCaptchaProviderBudget(client: PoolClient): Promise<void> {
+  await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+    'drasil:captcha:provider-budget',
+  ]);
 }
 
 async function failExhaustedGeneration(
@@ -458,6 +473,7 @@ export async function beginCaptchaAttempt(input: {
       };
     }
     await lockCaptchaAttemptUser(client, input.identity.userId);
+    await lockCaptchaProviderBudget(client);
     const limits = await readAttemptLimits(client, challenge, input.identity.userId);
     if (limits.generationCount >= CAPTCHA_CHALLENGE_ATTEMPT_LIMIT) {
       await failExhaustedGeneration(client, challenge);
@@ -465,6 +481,10 @@ export async function beginCaptchaAttempt(input: {
       return { state: 'stale', challenge: { ...publicChallenge, status: 'failed' } };
     }
     if (limits.recentUserCount >= CAPTCHA_ATTEMPT_RATE_LIMIT) {
+      await client.query('commit');
+      return { state: 'rate_limited', challenge: publicChallenge };
+    }
+    if (limits.recentServiceCount >= CAPTCHA_SERVICE_ATTEMPT_RATE_LIMIT) {
       await client.query('commit');
       return { state: 'rate_limited', challenge: publicChallenge };
     }

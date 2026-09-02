@@ -183,8 +183,8 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     }
 
     try {
-      const delivered = await this.threads.sendCaptchaChallenge(verificationEvent, url);
-      if (!delivered) {
+      const deliveryMessageId = await this.threads.sendCaptchaChallenge(verificationEvent, url);
+      if (!deliveryMessageId) {
         const recorded = await this.challenges.recordDeliveryFailure(
           challenge.id,
           challenge.generation,
@@ -198,6 +198,7 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
       }
       const recorded = await this.challenges.recordDelivery(challenge.id, challenge.generation);
       if (!recorded) {
+        await this.threads.retractCaptchaChallenge(verificationEvent, deliveryMessageId);
         await this.compensateRejectedDelivery(verificationEvent);
       }
       await this.refreshCaptchaPresentation(verificationEvent, challenge);

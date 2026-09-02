@@ -409,11 +409,24 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
   }
 
   public async recordDelivery(id: string, generation: number): Promise<boolean> {
-    const result = await this.prisma.captcha_challenges.updateMany({
-      where: { id, generation, status: CaptchaChallengeStatus.PENDING },
-      data: { delivered_at: new Date(), delivery_error_code: null, updated_at: new Date() },
-    });
-    return result.count === 1;
+    const delivered = await this.prisma.$queryRaw<Array<{ id: string }>>`
+      update captcha_challenges as challenge
+      set delivered_at = now(),
+          delivery_error_code = null,
+          updated_at = now()
+      from verification_events as verification,
+           servers as server
+      where challenge.id = ${id}::uuid
+        and challenge.generation = ${generation}
+        and challenge.status = ${CaptchaChallengeStatus.PENDING}::captcha_challenge_status
+        and verification.id = challenge.verification_event_id
+        and verification.status = ${VerificationStatus.PENDING}::verification_status
+        and verification.case_kind = ${CaseKind.STANDARD}::case_kind
+        and server.guild_id = challenge.server_id
+        and coalesce(server.settings->>'captcha_mode', 'off') in ('manual', 'suspicious_join')
+      returning challenge.id::text
+    `;
+    return delivered.length === 1;
   }
 
   public async recordPresentation(id: string, generation: number): Promise<boolean> {
@@ -818,7 +831,20 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
               'completed'::moderation_action_request_status
             )
         )
-      order by challenge.updated_at asc nulls first
+      order by coalesce(
+        (
+          select max(request.updated_at)
+          from moderation_action_requests as request
+          where request.idempotency_key = concat(
+            'captcha:apply:',
+            challenge.id::text,
+            ':',
+            challenge.generation::text
+          )
+            and request.status = 'failed'::moderation_action_request_status
+        ),
+        challenge.updated_at
+      ) asc nulls first
       limit ${Math.max(1, Math.min(limit, 100))}
     `;
   }

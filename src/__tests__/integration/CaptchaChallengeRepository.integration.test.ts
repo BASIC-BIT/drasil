@@ -80,6 +80,7 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       'user-captcha-presentation-recovery'
     );
     const challenges = new CaptchaChallengeRepository(prisma);
+    await enableManualCaptcha(verification.server_id);
     const challenge = await challenges.create({
       verificationEventId: verification.id,
       serverId: verification.server_id,
@@ -650,8 +651,43 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     ]);
     const queued = await requests.enqueue(requestInput);
     await expect(challenges.findPassedNeedingApplication(10)).resolves.toEqual([]);
+    const { verification: newerVerification } = await createCase(
+      'guild-captcha-pass-recovery-newer',
+      'user-captcha-pass-recovery-newer'
+    );
+    const newerChallenge = await challenges.create({
+      verificationEventId: newerVerification.id,
+      serverId: newerVerification.server_id,
+      userId: newerVerification.user_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      caseRevision: newerVerification.case_revision,
+      tokenHash: 'pass-recovery-newer-hash',
+      expiresAt: new Date(Date.now() + 60_000),
+      requestedBy: 'moderator-1',
+    });
+    await prisma.captcha_challenges.update({
+      where: { id: newerChallenge.id },
+      data: { status: CaptchaChallengeStatus.PASSED, passed_at: new Date() },
+    });
     await requests.fail(queued.id, 'Worker interrupted');
-    await expect(challenges.findPassedNeedingApplication(10)).resolves.toEqual([
+    await expect(challenges.findPassedNeedingApplication(1)).resolves.toEqual([
+      expect.objectContaining({ id: newerChallenge.id }),
+    ]);
+    const newerRequest = await requests.enqueue({
+      ...requestInput,
+      serverId: newerVerification.server_id,
+      targetUserId: newerVerification.user_id,
+      verificationEventId: newerVerification.id,
+      idempotencyKey: `captcha:apply:${newerChallenge.id}:${newerChallenge.generation}`,
+      metadata: {
+        challenge_id: newerChallenge.id,
+        expected_case_revision: newerChallenge.case_revision_at_issue,
+        generation: newerChallenge.generation,
+      },
+    });
+    await requests.complete(newerRequest.id, { applied: true });
+    await expect(challenges.findPassedNeedingApplication(1)).resolves.toEqual([
       expect.objectContaining({ id: challenge.id }),
     ]);
     const requeued = await requests.enqueue(requestInput);

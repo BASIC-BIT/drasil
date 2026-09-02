@@ -84,7 +84,7 @@ const buildThread = (id = 'thread-1'): jest.Mocked<ThreadChannel> =>
       add: jest.fn().mockResolvedValue(undefined),
       fetch: jest.fn().mockResolvedValue({ id: 'user-1' }),
     },
-    send: jest.fn().mockResolvedValue(undefined),
+    send: jest.fn().mockResolvedValue({ id: 'message-1' }),
     setArchived: jest.fn().mockResolvedValue(undefined),
     setLocked: jest.fn().mockResolvedValue(undefined),
     setInvitable: jest.fn().mockResolvedValue(undefined),
@@ -185,7 +185,7 @@ describe('ThreadManager (unit)', () => {
 
     await expect(
       manager.sendCaptchaChallenge(buildVerificationEvent({ thread_id: thread.id }), challengeUrl)
-    ).resolves.toBe(false);
+    ).resolves.toBeNull();
 
     expect(warn).toHaveBeenCalledWith(
       'Failed to deliver CAPTCHA challenge for case ver-1 (Discord code: 50035).'
@@ -211,7 +211,7 @@ describe('ThreadManager (unit)', () => {
         buildVerificationEvent({ thread_id: thread.id }),
         'https://drasil.example/captcha/token'
       )
-    ).resolves.toBe(true);
+    ).resolves.toBe('message-1');
 
     expect(thread.members.fetch).toHaveBeenCalledWith('user-1');
     expect(thread.send).toHaveBeenCalledWith(
@@ -240,10 +240,33 @@ describe('ThreadManager (unit)', () => {
         buildVerificationEvent({ thread_id: thread.id }),
         'https://drasil.example/captcha/token'
       )
-    ).resolves.toBe(false);
+    ).resolves.toBeNull();
 
     expect(thread.members.fetch).toHaveBeenCalledWith('user-1');
     expect(thread.send).not.toHaveBeenCalled();
+  });
+
+  it('retracts a stale CAPTCHA challenge message', async () => {
+    const deleteMessage = jest.fn().mockResolvedValue(undefined);
+    (thread.messages.fetch as jest.Mock).mockResolvedValueOnce({ delete: deleteMessage });
+    const client = {
+      channels: { fetch: jest.fn().mockResolvedValue(thread) },
+    };
+    const manager = new ThreadManager(
+      client as any,
+      configService,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      serverMemberRepository
+    );
+
+    await expect(
+      manager.retractCaptchaChallenge(buildVerificationEvent({ thread_id: thread.id }), 'message-1')
+    ).resolves.toBe(true);
+
+    expect(thread.messages.fetch).toHaveBeenCalledWith('message-1');
+    expect(deleteMessage).toHaveBeenCalledTimes(1);
   });
 
   it('returns false when a CAPTCHA status thread cannot be unarchived', async () => {

@@ -125,7 +125,8 @@ function createHarness(settings: Record<string, unknown> = { captcha_mode: 'manu
       closedAny: true,
       results: [],
     }),
-    sendCaptchaChallenge: jest.fn().mockResolvedValue(true),
+    retractCaptchaChallenge: jest.fn().mockResolvedValue(true),
+    sendCaptchaChallenge: jest.fn().mockResolvedValue('captcha-message-1'),
     sendCaptchaStatus: jest.fn().mockResolvedValue(true),
   } as unknown as jest.Mocked<IThreadManager>;
   const notifications = {
@@ -243,6 +244,10 @@ describe('CaptchaChallengeService', () => {
         requestSource: CaptchaChallengeRequestSource.MODERATOR,
       })
     ).resolves.toMatchObject({ delivered: false });
+    expect(threads.retractCaptchaChallenge).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'case-1' }),
+      'captcha-message-1'
+    );
     expect(threads.sendCaptchaStatus).toHaveBeenCalledWith(
       expect.objectContaining({ status: VerificationStatus.VERIFIED }),
       'This security check is no longer active.'

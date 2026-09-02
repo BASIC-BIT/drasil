@@ -135,7 +135,8 @@ describe('UserModerationService (unit)', () => {
       updateCaptchaChallengePresentation: jest.fn().mockResolvedValue(true),
     };
     threadManager = {
-      sendCaptchaChallenge: jest.fn().mockResolvedValue(true),
+      retractCaptchaChallenge: jest.fn().mockResolvedValue(true),
+      sendCaptchaChallenge: jest.fn().mockResolvedValue('captcha-message-1'),
       sendCaptchaStatus: jest.fn().mockResolvedValue(true),
       createVerificationThread: jest.fn().mockResolvedValue({} as any),
       createReportReviewThread: jest.fn().mockResolvedValue({} as any),

@@ -113,7 +113,8 @@ describe('SecurityActionService (unit)', () => {
       restoreObservedDetectionActions: jest.fn().mockResolvedValue(true),
     };
     threadManager = {
-      sendCaptchaChallenge: jest.fn().mockResolvedValue(true),
+      retractCaptchaChallenge: jest.fn().mockResolvedValue(true),
+      sendCaptchaChallenge: jest.fn().mockResolvedValue('captcha-message-1'),
       sendCaptchaStatus: jest.fn().mockResolvedValue(true),
       createVerificationThread: jest
         .fn()

@@ -416,7 +416,8 @@ describe('InteractionHandler (unit)', () => {
       update: jest.fn(),
     };
     threadManager = {
-      sendCaptchaChallenge: jest.fn().mockResolvedValue(true),
+      retractCaptchaChallenge: jest.fn().mockResolvedValue(true),
+      sendCaptchaChallenge: jest.fn().mockResolvedValue('captcha-message-1'),
       sendCaptchaStatus: jest.fn().mockResolvedValue(true),
       createVerificationThread: jest
         .fn()
