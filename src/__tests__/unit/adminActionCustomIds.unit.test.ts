@@ -73,6 +73,33 @@ describe('adminActionCustomIds (unit)', () => {
     });
   });
 
+  it('binds CAPTCHA retry confirmations to the displayed challenge generation', () => {
+    const userId = '1234567890123456789';
+    const challengeId = '12345678-1234-1234-1234-123456789012';
+
+    for (const action of ['captcha_retry', 'confirm_captcha_retry']) {
+      const customId = buildAdminActionCustomId(
+        action,
+        'case',
+        userId,
+        undefined,
+        undefined,
+        undefined,
+        challengeId,
+        7
+      );
+
+      expect(customId.length).toBeLessThanOrEqual(100);
+      expect(parseAdminActionCustomId(customId)).toEqual({
+        action,
+        surface: 'case',
+        userId,
+        captchaChallengeId: challengeId,
+        captchaGeneration: 7,
+      });
+    }
+  });
+
   it('does not map old observed-restrict custom ID codes', () => {
     expect(parseAdminActionCustomId('admin_actions:or:o:user-1:det-1')).toEqual({
       action: 'or',

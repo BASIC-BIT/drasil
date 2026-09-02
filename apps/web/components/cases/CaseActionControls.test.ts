@@ -75,6 +75,35 @@ function renderVerificationControls(useInboxAction: boolean): string {
   );
 }
 
+function renderCaptchaBypassControls(useInboxAction: boolean): string {
+  return renderToStaticMarkup(
+    createElement(CaseActionControls, {
+      actions: ['bypass_captcha'],
+      canQueueCaseActions: true,
+      captchaChallenge: {
+        id: '11111111-1111-4111-8111-111111111111',
+        status: 'failed',
+        requestSource: 'moderator',
+        passEffect: 'evidence_only',
+        generation: 3,
+        submissionCount: 5,
+        expiresAt: '2026-09-01T12:00:00.000Z',
+        requestedAt: '2026-09-01T11:00:00.000Z',
+        deliveredAt: '2026-09-01T11:01:00.000Z',
+        deliveryErrorCode: null,
+        passedAt: null,
+        bypassedAt: null,
+        bypassedBy: null,
+        bypassReason: null,
+      },
+      caseId: 'case-1',
+      guildId: 'guild-1',
+      queueCaseAction: queueCaseAction as never,
+      queueInboxCaseAction: useInboxAction ? (queueInboxCaseAction as never) : undefined,
+    })
+  );
+}
+
 describe('CaseActionControls account quarantine', () => {
   it('allows a completed stale preview to be refreshed', () => {
     const markup = renderControls(completedPreview('2020-01-01T00:00:00.000Z'));
@@ -108,6 +137,21 @@ describe('CaseActionControls account quarantine', () => {
       expect(markup).toContain('required=""');
       expect(markup).toContain(
         'This releases the account quarantine, restores eligible snapshotted roles, and resolves the open verification case.'
+      );
+    }
+  );
+
+  it.each([false, true])(
+    'binds CAPTCHA bypass confirmation to the displayed challenge (inbox action: %s)',
+    (useInboxAction) => {
+      const markup = renderCaptchaBypassControls(useInboxAction);
+
+      expect(markup).toContain(
+        'type="hidden" name="expectedCaptchaChallengeId" value="11111111-1111-4111-8111-111111111111"'
+      );
+      expect(markup).toContain('type="hidden" name="expectedCaptchaGeneration" value="3"');
+      expect(markup).not.toContain(
+        '<button class="button secondary compact-button" type="submit">Continue Without Browser Check</button>'
       );
     }
   );

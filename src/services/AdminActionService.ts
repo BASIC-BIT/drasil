@@ -5,6 +5,9 @@ import { IUserRepository } from '../repositories/UserRepository';
 import { IServerRepository } from '../repositories/ServerRepository';
 import { AdminAction, AdminActionCreate, AdminActionType } from '../repositories/types';
 
+const CAPTCHA_SYSTEM_ACTOR_ID = 'drasil:captcha';
+const CAPTCHA_SYSTEM_ACTOR_LABEL = 'Drasil browser check';
+
 export interface IAdminActionService {
   recordAction(data: AdminActionCreate): Promise<AdminAction>;
   getActionsByAdmin(
@@ -12,6 +15,7 @@ export interface IAdminActionService {
     options?: { limit?: number; offset?: number }
   ): Promise<AdminAction[]>;
   getActionsForUser(serverId: string, userId: string): Promise<AdminAction[]>;
+  getActionsForVerificationEvent?(verificationEventId: string): Promise<AdminAction[]>;
   formatActionSummary(action: AdminAction): string;
 }
 
@@ -55,59 +59,66 @@ export class AdminActionService implements IAdminActionService {
     return this.adminActionRepository.findByUserAndServer(userId, serverId);
   }
 
+  async getActionsForVerificationEvent(verificationEventId: string): Promise<AdminAction[]> {
+    return this.adminActionRepository.findByVerificationEvent(verificationEventId);
+  }
+
   formatActionSummary(action: AdminAction): string {
     const timestamp = new Date(action.action_at).toLocaleString();
-    const adminMention = `<@${action.admin_id}>`;
+    const adminLabel =
+      action.admin_id === CAPTCHA_SYSTEM_ACTOR_ID
+        ? CAPTCHA_SYSTEM_ACTOR_LABEL
+        : `<@${action.admin_id}>`;
     let summary = '';
 
     switch (action.action_type) {
       case AdminActionType.VERIFY:
-        summary = `✅ Verified by ${adminMention}`;
+        summary = `✅ Verified by ${adminLabel}`;
         break;
       case AdminActionType.REJECT:
-        summary = `❌ Rejected by ${adminMention}`;
+        summary = `❌ Rejected by ${adminLabel}`;
         break;
       case AdminActionType.BAN:
-        summary = `🔨 Banned by ${adminMention}`;
+        summary = `🔨 Banned by ${adminLabel}`;
         break;
       case AdminActionType.KICK:
-        summary = `👢 Kicked by ${adminMention}`;
+        summary = `👢 Kicked by ${adminLabel}`;
         break;
       case AdminActionType.CLOSE_NO_ACTION:
-        summary = `Closed with no action by ${adminMention}`;
+        summary = `Closed with no action by ${adminLabel}`;
         break;
       case AdminActionType.REOPEN:
-        summary = `🔄 Verification reopened by ${adminMention}`;
+        summary = `🔄 Verification reopened by ${adminLabel}`;
         break;
       case AdminActionType.CREATE_THREAD:
-        summary = `📝 Verification thread created by ${adminMention}`;
+        summary = `📝 Verification thread created by ${adminLabel}`;
         break;
       case AdminActionType.OPEN_CASE:
-        summary = `📝 Verification case opened by ${adminMention}`;
+        summary = `📝 Verification case opened by ${adminLabel}`;
         break;
       case AdminActionType.RESTRICT:
-        summary = `🔒 Case role applied by ${adminMention}`;
+        summary = `🔒 Case role applied by ${adminLabel}`;
         break;
       case AdminActionType.LIFT_RESTRICTION:
-        summary = `🔓 Case role removed by ${adminMention}`;
+        summary = `🔓 Case role removed by ${adminLabel}`;
         break;
       case AdminActionType.DISMISS:
-        summary = `Dismissed by ${adminMention}`;
+        summary = `Dismissed by ${adminLabel}`;
         break;
       case AdminActionType.FALSE_POSITIVE:
-        summary = `Marked false positive by ${adminMention}`;
+        summary = `Marked false positive by ${adminLabel}`;
         break;
       case AdminActionType.UNDO_OBSERVED_ACTION:
-        summary = `Observed alert action undone by ${adminMention}`;
+        summary = `Observed alert action undone by ${adminLabel}`;
         break;
       case AdminActionType.ROLE_GATE_CLEANUP:
-        summary = `Role gate cleanup by ${adminMention}`;
+        summary = `Role gate cleanup by ${adminLabel}`;
         break;
       case AdminActionType.QUARANTINE_COMPROMISED_ACCOUNT:
-        summary = `Compromised account quarantined by ${adminMention}`;
+        summary = `Compromised account quarantined by ${adminLabel}`;
         break;
       default:
-        summary = `Action taken by ${adminMention}`;
+        summary = `Action taken by ${adminLabel}`;
     }
 
     summary += ` at ${timestamp}`;

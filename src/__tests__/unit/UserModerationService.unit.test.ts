@@ -4,12 +4,15 @@ import { AdminActionService } from '../../services/AdminActionService';
 import { ModerationOutcomeService } from '../../services/ModerationOutcomeService';
 import {
   AdminActionType,
+  CaptchaChallengeStatus,
   CaseAttentionState,
   CaseContainmentStatus,
   CaseKind,
   DetectionType,
   ModerationOutcomeSource,
   ModerationOutcomeType,
+  RoleQuarantineSnapshotPurpose,
+  VerificationEvent,
   VerificationStatus,
 } from '../../repositories/types';
 import {
@@ -26,7 +29,9 @@ import { IRoleManager } from '../../services/RoleManager';
 import { IThreadManager } from '../../services/ThreadManager';
 import type { IModerationQueueService } from '../../services/ModerationQueueService';
 import type { IRoleQuarantineService } from '../../services/RoleQuarantineService';
+import type { ICaptchaChallengeRepository } from '../../repositories/CaptchaChallengeRepository';
 import {
+  CAPTCHA_FINALIZATION_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_LEASE_MS,
   CASE_TERMINAL_ACTION_ATTEMPT_PREFIX,
@@ -127,8 +132,12 @@ describe('UserModerationService (unit)', () => {
       upsertObservedDetectionNotification: jest.fn().mockResolvedValue({} as any),
       markObservedDetectionActionTaken: jest.fn().mockResolvedValue(true),
       restoreObservedDetectionActions: jest.fn().mockResolvedValue(true),
+      updateCaptchaChallengePresentation: jest.fn().mockResolvedValue(true),
     };
     threadManager = {
+      retractCaptchaChallenge: jest.fn().mockResolvedValue(true),
+      sendCaptchaChallenge: jest.fn().mockResolvedValue('captcha-message-1'),
+      sendCaptchaStatus: jest.fn().mockResolvedValue(true),
       createVerificationThread: jest.fn().mockResolvedValue({} as any),
       createReportReviewThread: jest.fn().mockResolvedValue({} as any),
       createPrivateEvidenceThread: jest.fn().mockResolvedValue({} as any),
@@ -222,6 +231,762 @@ describe('UserModerationService (unit)', () => {
     expect(notificationManager.updateNotificationButtons).toHaveBeenCalled();
   });
 
+  it('shows a cancelled browser check when another moderation action resolves the case', async () => {
+    const guildId = 'guild-captcha-cancel-presentation';
+    const userId = 'user-captcha-cancel-presentation';
+    const moderator = { id: 'mod-captcha-cancel-presentation' } as User;
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const cancelledChallenge = {
+      id: 'challenge-cancelled',
+      verification_event_id: verificationEvent.id,
+      status: CaptchaChallengeStatus.CANCELLED,
+    };
+    const captchaChallenges = {
+      cancelPendingForCase: jest.fn().mockResolvedValue(true),
+      findByCaseId: jest.fn().mockResolvedValue(cancelledChallenge),
+    } as unknown as jest.Mocked<ICaptchaChallengeRepository>;
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService,
+      undefined,
+      undefined,
+      captchaChallenges
+    );
+
+    await service.verifyUser(member, moderator);
+
+    expect(captchaChallenges.cancelPendingForCase).toHaveBeenCalledWith(verificationEvent.id);
+    expect(notificationManager.updateCaptchaChallengePresentation).toHaveBeenCalledWith(
+      expect.objectContaining({ id: verificationEvent.id }),
+      cancelledChallenge
+    );
+  });
+
+  it('resolves only the exact CAPTCHA-bound case with the system actor', async () => {
+    const guildId = 'guild-captcha-resolve';
+    const userId = 'user-captcha-resolve';
+    const member = buildMember(guildId, userId);
+    const roleQuarantineService: jest.Mocked<IRoleQuarantineService> = {
+      previewCompromisedAccount: jest.fn(),
+      quarantineCompromisedAccount: jest.fn(),
+      quarantineMember: jest.fn(),
+      enforceActiveCaseRoleUpdate: jest.fn(),
+      restoreMemberRoles: jest.fn().mockResolvedValue({
+        status: 'restored',
+        snapshotId: 'captcha-role-quarantine-1',
+        attemptedRoleIds: ['role-1'],
+        restoredRoleIds: ['role-1'],
+        skippedRoles: [],
+        failedRestores: [],
+      }),
+      abandonActiveSnapshot: jest.fn().mockResolvedValue({
+        status: 'no_active_snapshot',
+        snapshotId: null,
+      }),
+    };
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService,
+      undefined,
+      roleQuarantineService
+    );
+
+    await expect(
+      service.resolveCaptchaCase(member, {
+        challengeId: 'challenge-1',
+        expectedCaseRevision: 0,
+        generation: 1,
+        verificationEventId: verificationEvent.id,
+      })
+    ).resolves.toEqual({ status: 'resolved' });
+
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        notes: 'Security check completed.',
+        resolved_by: 'drasil:captcha',
+        status: VerificationStatus.VERIFIED,
+      })
+    );
+    expect(roleManager.removeCaseRole).toHaveBeenCalledWith(member);
+    expect(roleQuarantineService.restoreMemberRoles).toHaveBeenCalledWith(
+      member,
+      { id: 'drasil:captcha' },
+      expect.objectContaining({ canRestoreRole: expect.any(Function) })
+    );
+    expect(threadManager.resolveVerificationThread).toHaveBeenCalledWith(
+      expect.objectContaining({ id: verificationEvent.id }),
+      VerificationStatus.VERIFIED,
+      'Drasil browser check'
+    );
+    const actions = await adminActionRepository.findByUserAndServer(userId, guildId);
+    expect(actions).toEqual([
+      expect.objectContaining({
+        action_type: AdminActionType.VERIFY,
+        admin_id: 'drasil:captcha',
+        metadata: expect.objectContaining({
+          role_quarantine: expect.objectContaining({ restored_role_count: 1 }),
+        }),
+        verification_event_id: verificationEvent.id,
+      }),
+    ]);
+    const outcomes = await moderationOutcomeRepository.findByUserAndServer(userId, guildId);
+    expect(outcomes[0]?.metadata).toEqual(
+      expect.objectContaining({
+        role_quarantine: expect.objectContaining({ restored_role_count: 1 }),
+      })
+    );
+  });
+
+  it('treats a repeated exact-case CAPTCHA resolution as a side-effect-free success', async () => {
+    const guildId = 'guild-captcha-idempotent';
+    const userId = 'user-captcha-idempotent';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const input = {
+      verificationEventId: verificationEvent.id,
+      challengeId: 'challenge-idempotent',
+      generation: 1,
+      expectedCaseRevision: verificationEvent.case_revision,
+    };
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(service.resolveCaptchaCase(member, input)).resolves.toEqual({
+      status: 'resolved',
+    });
+    const actionCount = (await adminActionRepository.findByUserAndServer(userId, guildId)).length;
+    jest.clearAllMocks();
+    const markVerifiedIfNoPendingCase = jest.spyOn(
+      serverMemberRepository,
+      'markVerifiedIfNoPendingCase'
+    );
+
+    await expect(service.resolveCaptchaCase(member, input)).resolves.toEqual({
+      status: 'resolved',
+    });
+
+    expect(roleManager.removeCaseRole).not.toHaveBeenCalled();
+    expect(threadManager.resolveVerificationThread).not.toHaveBeenCalled();
+    expect(notificationManager.logActionToMessage).not.toHaveBeenCalled();
+    expect(markVerifiedIfNoPendingCase).toHaveBeenCalledWith(
+      guildId,
+      userId,
+      expect.not.objectContaining({ lastStatusChange: expect.anything() })
+    );
+    markVerifiedIfNoPendingCase.mockRestore();
+    await expect(adminActionRepository.findByUserAndServer(userId, guildId)).resolves.toHaveLength(
+      actionCount
+    );
+  });
+
+  it('resumes unfinished CAPTCHA resolution effects after the case commit', async () => {
+    const guildId = 'guild-captcha-resume';
+    const userId = 'user-captcha-resume';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const input = {
+      verificationEventId: verificationEvent.id,
+      challengeId: 'challenge-resume',
+      generation: 1,
+      expectedCaseRevision: verificationEvent.case_revision,
+    };
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+    threadManager.resolveVerificationThread.mockRejectedValueOnce(new Error('Discord unavailable'));
+
+    await expect(service.resolveCaptchaCase(member, input)).rejects.toThrow('Discord unavailable');
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        resolved_by: 'drasil:captcha',
+        status: VerificationStatus.VERIFIED,
+      })
+    );
+    await expect(adminActionRepository.findByUserAndServer(userId, guildId)).resolves.toHaveLength(
+      0
+    );
+
+    await expect(service.resolveCaptchaCase(member, input)).resolves.toEqual({
+      status: 'resolved',
+    });
+
+    expect(roleManager.removeCaseRole).toHaveBeenCalledTimes(1);
+    expect(threadManager.resolveVerificationThread).toHaveBeenCalledTimes(2);
+    await expect(adminActionRepository.findByUserAndServer(userId, guildId)).resolves.toHaveLength(
+      1
+    );
+    await expect(
+      moderationOutcomeRepository.findByVerificationEvent(verificationEvent.id)
+    ).resolves.toHaveLength(1);
+  });
+
+  it('immediately resumes the same CAPTCHA finalization after its lease release fails', async () => {
+    const guildId = 'guild-captcha-release-resume';
+    const userId = 'user-captcha-release-resume';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const input = {
+      verificationEventId: verificationEvent.id,
+      challengeId: 'challenge-release-resume',
+      generation: 2,
+      expectedCaseRevision: verificationEvent.case_revision,
+    };
+    const releaseCaptchaFinalization = verificationEventRepository.releaseCaptchaFinalization.bind(
+      verificationEventRepository
+    );
+    jest
+      .spyOn(verificationEventRepository, 'releaseCaptchaFinalization')
+      .mockResolvedValueOnce(false)
+      .mockImplementation(releaseCaptchaFinalization);
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(service.resolveCaptchaCase(member, input)).rejects.toThrow(
+      `Failed to release CAPTCHA finalization for case ${verificationEvent.id}.`
+    );
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        containment_status: CaseContainmentStatus.IN_PROGRESS,
+        quarantine_attempt_id: `${CAPTCHA_FINALIZATION_ATTEMPT_PREFIX}${input.challengeId}:${input.generation}`,
+      })
+    );
+
+    await expect(service.resolveCaptchaCase(member, input)).resolves.toEqual({
+      status: 'resolved',
+    });
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+        quarantine_attempt_id: null,
+      })
+    );
+    await expect(adminActionRepository.findByUserAndServer(userId, guildId)).resolves.toHaveLength(
+      1
+    );
+    await expect(
+      moderationOutcomeRepository.findByVerificationEvent(verificationEvent.id)
+    ).resolves.toHaveLength(1);
+  });
+
+  it('does not finalize a CAPTCHA resolution after the case is concurrently reopened', async () => {
+    const guildId = 'guild-captcha-concurrent-reopen';
+    const userId = 'user-captcha-concurrent-reopen';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const originalFindById = verificationEventRepository.findById.bind(verificationEventRepository);
+    let readCount = 0;
+    jest.spyOn(verificationEventRepository, 'findById').mockImplementation(async (id) => {
+      const current = await originalFindById(id);
+      readCount += 1;
+      if (readCount === 2 && current?.status === VerificationStatus.VERIFIED) {
+        return verificationEventRepository.reopen(id);
+      }
+      return current;
+    });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(
+      service.resolveCaptchaCase(member, {
+        challengeId: 'challenge-concurrent-reopen',
+        expectedCaseRevision: verificationEvent.case_revision,
+        generation: 1,
+        verificationEventId: verificationEvent.id,
+      })
+    ).resolves.toEqual({ status: 'held', reason: 'case_changed' });
+
+    await expect(originalFindById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        case_revision: verificationEvent.case_revision + 1,
+        status: VerificationStatus.PENDING,
+      })
+    );
+    expect(threadManager.resolveVerificationThread).not.toHaveBeenCalled();
+    expect(notificationManager.logActionToMessage).not.toHaveBeenCalled();
+    await expect(adminActionRepository.findByUserAndServer(userId, guildId)).resolves.toHaveLength(
+      0
+    );
+    await expect(
+      moderationOutcomeRepository.findByVerificationEvent(verificationEvent.id)
+    ).resolves.toHaveLength(0);
+  });
+
+  it('blocks a reopen while CAPTCHA finalization owns the case lease', async () => {
+    const guildId = 'guild-captcha-finalization-lease';
+    const userId = 'user-captcha-finalization-lease';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    let reopenDuringFinalization: VerificationEvent | null | undefined;
+    jest
+      .spyOn(adminActionService, 'getActionsForVerificationEvent')
+      .mockImplementation(async () => {
+        reopenDuringFinalization = await verificationEventRepository.reopen(verificationEvent.id);
+        return [];
+      });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(
+      service.resolveCaptchaCase(member, {
+        challengeId: 'challenge-finalization-lease',
+        expectedCaseRevision: verificationEvent.case_revision,
+        generation: 1,
+        verificationEventId: verificationEvent.id,
+      })
+    ).resolves.toEqual({ status: 'resolved' });
+
+    expect(reopenDuringFinalization).toBeNull();
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+        quarantine_attempt_id: null,
+        status: VerificationStatus.VERIFIED,
+      })
+    );
+  });
+
+  it('keeps the case role when another pending case exists', async () => {
+    const guildId = 'guild-captcha-other-case';
+    const userId = 'user-captcha-other-case';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager
+    );
+
+    await expect(
+      service.resolveCaptchaCase(member, {
+        challengeId: 'challenge-1',
+        expectedCaseRevision: 0,
+        generation: 1,
+        verificationEventId: verificationEvent.id,
+      })
+    ).resolves.toEqual({ status: 'held', reason: 'other_pending_case' });
+
+    expect(roleManager.removeCaseRole).not.toHaveBeenCalled();
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({ status: VerificationStatus.PENDING })
+    );
+  });
+
+  it('fences role restoration when another case opens during CAPTCHA resolution', async () => {
+    const guildId = 'guild-captcha-restore-fence';
+    const userId = 'user-captcha-restore-fence';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    let fenceAllowed = true;
+    const roleQuarantineService: jest.Mocked<IRoleQuarantineService> = {
+      previewCompromisedAccount: jest.fn(),
+      quarantineCompromisedAccount: jest.fn(),
+      quarantineMember: jest.fn().mockResolvedValue({
+        status: 'already_active',
+        mode: 'on',
+        purpose: RoleQuarantineSnapshotPurpose.STANDARD_CASE,
+        snapshotId: 'captcha-role-quarantine-fence',
+        originalRoleIds: ['role-1'],
+        plannedRoleIds: ['role-1'],
+        removedRoleIds: ['role-1'],
+        skippedRoles: [],
+        failedRemovals: [],
+      }),
+      enforceActiveCaseRoleUpdate: jest.fn(),
+      restoreMemberRoles: jest.fn().mockImplementation(async (_member, _moderator, fence) => {
+        await verificationEventRepository.createFromDetection(
+          null,
+          guildId,
+          userId,
+          VerificationStatus.PENDING
+        );
+        fenceAllowed = (await fence?.canRestoreRole()) ?? true;
+        return {
+          status: 'held_pending_case',
+          snapshotId: 'captcha-role-quarantine-fence',
+          attemptedRoleIds: ['role-1'],
+          restoredRoleIds: [],
+          skippedRoles: [],
+          failedRestores: [],
+        };
+      }),
+      abandonActiveSnapshot: jest.fn(),
+    };
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService,
+      undefined,
+      roleQuarantineService
+    );
+
+    await expect(
+      service.resolveCaptchaCase(member, {
+        challengeId: 'challenge-restore-fence',
+        expectedCaseRevision: verificationEvent.case_revision,
+        generation: 1,
+        verificationEventId: verificationEvent.id,
+      })
+    ).resolves.toEqual({ status: 'held', reason: 'other_pending_case' });
+
+    expect(fenceAllowed).toBe(false);
+    expect(roleManager.assignCaseRole).toHaveBeenCalledWith(member);
+    expect(roleQuarantineService.quarantineMember).toHaveBeenCalledWith(
+      member,
+      expect.objectContaining({ status: VerificationStatus.PENDING }),
+      expect.objectContaining({ id: 'drasil:captcha' })
+    );
+    expect(threadManager.resolveVerificationThread).toHaveBeenCalledWith(
+      expect.objectContaining({ id: verificationEvent.id }),
+      VerificationStatus.VERIFIED,
+      'Drasil browser check'
+    );
+    await expect(adminActionRepository.findByUserAndServer(userId, guildId)).resolves.toHaveLength(
+      1
+    );
+  });
+
+  it('does not overwrite pending member state when a case opens at the final write', async () => {
+    const guildId = 'guild-captcha-final-member-fence';
+    const userId = 'user-captcha-final-member-fence';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    await serverMemberRepository.upsertMember(guildId, userId, {
+      case_role_active: true,
+      verification_status: VerificationStatus.PENDING,
+    });
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    jest
+      .spyOn(serverMemberRepository, 'markVerifiedIfNoPendingCase')
+      .mockImplementationOnce(async () => {
+        await verificationEventRepository.createFromDetection(
+          null,
+          guildId,
+          userId,
+          VerificationStatus.PENDING
+        );
+        return null;
+      });
+    const roleQuarantineService: jest.Mocked<IRoleQuarantineService> = {
+      previewCompromisedAccount: jest.fn(),
+      quarantineCompromisedAccount: jest.fn(),
+      quarantineMember: jest.fn().mockResolvedValue({
+        status: 'quarantined',
+        mode: 'on',
+        purpose: RoleQuarantineSnapshotPurpose.STANDARD_CASE,
+        snapshotId: 'captcha-final-write-quarantine',
+        originalRoleIds: ['role-restored-before-race'],
+        plannedRoleIds: ['role-restored-before-race'],
+        removedRoleIds: ['role-restored-before-race'],
+        skippedRoles: [],
+        failedRemovals: [],
+      }),
+      enforceActiveCaseRoleUpdate: jest.fn(),
+      restoreMemberRoles: jest.fn().mockResolvedValue({
+        status: 'restored',
+        snapshotId: 'captcha-final-write-quarantine',
+        attemptedRoleIds: ['role-restored-before-race'],
+        restoredRoleIds: ['role-restored-before-race'],
+        skippedRoles: [],
+        failedRestores: [],
+      }),
+      abandonActiveSnapshot: jest.fn(),
+    };
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService,
+      undefined,
+      roleQuarantineService
+    );
+
+    await expect(
+      service.resolveCaptchaCase(member, {
+        challengeId: 'challenge-final-member-fence',
+        expectedCaseRevision: verificationEvent.case_revision,
+        generation: 1,
+        verificationEventId: verificationEvent.id,
+      })
+    ).resolves.toEqual({ status: 'held', reason: 'other_pending_case' });
+
+    expect(roleManager.assignCaseRole).toHaveBeenCalledWith(member);
+    expect(roleQuarantineService.quarantineMember).toHaveBeenCalledWith(
+      member,
+      expect.objectContaining({ status: VerificationStatus.PENDING }),
+      expect.objectContaining({ id: 'drasil:captcha' })
+    );
+    await expect(serverMemberRepository.findByServerAndUser(guildId, userId)).resolves.toEqual(
+      expect.objectContaining({
+        case_role_active: true,
+        verification_status: VerificationStatus.PENDING,
+      })
+    );
+    expect(threadManager.resolveVerificationThread).toHaveBeenCalledWith(
+      expect.objectContaining({ id: verificationEvent.id }),
+      VerificationStatus.VERIFIED,
+      'Drasil browser check'
+    );
+    await expect(adminActionRepository.findByUserAndServer(userId, guildId)).resolves.toHaveLength(
+      1
+    );
+  });
+
+  it('restores the case role when the expected-revision completion loses a race', async () => {
+    const guildId = 'guild-captcha-race';
+    const userId = 'user-captcha-race';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    jest.spyOn(verificationEventRepository, 'completeCaptchaVerification').mockResolvedValue(null);
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager
+    );
+
+    await expect(
+      service.resolveCaptchaCase(member, {
+        challengeId: 'challenge-1',
+        expectedCaseRevision: 0,
+        generation: 1,
+        verificationEventId: verificationEvent.id,
+      })
+    ).resolves.toEqual({ status: 'held', reason: 'case_changed' });
+
+    expect(roleManager.removeCaseRole).toHaveBeenCalledWith(member);
+    expect(roleManager.assignCaseRole).toHaveBeenCalledWith(member);
+  });
+
+  it('restores the case role when CAPTCHA completion throws before committing', async () => {
+    const guildId = 'guild-captcha-commit-error';
+    const userId = 'user-captcha-commit-error';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    jest
+      .spyOn(verificationEventRepository, 'completeCaptchaVerification')
+      .mockRejectedValue(new Error('Database unavailable'));
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager
+    );
+
+    await expect(
+      service.resolveCaptchaCase(member, {
+        challengeId: 'challenge-1',
+        expectedCaseRevision: 0,
+        generation: 1,
+        verificationEventId: verificationEvent.id,
+      })
+    ).rejects.toThrow('Database unavailable');
+
+    expect(roleManager.removeCaseRole).toHaveBeenCalledWith(member);
+    expect(roleManager.assignCaseRole).toHaveBeenCalledWith(member);
+  });
+
+  it('does not restore the case role when another resolution wins the race', async () => {
+    const guildId = 'guild-captcha-terminal-race';
+    const userId = 'user-captcha-terminal-race';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    jest
+      .spyOn(verificationEventRepository, 'completeCaptchaVerification')
+      .mockImplementation(async () => {
+        await verificationEventRepository.update(verificationEvent.id, {
+          resolved_at: new Date(),
+          resolved_by: 'moderator-1',
+          status: VerificationStatus.VERIFIED,
+        });
+        return null;
+      });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager
+    );
+
+    await expect(
+      service.resolveCaptchaCase(member, {
+        challengeId: 'challenge-1',
+        expectedCaseRevision: 0,
+        generation: 1,
+        verificationEventId: verificationEvent.id,
+      })
+    ).resolves.toEqual({ status: 'held', reason: 'case_changed' });
+
+    expect(roleManager.removeCaseRole).toHaveBeenCalledWith(member);
+    expect(roleManager.assignCaseRole).not.toHaveBeenCalled();
+  });
+
   it('does not resolve a case while account containment is in progress', async () => {
     const guildId = 'guild-quarantine-in-progress';
     const userId = 'user-quarantine-in-progress';
@@ -261,6 +1026,14 @@ describe('UserModerationService (unit)', () => {
     await expect(
       service.closeCaseNoAction(buildGuildWithMember(guildId, member), userId, moderator)
     ).rejects.toThrow('Account quarantine is currently in progress');
+    await expect(
+      service.resolveCaptchaCase(member, {
+        challengeId: 'challenge-containment-race',
+        expectedCaseRevision: verificationEvent.case_revision,
+        generation: 1,
+        verificationEventId: verificationEvent.id,
+      })
+    ).resolves.toEqual({ status: 'held', reason: 'case_changed' });
 
     await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
       expect.objectContaining({

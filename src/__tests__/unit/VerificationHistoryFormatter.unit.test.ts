@@ -34,6 +34,7 @@ const buildEvent = (
   private_evidence_thread_id: null,
   notification_message_id: 'notif-1',
   status: VerificationStatus.VERIFIED,
+  case_revision: overrides.case_revision ?? 0,
   created_at: new Date('2024-01-01T00:00:00.000Z'),
   updated_at: new Date('2024-01-01T00:00:00.000Z'),
   resolved_at: new Date('2024-01-02T00:00:00.000Z'),
@@ -108,5 +109,14 @@ describe('VerificationHistoryFormatter (unit)', () => {
     expect(output).toContain('Marked false positive by <@admin-1>');
     expect(output).toContain('Compromised account quarantined by <@admin-1>');
     expect(output).not.toContain('Status changed');
+  });
+
+  it('formats the CAPTCHA system actor as a product label', () => {
+    const event = buildEvent({}, [buildAction({ admin_id: 'drasil:captcha' })]);
+
+    const output = VerificationHistoryFormatter.formatForDiscord([event], 'user-1');
+
+    expect(output).toContain('Verified by Drasil browser check');
+    expect(output).not.toContain('<@drasil:captcha>');
   });
 });

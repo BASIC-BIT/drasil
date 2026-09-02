@@ -29,7 +29,7 @@ export interface IRoleQuarantineSnapshotRepository {
     serverId: string,
     userId: string
   ): Promise<RoleQuarantineSnapshot | null>;
-  findActiveCompletedCompromised(limit?: number): Promise<RoleQuarantineSnapshot[]>;
+  findActiveCompletedForRestoration(limit?: number): Promise<RoleQuarantineSnapshot[]>;
   update(id: string, data: RoleQuarantineSnapshotUpdate): Promise<RoleQuarantineSnapshot | null>;
   updateForQuarantineAttempt(
     id: string,
@@ -95,12 +95,11 @@ export class RoleQuarantineSnapshotRepository implements IRoleQuarantineSnapshot
     }
   }
 
-  public async findActiveCompletedCompromised(limit = 100): Promise<RoleQuarantineSnapshot[]> {
+  public async findActiveCompletedForRestoration(limit = 100): Promise<RoleQuarantineSnapshot[]> {
     try {
       const snapshots = await this.prisma.role_quarantine_snapshots.findMany({
         where: {
           status: RoleQuarantineSnapshotStatus.ACTIVE as role_quarantine_snapshot_status,
-          purpose: 'compromised_account' as role_quarantine_snapshot_purpose,
           verification_events: {
             is: { status: VerificationStatus.VERIFIED as verification_status },
           },
@@ -110,7 +109,7 @@ export class RoleQuarantineSnapshotRepository implements IRoleQuarantineSnapshot
       });
       return snapshots as RoleQuarantineSnapshot[];
     } catch (error) {
-      this.handleError(error, 'findActiveCompletedCompromisedRoleQuarantines');
+      this.handleError(error, 'findActiveCompletedRoleQuarantines');
     }
   }
 

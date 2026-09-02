@@ -12,6 +12,9 @@ import type { ReportAIAnalysis, VerificationThreadAnalysisResult } from './GPTSe
 import { CASE_STAFF_ROUTING_METADATA_KEY } from './ThreadManager';
 import {
   AdminActionType,
+  CaptchaChallenge,
+  CaptchaChallengeRequestSource,
+  CaptchaChallengeStatus,
   CaseAttentionState,
   CaseContainmentStatus,
   CaseKind,
@@ -84,13 +87,15 @@ export class NotificationPresentationBuilder {
   public static readonly MODERATION_ACTION_WARNING_FIELD_NAME = 'Moderation Action Warning';
   public static readonly RESOLUTION_FIELD_NAME = 'Resolution';
   public static readonly ACCOUNT_QUARANTINE_FIELD_NAME = 'Account Quarantine';
+  public static readonly CAPTCHA_FIELD_NAME = 'Browser Security Check';
 
   public createSuspiciousUserEmbed(
     member: GuildMember,
     detectionResult: DetectionResult,
     verificationEvent: VerificationEvent,
     detectionEvents: DetectionEvent[],
-    sourceMessage?: Message
+    sourceMessage?: Message,
+    captchaChallenge?: CaptchaChallenge | null
   ): EmbedBuilder {
     const accountCreatedAt = new Date(member.user.createdTimestamp);
     const joinedServerAt = member.joinedAt;
@@ -226,6 +231,10 @@ export class NotificationPresentationBuilder {
         value: this.formatThreadAnalysisFieldValue(persistedThreadAnalysis.latestAnalysis),
         inline: false,
       });
+    }
+
+    if (captchaChallenge !== undefined) {
+      this.upsertCaptchaChallengePresentation(embed, captchaChallenge);
     }
 
     return embed;
@@ -385,7 +394,7 @@ export class NotificationPresentationBuilder {
   ): ActionRowBuilder<ButtonBuilder> {
     const buttons = [
       new ButtonBuilder()
-        .setCustomId(buildCaseAdminActionsCustomId(userId))
+        .setCustomId(buildCaseAdminActionsCustomId(userId, options.verificationEventId))
         .setLabel('Admin Actions')
         .setStyle(ButtonStyle.Primary),
     ];
@@ -413,13 +422,14 @@ export class NotificationPresentationBuilder {
           options.includeBanAction !== false,
           options.caseMembershipState ?? 'in_server',
           options.caseAttentionState === CaseAttentionState.PARKED,
-          options.caseKind === CaseKind.COMPROMISED_ACCOUNT
+          options.caseKind === CaseKind.COMPROMISED_ACCOUNT,
+          options.verificationEventId
         )
       : [
           this.createCustomButton(`reopen_${userId}`, 'Reopen', ButtonStyle.Primary),
           this.createCustomButton(`history_${userId}`, 'History', ButtonStyle.Secondary),
           this.createCustomButton(
-            buildCaseAdminActionsCustomId(userId),
+            buildCaseAdminActionsCustomId(userId, options.verificationEventId),
             'Other Actions',
             ButtonStyle.Secondary
           ),
@@ -520,7 +530,8 @@ export class NotificationPresentationBuilder {
     includeBanAction: boolean,
     caseMembershipState: CaseMembershipState,
     isParked: boolean,
-    isCompromisedAccount: boolean
+    isCompromisedAccount: boolean,
+    verificationEventId?: string
   ): ButtonBuilder[] {
     if (isParked) {
       const buttons = [this.createCustomButton(`verify_${userId}`, 'Verify', ButtonStyle.Success)];
@@ -529,7 +540,7 @@ export class NotificationPresentationBuilder {
       }
       buttons.push(
         this.createCustomButton(
-          buildCaseAdminActionsCustomId(userId),
+          buildCaseAdminActionsCustomId(userId, verificationEventId),
           'Other Actions',
           ButtonStyle.Secondary
         )
@@ -551,7 +562,7 @@ export class NotificationPresentationBuilder {
       }
       buttons.push(
         this.createCustomButton(
-          buildCaseAdminActionsCustomId(userId),
+          buildCaseAdminActionsCustomId(userId, verificationEventId),
           'Other Actions',
           ButtonStyle.Secondary
         )
@@ -571,7 +582,7 @@ export class NotificationPresentationBuilder {
     }
     buttons.push(
       this.createCustomButton(
-        buildCaseAdminActionsCustomId(userId),
+        buildCaseAdminActionsCustomId(userId, verificationEventId),
         'Other Actions',
         ButtonStyle.Secondary
       )
@@ -634,7 +645,7 @@ export class NotificationPresentationBuilder {
 
     const field = {
       name: 'Action Taken',
-      value: `<@${adminId}> ${actionDescription} <t:${timestamp}:R>`,
+      value: `${this.formatActorReference(adminId)} ${actionDescription} <t:${timestamp}:R>`,
       inline: false,
     };
     const existingFields =
@@ -654,7 +665,7 @@ export class NotificationPresentationBuilder {
     this.restoreObservedPendingPresentation(embed);
     const field = {
       name: 'Action Reverted',
-      value: `<@${adminId}> ${actionDescription} <t:${timestamp}:R>`,
+      value: `${this.formatActorReference(adminId)} ${actionDescription} <t:${timestamp}:R>`,
       inline: false,
     };
     const existingFields =
@@ -788,6 +799,79 @@ export class NotificationPresentationBuilder {
         ? 'Account Quarantine Parked'
         : 'Account Quarantine Needs Review'
     );
+    embed.setFields(...fields);
+  }
+
+  public upsertCaptchaChallengePresentation(
+    embed: EmbedBuilder,
+    challenge: CaptchaChallenge | null
+  ): void {
+    const fields = (embed.data.fields ?? []).filter(
+      (field) => field.name !== NotificationPresentationBuilder.CAPTCHA_FIELD_NAME
+    );
+    if (!challenge) {
+      embed.setFields(...fields);
+      return;
+    }
+
+    const statusLabels: Record<CaptchaChallengeStatus, string> = {
+      [CaptchaChallengeStatus.PENDING]: 'Pending',
+      [CaptchaChallengeStatus.PASSED]: 'Passed',
+      [CaptchaChallengeStatus.FAILED]: 'Attempt limit reached',
+      [CaptchaChallengeStatus.EXPIRED]: 'Expired',
+      [CaptchaChallengeStatus.BYPASSED]: 'Bypassed by moderator',
+      [CaptchaChallengeStatus.CANCELLED]: 'Cancelled',
+    };
+    const requestedAt = Math.floor(challenge.requested_at.getTime() / 1000);
+    const expiresAt = Math.floor(challenge.expires_at.getTime() / 1000);
+    const lines = [
+      `Status: ${statusLabels[challenge.status]}`,
+      `Generation: ${challenge.generation} · Submissions: ${challenge.submission_count}`,
+      `Requested: <t:${requestedAt}:F> (<t:${requestedAt}:R>)`,
+      challenge.status === CaptchaChallengeStatus.PENDING
+        ? `Expires: <t:${expiresAt}:F> (<t:${expiresAt}:R>)`
+        : null,
+      challenge.requested_by
+        ? `Requested by: ${this.formatActorReference(challenge.requested_by)}`
+        : challenge.request_source === CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN
+          ? 'Requested by: Drasil suspicious-join policy'
+          : null,
+      challenge.delivered_at
+        ? `Link delivered: <t:${Math.floor(challenge.delivered_at.getTime() / 1000)}:R>`
+        : challenge.delivery_error_code
+          ? `Link delivery: failed (${challenge.delivery_error_code.replace(/_/g, ' ')})`
+          : 'Link delivery: pending',
+      challenge.passed_at
+        ? `Passed: <t:${Math.floor(challenge.passed_at.getTime() / 1000)}:F>`
+        : null,
+      challenge.bypassed_at
+        ? `Bypassed: <t:${Math.floor(challenge.bypassed_at.getTime() / 1000)}:F>${challenge.bypassed_by ? ` by ${this.formatActorReference(challenge.bypassed_by)}` : ''}`
+        : null,
+      challenge.bypass_reason ? `Bypass reason: ${challenge.bypass_reason}` : null,
+    ].filter((line): line is string => Boolean(line));
+    const priorGenerationHistory = (challenge.history ?? []).filter(
+      (entry) => entry.generation < challenge.generation
+    );
+    const priorHistory = priorGenerationHistory.slice(-3);
+    if (priorHistory.length > 0) {
+      const omittedCount = priorGenerationHistory.length - priorHistory.length;
+      lines.push(
+        'Previous generations:',
+        ...priorHistory.map((entry) => {
+          const outcome = entry.outcome?.replace(/_/g, ' ') ?? 'no outcome recorded';
+          const delivery = entry.delivery_error_code
+            ? `delivery failed (${entry.delivery_error_code.replace(/_/g, ' ')})`
+            : 'no delivery failure recorded';
+          return `• ${entry.generation}: ${outcome}, ${delivery}${entry.bypass_reason ? `, bypass: ${entry.bypass_reason}` : ''}`;
+        }),
+        ...(omittedCount > 0 ? [`• ${omittedCount} earlier generation(s) not shown`] : [])
+      );
+    }
+    fields.push({
+      name: NotificationPresentationBuilder.CAPTCHA_FIELD_NAME,
+      value: this.truncateEmbedFieldValue(lines.join('\n')),
+      inline: false,
+    });
     embed.setFields(...fields);
   }
 
@@ -1082,7 +1166,7 @@ export class NotificationPresentationBuilder {
     adminId: string,
     timestamp: number
   ): string {
-    return `${this.formatAdminActionLabel(actionTaken)} by <@${adminId}> at <t:${timestamp}:F>`;
+    return `${this.formatAdminActionLabel(actionTaken)} by ${this.formatActorReference(adminId)} at <t:${timestamp}:F>`;
   }
 
   private upsertLatestAdminActionField(
@@ -1202,7 +1286,7 @@ export class NotificationPresentationBuilder {
     adminId: string | null,
     timestamp: number | null
   ): string {
-    const actor = adminId ? ` by <@${adminId}>` : '';
+    const actor = adminId ? ` by ${this.formatActorReference(adminId)}` : '';
     const when = timestamp ? ` at <t:${timestamp}:F>` : '';
     return `${this.formatAdminActionLabel(actionTaken)}${actor}${when}\nNo further moderator action is pending.`;
   }
@@ -1219,6 +1303,10 @@ export class NotificationPresentationBuilder {
     } else {
       embed.addFields(field);
     }
+  }
+
+  private formatActorReference(actorId: string): string {
+    return actorId === 'drasil:captcha' ? 'Drasil browser check' : `<@${actorId}>`;
   }
 
   private metadataToRecord(metadata: DetectionEvent['metadata']): Record<string, unknown> {
@@ -1639,7 +1727,11 @@ export class NotificationPresentationBuilder {
       verificationEvent.status === VerificationStatus.BANNED ||
       verificationEvent.status === VerificationStatus.KICKED ||
       verificationEvent.status === VerificationStatus.CLOSED_NO_ACTION
-        ? `${verificationEvent.status}${verificationEvent.resolved_by ? ` by <@${verificationEvent.resolved_by}>` : ''}`
+        ? `${verificationEvent.status}${
+            verificationEvent.resolved_by
+              ? ` by ${this.formatActorReference(verificationEvent.resolved_by)}`
+              : ''
+          }`
         : 'pending';
 
     if (verificationEvent.thread_id) {

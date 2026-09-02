@@ -1,5 +1,6 @@
 import type {
   CaseAction,
+  CaptchaChallengeSummary,
   MessageCleanupCaseWorkspace,
   MessageCleanupJobDetail,
 } from '@drasil/contracts';
@@ -38,6 +39,9 @@ export type WebCaseAction = Extract<
   | 'sync_existing_ban'
   | 'refresh_notification'
   | 'reopen_case'
+  | 'challenge_user'
+  | 'retry_captcha'
+  | 'bypass_captcha'
 >;
 
 export type QueueCaseAction = (
@@ -67,10 +71,18 @@ export const executableCaseActions: readonly WebCaseAction[] = [
   'create_thread',
   'sync_existing_ban',
   'reopen_case',
+  'challenge_user',
+  'retry_captcha',
+  'bypass_captcha',
 ];
 
 const executableCaseActionSet = new Set<CaseAction>(executableCaseActions);
 const destructiveCaseActionSet = new Set<WebCaseAction>(['kick_user', 'ban_user', 'ban_by_id']);
+const captchaConfirmationActionSet = new Set<WebCaseAction>([
+  'challenge_user',
+  'retry_captcha',
+  'bypass_captcha',
+]);
 
 export function isExecutableCaseAction(action: string): action is WebCaseAction {
   return executableCaseActionSet.has(action as CaseAction);
@@ -259,6 +271,7 @@ export function CaseActionControls({
   actionRequestsByAction,
   canQueueCaseActions,
   caseId,
+  captchaChallenge,
   guildId,
   messageCleanup,
   queueCaseAction,
@@ -272,6 +285,7 @@ export function CaseActionControls({
   >;
   readonly canQueueCaseActions: boolean;
   readonly caseId: string;
+  readonly captchaChallenge?: CaptchaChallengeSummary | null;
   readonly guildId: string;
   readonly messageCleanup?: CaseMessageCleanupIntegration;
   readonly queueCaseAction: QueueCaseAction;
@@ -290,12 +304,14 @@ export function CaseActionControls({
   const standardActions = ordinaryExecutableActions.filter(
     (action) =>
       !destructiveCaseActionSet.has(action) &&
+      !captchaConfirmationActionSet.has(action) &&
       !(action === 'verify_user' && requiresVerificationReleaseConfirmation)
   );
   const confirmationActions = ordinaryExecutableActions.filter(
     (action) =>
       destructiveCaseActionSet.has(action) ||
-      (action === 'verify_user' && requiresVerificationReleaseConfirmation)
+      (action === 'verify_user' && requiresVerificationReleaseConfirmation) ||
+      captchaConfirmationActionSet.has(action)
   );
 
   return (
@@ -392,14 +408,44 @@ export function CaseActionControls({
                 >
                   {action === 'verify_user' ? (
                     <p className="muted">
-                      This releases the account quarantine, restores eligible snapshotted roles,
-                      and resolves the open verification case.
+                      This releases the account quarantine, restores eligible snapshotted roles, and
+                      resolves the open verification case.
                     </p>
                   ) : null}
-                  <label className="field destructive-reason">
-                    <span>Reason</span>
-                    <textarea name="reason" rows={3} />
-                  </label>
+                  {action === 'challenge_user' ? (
+                    <p className="muted">
+                      Send a case-scoped browser security check to the existing user thread.
+                    </p>
+                  ) : null}
+                  {action === 'retry_captcha' || action === 'bypass_captcha' ? (
+                    <>
+                      <input
+                        name="expectedCaptchaChallengeId"
+                        type="hidden"
+                        value={captchaChallenge?.id}
+                      />
+                      <input
+                        name="expectedCaptchaGeneration"
+                        type="hidden"
+                        value={captchaChallenge?.generation}
+                      />
+                      {action === 'retry_captcha' ? (
+                        <p className="muted">
+                          Invalidate the previous link and send a new browser security check.
+                        </p>
+                      ) : (
+                        <p className="muted">
+                          Continue moderator review without treating the browser check as passed.
+                        </p>
+                      )}
+                    </>
+                  ) : null}
+                  {action === 'bypass_captcha' || destructiveCaseActionSet.has(action) ? (
+                    <label className="field destructive-reason">
+                      <span>Reason</span>
+                      <textarea name="reason" required={action === 'bypass_captcha'} rows={3} />
+                    </label>
+                  ) : null}
                   <label className="checkbox-field destructive-confirm">
                     <input name="confirmAction" required type="checkbox" />
                     <span>Confirm {formatCaseAction(action)}</span>
@@ -412,14 +458,44 @@ export function CaseActionControls({
                 >
                   {action === 'verify_user' ? (
                     <p className="muted">
-                      This releases the account quarantine, restores eligible snapshotted roles,
-                      and resolves the open verification case.
+                      This releases the account quarantine, restores eligible snapshotted roles, and
+                      resolves the open verification case.
                     </p>
                   ) : null}
-                  <label className="field destructive-reason">
-                    <span>Reason</span>
-                    <textarea name="reason" rows={3} />
-                  </label>
+                  {action === 'challenge_user' ? (
+                    <p className="muted">
+                      Send a case-scoped browser security check to the existing user thread.
+                    </p>
+                  ) : null}
+                  {action === 'retry_captcha' || action === 'bypass_captcha' ? (
+                    <>
+                      <input
+                        name="expectedCaptchaChallengeId"
+                        type="hidden"
+                        value={captchaChallenge?.id}
+                      />
+                      <input
+                        name="expectedCaptchaGeneration"
+                        type="hidden"
+                        value={captchaChallenge?.generation}
+                      />
+                      {action === 'retry_captcha' ? (
+                        <p className="muted">
+                          Invalidate the previous link and send a new browser security check.
+                        </p>
+                      ) : (
+                        <p className="muted">
+                          Continue moderator review without treating the browser check as passed.
+                        </p>
+                      )}
+                    </>
+                  ) : null}
+                  {action === 'bypass_captcha' || destructiveCaseActionSet.has(action) ? (
+                    <label className="field destructive-reason">
+                      <span>Reason</span>
+                      <textarea name="reason" required={action === 'bypass_captcha'} rows={3} />
+                    </label>
+                  ) : null}
                   <label className="checkbox-field destructive-confirm">
                     <input name="confirmAction" required type="checkbox" />
                     <span>Confirm {formatCaseAction(action)}</span>

@@ -7,6 +7,7 @@ import { IServerMemberRepository } from '../repositories/ServerMemberRepository'
 import { INotificationManager } from './NotificationManager';
 import { IRoleManager } from './RoleManager';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
+import { ICaptchaChallengeRepository } from '../repositories/CaptchaChallengeRepository';
 import {
   AdminActionType,
   CaseAttentionState,
@@ -32,9 +33,11 @@ import { IModerationQueueService } from './ModerationQueueService';
 import {
   IRoleQuarantineService,
   RoleQuarantineApplyResult,
+  RoleRestorationFence,
   RoleQuarantineRestoreResult,
 } from './RoleQuarantineService';
 import {
+  CAPTCHA_FINALIZATION_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_LEASE_MS,
   CASE_TERMINAL_ACTION_ATTEMPT_PREFIX,
@@ -64,6 +67,16 @@ export interface IUserModerationService {
    * @returns Promise resolving to true if successful, false if the role couldn't be removed
    */
   verifyUser(member: GuildMember, moderator: User): Promise<boolean>;
+
+  resolveCaptchaCase(
+    member: GuildMember,
+    input: {
+      verificationEventId: string;
+      challengeId: string;
+      generation: number;
+      expectedCaseRevision: number;
+    }
+  ): Promise<CaptchaCaseResolutionResult>;
 
   /**
    * Bans a user from the guild
@@ -170,6 +183,11 @@ export interface ObservedDiscordBanOptions {
 
 export type ObservedDiscordKickOptions = ObservedDiscordBanOptions;
 
+export interface CaptchaCaseResolutionResult {
+  status: 'resolved' | 'held';
+  reason?: 'case_changed' | 'other_pending_case';
+}
+
 const ACTIVE_MODERATION_OPERATION_METADATA_KEY = 'active_moderation_operation';
 const COMBINED_BAN_CLEANUP_OPERATION_KIND = 'ban_with_message_cleanup';
 const DISCORD_AUDIT_LOG_REASON_MAX_LENGTH = 512;
@@ -197,6 +215,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
   private moderationOutcomeService?: IModerationOutcomeService;
   private moderationQueueService?: IModerationQueueService;
   private roleQuarantineService?: IRoleQuarantineService;
+  private captchaChallengeRepository?: ICaptchaChallengeRepository;
 
   constructor(
     @inject(TYPES.ServerMemberRepository) serverMemberRepository: IServerMemberRepository,
@@ -217,7 +236,10 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     moderationQueueService?: IModerationQueueService,
     @inject(TYPES.RoleQuarantineService)
     @optional()
-    roleQuarantineService?: IRoleQuarantineService
+    roleQuarantineService?: IRoleQuarantineService,
+    @inject(TYPES.CaptchaChallengeRepository)
+    @optional()
+    captchaChallengeRepository?: ICaptchaChallengeRepository
   ) {
     this.serverMemberRepository = serverMemberRepository;
     this.notificationManager = notificationManager;
@@ -229,6 +251,39 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     this.moderationOutcomeService = moderationOutcomeService;
     this.moderationQueueService = moderationQueueService;
     this.roleQuarantineService = roleQuarantineService;
+    this.captchaChallengeRepository = captchaChallengeRepository;
+  }
+
+  private async cancelPendingCaptchaChallenge(verificationEvent: VerificationEvent): Promise<void> {
+    let cancelled = false;
+    try {
+      cancelled =
+        (await this.captchaChallengeRepository?.cancelPendingForCase(verificationEvent.id)) ??
+        false;
+    } catch (error) {
+      console.warn(
+        `Failed to cancel pending security check for case ${verificationEvent.id}:`,
+        error
+      );
+      return;
+    }
+    if (!cancelled || !this.notificationManager.updateCaptchaChallengePresentation) {
+      return;
+    }
+    try {
+      const challenge = await this.captchaChallengeRepository?.findByCaseId(verificationEvent.id);
+      if (challenge) {
+        await this.notificationManager.updateCaptchaChallengePresentation(
+          verificationEvent,
+          challenge
+        );
+      }
+    } catch (error) {
+      console.warn(
+        `Failed to refresh cancelled security-check presentation for case ${verificationEvent.id}:`,
+        error
+      );
+    }
   }
 
   private async deleteLiveQueueCaseMirror(verificationEventId: string): Promise<void> {
@@ -477,7 +532,8 @@ export class UserModerationService implements IUserModerationService, ICombinedB
   private async tryRestoreRoleQuarantine(
     member: GuildMember,
     verificationEvent: VerificationEvent | null,
-    moderator?: User
+    moderator?: User,
+    fence?: RoleRestorationFence
   ): Promise<{
     verificationEvent: VerificationEvent | null;
     metadata: Record<string, unknown> | null;
@@ -487,7 +543,9 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     }
 
     try {
-      const result = await this.roleQuarantineService.restoreMemberRoles(member, moderator);
+      const result = fence
+        ? await this.roleQuarantineService.restoreMemberRoles(member, moderator, fence)
+        : await this.roleQuarantineService.restoreMemberRoles(member, moderator);
       const metadata = this.buildRoleQuarantineRestoreMetadata(result);
       if (!metadata || !verificationEvent) {
         return { verificationEvent, metadata };
@@ -525,6 +583,25 @@ export class UserModerationService implements IUserModerationService, ICombinedB
           at: new Date().toISOString(),
         },
       };
+    }
+  }
+
+  private async reapplyRoleQuarantineForPendingCase(
+    member: GuildMember,
+    verificationEvent: VerificationEvent,
+    actorId: string
+  ): Promise<void> {
+    if (!this.roleQuarantineService) {
+      return;
+    }
+
+    const result = await this.roleQuarantineService.quarantineMember(member, verificationEvent, {
+      id: actorId,
+    } as User);
+    if (result.failedRemovals.length > 0) {
+      throw new Error(
+        `Failed to restore containment after CAPTCHA resolution raced with case ${verificationEvent.id}`
+      );
     }
   }
 
@@ -828,6 +905,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     source: ModerationOutcomeSource,
     actorId?: string | null
   ): Promise<void> {
+    await this.cancelPendingCaptchaChallenge(verificationEvent);
     await this.threadManager.resolveVerificationThread(
       verificationEvent,
       newStatus,
@@ -864,6 +942,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
   ): Promise<void> {
     const actionType = getResolutionAdminActionType(newStatus);
 
+    await this.cancelPendingCaptchaChallenge(verificationEvent);
     await this.threadManager.resolveVerificationThread(verificationEvent, newStatus, moderator.id);
 
     const logged = await this.notificationManager.logActionToMessage(
@@ -1184,6 +1263,430 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       console.error(`Failed to verify user ${member.user.tag}:`, error);
       throw error;
     }
+  }
+
+  public async resolveCaptchaCase(
+    member: GuildMember,
+    input: {
+      verificationEventId: string;
+      challengeId: string;
+      generation: number;
+      expectedCaseRevision: number;
+    }
+  ): Promise<CaptchaCaseResolutionResult> {
+    const actorId = 'drasil:captcha';
+    const actorLabel = 'Drasil browser check';
+    const verificationEvent = await this.verificationEventRepository.findById(
+      input.verificationEventId
+    );
+    if (!verificationEvent) {
+      return { status: 'held', reason: 'case_changed' };
+    }
+    const captchaResolutionValue = this.metadataToRecord(
+      verificationEvent.metadata
+    ).captcha_resolution;
+    const captchaResolution =
+      captchaResolutionValue &&
+      typeof captchaResolutionValue === 'object' &&
+      !Array.isArray(captchaResolutionValue)
+        ? (captchaResolutionValue as Record<string, unknown>)
+        : {};
+    const alreadyResolvedByCaptcha =
+      verificationEvent.status === VerificationStatus.VERIFIED &&
+      verificationEvent.resolved_by === actorId &&
+      verificationEvent.server_id === member.guild.id &&
+      verificationEvent.user_id === member.id &&
+      verificationEvent.case_revision === input.expectedCaseRevision &&
+      captchaResolution.challenge_id === input.challengeId &&
+      captchaResolution.generation === input.generation;
+    if (
+      !alreadyResolvedByCaptcha &&
+      (verificationEvent.server_id !== member.guild.id ||
+        verificationEvent.user_id !== member.id ||
+        verificationEvent.status !== VerificationStatus.PENDING ||
+        verificationEvent.case_kind !== CaseKind.STANDARD ||
+        verificationEvent.containment_status === CaseContainmentStatus.IN_PROGRESS ||
+        verificationEvent.case_revision !== input.expectedCaseRevision)
+    ) {
+      return { status: 'held', reason: 'case_changed' };
+    }
+
+    let completed = verificationEvent;
+    let resolvedAt = verificationEvent.resolved_at ?? new Date();
+    if (!alreadyResolvedByCaptcha) {
+      const pendingEvents = (
+        await this.verificationEventRepository.findByUserAndServer(member.id, member.guild.id)
+      ).filter((event) => event.status === VerificationStatus.PENDING);
+      if (pendingEvents.some((event) => event.id !== verificationEvent.id)) {
+        return { status: 'held', reason: 'other_pending_case' };
+      }
+
+      const roleRemoved = await this.roleManager.removeCaseRole(member);
+      if (!roleRemoved) {
+        throw new Error(`Failed to remove case role from ${member.user.tag}`);
+      }
+      resolvedAt = new Date();
+      let committed: VerificationEvent | null;
+      try {
+        committed = await this.verificationEventRepository.completeCaptchaVerification({
+          id: verificationEvent.id,
+          serverId: member.guild.id,
+          userId: member.id,
+          expectedCaseRevision: input.expectedCaseRevision,
+          challengeId: input.challengeId,
+          generation: input.generation,
+          resolvedBy: actorId,
+          resolvedAt,
+        });
+      } catch (error) {
+        const currentPendingEvents = await this.verificationEventRepository
+          .findByUserAndServer(member.id, member.guild.id)
+          .then((events) => events.filter((event) => event.status === VerificationStatus.PENDING))
+          .catch((reloadError) => {
+            console.error(
+              `Failed to reload CAPTCHA case state for ${member.user.tag} after completion failed:`,
+              reloadError
+            );
+            return null;
+          });
+        if (currentPendingEvents === null || currentPendingEvents.length > 0) {
+          const roleRestored = await this.roleManager.assignCaseRole(member).catch(() => false);
+          if (!roleRestored) {
+            console.error(
+              `Failed to restore case role for ${member.user.tag} after CAPTCHA completion failed.`
+            );
+          }
+        }
+        throw error;
+      }
+      if (!committed) {
+        const currentPendingEvents = (
+          await this.verificationEventRepository.findByUserAndServer(member.id, member.guild.id)
+        ).filter((event) => event.status === VerificationStatus.PENDING);
+        if (currentPendingEvents.length > 0) {
+          const roleRestored = await this.roleManager.assignCaseRole(member);
+          if (!roleRestored) {
+            throw new Error(`Failed to restore case role for ${member.user.tag}`);
+          }
+        }
+        return { status: 'held', reason: 'case_changed' };
+      }
+      completed = committed;
+    }
+
+    const remainingPending = (
+      await this.verificationEventRepository.findByUserAndServer(member.id, member.guild.id)
+    ).filter((event) => event.status === VerificationStatus.PENDING);
+    const storedMember = alreadyResolvedByCaptcha
+      ? await this.serverMemberRepository.findByServerAndUser(member.guild.id, member.id)
+      : null;
+    if (
+      remainingPending.length > 0 &&
+      (!alreadyResolvedByCaptcha || storedMember?.case_role_active !== true)
+    ) {
+      const roleRestored = await this.roleManager.assignCaseRole(member);
+      if (!roleRestored) {
+        throw new Error(`Failed to preserve case role for ${member.user.tag}`);
+      }
+    } else if (
+      alreadyResolvedByCaptcha &&
+      remainingPending.length === 0 &&
+      storedMember?.case_role_active === true
+    ) {
+      const roleRemoved = await this.roleManager.removeCaseRole(member);
+      if (!roleRemoved) {
+        throw new Error(`Failed to reconcile case role for ${member.user.tag}`);
+      }
+    }
+    const restoreResult =
+      remainingPending.length === 0
+        ? await this.tryRestoreRoleQuarantine(member, completed, { id: actorId } as User, {
+            canRestoreRole: async () =>
+              !(
+                await this.verificationEventRepository.findByUserAndServer(
+                  member.id,
+                  member.guild.id
+                )
+              ).some((event) => event.status === VerificationStatus.PENDING),
+          })
+        : { verificationEvent: completed, metadata: null };
+    completed = restoreResult.verificationEvent ?? completed;
+    const pendingAfterRestoration = (
+      await this.verificationEventRepository.findByUserAndServer(member.id, member.guild.id)
+    ).filter((event) => event.status === VerificationStatus.PENDING);
+    if (pendingAfterRestoration.length > 0) {
+      const roleRestored = await this.roleManager.assignCaseRole(member);
+      if (!roleRestored) {
+        throw new Error(`Failed to preserve case role for ${member.user.tag}`);
+      }
+      await this.reapplyRoleQuarantineForPendingCase(member, pendingAfterRestoration[0], actorId);
+      await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
+        case_role_active: true,
+        verification_status: VerificationStatus.PENDING,
+        last_status_change: new Date(),
+        updated_by: actorId,
+      });
+      const heldReason = pendingAfterRestoration.some((event) => event.id === completed.id)
+        ? 'case_changed'
+        : 'other_pending_case';
+      const finalization = await this.finalizeCommittedCaptchaResolution(
+        member,
+        completed,
+        input,
+        resolvedAt,
+        actorId,
+        actorLabel,
+        restoreResult.metadata
+      );
+      if (finalization.status !== 'resolved') {
+        return finalization;
+      }
+      return {
+        status: 'held',
+        reason: heldReason,
+      };
+    }
+    const memberStateChanged =
+      !alreadyResolvedByCaptcha ||
+      !storedMember ||
+      storedMember.case_role_active !== false ||
+      storedMember.verification_status !== VerificationStatus.VERIFIED;
+    const finalizedMember = await this.serverMemberRepository.markVerifiedIfNoPendingCase(
+      member.guild.id,
+      member.id,
+      {
+        ...(memberStateChanged ? { lastStatusChange: new Date() } : {}),
+        lastVerifiedAt: resolvedAt.toISOString(),
+        updatedBy: actorId,
+      }
+    );
+    if (!finalizedMember) {
+      const pendingAtFinalWrite = (
+        await this.verificationEventRepository.findByUserAndServer(member.id, member.guild.id)
+      ).filter((event) => event.status === VerificationStatus.PENDING);
+      if (pendingAtFinalWrite.length === 0) {
+        throw new Error(`Failed to finalize member state for CAPTCHA case ${completed.id}.`);
+      }
+      const roleRestored = await this.roleManager.assignCaseRole(member);
+      if (!roleRestored) {
+        throw new Error(`Failed to preserve case role for ${member.user.tag}`);
+      }
+      await this.reapplyRoleQuarantineForPendingCase(member, pendingAtFinalWrite[0], actorId);
+      const heldReason = pendingAtFinalWrite.some((event) => event.id === completed.id)
+        ? 'case_changed'
+        : 'other_pending_case';
+      const finalization = await this.finalizeCommittedCaptchaResolution(
+        member,
+        completed,
+        input,
+        resolvedAt,
+        actorId,
+        actorLabel,
+        restoreResult.metadata
+      );
+      if (finalization.status !== 'resolved') {
+        return finalization;
+      }
+      return {
+        status: 'held',
+        reason: heldReason,
+      };
+    }
+
+    return this.finalizeCommittedCaptchaResolution(
+      member,
+      completed,
+      input,
+      resolvedAt,
+      actorId,
+      actorLabel,
+      restoreResult.metadata
+    );
+  }
+
+  private async finalizeCommittedCaptchaResolution(
+    member: GuildMember,
+    completed: VerificationEvent,
+    input: {
+      verificationEventId: string;
+      challengeId: string;
+      generation: number;
+      expectedCaseRevision: number;
+    },
+    resolvedAt: Date,
+    actorId: string,
+    actorLabel: string,
+    roleQuarantineMetadata: Record<string, unknown> | null
+  ): Promise<CaptchaCaseResolutionResult> {
+    const current = await this.verificationEventRepository.findById(completed.id);
+    const currentCaptchaResolutionValue = this.metadataToRecord(
+      current?.metadata ?? null
+    ).captcha_resolution;
+    const currentCaptchaResolution =
+      currentCaptchaResolutionValue &&
+      typeof currentCaptchaResolutionValue === 'object' &&
+      !Array.isArray(currentCaptchaResolutionValue)
+        ? (currentCaptchaResolutionValue as Record<string, unknown>)
+        : {};
+    if (
+      !current ||
+      current.status !== VerificationStatus.VERIFIED ||
+      current.resolved_by !== actorId ||
+      current.case_revision !== input.expectedCaseRevision ||
+      currentCaptchaResolution.challenge_id !== input.challengeId ||
+      currentCaptchaResolution.generation !== input.generation
+    ) {
+      return { status: 'held', reason: 'case_changed' };
+    }
+    completed = current;
+    const finalizationAttemptId = `${CAPTCHA_FINALIZATION_ATTEMPT_PREFIX}${input.challengeId}:${input.generation}`;
+    const claimed = await this.verificationEventRepository.claimCaptchaFinalization(
+      {
+        id: completed.id,
+        serverId: member.guild.id,
+        userId: member.id,
+        expectedCaseRevision: input.expectedCaseRevision,
+        challengeId: input.challengeId,
+        generation: input.generation,
+        resolvedBy: actorId,
+        resolvedAt,
+      },
+      finalizationAttemptId,
+      new Date(Date.now() - CASE_ROLE_RELEASE_LEASE_MS)
+    );
+    if (!claimed) {
+      return { status: 'held', reason: 'case_changed' };
+    }
+    try {
+      await this.finalizeCaptchaResolvedVerificationEvent(
+        member,
+        claimed,
+        actorId,
+        actorLabel,
+        roleQuarantineMetadata
+      );
+      await this.ensureCaptchaModerationOutcome(
+        member,
+        claimed,
+        actorId,
+        input.challengeId,
+        roleQuarantineMetadata
+      );
+    } catch (error) {
+      await this.verificationEventRepository
+        .releaseCaptchaFinalization(claimed.id, finalizationAttemptId)
+        .catch((releaseError) => {
+          console.error(
+            `Failed to release CAPTCHA finalization for case ${claimed.id}:`,
+            releaseError
+          );
+        });
+      throw error;
+    }
+    const released = await this.verificationEventRepository.releaseCaptchaFinalization(
+      claimed.id,
+      finalizationAttemptId
+    );
+    if (!released) {
+      throw new Error(`Failed to release CAPTCHA finalization for case ${claimed.id}.`);
+    }
+    return { status: 'resolved' };
+  }
+
+  private async finalizeCaptchaResolvedVerificationEvent(
+    member: GuildMember,
+    verificationEvent: VerificationEvent,
+    actorId: string,
+    actorLabel: string,
+    roleQuarantineMetadata: Record<string, unknown> | null
+  ): Promise<void> {
+    const existingActions =
+      (await this.adminActionService.getActionsForVerificationEvent?.(verificationEvent.id)) ?? [];
+    const actionRecorded = existingActions.some(
+      (action) =>
+        action.action_type === AdminActionType.VERIFY &&
+        action.admin_id === actorId &&
+        action.new_status === VerificationStatus.VERIFIED
+    );
+    if (!actionRecorded) {
+      const threadResolved = await this.threadManager.resolveVerificationThread(
+        verificationEvent,
+        VerificationStatus.VERIFIED,
+        actorLabel
+      );
+      if (!threadResolved) {
+        throw new Error(`Failed to resolve CAPTCHA case thread ${verificationEvent.id}.`);
+      }
+      if (verificationEvent.notification_message_id) {
+        const logged = await this.notificationManager.logActionToMessage(
+          verificationEvent,
+          AdminActionType.VERIFY,
+          { id: actorId }
+        );
+        if (!logged) {
+          throw new Error(`Failed to log CAPTCHA resolution for case ${verificationEvent.id}.`);
+        }
+        await this.notificationManager.updateNotificationButtons(
+          verificationEvent,
+          VerificationStatus.VERIFIED
+        );
+      }
+      await this.adminActionService.recordAction({
+        server_id: member.guild.id,
+        user_id: member.id,
+        admin_id: actorId,
+        verification_event_id: verificationEvent.id,
+        detection_event_id: verificationEvent.detection_event_id,
+        action_type: AdminActionType.VERIFY,
+        previous_status: VerificationStatus.PENDING,
+        new_status: VerificationStatus.VERIFIED,
+        notes: 'Security check completed.',
+        metadata: {
+          actor_kind: 'system',
+          actor_label: actorLabel,
+          ...(roleQuarantineMetadata ? { role_quarantine: roleQuarantineMetadata } : {}),
+        } as unknown as Prisma.JsonValue,
+      });
+    }
+    await this.deleteLiveQueueCaseMirror(verificationEvent.id);
+    await this.deleteCaseAttention(verificationEvent.id);
+  }
+
+  private async ensureCaptchaModerationOutcome(
+    member: GuildMember,
+    verificationEvent: VerificationEvent,
+    actorId: string,
+    challengeId: string,
+    roleQuarantineMetadata: Record<string, unknown> | null
+  ): Promise<void> {
+    const outcomeType = getResolutionModerationOutcomeType(VerificationStatus.VERIFIED);
+    const existingOutcomes =
+      (await this.moderationOutcomeService?.findOutcomesForVerificationEvent?.(
+        verificationEvent.id
+      )) ?? [];
+    if (
+      existingOutcomes.some(
+        (outcome) =>
+          outcome.outcome_type === outcomeType &&
+          outcome.source === ModerationOutcomeSource.DRASIL &&
+          outcome.actor_id === actorId
+      )
+    ) {
+      return;
+    }
+    await this.recordModerationOutcomes(
+      this.getModerationTarget(member),
+      outcomeType,
+      ModerationOutcomeSource.DRASIL,
+      [verificationEvent],
+      {
+        actorId,
+        metadata: {
+          captcha_challenge_id: challengeId,
+          ...(roleQuarantineMetadata ? { role_quarantine: roleQuarantineMetadata } : {}),
+        },
+      }
+    );
   }
 
   /**

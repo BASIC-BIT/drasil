@@ -749,15 +749,17 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
     );
   });
 
-  it('persists containment regression and discovers unfinished verified role restoration', async () => {
+  it('persists containment regression and discovers unfinished verified role restorations', async () => {
     const serverId = 'guild-quarantine-reconciliation';
     const userId = 'user-quarantine-reconciliation';
+    const standardUserId = 'user-standard-reconciliation';
     const servers = new ServerRepository(prisma);
     const users = new UserRepository(prisma);
     const verifications = new VerificationEventRepository(prisma);
     const snapshots = new RoleQuarantineSnapshotRepository(prisma);
     await servers.getOrCreateServer(serverId);
     await users.getOrCreateUser(userId, 'target');
+    await users.getOrCreateUser(standardUserId, 'standard-target');
     const verification = await verifications.createFromDetection(
       null,
       serverId,
@@ -781,8 +783,24 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
       plannedRoleIds: ['role-1'],
       removedRoleIds: ['role-1'],
     });
+    const standardVerification = await verifications.createFromDetection(
+      null,
+      serverId,
+      standardUserId,
+      VerificationStatus.PENDING
+    );
+    const standardSnapshot = await snapshots.create({
+      serverId,
+      userId: standardUserId,
+      verificationEventId: standardVerification.id,
+      mode: 'on',
+      purpose: RoleQuarantineSnapshotPurpose.STANDARD_CASE,
+      originalRoleIds: ['role-standard'],
+      plannedRoleIds: ['role-standard'],
+      removedRoleIds: ['role-standard'],
+    });
 
-    await expect(snapshots.findActiveCompletedCompromised()).resolves.toEqual([]);
+    await expect(snapshots.findActiveCompletedForRestoration()).resolves.toEqual([]);
     const regressed = await verifications.markParkedContainmentIncomplete(
       verification.id,
       verification.metadata
@@ -803,9 +821,22 @@ describeIntegration('compromised-account quarantine persistence (integration)', 
       resolved_by: 'moderator-verify',
       resolved_at: new Date(),
     });
-    await expect(snapshots.findActiveCompletedCompromised()).resolves.toEqual([
-      expect.objectContaining({ id: snapshot.id, verification_event_id: verification.id }),
-    ]);
+    await verifications.update(standardVerification.id, {
+      status: VerificationStatus.VERIFIED,
+      resolved_by: 'drasil:captcha',
+      resolved_at: new Date(),
+    });
+    const unfinishedRestorations = await snapshots.findActiveCompletedForRestoration();
+    expect(unfinishedRestorations).toHaveLength(2);
+    expect(unfinishedRestorations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: snapshot.id, verification_event_id: verification.id }),
+        expect.objectContaining({
+          id: standardSnapshot.id,
+          verification_event_id: standardVerification.id,
+        }),
+      ])
+    );
   });
 
   it('stores same-channel quarantine breaches separately for each case', async () => {

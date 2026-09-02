@@ -23,6 +23,7 @@ import { DetectionResult } from './DetectionOrchestrator';
 import { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
 import {
   CaseKind,
+  CaptchaChallenge,
   DetectionEvent,
   DetectionType,
   VerificationStatus,
@@ -65,6 +66,13 @@ export type AccountQuarantineAttentionReason =
   | 'attention_delivery_incomplete'
   | 'role_restoration_incomplete';
 
+export type CaptchaAttentionReason =
+  | 'delivery_failed'
+  | 'expired'
+  | 'submission_limit'
+  | 'evidence_only_pass'
+  | 'automatic_resolution_held';
+
 /**
  * Interface for NotificationManager service
  */
@@ -81,7 +89,8 @@ export interface INotificationManager {
     member: GuildMember,
     detectionResult: DetectionResult,
     verificationEvent: VerificationEvent,
-    sourceMessage?: Message
+    sourceMessage?: Message,
+    captchaChallenge?: CaptchaChallenge | null
   ): Promise<Message | null>;
 
   /**
@@ -94,7 +103,7 @@ export interface INotificationManager {
   logActionToMessage(
     verificationEvent: VerificationEvent,
     actionTaken: AdminActionType,
-    admin: User,
+    admin: Pick<User, 'id'>,
     thread?: ThreadChannel
   ): Promise<boolean>;
 
@@ -148,6 +157,11 @@ export interface INotificationManager {
     newStatus: VerificationStatus
   ): Promise<void>;
 
+  updateCaptchaChallengePresentation?(
+    verificationEvent: VerificationEvent,
+    challenge: CaptchaChallenge
+  ): Promise<boolean>;
+
   updateVerificationThreadAnalysis(
     verificationEvent: VerificationEvent,
     analysis: VerificationThreadAnalysisResult,
@@ -168,6 +182,11 @@ export interface INotificationManager {
     verificationEvent: VerificationEvent,
     reason: AccountQuarantineAttentionReason,
     sourceMessage?: Message
+  ): Promise<boolean>;
+
+  notifyCaptchaAttention?(
+    verificationEvent: VerificationEvent,
+    reason: CaptchaAttentionReason
   ): Promise<boolean>;
 
   upsertObservedDetectionNotification(
@@ -253,7 +272,8 @@ export class NotificationManager implements INotificationManager {
     member: GuildMember,
     detectionResult: DetectionResult,
     verificationEvent: VerificationEvent,
-    sourceMessage?: Message
+    sourceMessage?: Message,
+    captchaChallenge?: CaptchaChallenge | null
   ): Promise<Message | null> {
     const serverConfig = await this.configService.getServerConfig(member.guild.id);
     const responseSettings = getDetectionResponseSettings(serverConfig.settings);
@@ -276,7 +296,8 @@ export class NotificationManager implements INotificationManager {
         detectionResult,
         verificationEvent,
         detectionEvents,
-        sourceMessage
+        sourceMessage,
+        captchaChallenge
       );
       this.presentationBuilder.upsertAccountQuarantinePresentation(embed, verificationEvent);
       const actionRows = this.presentationBuilder.createAdminNotificationActionRows(member.id, {
@@ -692,6 +713,52 @@ export class NotificationManager implements INotificationManager {
     }
   }
 
+  public async notifyCaptchaAttention(
+    verificationEvent: VerificationEvent,
+    reason: CaptchaAttentionReason
+  ): Promise<boolean> {
+    try {
+      const serverConfig = await this.configService.getServerConfig(verificationEvent.server_id);
+      const adminChannel = await this.configService.getAdminChannel(verificationEvent.server_id);
+      if (!adminChannel) {
+        return false;
+      }
+
+      const notificationRoleIds = this.presentationBuilder.getCaseNotificationRoleIds(serverConfig);
+      const summary =
+        reason === 'delivery_failed'
+          ? 'A browser security check could not be delivered. Review the case and retry when ready.'
+          : reason === 'expired'
+            ? 'A browser security check expired. The user remains restricted.'
+            : reason === 'submission_limit'
+              ? 'A browser security check reached its submission limit. The user remains restricted.'
+              : reason === 'evidence_only_pass'
+                ? 'A browser security check was completed. Review the pending case.'
+                : 'A browser security check passed, but current case state prevented automatic resolution.';
+      const roleMentions = this.presentationBuilder.formatRoleMentions(notificationRoleIds) ?? '';
+      const lines = [
+        `${roleMentions} ${summary}`.trim(),
+        `User: <@${verificationEvent.user_id}> (\`${verificationEvent.user_id}\`)`,
+        `Case: \`${verificationEvent.id}\``,
+        verificationEvent.thread_id ? `Support thread: <#${verificationEvent.thread_id}>` : null,
+        verificationEvent.private_evidence_thread_id
+          ? `Evidence thread: <#${verificationEvent.private_evidence_thread_id}>`
+          : null,
+      ].filter((line): line is string => Boolean(line));
+      await adminChannel.send({
+        content: lines.join('\n'),
+        allowedMentions: this.presentationBuilder.createAdminAllowedMentions(notificationRoleIds),
+      });
+      return true;
+    } catch (error) {
+      console.warn(
+        `Failed to notify admins about browser security-check attention for case ${verificationEvent.id}:`,
+        error
+      );
+      return false;
+    }
+  }
+
   /**
    * Log an admin action to the notification message
    * @param message The original notification message
@@ -702,7 +769,7 @@ export class NotificationManager implements INotificationManager {
   public async logActionToMessage(
     verificationEvent: VerificationEvent,
     actionTaken: AdminActionType,
-    admin: User,
+    admin: Pick<User, 'id'>,
     thread?: ThreadChannel
   ): Promise<boolean> {
     try {
@@ -1537,6 +1604,31 @@ export class NotificationManager implements INotificationManager {
       ),
       ...(updatedEmbed ? { embeds: [updatedEmbed] } : {}),
     });
+  }
+
+  public async updateCaptchaChallengePresentation(
+    verificationEvent: VerificationEvent,
+    challenge: CaptchaChallenge
+  ): Promise<boolean> {
+    if (!verificationEvent.notification_message_id) {
+      return true;
+    }
+    try {
+      const message = await this.getMessageForVerificationEvent(verificationEvent);
+      if (!message.embeds[0]) {
+        return false;
+      }
+      const updatedEmbed = EmbedBuilder.from(message.embeds[0]);
+      this.presentationBuilder.upsertCaptchaChallengePresentation(updatedEmbed, challenge);
+      await message.edit({ allowedMentions: { parse: [] }, embeds: [updatedEmbed] });
+      return true;
+    } catch (error) {
+      console.warn(
+        `Failed to update browser security-check presentation for case ${verificationEvent.id}:`,
+        error
+      );
+      return false;
+    }
   }
 
   private formatVerificationThreadMessageMirror(

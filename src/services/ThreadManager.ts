@@ -33,6 +33,7 @@ import {
   buildReportIntakeAdminActionsCustomId,
   buildReportIntakeThreadCloseCustomId,
 } from '../utils/reportIntakeAdminActions';
+import { getDiscordErrorCode } from '../utils/discordErrors';
 
 export const VERIFICATION_THREAD_TYPE_METADATA_KEY = 'thread_type';
 export const VERIFICATION_THREAD_TYPE = 'verification';
@@ -89,6 +90,15 @@ export interface IThreadManager {
     member: GuildMember,
     verificationEvent: VerificationEvent
   ): Promise<ThreadChannel | null>;
+
+  sendCaptchaChallenge(verificationEvent: VerificationEvent, url: string): Promise<string | null>;
+
+  retractCaptchaChallenge(
+    verificationEvent: VerificationEvent,
+    messageId: string
+  ): Promise<boolean>;
+
+  sendCaptchaStatus(verificationEvent: VerificationEvent, message: string): Promise<boolean>;
 
   repairVerificationThread(
     member: GuildMember,
@@ -184,6 +194,90 @@ export class ThreadManager implements IThreadManager {
     this.userRepository = userRepository;
     this.serverRepository = serverRepository;
     this.serverMemberRepository = serverMemberRepository;
+  }
+
+  public async sendCaptchaChallenge(
+    verificationEvent: VerificationEvent,
+    url: string
+  ): Promise<string | null> {
+    if (!verificationEvent.thread_id) {
+      return null;
+    }
+    try {
+      const channel = await this.client.channels.fetch(verificationEvent.thread_id);
+      if (!channel?.isThread()) {
+        return null;
+      }
+      await channel.members.fetch(verificationEvent.user_id);
+      if (channel.archived) {
+        await channel.setArchived(false, 'Deliver CAPTCHA case challenge');
+      }
+      const message = await channel.send({
+        content: 'Complete this browser check to confirm access to your Discord account.',
+        components: [
+          new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder()
+              .setStyle(ButtonStyle.Link)
+              .setLabel('Open security check')
+              .setURL(url)
+          ),
+        ],
+      });
+      return message.id;
+    } catch (error) {
+      const code = getDiscordErrorCode(error);
+      console.warn(
+        `Failed to deliver CAPTCHA challenge for case ${verificationEvent.id} (Discord code: ${String(code ?? 'unknown')}).`
+      );
+      return null;
+    }
+  }
+
+  public async retractCaptchaChallenge(
+    verificationEvent: VerificationEvent,
+    messageId: string
+  ): Promise<boolean> {
+    if (!verificationEvent.thread_id) {
+      return false;
+    }
+    try {
+      const channel = await this.client.channels.fetch(verificationEvent.thread_id);
+      if (!channel?.isThread()) {
+        return false;
+      }
+      const message = await channel.messages.fetch(messageId);
+      await message.delete();
+      return true;
+    } catch (error) {
+      const code = getDiscordErrorCode(error);
+      console.warn(
+        `Failed to retract stale CAPTCHA challenge for case ${verificationEvent.id} (Discord code: ${String(code ?? 'unknown')}).`
+      );
+      return false;
+    }
+  }
+
+  public async sendCaptchaStatus(
+    verificationEvent: VerificationEvent,
+    message: string
+  ): Promise<boolean> {
+    if (!verificationEvent.thread_id) {
+      return false;
+    }
+    try {
+      const channel = await this.client.channels.fetch(verificationEvent.thread_id);
+      if (!channel?.isThread()) {
+        return false;
+      }
+      if (channel.archived) {
+        await channel.setArchived(false, 'Deliver CAPTCHA case status');
+      }
+      await channel.send({ content: enforceDiscordMessageLimit(message) });
+      return true;
+    } catch (error) {
+      console.warn(`Failed to deliver CAPTCHA status for case ${verificationEvent.id}:`, error);
+      return false;
+    }
   }
 
   private async getInitialVerificationPrompt(member: GuildMember): Promise<string> {
@@ -734,7 +828,8 @@ export class ThreadManager implements IThreadManager {
 
   private async sendInitialVerificationPrompt(
     member: GuildMember,
-    thread: ThreadChannel
+    thread: ThreadChannel,
+    verificationEventId: string
   ): Promise<void> {
     const rawInitialPrompt = await this.getInitialVerificationPrompt(member);
     const initialPrompt = enforceDiscordMessageLimit(rawInitialPrompt);
@@ -752,7 +847,7 @@ export class ThreadManager implements IThreadManager {
         roles: [],
         repliedUser: false,
       },
-      components: [this.presentationBuilder.createActionRow(member.id)],
+      components: [this.presentationBuilder.createActionRow(member.id, { verificationEventId })],
     });
   }
 
@@ -854,7 +949,7 @@ export class ThreadManager implements IThreadManager {
 
       // Send an initial message to the thread
       setupStage = 'send initial verification prompt';
-      await this.sendInitialVerificationPrompt(member, thread);
+      await this.sendInitialVerificationPrompt(member, thread, verificationEvent.id);
 
       return thread;
     } catch (error) {
@@ -896,7 +991,7 @@ export class ThreadManager implements IThreadManager {
     await this.addFlaggedUserToVerificationThread(member, thread);
     const promptAlreadyPresent = await this.hasInitialVerificationPrompt(member, thread);
     if (!promptAlreadyPresent) {
-      await this.sendInitialVerificationPrompt(member, thread);
+      await this.sendInitialVerificationPrompt(member, thread, verificationEvent.id);
     }
 
     return {

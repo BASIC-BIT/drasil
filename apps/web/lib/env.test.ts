@@ -8,6 +8,23 @@ describe('environment helpers', () => {
     expect(() => getPublicAppUrl()).toThrow('NEXT_PUBLIC_APP_URL');
   });
 
+  it.each([
+    'https://drasil.example/base',
+    'https://drasil.example?preview=1',
+    'https://drasil.example#preview',
+    'https://user:password@drasil.example',
+  ])('rejects a public app URL that is not a bare origin: %s', (value) => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', value);
+
+    expect(() => getPublicAppUrl()).toThrow('must be a valid HTTP(S) origin');
+  });
+
+  it('normalizes a public app origin with a trailing slash', () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://drasil.example/');
+
+    expect(getPublicAppUrl()).toBe('https://drasil.example');
+  });
+
   it('rejects invalid positive integer values', () => {
     vi.stubEnv('DRASIL_WEB_PG_POOL_MAX', '0');
 

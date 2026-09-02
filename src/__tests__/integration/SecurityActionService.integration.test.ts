@@ -81,6 +81,9 @@ describeIntegration('SecurityActionService (integration)', () => {
       restoreObservedDetectionActions: jest.fn().mockResolvedValue(true),
     };
     threadManager = {
+      retractCaptchaChallenge: jest.fn().mockResolvedValue(true),
+      sendCaptchaChallenge: jest.fn().mockResolvedValue('captcha-message-1'),
+      sendCaptchaStatus: jest.fn().mockResolvedValue(true),
       createVerificationThread: jest
         .fn()
         .mockResolvedValue({ id: 'thread-1', url: 'https://discord.com/channels/thread-1' } as any),
@@ -113,6 +116,7 @@ describeIntegration('SecurityActionService (integration)', () => {
     };
     userModerationService = {
       applyCaseRole: jest.fn().mockResolvedValue(true),
+      resolveCaptchaCase: jest.fn().mockResolvedValue({ status: 'resolved' }),
       verifyUser: jest.fn().mockResolvedValue(true),
       kickUser: jest.fn().mockResolvedValue(true),
       banUser: jest.fn().mockResolvedValue(true),
@@ -338,5 +342,13 @@ describeIntegration('SecurityActionService (integration)', () => {
     expect(actions[0].server_id).toBe(guildId);
     expect(actions[0].user_id).toBe(userId);
     expect(actions[0].verification_event_id).toBe(verificationEvent.id);
+    await expect(
+      prisma.verification_events.findUnique({ where: { id: verificationEvent.id } })
+    ).resolves.toEqual(
+      expect.objectContaining({
+        case_revision: verificationEvent.case_revision + 1,
+        status: VerificationStatus.PENDING,
+      })
+    );
   });
 });

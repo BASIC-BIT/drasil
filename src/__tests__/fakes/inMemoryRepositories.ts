@@ -6,10 +6,11 @@ import type {
   ServerSetupConfigurationUpdate,
 } from '../../repositories/ServerRepository';
 import type { IUserRepository } from '../../repositories/UserRepository';
-import type {
-  IVerificationEventRepository,
-  TerminalActionCompletion,
-  VerificationReleaseCompletion,
+import {
+  SUBJECT_EVIDENCE_MESSAGE_ID_LIMIT,
+  type IVerificationEventRepository,
+  type TerminalActionCompletion,
+  type VerificationReleaseCompletion,
 } from '../../repositories/VerificationEventRepository';
 import type { IReportIntakeRepository } from '../../repositories/ReportIntakeRepository';
 import type { IModerationOutcomeRepository } from '../../repositories/ModerationOutcomeRepository';
@@ -58,7 +59,11 @@ import {
   MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY,
   MODERATOR_BAN_ACTION_REQUIRES_REASON_SETTING_KEY,
 } from '../../utils/detectionResponseSettings';
-import { isCaseRoleReleaseRecoveryAttempt } from '../../utils/caseRoleRelease';
+import {
+  CAPTCHA_FINALIZATION_ATTEMPT_PREFIX,
+  isCaseRoleReleaseRecoveryAttempt,
+  isCaptchaPresentationAttempt,
+} from '../../utils/caseRoleRelease';
 import {
   DEFAULT_USER_REPORT_EXTERNAL_RESPONSE_MODE,
   DEFAULT_USER_REPORT_REASON_REQUIRED,
@@ -194,6 +199,13 @@ export class InMemoryDetectionEventsRepository implements IDetectionEventsReposi
     return this.events
       .filter((event) => event.server_id === serverId && event.user_id === userId)
       .sort((a, b) => toTimestamp(b.detected_at) - toTimestamp(a.detected_at))
+      .map((event) => ({ ...event }));
+  }
+
+  async findByVerificationEventId(verificationEventId: string): Promise<DetectionEvent[]> {
+    return this.events
+      .filter((event) => event.latest_verification_event_id === verificationEventId)
+      .sort((a, b) => toTimestamp(a.detected_at) - toTimestamp(b.detected_at))
       .map((event) => ({ ...event }));
   }
 
@@ -558,11 +570,12 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       .filter(
         (event) =>
           event.status === VerificationStatus.PENDING &&
-          event.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
           event.containment_status === CaseContainmentStatus.IN_PROGRESS &&
           event.quarantine_attempt_id !== null &&
           event.quarantine_attempt_id !== undefined &&
-          !isCaseRoleReleaseRecoveryAttempt(event.quarantine_attempt_id) &&
+          (isCaptchaPresentationAttempt(event.quarantine_attempt_id) ||
+            (event.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
+              !isCaseRoleReleaseRecoveryAttempt(event.quarantine_attempt_id))) &&
           (event.quarantine_lease_renewed_at === null ||
             event.quarantine_lease_renewed_at === undefined ||
             event.quarantine_lease_renewed_at <= staleBefore)
@@ -637,6 +650,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       notification_channel_id: null,
       notification_message_id: null,
       status,
+      case_revision: 0,
       case_kind: CaseKind.STANDARD,
       attention_state: CaseAttentionState.REVIEW_REQUIRED,
       containment_status: CaseContainmentStatus.NOT_APPLICABLE,
@@ -677,6 +691,221 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     }
 
     return { ...matchingEvents[0] };
+  }
+
+  public async completeCaptchaVerification(input: {
+    id: string;
+    serverId: string;
+    userId: string;
+    expectedCaseRevision: number;
+    challengeId: string;
+    generation: number;
+    resolvedBy: string;
+    resolvedAt: Date;
+  }): Promise<VerificationEvent | null> {
+    const eventIndex = this.events.findIndex(
+      (event) =>
+        event.id === input.id &&
+        event.server_id === input.serverId &&
+        event.user_id === input.userId &&
+        event.status === VerificationStatus.PENDING &&
+        event.case_kind === CaseKind.STANDARD &&
+        event.containment_status !== CaseContainmentStatus.IN_PROGRESS &&
+        event.case_revision === input.expectedCaseRevision
+    );
+    const hasAnotherPendingCase = this.events.some(
+      (event) =>
+        event.id !== input.id &&
+        event.server_id === input.serverId &&
+        event.user_id === input.userId &&
+        event.status === VerificationStatus.PENDING
+    );
+    if (eventIndex === -1 || hasAnotherPendingCase) {
+      return null;
+    }
+    const event = this.events[eventIndex];
+    const metadata =
+      event.metadata && typeof event.metadata === 'object' && !Array.isArray(event.metadata)
+        ? event.metadata
+        : {};
+    const completed: VerificationEvent = {
+      ...event,
+      status: VerificationStatus.VERIFIED,
+      resolved_by: input.resolvedBy,
+      resolved_at: input.resolvedAt,
+      notes: 'Security check completed.',
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+      quarantine_attempt_id: null,
+      quarantine_lease_renewed_at: null,
+      parked_at: null,
+      parked_by: null,
+      metadata: {
+        ...metadata,
+        captcha_resolution: {
+          challenge_id: input.challengeId,
+          generation: input.generation,
+          resolved_at: input.resolvedAt.toISOString(),
+        },
+      },
+      updated_at: new Date(),
+    };
+    this.events[eventIndex] = completed;
+    return { ...completed };
+  }
+
+  public async claimCaptchaFinalization(
+    input: {
+      id: string;
+      serverId: string;
+      userId: string;
+      expectedCaseRevision: number;
+      challengeId: string;
+      generation: number;
+      resolvedBy: string;
+      resolvedAt: Date;
+    },
+    attemptId: string,
+    staleBefore: Date
+  ): Promise<VerificationEvent | null> {
+    const eventIndex = this.events.findIndex((event) => {
+      const metadata =
+        event.metadata && typeof event.metadata === 'object' && !Array.isArray(event.metadata)
+          ? event.metadata
+          : {};
+      const resolution =
+        metadata.captcha_resolution &&
+        typeof metadata.captcha_resolution === 'object' &&
+        !Array.isArray(metadata.captcha_resolution)
+          ? metadata.captcha_resolution
+          : {};
+      const available =
+        event.containment_status !== CaseContainmentStatus.IN_PROGRESS &&
+        event.quarantine_attempt_id === null;
+      const staleCaptchaFinalization =
+        event.containment_status === CaseContainmentStatus.IN_PROGRESS &&
+        event.quarantine_attempt_id?.startsWith(CAPTCHA_FINALIZATION_ATTEMPT_PREFIX) === true &&
+        (!event.quarantine_lease_renewed_at ||
+          event.quarantine_lease_renewed_at.getTime() <= staleBefore.getTime());
+      const matchingCaptchaFinalization =
+        event.containment_status === CaseContainmentStatus.IN_PROGRESS &&
+        event.quarantine_attempt_id === attemptId;
+      return (
+        event.id === input.id &&
+        event.server_id === input.serverId &&
+        event.user_id === input.userId &&
+        event.status === VerificationStatus.VERIFIED &&
+        event.resolved_by === input.resolvedBy &&
+        event.case_revision === input.expectedCaseRevision &&
+        resolution.challenge_id === input.challengeId &&
+        resolution.generation === input.generation &&
+        (available || matchingCaptchaFinalization || staleCaptchaFinalization)
+      );
+    });
+    if (eventIndex === -1) {
+      return null;
+    }
+    const claimed = {
+      ...this.events[eventIndex],
+      containment_status: CaseContainmentStatus.IN_PROGRESS,
+      quarantine_attempt_id: attemptId,
+      quarantine_lease_renewed_at: new Date(),
+      updated_at: new Date(),
+    };
+    this.events[eventIndex] = claimed;
+    return { ...claimed };
+  }
+
+  public async releaseCaptchaFinalization(id: string, attemptId: string): Promise<boolean> {
+    const eventIndex = this.events.findIndex(
+      (event) =>
+        event.id === id &&
+        event.status === VerificationStatus.VERIFIED &&
+        event.containment_status === CaseContainmentStatus.IN_PROGRESS &&
+        event.quarantine_attempt_id === attemptId
+    );
+    if (eventIndex === -1) {
+      return false;
+    }
+    this.events[eventIndex] = {
+      ...this.events[eventIndex],
+      containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+      quarantine_attempt_id: null,
+      quarantine_lease_renewed_at: null,
+      updated_at: new Date(),
+    };
+    return true;
+  }
+
+  public async recordSubjectCaseEvidence(
+    id: string,
+    messageId: string
+  ): Promise<VerificationEvent | null> {
+    const eventIndex = this.events.findIndex(
+      (event) => event.id === id && event.status === VerificationStatus.PENDING
+    );
+    if (eventIndex === -1) {
+      return null;
+    }
+    const existing = this.events[eventIndex];
+    const metadata =
+      existing.metadata &&
+      typeof existing.metadata === 'object' &&
+      !Array.isArray(existing.metadata)
+        ? existing.metadata
+        : {};
+    const subjectEvidenceMessageIds = Array.isArray(metadata.subject_evidence_message_ids)
+      ? metadata.subject_evidence_message_ids.filter(
+          (value): value is string => typeof value === 'string'
+        )
+      : [];
+    if (subjectEvidenceMessageIds.includes(messageId)) {
+      return null;
+    }
+    const updated: VerificationEvent = {
+      ...existing,
+      case_revision: existing.case_revision + 1,
+      metadata: {
+        ...metadata,
+        subject_evidence_message_ids: [...subjectEvidenceMessageIds, messageId].slice(
+          -SUBJECT_EVIDENCE_MESSAGE_ID_LIMIT
+        ),
+      },
+      updated_at: new Date(),
+    };
+    this.events[eventIndex] = updated;
+    return { ...updated };
+  }
+
+  public async reopen(id: string): Promise<VerificationEvent | null> {
+    const eventIndex = this.events.findIndex(
+      (event) =>
+        event.id === id &&
+        event.status !== VerificationStatus.PENDING &&
+        event.containment_status !== CaseContainmentStatus.IN_PROGRESS
+    );
+    if (eventIndex === -1) {
+      return null;
+    }
+    const existing = this.events[eventIndex];
+    const reopened: VerificationEvent = {
+      ...existing,
+      status: VerificationStatus.PENDING,
+      case_revision: existing.case_revision + 1,
+      case_kind: CaseKind.STANDARD,
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+      quarantine_attempt_id: null,
+      quarantine_lease_renewed_at: null,
+      quarantine_case_role_id: null,
+      parked_at: null,
+      parked_by: null,
+      resolved_at: null,
+      resolved_by: null,
+      updated_at: new Date(),
+    };
+    this.events[eventIndex] = reopened;
+    return { ...reopened };
   }
 
   async claimQuarantineAttempt(
@@ -1065,6 +1294,33 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       ...data,
       quarantine_attempt_id: null,
       quarantine_lease_renewed_at: null,
+      updated_at: new Date(),
+    };
+    this.events[eventIndex] = updated;
+    return { ...updated };
+  }
+
+  async claimCaptchaPresentation(
+    input: import('../../repositories/VerificationEventRepository').CaptchaPresentationClaimInput
+  ): Promise<VerificationEvent | null> {
+    const eventIndex = this.events.findIndex(
+      (event) =>
+        event.id === input.id &&
+        event.server_id === input.serverId &&
+        event.user_id === input.userId &&
+        event.status === VerificationStatus.PENDING &&
+        event.case_kind === CaseKind.STANDARD &&
+        (event.containment_status !== CaseContainmentStatus.IN_PROGRESS ||
+          event.quarantine_attempt_id === input.attemptId)
+    );
+    if (eventIndex === -1) {
+      return null;
+    }
+    const updated = {
+      ...this.events[eventIndex],
+      containment_status: CaseContainmentStatus.IN_PROGRESS,
+      quarantine_attempt_id: input.attemptId,
+      quarantine_lease_renewed_at: new Date(),
       updated_at: new Date(),
     };
     this.events[eventIndex] = updated;
@@ -1664,6 +1920,20 @@ export class InMemoryServerMemberRepository implements IServerMemberRepository {
     return { ...updated };
   }
 
+  async markVerifiedIfNoPendingCase(
+    serverId: string,
+    userId: string,
+    input: { lastStatusChange?: Date; lastVerifiedAt: string; updatedBy: string }
+  ): Promise<ServerMember | null> {
+    return this.upsertMember(serverId, userId, {
+      case_role_active: false,
+      verification_status: VerificationStatus.VERIFIED,
+      last_verified_at: input.lastVerifiedAt,
+      ...(input.lastStatusChange ? { last_status_change: input.lastStatusChange } : {}),
+      updated_by: input.updatedBy,
+    });
+  }
+
   async findByServer(serverId: string): Promise<ServerMember[]> {
     return Array.from(this.members.values())
       .filter((member) => member.server_id === serverId)
@@ -2046,7 +2316,7 @@ export class InMemoryRoleQuarantineSnapshotRepository implements IRoleQuarantine
     return this.clone(snapshots[0]);
   }
 
-  async findActiveCompletedCompromised(): Promise<RoleQuarantineSnapshot[]> {
+  async findActiveCompletedForRestoration(): Promise<RoleQuarantineSnapshot[]> {
     return [];
   }
 

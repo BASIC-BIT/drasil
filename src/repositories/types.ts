@@ -26,6 +26,10 @@ export interface Server {
  * Flexible server settings stored as JSON
  */
 export interface ServerSettings {
+  captcha_mode?: 'off' | 'manual' | 'suspicious_join';
+  captcha_pass_action?: 'evidence_only' | 'verify_join_only';
+  captcha_challenge_lifetime_hours?: number;
+  captcha_max_submissions?: number;
   account_quarantine_enabled?: boolean;
   min_confidence_threshold?: number; // Minimum confidence for GPT detection
   use_gpt_on_join?: boolean; // Whether to use GPT for join verification
@@ -317,6 +321,11 @@ export enum ModerationActionRequestType {
   PREVIEW_CASE_MESSAGE_DELETION = 'preview_case_message_deletion',
   EXECUTE_CASE_MESSAGE_DELETION = 'execute_case_message_deletion',
   BAN_CASE_USER_WITH_MESSAGE_CLEANUP = 'ban_case_user_with_message_cleanup',
+  REQUEST_CAPTCHA_CHALLENGE = 'request_captcha_challenge',
+  RETRY_CAPTCHA_CHALLENGE = 'retry_captcha_challenge',
+  BYPASS_CAPTCHA_CHALLENGE = 'bypass_captcha_challenge',
+  APPLY_CAPTCHA_PASS = 'apply_captcha_pass',
+  NOTIFY_CAPTCHA_ATTENTION = 'notify_captcha_attention',
 }
 
 export enum ModerationActionRequestStatus {
@@ -473,6 +482,7 @@ export interface VerificationEvent {
   notification_channel_id: string | null;
   notification_message_id: string | null;
   status: VerificationStatus;
+  case_revision: number;
   case_kind?: CaseKind;
   attention_state?: CaseAttentionState;
   containment_status?: CaseContainmentStatus;
@@ -488,6 +498,107 @@ export interface VerificationEvent {
   resolved_by: string | null;
   notes: string | null;
   metadata: Prisma.JsonValue | null; // Align with Prisma JSON type
+}
+
+export enum CaptchaProvider {
+  TURNSTILE = 'turnstile',
+}
+
+export enum CaptchaChallengeStatus {
+  PENDING = 'pending',
+  PASSED = 'passed',
+  FAILED = 'failed',
+  EXPIRED = 'expired',
+  BYPASSED = 'bypassed',
+  CANCELLED = 'cancelled',
+}
+
+export enum CaptchaChallengeRequestOutcome {
+  DELIVERY_FAILED = 'delivery_failed',
+  FAILED = 'failed',
+  EXPIRED = 'expired',
+  BYPASSED = 'bypassed',
+  CANCELLED = 'cancelled',
+}
+
+export enum CaptchaChallengeRequestSource {
+  MODERATOR = 'moderator',
+  AUTOMATIC_SUSPICIOUS_JOIN = 'automatic_suspicious_join',
+}
+
+export enum CaptchaChallengePassEffect {
+  EVIDENCE_ONLY = 'evidence_only',
+  VERIFY_JOIN_ONLY = 'verify_join_only',
+}
+
+export enum CaptchaAttemptValidationState {
+  STARTED = 'started',
+  IDENTITY_MISMATCH = 'identity_mismatch',
+  INVALID = 'invalid',
+  PASSED = 'passed',
+  PROVIDER_ERROR = 'provider_error',
+  STALE = 'stale',
+}
+
+export interface CaptchaChallenge {
+  id: string;
+  verification_event_id: string;
+  server_id: string;
+  user_id: string;
+  provider: CaptchaProvider;
+  status: CaptchaChallengeStatus;
+  request_source: CaptchaChallengeRequestSource;
+  pass_effect: CaptchaChallengePassEffect;
+  generation: number;
+  case_revision_at_issue: number;
+  link_token_hash: string;
+  expires_at: Date;
+  submission_count: number;
+  requested_by: string | null;
+  requested_at: Date;
+  delivered_at: Date | null;
+  delivery_error_code: string | null;
+  passed_at: Date | null;
+  bypassed_by: string | null;
+  bypassed_at: Date | null;
+  bypass_reason: string | null;
+  cancelled_at: Date | null;
+  created_at: Date;
+  updated_at: Date;
+  history?: CaptchaChallengeGenerationHistory[];
+}
+
+export interface CaptchaChallengeGenerationHistory {
+  generation: number;
+  request_source: CaptchaChallengeRequestSource;
+  pass_effect: CaptchaChallengePassEffect;
+  case_revision_at_issue: number;
+  requested_by: string | null;
+  requested_at: Date;
+  presented_at: Date | null;
+  outcome: CaptchaChallengeRequestOutcome | null;
+  outcome_at: Date | null;
+  delivery_error_code: string | null;
+  bypassed_by: string | null;
+  bypassed_at: Date | null;
+  bypass_reason: string | null;
+}
+
+export interface CaptchaChallengeAttempt {
+  id: string;
+  captcha_challenge_id: string;
+  generation: number;
+  submission_number: number;
+  consumes_submission: boolean;
+  idempotency_key: string;
+  validation_state: CaptchaAttemptValidationState;
+  provider_success: boolean | null;
+  provider_action: string | null;
+  provider_hostname: string | null;
+  provider_error_codes: string[];
+  discord_user_id: string | null;
+  created_at: Date;
+  validated_at: Date | null;
 }
 
 export interface AdminAction {

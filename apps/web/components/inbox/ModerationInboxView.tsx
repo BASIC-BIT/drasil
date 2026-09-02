@@ -18,7 +18,13 @@ import {
 } from '@/components/cases/CaseActionControls';
 import { InboxActionForm, type InboxStateAction } from './InboxActionForm';
 import { InboxActionRequestPollingProvider } from './InboxActionRequestPoller';
-import { formatDetectionType, formatUtc, freshnessStatusClass } from '@/lib/casePresentation';
+import {
+  formatCaptchaStatus,
+  formatCaptchaHistoryEntry,
+  formatDetectionType,
+  formatUtc,
+  freshnessStatusClass,
+} from '@/lib/casePresentation';
 import type { InboxActionState } from '@/lib/inboxActionState';
 import {
   findAccountQuarantineActionRequests,
@@ -156,6 +162,9 @@ const actionLabels: Record<ModerationInboxAction, string> = {
   view_case: 'View Case',
   view_history: 'View History',
   view_report: 'View Report',
+  challenge_user: 'Challenge User',
+  retry_captcha: 'Retry Security Check',
+  bypass_captcha: 'Continue Without Browser Check',
 };
 
 const reportClosureActionSet = new Set<ModerationInboxAction>([
@@ -656,6 +665,7 @@ function InboxActions({
           actionRequestsByAction={actionRequestsByAction}
           canQueueCaseActions={canQueueCaseActions}
           caseId={item.sourceId}
+          captchaChallenge={item.captchaChallenge}
           guildId={item.guildId}
           messageCleanup={messageCleanup}
           queueCaseAction={queueCaseAction}
@@ -819,7 +829,31 @@ function InboxDetailPanel({
         <DetailMetric label="Created" value={formatUtc(item.createdAt)} />
         <DetailMetric label="Source" value={item.sourceId} />
         <DetailMetric label="Queue" value={item.queueItemId ? attentionLabel : 'No queue mirror'} />
+        {item.captchaChallenge ? (
+          <DetailMetric
+            label="Security check"
+            value={formatCaptchaStatus(item.captchaChallenge.status)}
+          />
+        ) : null}
       </div>
+
+      {item.captchaChallenge?.history?.length ? (
+        <div className="inbox-detail-section">
+          <h3>Security check history</h3>
+          <ul>
+            {item.captchaChallenge.history.map((entry) => (
+              <li key={entry.generation}>
+                {formatCaptchaHistoryEntry(
+                  entry,
+                  entry.generation === item.captchaChallenge?.generation
+                    ? item.captchaChallenge.status
+                    : undefined
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       <div className="inbox-detail-section">
         <h3>Links</h3>

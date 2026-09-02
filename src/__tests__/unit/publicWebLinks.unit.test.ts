@@ -4,6 +4,7 @@ import {
   buildAdminGuildSetupUrl,
   buildAdminGuildOnboardingUrl,
   buildAdminModerationInboxUrl,
+  buildCaptchaChallengeUrl,
   getPublicWebBaseUrl,
 } from '../../utils/publicWebLinks';
 
@@ -53,6 +54,18 @@ describe('publicWebLinks', () => {
     );
     expect(buildAdminCaseDetailUrl('guild-1', 'case-1')).toBe(
       'https://drasilbot.com/admin/guild/guild-1/cases/case-1'
+    );
+    expect(buildCaptchaChallengeUrl('opaque/token')).toBe(
+      'https://ignored.example/captcha/opaque%2Ftoken'
+    );
+  });
+
+  it('uses the same preferred origin as CAPTCHA OAuth when both URLs are configured', () => {
+    process.env.DRASIL_WEB_PUBLIC_URL = 'https://bot-links.example';
+    process.env.NEXT_PUBLIC_APP_URL = 'https://oauth.example';
+
+    expect(buildCaptchaChallengeUrl('opaque-token')).toBe(
+      'https://oauth.example/captcha/opaque-token'
     );
   });
 });

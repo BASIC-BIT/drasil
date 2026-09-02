@@ -26,6 +26,7 @@ const buildEvent = (
   notification_channel_id: null,
   notification_message_id: null,
   status: VerificationStatus.PENDING,
+  case_revision: 0,
   created_at: updatedAt,
   updated_at: updatedAt,
   resolved_at: null,

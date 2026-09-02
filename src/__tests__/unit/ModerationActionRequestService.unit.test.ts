@@ -3,6 +3,9 @@ import type { Prisma } from '../../db/prisma';
 import { ChannelType } from 'discord.js';
 import {
   AdminActionType,
+  CaseAttentionState,
+  CaseContainmentStatus,
+  CaseKind,
   MessageDeletionBanStatus,
   MessageDeletionCaseFinalizationStatus,
   MessageDeletionCoverage,
@@ -12,6 +15,7 @@ import {
   ModerationActionRequest,
   ModerationActionRequestStatus,
   ModerationActionRequestType,
+  VerificationStatus,
   type MessageDeletionJobWithItems,
 } from '../../repositories/types';
 import type { IModerationActionRequestRepository } from '../../repositories/ModerationActionRequestRepository';
@@ -110,6 +114,106 @@ const verifyRequest: ModerationActionRequest = {
   idempotency_key: 'web:case-action:verify_user:guild-1:ver-1',
   report_intake_id: null,
   verification_event_id: 'ver-1',
+};
+
+const applyCaptchaPassRequest: ModerationActionRequest = {
+  ...verifyRequest,
+  action_type: ModerationActionRequestType.APPLY_CAPTCHA_PASS,
+  actor_id: 'drasil:captcha',
+  actor_surface: 'captcha',
+  id: 'captcha-pass-request-1',
+  idempotency_key: 'captcha:apply:challenge-1:1',
+  metadata: {
+    challenge_id: 'challenge-1',
+    expected_case_revision: 2,
+    generation: 1,
+  },
+};
+
+const requestCaptchaChallengeRequest: ModerationActionRequest = {
+  ...verifyRequest,
+  action_type: ModerationActionRequestType.REQUEST_CAPTCHA_CHALLENGE,
+  id: 'captcha-request-1',
+  idempotency_key: 'web:case-action:challenge_user:guild-1:ver-1',
+};
+
+const retryCaptchaChallengeRequest: ModerationActionRequest = {
+  ...verifyRequest,
+  action_type: ModerationActionRequestType.RETRY_CAPTCHA_CHALLENGE,
+  id: 'captcha-retry-request-1',
+  idempotency_key: 'web:case-action:retry_captcha:guild-1:ver-1:attempt-1',
+  metadata: {
+    expected_challenge_id: 'challenge-1',
+    expected_generation: 4,
+  },
+};
+
+const bypassCaptchaChallengeRequest: ModerationActionRequest = {
+  ...verifyRequest,
+  action_type: ModerationActionRequestType.BYPASS_CAPTCHA_CHALLENGE,
+  id: 'captcha-bypass-request-1',
+  idempotency_key: 'web:case-action:bypass_captcha:guild-1:ver-1',
+  metadata: {
+    expected_challenge_id: 'challenge-1',
+    expected_generation: 1,
+    reason: 'Moderator confirmed access another way.',
+  },
+};
+
+const notifyCaptchaAttentionRequest: ModerationActionRequest = {
+  ...applyCaptchaPassRequest,
+  action_type: ModerationActionRequestType.NOTIFY_CAPTCHA_ATTENTION,
+  id: 'captcha-attention-request-1',
+  idempotency_key: 'captcha:attention:challenge-1:1:submission-limit',
+  metadata: {
+    challenge_id: 'challenge-1',
+    generation: 1,
+    reason: 'submission_limit',
+  },
+};
+
+const notifyExpiredCaptchaAttentionRequest: ModerationActionRequest = {
+  ...notifyCaptchaAttentionRequest,
+  id: 'captcha-expired-attention-request-1',
+  idempotency_key: 'captcha:attention:challenge-1:1:expired',
+  metadata: {
+    challenge_id: 'challenge-1',
+    generation: 1,
+    reason: 'expired',
+  },
+};
+
+const notifyDeliveryFailedCaptchaAttentionRequest: ModerationActionRequest = {
+  ...notifyCaptchaAttentionRequest,
+  id: 'captcha-delivery-attention-request-1',
+  idempotency_key: 'captcha:attention:challenge-1:1:delivery-failed',
+  metadata: {
+    challenge_id: 'challenge-1',
+    generation: 1,
+    reason: 'delivery_failed',
+  },
+};
+
+const updateCancelledCaptchaPresentationRequest: ModerationActionRequest = {
+  ...notifyCaptchaAttentionRequest,
+  id: 'captcha-cancelled-presentation-request-1',
+  idempotency_key: 'captcha:presentation:challenge-1:1:cancelled',
+  metadata: {
+    challenge_id: 'challenge-1',
+    generation: 1,
+    reason: 'cancelled',
+  },
+};
+
+const updateBypassedCaptchaPresentationRequest: ModerationActionRequest = {
+  ...notifyCaptchaAttentionRequest,
+  id: 'captcha-bypassed-presentation-request-1',
+  idempotency_key: 'captcha:presentation:challenge-1:1:bypassed',
+  metadata: {
+    challenge_id: 'challenge-1',
+    generation: 1,
+    reason: 'bypassed',
+  },
 };
 
 const accountQuarantinePreviewRequest: ModerationActionRequest = {
@@ -703,6 +807,7 @@ describe('ModerationActionRequestService', () => {
     const threadManager = {
       activateReportIntakeThread: jest.fn(async () => true),
       createReportIntakeThread: jest.fn(async () => reportIntakeThread),
+      sendCaptchaStatus: jest.fn(async () => true),
     };
     const reportIntakeService = {
       closeIntakeForThread: jest.fn(async () => ({
@@ -786,6 +891,7 @@ describe('ModerationActionRequestService', () => {
       performDiscordBanById: jest.fn(async () => undefined),
       performDiscordMemberBan: jest.fn(async () => undefined),
       syncAlreadyBannedUser: jest.fn(async () => 1),
+      resolveCaptchaCase: jest.fn(async () => ({ status: 'resolved' as const })),
       verifyUser: jest.fn(async () => true),
     };
     const moderationQueueService = {
@@ -854,6 +960,8 @@ describe('ModerationActionRequestService', () => {
       updateServerSettings: jest.fn(async () => undefined),
     };
     const notificationManager = {
+      notifyCaptchaAttention: jest.fn(async () => true),
+      updateCaptchaChallengePresentation: jest.fn(async () => true),
       restoreVerificationChannelPermissions: jest.fn(async () => true),
       setupVerificationChannel: jest.fn(async (...args: unknown[]) => {
         const configuredChannelId = args[4];
@@ -929,15 +1037,28 @@ describe('ModerationActionRequestService', () => {
       })),
       previewJob: jest.fn(async () => messageCleanupJob),
     };
+    const pendingVerificationEvent = {
+      id: 'ver-1',
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      case_kind: CaseKind.STANDARD,
+      case_revision: 2,
+      containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+      notification_channel_id: 'admin-channel-1',
+      notification_message_id: 'admin-message-1',
+      server_id: 'guild-1',
+      status: VerificationStatus.PENDING,
+      thread_id: 'thread-1',
+      user_id: 'user-1',
+    } as any;
     const verificationEventRepository = {
-      findById: jest.fn(async () => ({
-        id: 'ver-1',
-        notification_channel_id: 'admin-channel-1',
-        notification_message_id: 'admin-message-1',
-        server_id: 'guild-1',
-        thread_id: 'thread-1',
-        user_id: 'user-1',
-      })),
+      claimCaptchaPresentation: jest.fn(
+        async (input: { attemptId: string }): Promise<any> => ({
+          ...pendingVerificationEvent,
+          containment_status: CaseContainmentStatus.IN_PROGRESS,
+          quarantine_attempt_id: input.attemptId,
+        })
+      ),
+      findById: jest.fn(async (): Promise<any> => pendingVerificationEvent),
       findActiveByUserAndServer: jest.fn(async () => ({
         id: 'ver-1',
         notification_channel_id: 'admin-channel-1',
@@ -946,6 +1067,7 @@ describe('ModerationActionRequestService', () => {
         thread_id: 'thread-1',
         user_id: 'user-1',
       })),
+      updateQuarantineAttempt: jest.fn(async () => pendingVerificationEvent),
     };
     const accountQuarantineService = {
       preview: jest.fn(async () => defaultAccountQuarantinePreview),
@@ -955,6 +1077,22 @@ describe('ModerationActionRequestService', () => {
         roleResult: { failedRemovals: [], skippedRoles: [] },
         status: 'parked',
         verificationEvent: { containment_status: 'contained' },
+      })),
+    };
+    const captchaChallengeService = {
+      bypassChallenge: jest.fn(async () => ({ generation: 1, id: 'challenge-1' })),
+      evaluatePassedChallenge: jest.fn(async () => ({ status: 'eligible' as const })),
+      findById: jest.fn(async () => ({ generation: 1, id: 'challenge-1', status: 'passed' })),
+      findByCaseId: jest.fn(async () => ({
+        delivered_at: null as Date | null,
+        delivery_error_code: null as string | null,
+        generation: 1,
+        id: 'challenge-1',
+        status: 'failed',
+      })),
+      requestChallenge: jest.fn(async () => ({
+        challenge: { generation: 1, id: 'challenge-1' },
+        delivered: true,
       })),
     };
     const service = new ModerationActionRequestService(
@@ -974,7 +1112,8 @@ describe('ModerationActionRequestService', () => {
       setupDiagnosticsService as any,
       messageDeletionJobs as any,
       messageCleanupService as any,
-      accountQuarantineService as any
+      accountQuarantineService as any,
+      captchaChallengeService as any
     );
 
     return {
@@ -1004,6 +1143,7 @@ describe('ModerationActionRequestService', () => {
       verificationChannel,
       caseThreadClosureSweepService,
       caseRoleLockdownService,
+      captchaChallengeService,
       moderationQueueService,
       messageCleanupService,
       messageDeletionJobs,
@@ -1515,6 +1655,873 @@ describe('ModerationActionRequestService', () => {
       },
     ]);
     expect(repository.failed).toEqual([]);
+  });
+
+  it('refuses to issue a CAPTCHA after the target member leaves the server', async () => {
+    const { captchaChallengeService, guild, repository, service } = buildService([
+      requestCaptchaChallengeRequest,
+    ]);
+    guild.members.fetch.mockRejectedValueOnce(new Error('Unknown member'));
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(captchaChallengeService.requestChallenge).not.toHaveBeenCalled();
+    expect(repository.failed).toEqual([{ id: 'captcha-request-1', error: 'Unknown member' }]);
+  });
+
+  it('refuses a queued CAPTCHA action after the moderator loses permission', async () => {
+    const { captchaChallengeService, guild, reporterMember, repository, service } = buildService([
+      requestCaptchaChallengeRequest,
+    ]);
+    reporterMember.permissions.has.mockReturnValue(false);
+    guild.members.fetch.mockImplementation(async (value: string | { user: string }) => {
+      const id = typeof value === 'string' ? value : value.user;
+      return id === 'moderator-1' ? reporterMember : { guild, id: 'user-1' };
+    });
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(captchaChallengeService.requestChallenge).not.toHaveBeenCalled();
+    expect(repository.failed).toEqual([
+      {
+        id: 'captcha-request-1',
+        error: 'Security-check actions require current moderation permission.',
+      },
+    ]);
+  });
+
+  it('refuses to issue a CAPTCHA when the queued target does not match the case subject', async () => {
+    const { captchaChallengeService, repository, service, verificationEventRepository } =
+      buildService([requestCaptchaChallengeRequest]);
+    verificationEventRepository.findById.mockResolvedValueOnce({
+      id: 'ver-1',
+      notification_channel_id: 'admin-channel-1',
+      notification_message_id: 'admin-message-1',
+      server_id: 'guild-1',
+      status: 'pending',
+      thread_id: 'thread-1',
+      user_id: 'different-user',
+    });
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(captchaChallengeService.requestChallenge).not.toHaveBeenCalled();
+    expect(repository.failed).toEqual([
+      {
+        id: 'captcha-request-1',
+        error: 'Security-check request does not match its case subject.',
+      },
+    ]);
+  });
+
+  it('binds a queued CAPTCHA retry to the displayed challenge generation', async () => {
+    const { captchaChallengeService, repository, service } = buildService([
+      retryCaptchaChallengeRequest,
+    ]);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(captchaChallengeService.requestChallenge).toHaveBeenCalledWith({
+      actionRequestId: 'captcha-retry-request-1',
+      expectedChallengeId: 'challenge-1',
+      expectedGeneration: 4,
+      requestedBy: 'moderator-1',
+      requestSource: 'moderator',
+      retry: true,
+      verificationEventId: 'ver-1',
+    });
+    expect(repository.failed).toEqual([]);
+  });
+
+  it('refuses to bypass a CAPTCHA when the queued target does not match the case subject', async () => {
+    const { captchaChallengeService, repository, service, verificationEventRepository } =
+      buildService([bypassCaptchaChallengeRequest]);
+    verificationEventRepository.findById.mockResolvedValueOnce({
+      id: 'ver-1',
+      notification_channel_id: 'admin-channel-1',
+      notification_message_id: 'admin-message-1',
+      server_id: 'guild-1',
+      status: 'pending',
+      thread_id: 'thread-1',
+      user_id: 'different-user',
+    });
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(captchaChallengeService.bypassChallenge).not.toHaveBeenCalled();
+    expect(repository.failed).toEqual([
+      {
+        id: 'captcha-bypass-request-1',
+        error: 'Security-check request does not match its case subject.',
+      },
+    ]);
+  });
+
+  it('binds a queued CAPTCHA bypass to the displayed challenge generation', async () => {
+    const { captchaChallengeService, repository, service } = buildService([
+      bypassCaptchaChallengeRequest,
+    ]);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(captchaChallengeService.bypassChallenge).toHaveBeenCalledWith({
+      actionRequestId: 'captcha-bypass-request-1',
+      expectedChallengeId: 'challenge-1',
+      expectedGeneration: 1,
+      moderatorId: 'moderator-1',
+      reason: 'Moderator confirmed access another way.',
+      verificationEventId: 'ver-1',
+    });
+    expect(repository.failed).toEqual([]);
+  });
+
+  it('reconciles an already-committed CAPTCHA request mutation on queue retry', async () => {
+    const request = {
+      ...requestCaptchaChallengeRequest,
+      metadata: {
+        captcha_mutation_receipt: {
+          challenge_id: 'challenge-1',
+          generation: 1,
+          operation: 'request',
+        },
+      },
+    };
+    const { captchaChallengeService, repository, service } = buildService([request]);
+    captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+      bypass_reason: null,
+      bypassed_by: null,
+      delivered_at: new Date(),
+      generation: 1,
+      history: [
+        {
+          generation: 1,
+          request_source: 'moderator',
+          requested_by: 'moderator-1',
+        },
+      ],
+      id: 'challenge-1',
+      request_source: 'moderator',
+      requested_by: 'moderator-1',
+      server_id: 'guild-1',
+      status: 'pending',
+      user_id: 'user-1',
+      verification_event_id: 'ver-1',
+    } as any);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(captchaChallengeService.requestChallenge).not.toHaveBeenCalled();
+    expect(repository.completed).toEqual([
+      {
+        id: 'captcha-request-1',
+        result: expect.objectContaining({ delivered: true, resumed: true }),
+      },
+    ]);
+    expect(repository.failed).toEqual([]);
+  });
+
+  it('reconciles an already-committed CAPTCHA bypass mutation on queue retry', async () => {
+    const request = {
+      ...bypassCaptchaChallengeRequest,
+      metadata: {
+        ...(bypassCaptchaChallengeRequest.metadata as Prisma.JsonObject),
+        captcha_mutation_receipt: {
+          challenge_id: 'challenge-1',
+          generation: 1,
+          operation: 'bypass',
+        },
+      },
+    };
+    const { captchaChallengeService, repository, service } = buildService([request]);
+    captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+      bypass_reason: 'Moderator confirmed access another way.',
+      bypassed_by: 'moderator-1',
+      delivered_at: new Date(),
+      generation: 1,
+      history: [
+        {
+          bypass_reason: 'Moderator confirmed access another way.',
+          bypassed_by: 'moderator-1',
+          generation: 1,
+        },
+      ],
+      id: 'challenge-1',
+      request_source: 'moderator',
+      requested_by: 'moderator-1',
+      server_id: 'guild-1',
+      status: 'bypassed',
+      user_id: 'user-1',
+      verification_event_id: 'ver-1',
+    } as any);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(captchaChallengeService.bypassChallenge).not.toHaveBeenCalled();
+    expect(repository.completed).toEqual([
+      {
+        id: 'captcha-bypass-request-1',
+        result: expect.objectContaining({ bypassed: true, resumed: true }),
+      },
+    ]);
+    expect(repository.failed).toEqual([]);
+  });
+
+  it('resolves an eligible CAPTCHA pass through the exact-case system path', async () => {
+    const {
+      captchaChallengeService,
+      member,
+      repository,
+      service,
+      threadManager,
+      userModerationService,
+    } = buildService([applyCaptchaPassRequest]);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(captchaChallengeService.evaluatePassedChallenge).toHaveBeenCalledWith({
+      challengeId: 'challenge-1',
+      expectedCaseRevision: 2,
+      generation: 1,
+      targetUserId: 'user-1',
+      verificationEventId: 'ver-1',
+    });
+    expect(threadManager.sendCaptchaStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'ver-1' }),
+      'Security check completed.'
+    );
+    expect(userModerationService.resolveCaptchaCase).toHaveBeenCalledWith(member, {
+      challengeId: 'challenge-1',
+      expectedCaseRevision: 2,
+      generation: 1,
+      verificationEventId: 'ver-1',
+    });
+    expect(repository.completed[0]).toEqual({
+      id: 'captcha-pass-request-1',
+      result: expect.objectContaining({
+        action_type: ModerationActionRequestType.APPLY_CAPTCHA_PASS,
+        resolved: true,
+      }),
+    });
+    expect(repository.failed).toEqual([]);
+  });
+
+  it('keeps a passed challenge retryable when the case presentation cannot update', async () => {
+    const { notificationManager, repository, service, threadManager, userModerationService } =
+      buildService([applyCaptchaPassRequest]);
+    notificationManager.updateCaptchaChallengePresentation.mockResolvedValueOnce(false);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(threadManager.sendCaptchaStatus).not.toHaveBeenCalled();
+    expect(userModerationService.resolveCaptchaCase).not.toHaveBeenCalled();
+    expect(repository.completed).toEqual([]);
+    expect(repository.failed).toEqual([
+      {
+        id: 'captcha-pass-request-1',
+        error: 'Failed to refresh passed CAPTCHA presentation for case ver-1.',
+      },
+    ]);
+  });
+
+  it('keeps a passed challenge retryable when its completion status cannot be delivered', async () => {
+    const { repository, service, threadManager, userModerationService } = buildService([
+      applyCaptchaPassRequest,
+    ]);
+    threadManager.sendCaptchaStatus.mockResolvedValueOnce(false);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(userModerationService.resolveCaptchaCase).not.toHaveBeenCalled();
+    expect(repository.completed).toEqual([]);
+    expect(repository.failed).toEqual([
+      {
+        id: 'captcha-pass-request-1',
+        error: 'Failed to deliver CAPTCHA completion for case ver-1.',
+      },
+    ]);
+  });
+
+  it('does not post completion after a moderator resolves the case first', async () => {
+    const {
+      captchaChallengeService,
+      notificationManager,
+      repository,
+      service,
+      threadManager,
+      userModerationService,
+      verificationEventRepository,
+    } = buildService([applyCaptchaPassRequest]);
+    captchaChallengeService.evaluatePassedChallenge.mockResolvedValueOnce({
+      status: 'held',
+      reason: 'case_changed',
+    } as any);
+    verificationEventRepository.findById
+      .mockResolvedValueOnce({
+        id: 'ver-1',
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        case_kind: CaseKind.STANDARD,
+        case_revision: 2,
+        containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+        server_id: 'guild-1',
+        status: VerificationStatus.PENDING,
+        thread_id: 'thread-1',
+        user_id: 'user-1',
+      } as any)
+      .mockResolvedValueOnce({
+        id: 'ver-1',
+        case_revision: 2,
+        resolved_by: 'moderator-1',
+        server_id: 'guild-1',
+        status: VerificationStatus.CLOSED_NO_ACTION,
+        thread_id: 'thread-1',
+        user_id: 'user-1',
+      } as any);
+    verificationEventRepository.claimCaptchaPresentation.mockResolvedValueOnce(null);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(threadManager.sendCaptchaStatus).not.toHaveBeenCalled();
+    expect(userModerationService.resolveCaptchaCase).not.toHaveBeenCalled();
+    expect(notificationManager.updateCaptchaChallengePresentation).toHaveBeenCalledWith(
+      expect.objectContaining({ status: VerificationStatus.CLOSED_NO_ACTION }),
+      expect.objectContaining({ id: 'challenge-1' })
+    );
+    expect(repository.completed[0]).toEqual({
+      id: 'captcha-pass-request-1',
+      result: expect.objectContaining({ held_reason: 'case_changed', resolved: false }),
+    });
+  });
+
+  it('records a held pass when the pending case becomes nonstandard before presentation', async () => {
+    const {
+      captchaChallengeService,
+      notificationManager,
+      repository,
+      service,
+      threadManager,
+      userModerationService,
+      verificationEventRepository,
+    } = buildService([applyCaptchaPassRequest]);
+    captchaChallengeService.evaluatePassedChallenge.mockResolvedValueOnce({
+      status: 'held',
+      reason: 'case_kind_changed',
+    } as any);
+    const compromisedCase = {
+      id: 'ver-1',
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      case_revision: 2,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      server_id: 'guild-1',
+      status: VerificationStatus.PENDING,
+      thread_id: 'thread-1',
+      user_id: 'user-1',
+    } as any;
+    verificationEventRepository.findById
+      .mockResolvedValueOnce(compromisedCase)
+      .mockResolvedValueOnce(compromisedCase);
+    verificationEventRepository.claimCaptchaPresentation.mockResolvedValueOnce(null);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(notificationManager.updateCaptchaChallengePresentation).toHaveBeenCalledWith(
+      compromisedCase,
+      expect.objectContaining({ id: 'challenge-1' })
+    );
+    expect(threadManager.sendCaptchaStatus).not.toHaveBeenCalled();
+    expect(notificationManager.notifyCaptchaAttention).toHaveBeenCalledWith(
+      compromisedCase,
+      'automatic_resolution_held'
+    );
+    expect(userModerationService.resolveCaptchaCase).not.toHaveBeenCalled();
+    expect(repository.completed[0]).toEqual({
+      id: 'captcha-pass-request-1',
+      result: expect.objectContaining({
+        effect: 'held',
+        held_reason: 'case_kind_changed',
+        resolved: false,
+      }),
+    });
+  });
+
+  it('resumes exact-case CAPTCHA finalization after the case commit', async () => {
+    const {
+      captchaChallengeService,
+      member,
+      notificationManager,
+      repository,
+      service,
+      threadManager,
+      userModerationService,
+      verificationEventRepository,
+    } = buildService([applyCaptchaPassRequest]);
+    captchaChallengeService.evaluatePassedChallenge.mockResolvedValueOnce({
+      status: 'held',
+      reason: 'case_changed',
+    } as any);
+    verificationEventRepository.findById.mockResolvedValueOnce({
+      id: 'ver-1',
+      server_id: 'guild-1',
+      user_id: 'user-1',
+      status: 'verified',
+      case_revision: 2,
+      resolved_by: 'drasil:captcha',
+      metadata: {
+        captcha_resolution: { challenge_id: 'challenge-1', generation: 1 },
+      },
+    } as any);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(userModerationService.resolveCaptchaCase).toHaveBeenCalledWith(member, {
+      challengeId: 'challenge-1',
+      expectedCaseRevision: 2,
+      generation: 1,
+      verificationEventId: 'ver-1',
+    });
+    expect(threadManager.sendCaptchaStatus).not.toHaveBeenCalled();
+    expect(notificationManager.notifyCaptchaAttention).not.toHaveBeenCalled();
+    expect(repository.completed[0]).toEqual({
+      id: 'captcha-pass-request-1',
+      result: expect.objectContaining({ resolved: true }),
+    });
+  });
+
+  it('keeps committed CAPTCHA finalization retryable while the member is unavailable', async () => {
+    const {
+      captchaChallengeService,
+      guild,
+      repository,
+      service,
+      userModerationService,
+      verificationEventRepository,
+    } = buildService([applyCaptchaPassRequest]);
+    captchaChallengeService.evaluatePassedChallenge.mockResolvedValueOnce({
+      status: 'held',
+      reason: 'case_changed',
+    } as any);
+    verificationEventRepository.findById.mockResolvedValueOnce({
+      id: 'ver-1',
+      server_id: 'guild-1',
+      user_id: 'user-1',
+      status: 'verified',
+      case_revision: 2,
+      resolved_by: 'drasil:captcha',
+      metadata: {
+        captcha_resolution: { challenge_id: 'challenge-1', generation: 1 },
+      },
+    } as any);
+    guild.members.fetch.mockRejectedValueOnce({ code: 10007 });
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(userModerationService.resolveCaptchaCase).not.toHaveBeenCalled();
+    expect(repository.completed).toEqual([]);
+    expect(repository.failed).toEqual([
+      {
+        id: 'captcha-pass-request-1',
+        error: 'CAPTCHA case ver-1 was resolved, but the member is unavailable for finalization.',
+      },
+    ]);
+  });
+
+  it('records a moderator-issued CAPTCHA pass as evidence without resolving the case', async () => {
+    const {
+      captchaChallengeService,
+      notificationManager,
+      repository,
+      service,
+      userModerationService,
+    } = buildService([applyCaptchaPassRequest]);
+    captchaChallengeService.evaluatePassedChallenge.mockResolvedValueOnce({
+      status: 'evidence_only',
+    } as any);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(userModerationService.resolveCaptchaCase).not.toHaveBeenCalled();
+    expect(notificationManager.notifyCaptchaAttention).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'ver-1' }),
+      'evidence_only_pass'
+    );
+    expect(repository.completed[0]).toEqual({
+      id: 'captcha-pass-request-1',
+      result: expect.objectContaining({ effect: 'evidence_only', resolved: false }),
+    });
+  });
+
+  it('keeps an evidence-only CAPTCHA pass retryable when moderator attention fails', async () => {
+    const { captchaChallengeService, notificationManager, repository, service } = buildService([
+      applyCaptchaPassRequest,
+    ]);
+    captchaChallengeService.evaluatePassedChallenge.mockResolvedValueOnce({
+      status: 'evidence_only',
+    } as any);
+    notificationManager.notifyCaptchaAttention.mockResolvedValueOnce(false);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(repository.completed).toEqual([]);
+    expect(repository.failed).toEqual([
+      {
+        id: 'captcha-pass-request-1',
+        error: 'Failed to notify moderators about CAPTCHA case ver-1.',
+      },
+    ]);
+  });
+
+  it('keeps automatic CAPTCHA resolution retryable after a transient member fetch failure', async () => {
+    const { guild, repository, service, threadManager, userModerationService } = buildService([
+      applyCaptchaPassRequest,
+    ]);
+    guild.members.fetch.mockRejectedValueOnce(new Error('Discord unavailable'));
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    repository.requests.push(repository.byId.get(applyCaptchaPassRequest.id)!);
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(threadManager.sendCaptchaStatus).toHaveBeenCalledTimes(1);
+    expect(repository.metadataMerges).toContainEqual({
+      id: applyCaptchaPassRequest.id,
+      metadata: {
+        captcha_thread_status_receipt: 'captcha-presentation:challenge-1:1:passed',
+      },
+    });
+    expect(userModerationService.resolveCaptchaCase).toHaveBeenCalledTimes(1);
+    expect(repository.completed).toHaveLength(1);
+    expect(repository.failed).toEqual([
+      { id: 'captcha-pass-request-1', error: 'Discord unavailable' },
+    ]);
+  });
+
+  it('rejects a CAPTCHA pass request that does not use the dedicated system actor', async () => {
+    const { captchaChallengeService, repository, service, userModerationService } = buildService([
+      { ...applyCaptchaPassRequest, actor_id: 'moderator-1' },
+    ]);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(captchaChallengeService.evaluatePassedChallenge).not.toHaveBeenCalled();
+    expect(userModerationService.resolveCaptchaCase).not.toHaveBeenCalled();
+    expect(repository.failed).toEqual([
+      { id: 'captcha-pass-request-1', error: 'Security-check completion request is invalid.' },
+    ]);
+  });
+
+  it('delivers submission-limit attention through the system-only CAPTCHA action', async () => {
+    const { notificationManager, repository, service, threadManager } = buildService([
+      notifyCaptchaAttentionRequest,
+    ]);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(threadManager.sendCaptchaStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'ver-1' }),
+      'This security check reached its attempt limit. Ask a moderator to issue a new check.'
+    );
+    expect(notificationManager.notifyCaptchaAttention).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'ver-1' }),
+      'submission_limit'
+    );
+    expect(repository.completed[0]).toEqual({
+      id: 'captcha-attention-request-1',
+      result: expect.objectContaining({ notified: true, reason: 'submission_limit' }),
+    });
+  });
+
+  it('keeps submission-limit attention retryable when moderator notification fails', async () => {
+    const { notificationManager, repository, service } = buildService([
+      notifyCaptchaAttentionRequest,
+    ]);
+    notificationManager.notifyCaptchaAttention.mockResolvedValueOnce(false);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(repository.completed).toEqual([]);
+    expect(repository.failed).toEqual([
+      {
+        id: 'captcha-attention-request-1',
+        error: 'Failed to notify moderators about CAPTCHA case ver-1.',
+      },
+    ]);
+  });
+
+  it('keeps CAPTCHA attention retryable when case-thread status delivery fails', async () => {
+    const { notificationManager, repository, service, threadManager } = buildService([
+      notifyCaptchaAttentionRequest,
+    ]);
+    threadManager.sendCaptchaStatus.mockResolvedValueOnce(false);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(notificationManager.notifyCaptchaAttention).not.toHaveBeenCalled();
+    expect(repository.completed).toEqual([]);
+    expect(repository.failed).toEqual([
+      {
+        id: 'captcha-attention-request-1',
+        error: 'Failed to deliver CAPTCHA status for case ver-1.',
+      },
+    ]);
+  });
+
+  it('does not post terminal CAPTCHA alerts after a moderator resolves the case first', async () => {
+    const { notificationManager, repository, service, threadManager, verificationEventRepository } =
+      buildService([notifyCaptchaAttentionRequest]);
+    verificationEventRepository.findById
+      .mockResolvedValueOnce({
+        id: 'ver-1',
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        case_kind: CaseKind.STANDARD,
+        case_revision: 2,
+        containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+        server_id: 'guild-1',
+        status: VerificationStatus.PENDING,
+        thread_id: 'thread-1',
+        user_id: 'user-1',
+      } as any)
+      .mockResolvedValueOnce({
+        id: 'ver-1',
+        server_id: 'guild-1',
+        status: VerificationStatus.CLOSED_NO_ACTION,
+        thread_id: 'thread-1',
+        user_id: 'user-1',
+      } as any);
+    verificationEventRepository.claimCaptchaPresentation.mockResolvedValueOnce(null);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(threadManager.sendCaptchaStatus).not.toHaveBeenCalled();
+    expect(notificationManager.notifyCaptchaAttention).not.toHaveBeenCalled();
+    expect(repository.completed[0]).toEqual({
+      id: 'captcha-attention-request-1',
+      result: expect.objectContaining({ notified: false, stale: true }),
+    });
+  });
+
+  it('keeps expired attention retryable when moderator notification fails', async () => {
+    const { captchaChallengeService, notificationManager, repository, service, threadManager } =
+      buildService([notifyExpiredCaptchaAttentionRequest]);
+    captchaChallengeService.findByCaseId.mockResolvedValue({
+      delivered_at: new Date(),
+      delivery_error_code: null,
+      generation: 1,
+      id: 'challenge-1',
+      status: 'expired',
+    });
+    notificationManager.notifyCaptchaAttention.mockResolvedValueOnce(false);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    repository.requests.push(repository.byId.get(notifyExpiredCaptchaAttentionRequest.id)!);
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(threadManager.sendCaptchaStatus).toHaveBeenCalledTimes(1);
+    expect(threadManager.sendCaptchaStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'ver-1' }),
+      'This security check expired. Ask a moderator to issue a new check.'
+    );
+    expect(repository.metadataMerges).toContainEqual({
+      id: notifyExpiredCaptchaAttentionRequest.id,
+      metadata: {
+        captcha_thread_status_receipt: 'captcha-presentation:challenge-1:1:expired',
+      },
+    });
+    expect(notificationManager.notifyCaptchaAttention).toHaveBeenCalledTimes(2);
+    expect(notificationManager.notifyCaptchaAttention).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: 'ver-1' }),
+      'expired'
+    );
+    expect(repository.completed).toHaveLength(1);
+    expect(repository.failed).toEqual([
+      {
+        id: 'captcha-expired-attention-request-1',
+        error: 'Failed to notify moderators about CAPTCHA case ver-1.',
+      },
+    ]);
+  });
+
+  it('does not duplicate moderator attention after a later presentation failure', async () => {
+    const {
+      captchaChallengeService,
+      notificationManager,
+      repository,
+      service,
+      verificationEventRepository,
+    } = buildService([notifyExpiredCaptchaAttentionRequest]);
+    captchaChallengeService.findByCaseId.mockResolvedValue({
+      delivered_at: new Date(),
+      delivery_error_code: null,
+      generation: 1,
+      id: 'challenge-1',
+      status: 'expired',
+    });
+    verificationEventRepository.updateQuarantineAttempt
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 'ver-1' } as any);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    repository.requests.push(repository.byId.get(notifyExpiredCaptchaAttentionRequest.id)!);
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(notificationManager.notifyCaptchaAttention).toHaveBeenCalledTimes(1);
+    expect(repository.metadataMerges).toContainEqual({
+      id: notifyExpiredCaptchaAttentionRequest.id,
+      metadata: {
+        captcha_attention_receipt: 'captcha-presentation:challenge-1:1:expired:attention',
+      },
+    });
+    expect(repository.completed).toHaveLength(1);
+    expect(repository.failed).toEqual([
+      {
+        id: 'captcha-expired-attention-request-1',
+        error: 'Failed to release CAPTCHA presentation claim for case ver-1.',
+      },
+    ]);
+  });
+
+  it('delivers durable attention for a failed security-check link', async () => {
+    const { captchaChallengeService, notificationManager, repository, service, threadManager } =
+      buildService([notifyDeliveryFailedCaptchaAttentionRequest]);
+    captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+      delivered_at: null,
+      delivery_error_code: 'discord_delivery_failed',
+      generation: 1,
+      id: 'challenge-1',
+      status: 'pending',
+    });
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(threadManager.sendCaptchaStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'ver-1' }),
+      'This security check link could not be delivered. Ask a moderator to retry.'
+    );
+    expect(notificationManager.notifyCaptchaAttention).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'ver-1' }),
+      'delivery_failed'
+    );
+    expect(repository.completed[0]).toEqual({
+      id: 'captcha-delivery-attention-request-1',
+      result: expect.objectContaining({ notified: true, reason: 'delivery_failed' }),
+    });
+  });
+
+  it('completes cancelled presentation only after both Discord surfaces update', async () => {
+    const { captchaChallengeService, notificationManager, repository, service, threadManager } =
+      buildService([updateCancelledCaptchaPresentationRequest]);
+    captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+      delivered_at: new Date(),
+      delivery_error_code: null,
+      generation: 1,
+      id: 'challenge-1',
+      status: 'cancelled',
+    });
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(notificationManager.updateCaptchaChallengePresentation).toHaveBeenCalled();
+    expect(threadManager.sendCaptchaStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'ver-1' }),
+      'This security check is no longer active.'
+    );
+    expect(notificationManager.notifyCaptchaAttention).not.toHaveBeenCalled();
+    expect(repository.completed[0]).toEqual({
+      id: 'captcha-cancelled-presentation-request-1',
+      result: expect.objectContaining({ presented: true, reason: 'cancelled' }),
+    });
+  });
+
+  it('keeps cancelled presentation retryable when the embed refresh fails', async () => {
+    const { captchaChallengeService, notificationManager, repository, service, threadManager } =
+      buildService([updateCancelledCaptchaPresentationRequest]);
+    captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+      delivered_at: new Date(),
+      delivery_error_code: null,
+      generation: 1,
+      id: 'challenge-1',
+      status: 'cancelled',
+    });
+    notificationManager.updateCaptchaChallengePresentation.mockResolvedValueOnce(false);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(threadManager.sendCaptchaStatus).not.toHaveBeenCalled();
+    expect(repository.completed).toEqual([]);
+    expect(repository.failed).toEqual([
+      {
+        id: 'captcha-cancelled-presentation-request-1',
+        error: 'Failed to refresh cancelled CAPTCHA presentation for case ver-1.',
+      },
+    ]);
+  });
+
+  it('completes bypassed presentation after refreshing the case embed', async () => {
+    const { captchaChallengeService, notificationManager, repository, service, threadManager } =
+      buildService([updateBypassedCaptchaPresentationRequest]);
+    captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+      delivered_at: new Date(),
+      delivery_error_code: null,
+      generation: 1,
+      id: 'challenge-1',
+      status: 'bypassed',
+    });
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(notificationManager.updateCaptchaChallengePresentation).toHaveBeenCalled();
+    expect(threadManager.sendCaptchaStatus).not.toHaveBeenCalled();
+    expect(notificationManager.notifyCaptchaAttention).not.toHaveBeenCalled();
+    expect(repository.completed[0]).toEqual({
+      id: 'captcha-bypassed-presentation-request-1',
+      result: expect.objectContaining({ presented: true, reason: 'bypassed' }),
+    });
+  });
+
+  it('keeps bypassed presentation retryable when the embed refresh fails', async () => {
+    const { captchaChallengeService, notificationManager, repository, service, threadManager } =
+      buildService([updateBypassedCaptchaPresentationRequest]);
+    captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+      delivered_at: new Date(),
+      delivery_error_code: null,
+      generation: 1,
+      id: 'challenge-1',
+      status: 'bypassed',
+    });
+    notificationManager.updateCaptchaChallengePresentation.mockResolvedValueOnce(false);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(threadManager.sendCaptchaStatus).not.toHaveBeenCalled();
+    expect(repository.completed).toEqual([]);
+    expect(repository.failed).toEqual([
+      {
+        id: 'captcha-bypassed-presentation-request-1',
+        error: 'Failed to refresh bypassed CAPTCHA presentation for case ver-1.',
+      },
+    ]);
+  });
+
+  it('discards submission-limit attention after the challenge generation changes', async () => {
+    const { captchaChallengeService, notificationManager, repository, service, threadManager } =
+      buildService([notifyCaptchaAttentionRequest]);
+    captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+      delivered_at: new Date(),
+      delivery_error_code: null,
+      generation: 2,
+      id: 'challenge-1',
+      status: 'pending',
+    });
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(threadManager.sendCaptchaStatus).not.toHaveBeenCalled();
+    expect(notificationManager.notifyCaptchaAttention).not.toHaveBeenCalled();
+    expect(repository.completed[0]).toEqual({
+      id: 'captcha-attention-request-1',
+      result: expect.objectContaining({ notified: false, stale: true }),
+    });
   });
 
   it('produces a read-only live account-quarantine preview for the web flow', async () => {

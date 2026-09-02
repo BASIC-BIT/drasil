@@ -26,6 +26,8 @@ import type { AccountQuarantineActionRequests } from '@/lib/inboxActionReceipts'
 import {
   confidenceStatusClass,
   formatCaseAction,
+  formatCaptchaStatus,
+  formatCaptchaHistoryEntry,
   formatConfidence,
   formatDetectionType,
   formatPresenceState,
@@ -155,6 +157,39 @@ function SummaryPanel({
         </div>
       ) : null}
 
+      {detail.captchaChallenge ? (
+        <div className="member-warning neutral-warning">
+          <strong>{formatCaptchaStatus(detail.captchaChallenge.status)}</strong>
+          <span>
+            {detail.captchaChallenge.status === 'pending'
+              ? `Expires ${formatUtc(detail.captchaChallenge.expiresAt)}. ${detail.captchaChallenge.submissionCount} submissions recorded.`
+              : detail.captchaChallenge.status === 'passed'
+                ? 'Security check completed.'
+                : detail.captchaChallenge.status === 'bypassed'
+                  ? (detail.captchaChallenge.bypassReason ??
+                    'A moderator continued this case without the browser check.')
+                  : `Generation ${detail.captchaChallenge.generation}.`}
+          </span>
+          {detail.captchaChallenge.history?.length ? (
+            <details>
+              <summary>Security check history</summary>
+              <ul>
+                {detail.captchaChallenge.history.map((entry) => (
+                  <li key={entry.generation}>
+                    {formatCaptchaHistoryEntry(
+                      entry,
+                      entry.generation === detail.captchaChallenge?.generation
+                        ? detail.captchaChallenge.status
+                        : undefined
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          ) : null}
+        </div>
+      ) : null}
+
       {detail.notes ? <p>{detail.notes}</p> : <p className="muted">No moderator notes recorded.</p>}
     </section>
   );
@@ -239,6 +274,7 @@ function DiscordSurfaces({
         accountQuarantineRequests={accountQuarantineRequests}
         canQueueCaseActions={canQueueCaseActions}
         caseId={detail.id}
+        captchaChallenge={detail.captchaChallenge}
         guildId={guildId}
         messageCleanup={messageCleanup}
         queueCaseAction={queueCaseAction}

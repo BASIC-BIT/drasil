@@ -30,6 +30,28 @@ detections, and cases, see `docs/moderation-flow.md`.
    - Otherwise creates a `verification_event` case (PENDING), applies the case
      role, creates a verification thread, and upserts the admin notification.
 
+## Case-bound browser security checks
+
+CAPTCHA is an optional component of a normal pending case. It is never a separate case type and is
+never available for compromised-account recovery cases.
+
+- `captcha_mode=off` disables new checks and causes the bounded bot sweep to cancel pending checks.
+- `captcha_mode=manual` lets moderators add a check to a pending standard case.
+- `captcha_mode=suspicious_join` also adds a check when suspicious join detection creates a new
+  case. Later join evidence added to an existing case does not add one automatically.
+- A moderator-requested pass is durable evidence only. The case stays pending.
+- An automatic suspicious-join pass can resolve its exact case only when
+  `captcha_pass_action=verify_join_only`, the case is still unchanged and join-only, and the member
+  has no other pending case. All other valid passes remain evidence without releasing the case role.
+- Failure, expiry, delivery failure, and bypass keep the case pending. No CAPTCHA outcome kicks or
+  bans a member.
+
+The existing user-facing case thread receives the opaque browser link. The public web flow uses a
+dedicated Discord `identify` OAuth session, validates Turnstile server-side, records the pass and a
+system-only `apply_captcha_pass` request in one database transaction, then lets the bot own Discord
+roles, threads, notifications, and audit effects. See
+`docs/captcha-case-challenge-plan.md` for the complete state and security contract.
+
 ## Recent message context
 
 Drasil persists short-lived message context for moderation inference by default.

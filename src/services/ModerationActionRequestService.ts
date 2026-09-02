@@ -21,6 +21,7 @@ import {
 } from '../controllers/ReportInstructionsManager';
 import { Prisma } from '../db/prisma';
 import { TYPES } from '../di/symbols';
+import { DISCORD_UNKNOWN_MEMBER_ERROR_CODE, isDiscordErrorCode } from '../utils/discordErrors';
 import { IModerationActionRequestRepository } from '../repositories/ModerationActionRequestRepository';
 import { IMessageDeletionJobRepository } from '../repositories/MessageDeletionJobRepository';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
@@ -29,6 +30,9 @@ import {
   CaseAttentionState,
   CaseContainmentStatus,
   CaseKind,
+  CaptchaChallenge,
+  CaptchaChallengeStatus,
+  CaptchaChallengeRequestSource,
   MessageDeletionBanStatus,
   MessageDeletionCaseFinalizationStatus,
   MessageDeletionJobMode,
@@ -37,12 +41,15 @@ import {
   ModerationActionRequest,
   ModerationActionRequestStatus,
   ModerationActionRequestType,
+  VerificationEvent,
+  VerificationStatus,
   type VerificationChannelPermissionSyncState,
 } from '../repositories/types';
 import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
+import { CAPTCHA_PRESENTATION_ATTEMPT_PREFIX } from '../utils/caseRoleRelease';
 import { buildReportIntakeAdminActionsCustomId } from '../utils/reportIntakeAdminActions';
 import { IModerationQueueService } from './ModerationQueueService';
-import { INotificationManager } from './NotificationManager';
+import { CaptchaAttentionReason, INotificationManager } from './NotificationManager';
 import { NotificationPresentationBuilder } from './NotificationPresentationBuilder';
 import { IProductAnalyticsService } from './ProductAnalyticsService';
 import { ReportSubmissionService } from './ReportSubmissionService';
@@ -58,6 +65,7 @@ import { ICaseThreadClosureSweepService } from './CaseThreadClosureSweepService'
 import { CaseRoleLockdownReport, ICaseRoleLockdownService } from './CaseRoleLockdownService';
 import { IAccountQuarantineService } from './AccountQuarantineService';
 import { buildAccountQuarantinePreviewFingerprint } from '../utils/accountQuarantinePreview';
+import type { ICaptchaChallengeService } from './CaptchaChallengeService';
 
 const DEFAULT_POLL_INTERVAL_MS = 5000;
 const DEFAULT_MAX_REQUESTS_PER_TICK = 5;
@@ -137,6 +145,15 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       this.completeSetupVerification(request),
     [ModerationActionRequestType.UPSERT_REPORT_INSTRUCTIONS]: (request) =>
       this.upsertReportInstructions(request),
+    [ModerationActionRequestType.REQUEST_CAPTCHA_CHALLENGE]: (request) =>
+      this.requestCaptchaChallenge(request, false),
+    [ModerationActionRequestType.RETRY_CAPTCHA_CHALLENGE]: (request) =>
+      this.requestCaptchaChallenge(request, true),
+    [ModerationActionRequestType.BYPASS_CAPTCHA_CHALLENGE]: (request) =>
+      this.bypassCaptchaChallenge(request),
+    [ModerationActionRequestType.APPLY_CAPTCHA_PASS]: (request) => this.applyCaptchaPass(request),
+    [ModerationActionRequestType.NOTIFY_CAPTCHA_ATTENTION]: (request) =>
+      this.notifyCaptchaAttention(request),
   };
 
   public constructor(
@@ -172,7 +189,10 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     private readonly messageCleanupService: MessageCleanupService,
     @inject(TYPES.AccountQuarantineService)
     @optional()
-    private readonly accountQuarantineService?: IAccountQuarantineService
+    private readonly accountQuarantineService?: IAccountQuarantineService,
+    @inject(TYPES.CaptchaChallengeService)
+    @optional()
+    private readonly captchaChallengeService?: ICaptchaChallengeService
   ) {}
 
   public start(): void {
@@ -913,6 +933,659 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       target_user_id: request.target_user_id,
       verification_event_id: request.verification_event_id,
       verified,
+    });
+  }
+
+  private async requestCaptchaChallenge(
+    request: ModerationActionRequest,
+    retry: boolean
+  ): Promise<void> {
+    if (!request.target_user_id || !request.verification_event_id) {
+      throw new Error('Security-check request is missing target user or case id.');
+    }
+    if (!this.captchaChallengeService) {
+      throw new Error('Security-check service is unavailable.');
+    }
+    if (await this.completeRecordedCaptchaMutation(request, retry ? 'retry' : 'request')) {
+      return;
+    }
+    await this.requireCaptchaCaseBinding(
+      request.server_id,
+      request.target_user_id,
+      request.verification_event_id
+    );
+    await Promise.all([
+      this.requireCaptchaModerator(request.server_id, request.actor_id),
+      this.fetchGuildMember(request.server_id, request.target_user_id),
+    ]);
+    const expectedChallengeId = retry
+      ? this.readMetadataString(request.metadata, 'expected_challenge_id')
+      : null;
+    const expectedGeneration = retry
+      ? this.readMetadataInteger(request.metadata, 'expected_generation')
+      : null;
+    if (retry && (!expectedChallengeId || expectedGeneration === null || expectedGeneration < 1)) {
+      throw new Error('Security-check retry metadata is invalid.');
+    }
+    const result = await this.captchaChallengeService.requestChallenge({
+      actionRequestId: request.id,
+      verificationEventId: request.verification_event_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      requestedBy: request.actor_id,
+      retry,
+      ...(retry
+        ? {
+            expectedChallengeId: expectedChallengeId as string,
+            expectedGeneration: expectedGeneration as number,
+          }
+        : {}),
+    });
+    await this.repository.complete(request.id, {
+      action_type: request.action_type,
+      challenge_id: result.challenge.id,
+      delivered: result.delivered,
+      generation: result.challenge.generation,
+      target_user_id: request.target_user_id,
+      verification_event_id: request.verification_event_id,
+    });
+  }
+
+  private async bypassCaptchaChallenge(request: ModerationActionRequest): Promise<void> {
+    if (!request.target_user_id || !request.verification_event_id) {
+      throw new Error('Security-check bypass is missing target user or case id.');
+    }
+    if (!this.captchaChallengeService) {
+      throw new Error('Security-check service is unavailable.');
+    }
+    if (await this.completeRecordedCaptchaMutation(request, 'bypass')) {
+      return;
+    }
+    await this.requireCaptchaCaseBinding(
+      request.server_id,
+      request.target_user_id,
+      request.verification_event_id
+    );
+    await this.requireCaptchaModerator(request.server_id, request.actor_id);
+    const reason = this.readMetadataString(request.metadata, 'reason')?.trim();
+    if (!reason) {
+      throw new Error('A reason is required to continue without the browser check.');
+    }
+    const expectedChallengeId = this.readMetadataString(request.metadata, 'expected_challenge_id');
+    const expectedGeneration = this.readMetadataInteger(request.metadata, 'expected_generation');
+    if (!expectedChallengeId || expectedGeneration === null || expectedGeneration < 1) {
+      throw new Error('Security-check bypass metadata is invalid.');
+    }
+    const challenge = await this.captchaChallengeService.bypassChallenge({
+      actionRequestId: request.id,
+      verificationEventId: request.verification_event_id,
+      moderatorId: request.actor_id,
+      reason,
+      expectedChallengeId,
+      expectedGeneration,
+    });
+    await this.repository.complete(request.id, {
+      action_type: request.action_type,
+      bypassed: true,
+      challenge_id: challenge.id,
+      generation: challenge.generation,
+      target_user_id: request.target_user_id,
+      verification_event_id: request.verification_event_id,
+    });
+  }
+
+  private async completeRecordedCaptchaMutation(
+    request: ModerationActionRequest,
+    operation: 'request' | 'retry' | 'bypass'
+  ): Promise<boolean> {
+    const receipt = this.readMetadataRecord(request.metadata, 'captcha_mutation_receipt');
+    if (!receipt) {
+      return false;
+    }
+    if (
+      !request.target_user_id ||
+      !request.verification_event_id ||
+      !this.captchaChallengeService
+    ) {
+      throw new Error('Security-check mutation receipt is invalid.');
+    }
+    const challengeId = typeof receipt.challenge_id === 'string' ? receipt.challenge_id : null;
+    const generation =
+      typeof receipt.generation === 'number' &&
+      Number.isInteger(receipt.generation) &&
+      receipt.generation >= 1
+        ? receipt.generation
+        : null;
+    if (receipt.operation !== operation || !challengeId || generation === null) {
+      throw new Error('Security-check mutation receipt is invalid.');
+    }
+    const challenge = await this.captchaChallengeService.findByCaseId(
+      request.verification_event_id
+    );
+    if (
+      !challenge ||
+      challenge.id !== challengeId ||
+      challenge.verification_event_id !== request.verification_event_id ||
+      challenge.server_id !== request.server_id ||
+      challenge.user_id !== request.target_user_id
+    ) {
+      throw new Error('The recorded security-check mutation no longer matches its case.');
+    }
+    const generationHistory = challenge.history?.find((entry) => entry.generation === generation);
+    const currentGeneration = challenge.generation === generation;
+    const expectedBypassReason = this.readMetadataString(request.metadata, 'reason')
+      ?.trim()
+      .slice(0, 1000);
+    const requestMatches =
+      operation !== 'bypass' &&
+      ((generationHistory?.request_source === CaptchaChallengeRequestSource.MODERATOR &&
+        generationHistory.requested_by === request.actor_id) ||
+        (currentGeneration &&
+          challenge.request_source === CaptchaChallengeRequestSource.MODERATOR &&
+          challenge.requested_by === request.actor_id));
+    const bypassMatches =
+      operation === 'bypass' &&
+      ((generationHistory?.bypassed_by === request.actor_id &&
+        generationHistory.bypass_reason === expectedBypassReason) ||
+        (currentGeneration &&
+          challenge.status === CaptchaChallengeStatus.BYPASSED &&
+          challenge.bypassed_by === request.actor_id &&
+          challenge.bypass_reason === expectedBypassReason));
+    if (!requestMatches && !bypassMatches) {
+      throw new Error('The recorded security-check mutation could not be verified.');
+    }
+    await this.repository.complete(request.id, {
+      action_type: request.action_type,
+      challenge_id: challengeId,
+      generation,
+      resumed: true,
+      ...(operation === 'bypass'
+        ? { bypassed: true }
+        : { delivered: currentGeneration && challenge.delivered_at !== null }),
+      target_user_id: request.target_user_id,
+      verification_event_id: request.verification_event_id,
+    });
+    return true;
+  }
+
+  private async applyCaptchaPass(request: ModerationActionRequest): Promise<void> {
+    if (
+      request.actor_id !== 'drasil:captcha' ||
+      request.actor_surface !== 'captcha' ||
+      !request.target_user_id ||
+      !request.verification_event_id
+    ) {
+      throw new Error('Security-check completion request is invalid.');
+    }
+    if (!this.captchaChallengeService) {
+      throw new Error('Security-check service is unavailable.');
+    }
+
+    const challengeId = this.readMetadataString(request.metadata, 'challenge_id');
+    const generation = this.readMetadataInteger(request.metadata, 'generation');
+    const expectedCaseRevision = this.readMetadataInteger(
+      request.metadata,
+      'expected_case_revision'
+    );
+    if (
+      !challengeId ||
+      generation === null ||
+      generation < 1 ||
+      expectedCaseRevision === null ||
+      expectedCaseRevision < 0
+    ) {
+      throw new Error('Security-check completion metadata is invalid.');
+    }
+
+    const decision = await this.captchaChallengeService.evaluatePassedChallenge({
+      challengeId,
+      verificationEventId: request.verification_event_id,
+      targetUserId: request.target_user_id,
+      generation,
+      expectedCaseRevision,
+    });
+    let verificationEvent = await this.verificationEventRepository.findById(
+      request.verification_event_id
+    );
+    const challenge = await this.captchaChallengeService.findById(challengeId);
+    if (!verificationEvent || !challenge) {
+      throw new Error('Security-check completion presentation is unavailable.');
+    }
+    verificationEvent = await this.requireCaptchaPassPresentation(
+      request,
+      verificationEvent,
+      challenge
+    );
+    const captchaResolution = this.readMetadataRecord(
+      verificationEvent.metadata,
+      'captcha_resolution'
+    );
+    const resumesCommittedResolution =
+      decision.status === 'held' &&
+      verificationEvent.status === VerificationStatus.VERIFIED &&
+      verificationEvent.resolved_by === 'drasil:captcha' &&
+      verificationEvent.server_id === request.server_id &&
+      verificationEvent.user_id === request.target_user_id &&
+      verificationEvent.case_revision === expectedCaseRevision &&
+      captchaResolution?.challenge_id === challengeId &&
+      captchaResolution.generation === generation;
+    if (decision.status !== 'eligible' && !resumesCommittedResolution) {
+      if (verificationEvent.status === VerificationStatus.PENDING) {
+        const attentionReason =
+          decision.status === 'held' ? 'automatic_resolution_held' : 'evidence_only_pass';
+        await this.requireCaptchaAttention(
+          request,
+          verificationEvent,
+          attentionReason,
+          `captcha-attention:${challengeId}:${generation}:${attentionReason}`
+        );
+      }
+      await this.repository.complete(request.id, {
+        action_type: request.action_type,
+        challenge_id: challengeId,
+        effect: decision.status,
+        generation,
+        held_reason: decision.status === 'held' ? decision.reason : null,
+        resolved: false,
+        target_user_id: request.target_user_id,
+        verification_event_id: request.verification_event_id,
+      });
+      return;
+    }
+
+    let member: GuildMember | null;
+    try {
+      member = await this.fetchGuildMember(request.server_id, request.target_user_id);
+    } catch (error) {
+      if (!isDiscordErrorCode(error, DISCORD_UNKNOWN_MEMBER_ERROR_CODE)) {
+        throw error;
+      }
+      member = null;
+    }
+    if (!member) {
+      if (resumesCommittedResolution) {
+        throw new Error(
+          `CAPTCHA case ${verificationEvent.id} was resolved, but the member is unavailable for finalization.`
+        );
+      }
+      if (verificationEvent.status === VerificationStatus.PENDING) {
+        await this.requireCaptchaAttention(
+          request,
+          verificationEvent,
+          'automatic_resolution_held',
+          `captcha-attention:${challengeId}:${generation}:automatic_resolution_held`
+        );
+      }
+      await this.repository.complete(request.id, {
+        action_type: request.action_type,
+        challenge_id: challengeId,
+        effect: 'held',
+        generation,
+        held_reason: 'member_unavailable',
+        resolved: false,
+        target_user_id: request.target_user_id,
+        verification_event_id: request.verification_event_id,
+      });
+      return;
+    }
+
+    const result = await this.userModerationService.resolveCaptchaCase(member, {
+      verificationEventId: request.verification_event_id,
+      challengeId,
+      generation,
+      expectedCaseRevision,
+    });
+    if (result.status === 'held' && verificationEvent.status === VerificationStatus.PENDING) {
+      await this.requireCaptchaAttention(
+        request,
+        verificationEvent,
+        'automatic_resolution_held',
+        `captcha-attention:${challengeId}:${generation}:automatic_resolution_held`
+      );
+    }
+    await this.repository.complete(request.id, {
+      action_type: request.action_type,
+      challenge_id: challengeId,
+      effect: result.status,
+      generation,
+      held_reason: result.status === 'held' ? result.reason : null,
+      resolved: result.status === 'resolved',
+      target_user_id: request.target_user_id,
+      verification_event_id: request.verification_event_id,
+    });
+  }
+
+  private async requireCaptchaPassPresentation(
+    request: ModerationActionRequest,
+    verificationEvent: VerificationEvent,
+    challenge: CaptchaChallenge
+  ): Promise<VerificationEvent> {
+    if (verificationEvent.status !== VerificationStatus.PENDING) {
+      await this.updateCaptchaPresentation(verificationEvent, challenge);
+      return verificationEvent;
+    }
+
+    const attemptId = `${CAPTCHA_PRESENTATION_ATTEMPT_PREFIX}${challenge.id}:${challenge.generation}:passed`;
+    const claimed = await this.verificationEventRepository.claimCaptchaPresentation({
+      id: verificationEvent.id,
+      serverId: verificationEvent.server_id,
+      userId: verificationEvent.user_id,
+      challengeId: challenge.id,
+      generation: challenge.generation,
+      expectedStatus: CaptchaChallengeStatus.PASSED,
+      attemptId,
+    });
+    if (!claimed) {
+      const current = await this.verificationEventRepository.findById(verificationEvent.id);
+      if (!current) {
+        throw new Error(`CAPTCHA case ${verificationEvent.id} is unavailable.`);
+      }
+      if (
+        current.status !== VerificationStatus.PENDING ||
+        current.case_kind !== CaseKind.STANDARD
+      ) {
+        await this.updateCaptchaPresentation(current, challenge);
+        return current;
+      }
+      throw new Error(
+        `CAPTCHA case ${verificationEvent.id} changed before completion could be presented.`
+      );
+    }
+
+    let presentationError: unknown = null;
+    try {
+      await this.updateCaptchaPresentation(claimed, challenge);
+      await this.requireCaptchaThreadStatus(
+        request,
+        claimed,
+        'Security check completed.',
+        attemptId,
+        `Failed to deliver CAPTCHA completion for case ${claimed.id}.`
+      );
+    } catch (error) {
+      presentationError = error;
+    }
+
+    const released = await this.verificationEventRepository.updateQuarantineAttempt(
+      claimed.id,
+      attemptId,
+      {
+        case_kind: CaseKind.STANDARD,
+        attention_state: claimed.attention_state,
+        containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+        parked_at: null,
+        parked_by: null,
+      }
+    );
+    if (!released) {
+      throw new Error(`Failed to release CAPTCHA presentation claim for case ${claimed.id}.`);
+    }
+    if (presentationError) {
+      throw presentationError;
+    }
+    return released;
+  }
+
+  private async updateCaptchaPresentation(
+    verificationEvent: VerificationEvent,
+    challenge: CaptchaChallenge,
+    description = 'passed'
+  ): Promise<void> {
+    const presentationUpdated = this.notificationManager.updateCaptchaChallengePresentation
+      ? await this.notificationManager.updateCaptchaChallengePresentation(
+          verificationEvent,
+          challenge
+        )
+      : false;
+    if (!presentationUpdated) {
+      throw new Error(
+        `Failed to refresh ${description} CAPTCHA presentation for case ${verificationEvent.id}.`
+      );
+    }
+  }
+
+  private async requireCaptchaThreadStatus(
+    request: ModerationActionRequest,
+    verificationEvent: VerificationEvent,
+    message: string,
+    receipt: string,
+    failureMessage: string
+  ): Promise<void> {
+    if (this.readMetadataString(request.metadata, 'captcha_thread_status_receipt') === receipt) {
+      return;
+    }
+    const statusSent = await this.threadManager.sendCaptchaStatus(verificationEvent, message);
+    if (!statusSent) {
+      throw new Error(failureMessage);
+    }
+    const persisted = await this.repository.mergeMetadata(request.id, {
+      captcha_thread_status_receipt: receipt,
+    });
+    if (!persisted) {
+      throw new Error(`Failed to persist CAPTCHA status receipt for case ${verificationEvent.id}.`);
+    }
+  }
+
+  private async requireCaptchaAttention(
+    request: ModerationActionRequest,
+    verificationEvent: VerificationEvent,
+    reason: CaptchaAttentionReason,
+    receipt: string
+  ): Promise<void> {
+    if (this.readMetadataString(request.metadata, 'captcha_attention_receipt') === receipt) {
+      return;
+    }
+    const notified = this.notificationManager.notifyCaptchaAttention
+      ? await this.notificationManager.notifyCaptchaAttention(verificationEvent, reason)
+      : false;
+    if (!notified) {
+      throw new Error(`Failed to notify moderators about CAPTCHA case ${verificationEvent.id}.`);
+    }
+    const persisted = await this.repository.mergeMetadata(request.id, {
+      captcha_attention_receipt: receipt,
+    });
+    if (!persisted) {
+      throw new Error(
+        `Failed to persist CAPTCHA attention receipt for case ${verificationEvent.id}.`
+      );
+    }
+  }
+
+  private captchaChallengeMatchesAttentionReason(
+    challenge: CaptchaChallenge | null,
+    reason: 'delivery_failed' | 'submission_limit' | 'expired' | 'cancelled' | 'bypassed'
+  ): challenge is CaptchaChallenge {
+    return reason === 'delivery_failed'
+      ? challenge?.status === CaptchaChallengeStatus.PENDING &&
+          challenge.delivered_at === null &&
+          Boolean(challenge.delivery_error_code)
+      : reason === 'cancelled'
+        ? challenge?.status === CaptchaChallengeStatus.CANCELLED
+        : reason === 'bypassed'
+          ? challenge?.status === CaptchaChallengeStatus.BYPASSED
+          : challenge?.status ===
+            (reason === 'expired' ? CaptchaChallengeStatus.EXPIRED : CaptchaChallengeStatus.FAILED);
+  }
+
+  private async requireCaptchaStatusPresentation(
+    request: ModerationActionRequest,
+    verificationEvent: VerificationEvent,
+    challenge: CaptchaChallenge,
+    reason: 'delivery_failed' | 'submission_limit' | 'expired' | 'cancelled' | 'bypassed'
+  ): Promise<boolean> {
+    const canPresentAfterResolution = reason === 'cancelled' || reason === 'bypassed';
+    if (verificationEvent.status !== VerificationStatus.PENDING) {
+      if (canPresentAfterResolution) {
+        await this.updateCaptchaPresentation(verificationEvent, challenge, reason);
+      }
+      return canPresentAfterResolution;
+    }
+
+    const attemptId = `${CAPTCHA_PRESENTATION_ATTEMPT_PREFIX}${challenge.id}:${challenge.generation}:${reason}`;
+    const claimed = await this.verificationEventRepository.claimCaptchaPresentation({
+      id: verificationEvent.id,
+      serverId: verificationEvent.server_id,
+      userId: verificationEvent.user_id,
+      challengeId: challenge.id,
+      generation: challenge.generation,
+      expectedStatus: challenge.status,
+      requireDeliveryError: reason === 'delivery_failed',
+      attemptId,
+    });
+    if (!claimed) {
+      const [current, currentChallenge] = await Promise.all([
+        this.verificationEventRepository.findById(verificationEvent.id),
+        this.captchaChallengeService?.findByCaseId(verificationEvent.id) ?? Promise.resolve(null),
+      ]);
+      if (!current) {
+        throw new Error(`CAPTCHA case ${verificationEvent.id} is unavailable.`);
+      }
+      const challengeStillMatches =
+        currentChallenge?.id === challenge.id &&
+        currentChallenge.generation === challenge.generation &&
+        this.captchaChallengeMatchesAttentionReason(currentChallenge, reason);
+      if (current.status !== VerificationStatus.PENDING) {
+        if (canPresentAfterResolution && challengeStillMatches) {
+          await this.updateCaptchaPresentation(current, currentChallenge, reason);
+          return true;
+        }
+        return false;
+      }
+      if (!challengeStillMatches) {
+        return false;
+      }
+      throw new Error(
+        `CAPTCHA case ${verificationEvent.id} changed before ${reason} could be presented.`
+      );
+    }
+
+    let presentationError: unknown = null;
+    try {
+      await this.updateCaptchaPresentation(claimed, challenge, reason);
+      if (reason === 'cancelled') {
+        await this.requireCaptchaThreadStatus(
+          request,
+          claimed,
+          'This security check is no longer active.',
+          attemptId,
+          `Failed to deliver cancelled CAPTCHA status for case ${claimed.id}.`
+        );
+      } else if (reason !== 'bypassed') {
+        await this.requireCaptchaThreadStatus(
+          request,
+          claimed,
+          reason === 'delivery_failed'
+            ? 'This security check link could not be delivered. Ask a moderator to retry.'
+            : reason === 'expired'
+              ? 'This security check expired. Ask a moderator to issue a new check.'
+              : 'This security check reached its attempt limit. Ask a moderator to issue a new check.',
+          attemptId,
+          `Failed to deliver CAPTCHA status for case ${claimed.id}.`
+        );
+        await this.requireCaptchaAttention(request, claimed, reason, `${attemptId}:attention`);
+      }
+    } catch (error) {
+      presentationError = error;
+    }
+
+    const released = await this.verificationEventRepository.updateQuarantineAttempt(
+      claimed.id,
+      attemptId,
+      {
+        case_kind: CaseKind.STANDARD,
+        attention_state: claimed.attention_state,
+        containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+        parked_at: null,
+        parked_by: null,
+      }
+    );
+    if (!released) {
+      throw new Error(`Failed to release CAPTCHA presentation claim for case ${claimed.id}.`);
+    }
+    if (presentationError) {
+      throw presentationError;
+    }
+    return true;
+  }
+
+  private async notifyCaptchaAttention(request: ModerationActionRequest): Promise<void> {
+    if (
+      request.actor_id !== 'drasil:captcha' ||
+      request.actor_surface !== 'captcha' ||
+      !request.target_user_id ||
+      !request.verification_event_id
+    ) {
+      throw new Error('Security-check attention request is invalid.');
+    }
+    const reason = this.readMetadataString(request.metadata, 'reason');
+    if (
+      reason !== 'delivery_failed' &&
+      reason !== 'submission_limit' &&
+      reason !== 'expired' &&
+      reason !== 'cancelled' &&
+      reason !== 'bypassed'
+    ) {
+      throw new Error('Security-check attention reason is invalid.');
+    }
+    if (!this.captchaChallengeService) {
+      throw new Error('Security-check service is unavailable.');
+    }
+
+    const challengeId = this.readMetadataString(request.metadata, 'challenge_id');
+    const generation = this.readMetadataInteger(request.metadata, 'generation');
+    if (!challengeId || generation === null || generation < 1) {
+      throw new Error('Security-check attention metadata is invalid.');
+    }
+
+    const [verificationEvent, challenge] = await Promise.all([
+      this.verificationEventRepository.findById(request.verification_event_id),
+      this.captchaChallengeService.findByCaseId(request.verification_event_id),
+    ]);
+    if (
+      !verificationEvent ||
+      verificationEvent.server_id !== request.server_id ||
+      verificationEvent.user_id !== request.target_user_id
+    ) {
+      throw new Error('Security-check attention case binding is invalid.');
+    }
+    const challengeStateMatches = this.captchaChallengeMatchesAttentionReason(challenge, reason);
+    if (
+      (reason !== 'cancelled' &&
+        reason !== 'bypassed' &&
+        verificationEvent.status !== VerificationStatus.PENDING) ||
+      !challenge ||
+      challenge.id !== challengeId ||
+      challenge.generation !== generation ||
+      !challengeStateMatches
+    ) {
+      await this.repository.complete(request.id, {
+        action_type: request.action_type,
+        challenge_id: challengeId,
+        generation,
+        notified: false,
+        reason,
+        stale: true,
+        target_user_id: request.target_user_id,
+        verification_event_id: request.verification_event_id,
+      });
+      return;
+    }
+    const presented = await this.requireCaptchaStatusPresentation(
+      request,
+      verificationEvent,
+      challenge,
+      reason
+    );
+    await this.repository.complete(request.id, {
+      action_type: request.action_type,
+      challenge_id: challengeId,
+      generation,
+      ...(reason === 'cancelled' || reason === 'bypassed'
+        ? { presented }
+        : { notified: presented }),
+      reason,
+      ...(!presented ? { stale: true } : {}),
+      target_user_id: request.target_user_id,
+      verification_event_id: request.verification_event_id,
     });
   }
 
@@ -1807,6 +2480,31 @@ export class ModerationActionRequestService implements IModerationActionRequestS
   private async fetchGuildMember(serverId: string, userId: string): Promise<GuildMember> {
     const guild = await this.fetchGuild(serverId);
     return guild.members.fetch(userId);
+  }
+
+  private async requireCaptchaModerator(serverId: string, userId: string): Promise<void> {
+    const moderator = await this.fetchGuildMember(serverId, userId);
+    if (
+      !moderator.permissions.has(PermissionFlagsBits.ManageGuild) &&
+      !moderator.permissions.has(PermissionFlagsBits.ModerateMembers)
+    ) {
+      throw new Error('Security-check actions require current moderation permission.');
+    }
+  }
+
+  private async requireCaptchaCaseBinding(
+    serverId: string,
+    userId: string,
+    verificationEventId: string
+  ): Promise<void> {
+    const verificationEvent = await this.verificationEventRepository.findById(verificationEventId);
+    if (
+      !verificationEvent ||
+      verificationEvent.server_id !== serverId ||
+      verificationEvent.user_id !== userId
+    ) {
+      throw new Error('Security-check request does not match its case subject.');
+    }
   }
 
   private async requireCleanupAdministrator(

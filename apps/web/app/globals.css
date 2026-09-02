@@ -520,6 +520,44 @@ select {
   white-space: nowrap;
 }
 
+.public-flow-shell {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 24px;
+}
+
+.public-flow-panel {
+  display: grid;
+  width: min(100%, 520px);
+  gap: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
+  background: var(--panel);
+  box-shadow: var(--shadow-panel);
+  padding: clamp(24px, 6vw, 40px);
+}
+
+.public-flow-panel h1,
+.public-flow-panel p {
+  margin: 0;
+}
+
+.captcha-check-form {
+  display: grid;
+  gap: 16px;
+}
+
+.captcha-turnstile {
+  min-height: 65px;
+  width: 100%;
+}
+
+.captcha-check-status {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));

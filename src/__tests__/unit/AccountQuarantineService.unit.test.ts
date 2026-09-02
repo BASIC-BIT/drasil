@@ -38,6 +38,7 @@ const event: VerificationEvent = {
   notification_channel_id: 'admin-1',
   notification_message_id: 'message-1',
   status: VerificationStatus.PENDING,
+  case_revision: 0,
   created_at: new Date(),
   updated_at: new Date(),
   resolved_at: null,

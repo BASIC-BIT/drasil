@@ -1,6 +1,7 @@
 import { CaseRoleReleaseReconciliationService } from '../../services/CaseRoleReleaseReconciliationService';
 import {
   CASE_ATTENTION_ATTEMPT_PREFIX,
+  CAPTCHA_PRESENTATION_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_LEASE_MS,
   CASE_ROLE_RELEASE_RECONCILIATION_ATTEMPT_PREFIX,
@@ -62,7 +63,7 @@ function buildService(options: {
       assignCaseRole: jest.fn().mockResolvedValue(true),
       removeCaseRole: jest.fn(),
     },
-    options.snapshots ?? { findActiveCompletedCompromised: jest.fn().mockResolvedValue([]) },
+    options.snapshots ?? { findActiveCompletedForRestoration: jest.fn().mockResolvedValue([]) },
     options.roleQuarantine ?? { restoreMemberRoles: jest.fn() },
     options.lockdown ?? {
       auditGuild: jest.fn().mockResolvedValue(readyLockdown),
@@ -299,6 +300,48 @@ describe('CaseRoleReleaseReconciliationService (unit)', () => {
     expect(queue.upsertCaseMirror).toHaveBeenCalledWith(recovered);
   });
 
+  it('releases an expired CAPTCHA presentation claim without changing case review state', async () => {
+    const now = new Date('2026-08-18T12:00:00.000Z');
+    const verificationEvents = new InMemoryVerificationEventRepository();
+    const verificationEvent = await verificationEvents.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationEvents.update(verificationEvent.id, {
+      case_kind: CaseKind.STANDARD,
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      containment_status: CaseContainmentStatus.IN_PROGRESS,
+      quarantine_attempt_id: `${CAPTCHA_PRESENTATION_ATTEMPT_PREFIX}challenge-1:1:request-1`,
+      quarantine_lease_renewed_at: new Date('2026-08-18T11:00:00.000Z'),
+    });
+    const notifications = {
+      notifyAccountQuarantineAttention: jest.fn().mockResolvedValue(true),
+    };
+    const queue = { upsertCaseMirror: jest.fn().mockResolvedValue(undefined) };
+    const service = buildService({
+      client: { guilds: { cache: new Map(), fetch: jest.fn() } },
+      verificationEvents,
+      notifications,
+      queue,
+    });
+
+    await service.runOnce(now);
+
+    const recovered = await verificationEvents.findById(verificationEvent.id);
+    expect(recovered).toEqual(
+      expect.objectContaining({
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+        quarantine_attempt_id: null,
+        quarantine_lease_renewed_at: null,
+      })
+    );
+    expect(notifications.notifyAccountQuarantineAttention).not.toHaveBeenCalled();
+    expect(queue.upsertCaseMirror).toHaveBeenCalledWith(recovered);
+  });
+
   it('returns an expired attention lease to durable moderator review', async () => {
     const now = new Date('2026-08-18T12:00:00.000Z');
     const verificationEvents = new InMemoryVerificationEventRepository();
@@ -500,7 +543,7 @@ describe('CaseRoleReleaseReconciliationService (unit)', () => {
     expect(queue.upsertCaseMirror).toHaveBeenCalledWith(updated);
   });
 
-  it('resumes role restoration for a verified case with an active compromised snapshot', async () => {
+  it('resumes role restoration for a verified standard case with an active snapshot', async () => {
     const verificationEvents = new InMemoryVerificationEventRepository();
     const verificationEvent = await verificationEvents.createFromDetection(
       null,
@@ -512,7 +555,7 @@ describe('CaseRoleReleaseReconciliationService (unit)', () => {
       status: VerificationStatus.VERIFIED,
       resolved_by: 'moderator-1',
       resolved_at: new Date(),
-      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      case_kind: CaseKind.STANDARD,
     });
     const snapshot = {
       id: 'snapshot-1',
@@ -521,7 +564,7 @@ describe('CaseRoleReleaseReconciliationService (unit)', () => {
       verification_event_id: verificationEvent.id,
       status: RoleQuarantineSnapshotStatus.ACTIVE,
       mode: 'on',
-      purpose: RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT,
+      purpose: RoleQuarantineSnapshotPurpose.STANDARD_CASE,
       original_role_ids: ['role-1'],
       planned_role_ids: ['role-1'],
       removed_role_ids: ['role-1'],
@@ -544,14 +587,156 @@ describe('CaseRoleReleaseReconciliationService (unit)', () => {
       client: { guilds: { cache: new Map([['guild-1', guild]]), fetch: jest.fn() } },
       verificationEvents,
       snapshots: {
-        findActiveCompletedCompromised: jest.fn().mockResolvedValue([snapshot]),
+        findActiveCompletedForRestoration: jest.fn().mockResolvedValue([snapshot]),
       },
       roleQuarantine,
     });
 
     await service.runOnce();
 
-    expect(roleQuarantine.restoreMemberRoles).toHaveBeenCalledWith(member);
+    expect(roleQuarantine.restoreMemberRoles).toHaveBeenCalledWith(
+      member,
+      undefined,
+      expect.objectContaining({ canRestoreRole: expect.any(Function) })
+    );
+  });
+
+  it('rechecks for a pending case inside role restoration after member fetch', async () => {
+    const verificationEvents = new InMemoryVerificationEventRepository();
+    const completedCase = await verificationEvents.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationEvents.update(completedCase.id, {
+      status: VerificationStatus.VERIFIED,
+      resolved_by: 'drasil:captcha',
+      resolved_at: new Date(),
+      case_kind: CaseKind.STANDARD,
+    });
+    const snapshot = {
+      id: 'snapshot-concurrent-pending',
+      server_id: 'guild-1',
+      user_id: 'user-1',
+      verification_event_id: completedCase.id,
+      status: RoleQuarantineSnapshotStatus.ACTIVE,
+      mode: 'on',
+      purpose: RoleQuarantineSnapshotPurpose.STANDARD_CASE,
+      original_role_ids: ['role-1'],
+      planned_role_ids: ['role-1'],
+      removed_role_ids: ['role-1'],
+      restored_role_ids: [],
+      skipped_roles: [],
+      failed_removals: [],
+      failed_restores: [],
+      created_at: new Date(),
+      updated_at: new Date(),
+      restored_at: null,
+      restored_by: null,
+      metadata: {},
+    };
+    const member = { id: 'user-1' };
+    let fenceAllowed: boolean | null = null;
+    const roleQuarantine = {
+      restoreMemberRoles: jest.fn().mockImplementation(async (...args: unknown[]) => {
+        const fence = args[2] as { canRestoreRole(): Promise<boolean> };
+        await verificationEvents.createFromDetection(
+          null,
+          'guild-1',
+          'user-1',
+          VerificationStatus.PENDING
+        );
+        fenceAllowed = await fence.canRestoreRole();
+        return {
+          status: fenceAllowed ? 'restored' : 'held_pending_case',
+        };
+      }),
+    };
+    const notifications = {
+      notifyAccountQuarantineAttention: jest.fn().mockResolvedValue(true),
+    };
+    const service = buildService({
+      client: {
+        guilds: {
+          cache: new Map([
+            ['guild-1', { id: 'guild-1', members: { fetch: jest.fn().mockResolvedValue(member) } }],
+          ]),
+          fetch: jest.fn(),
+        },
+      },
+      verificationEvents,
+      snapshots: { findActiveCompletedForRestoration: jest.fn().mockResolvedValue([snapshot]) },
+      roleQuarantine,
+      notifications,
+    });
+
+    await service.runOnce();
+
+    expect(fenceAllowed).toBe(false);
+    expect(notifications.notifyAccountQuarantineAttention).not.toHaveBeenCalled();
+  });
+
+  it('does not restore roles while the member has a newer pending case', async () => {
+    const verificationEvents = new InMemoryVerificationEventRepository();
+    const completedCase = await verificationEvents.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationEvents.update(completedCase.id, {
+      status: VerificationStatus.VERIFIED,
+      resolved_by: 'drasil:captcha',
+      resolved_at: new Date(),
+    });
+    await verificationEvents.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    const snapshot = {
+      id: 'snapshot-pending-case',
+      server_id: 'guild-1',
+      user_id: 'user-1',
+      verification_event_id: completedCase.id,
+      status: RoleQuarantineSnapshotStatus.ACTIVE,
+      mode: 'on',
+      purpose: RoleQuarantineSnapshotPurpose.STANDARD_CASE,
+      original_role_ids: ['role-1'],
+      planned_role_ids: ['role-1'],
+      removed_role_ids: ['role-1'],
+      restored_role_ids: [],
+      skipped_roles: [],
+      failed_removals: [],
+      failed_restores: [],
+      created_at: new Date(),
+      updated_at: new Date(),
+      restored_at: null,
+      restored_by: null,
+      metadata: {},
+    };
+    const fetchMember = jest.fn();
+    const roleQuarantine = { restoreMemberRoles: jest.fn() };
+    const service = buildService({
+      client: {
+        guilds: {
+          cache: new Map([['guild-1', { id: 'guild-1', members: { fetch: fetchMember } }]]),
+          fetch: jest.fn(),
+        },
+      },
+      verificationEvents,
+      snapshots: {
+        findActiveCompletedForRestoration: jest.fn().mockResolvedValue([snapshot]),
+      },
+      roleQuarantine,
+    });
+
+    await service.runOnce();
+
+    expect(fetchMember).not.toHaveBeenCalled();
+    expect(roleQuarantine.restoreMemberRoles).not.toHaveBeenCalled();
   });
 
   it('does not restore a prior membership snapshot after the user rejoins', async () => {
@@ -598,7 +783,7 @@ describe('CaseRoleReleaseReconciliationService (unit)', () => {
     const service = buildService({
       client: { guilds: { cache: new Map([['guild-1', guild]]), fetch: jest.fn() } },
       verificationEvents,
-      snapshots: { findActiveCompletedCompromised: jest.fn().mockResolvedValue([snapshot]) },
+      snapshots: { findActiveCompletedForRestoration: jest.fn().mockResolvedValue([snapshot]) },
       roleQuarantine,
     });
 
@@ -655,7 +840,7 @@ describe('CaseRoleReleaseReconciliationService (unit)', () => {
     const service = buildService({
       client: { guilds: { cache: new Map([['guild-1', guild]]), fetch: jest.fn() } },
       verificationEvents,
-      snapshots: { findActiveCompletedCompromised: jest.fn().mockResolvedValue([snapshot]) },
+      snapshots: { findActiveCompletedForRestoration: jest.fn().mockResolvedValue([snapshot]) },
       roleQuarantine: {
         restoreMemberRoles: jest.fn().mockResolvedValue({ status: 'partially_restored' }),
       },

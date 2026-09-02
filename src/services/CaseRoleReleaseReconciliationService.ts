@@ -12,12 +12,14 @@ import {
   CaseKind,
   RoleQuarantineSnapshot,
   VerificationEvent,
+  VerificationStatus,
 } from '../repositories/types';
 import {
   CASE_ROLE_RELEASE_RECONCILIATION_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_LEASE_MS,
   isCaseAttentionAttempt,
   isCaseTerminalActionAttempt,
+  isCaptchaPresentationAttempt,
 } from '../utils/caseRoleRelease';
 import { CaseRoleLockdownAuditContext, ICaseRoleLockdownService } from './CaseRoleLockdownService';
 import { IModerationQueueService } from './ModerationQueueService';
@@ -121,6 +123,24 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
   ): Promise<void> {
     const attemptId = verificationEvent.quarantine_attempt_id;
     if (!attemptId) {
+      return;
+    }
+    if (isCaptchaPresentationAttempt(attemptId)) {
+      const recovered = await this.verificationEventRepository.recoverExpiredQuarantineAttempt(
+        verificationEvent.id,
+        attemptId,
+        staleBefore,
+        {
+          attention_state: verificationEvent.attention_state,
+          containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+          parked_at: verificationEvent.parked_at,
+          parked_by: verificationEvent.parked_by,
+          metadata: verificationEvent.metadata,
+        }
+      );
+      if (recovered) {
+        await this.moderationQueueService.upsertCaseMirror(recovered);
+      }
       return;
     }
     if (isCaseAttentionAttempt(attemptId)) {
@@ -252,7 +272,7 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
   }
 
   private async reconcileCompletedRoleRestorations(): Promise<void> {
-    const snapshots = await this.snapshotRepository.findActiveCompletedCompromised();
+    const snapshots = await this.snapshotRepository.findActiveCompletedForRestoration();
     for (const snapshot of snapshots) {
       await this.reconcileCompletedRoleRestoration(snapshot).catch((error) => {
         console.error(`Failed to reconcile role restoration for snapshot ${snapshot.id}:`, error);
@@ -268,6 +288,18 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
       snapshot.verification_event_id
     );
     if (!verificationEvent) {
+      return;
+    }
+    if (verificationEvent.status !== VerificationStatus.VERIFIED) {
+      return;
+    }
+    const hasPendingCase = (
+      await this.verificationEventRepository.findByUserAndServer(
+        snapshot.user_id,
+        snapshot.server_id
+      )
+    ).some((event) => event.status === VerificationStatus.PENDING);
+    if (hasPendingCase) {
       return;
     }
 
@@ -286,11 +318,18 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
         this.roleRestorationAlertedSnapshotIds.delete(snapshot.id);
         return;
       }
-      const result = await this.roleQuarantineService.restoreMemberRoles(member);
+      const result = await this.roleQuarantineService.restoreMemberRoles(member, undefined, {
+        canRestoreRole: async () =>
+          !(await this.verificationEventRepository.findActiveByUserAndServer(
+            snapshot.user_id,
+            snapshot.server_id
+          )),
+      });
       if (
         result.status === 'restored' ||
         result.status === 'no_active_snapshot' ||
-        result.status === 'abandoned_membership_changed'
+        result.status === 'abandoned_membership_changed' ||
+        result.status === 'held_pending_case'
       ) {
         this.roleRestorationAlertedSnapshotIds.delete(snapshot.id);
         return;

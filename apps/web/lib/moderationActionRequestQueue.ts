@@ -36,7 +36,12 @@ export type ModerationActionRequestActionType =
   | 'intake_role_members'
   | 'sync_existing_ban'
   | 'complete_setup_verification'
-  | 'upsert_report_instructions';
+  | 'upsert_report_instructions'
+  | 'request_captcha_challenge'
+  | 'retry_captcha_challenge'
+  | 'bypass_captcha_challenge'
+  | 'apply_captcha_pass'
+  | 'notify_captcha_attention';
 
 export type ModerationActionRequestQueueStatus = 'queued' | 'processing' | 'completed' | 'failed';
 
@@ -76,12 +81,13 @@ export async function queueModerationActionRequestWithReceipt(
   return insertModerationActionRequestWithReceipt(getPostgresPool(), input);
 }
 
-async function insertModerationActionRequestWithReceipt(
+export async function insertModerationActionRequestWithReceipt(
   client: Pool | PoolClient,
   input: QueueModerationActionRequestInput
 ): Promise<ModerationActionRequestReceipt> {
   const result = await client.query<ModerationActionRequestReceipt>(
-    `insert into moderation_action_requests (
+    `with upserted as (
+       insert into moderation_action_requests (
        server_id,
        action_type,
        status,
@@ -109,34 +115,51 @@ async function insertModerationActionRequestWithReceipt(
        $10,
        $11::jsonb
      )
-     on conflict (idempotency_key) do update
-     set status = case
-           when moderation_action_requests.status in ('processing', 'completed')
-             then moderation_action_requests.status
-           else 'queued'
-         end,
-         updated_at = now(),
-         failed_at = null,
-         last_error = null,
-         actor_id = case
-           when moderation_action_requests.status in ('processing', 'completed')
-             then moderation_action_requests.actor_id
-           else excluded.actor_id
-         end,
-         actor_surface = case
-           when moderation_action_requests.status in ('processing', 'completed')
-             then moderation_action_requests.actor_surface
-           else excluded.actor_surface
-         end,
-         metadata = coalesce(moderation_action_requests.metadata, '{}'::jsonb) || excluded.metadata,
+       on conflict (idempotency_key) do update
+       set status = case
+             when moderation_action_requests.status in ('processing', 'completed')
+               then moderation_action_requests.status
+             else 'queued'
+           end,
+          updated_at = now(),
+          failed_at = null,
+          last_error = null,
+          actor_id = case
+            when moderation_action_requests.status in ('processing', 'completed')
+              then moderation_action_requests.actor_id
+            else excluded.actor_id
+          end,
+          actor_surface = case
+            when moderation_action_requests.status in ('processing', 'completed')
+              then moderation_action_requests.actor_surface
+            else excluded.actor_surface
+          end,
+          metadata = coalesce(moderation_action_requests.metadata, '{}'::jsonb) || excluded.metadata,
          message_deletion_job_id = coalesce(
            moderation_action_requests.message_deletion_job_id,
            excluded.message_deletion_job_id
-         )
-     returning
-       id::text,
-       message_deletion_job_id::text as "messageDeletionJobId",
-       status::text as status`,
+          )
+       where moderation_action_requests.status = 'failed'
+          or (
+            moderation_action_requests.status = 'queued'
+            and moderation_action_requests.action_type <>
+              'apply_captcha_pass'::moderation_action_request_type
+          )
+       returning
+         id::text,
+         message_deletion_job_id::text as "messageDeletionJobId",
+         status::text as status
+     )
+     select id, "messageDeletionJobId", status from upserted
+     union all
+     select
+       request.id::text,
+       request.message_deletion_job_id::text as "messageDeletionJobId",
+       request.status::text as status
+     from moderation_action_requests as request
+     where request.idempotency_key = $10
+       and not exists (select 1 from upserted)
+     limit 1`,
     [
       input.serverId,
       input.actionType,

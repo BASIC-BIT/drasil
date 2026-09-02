@@ -176,4 +176,29 @@ describe('AdminActionService (unit)', () => {
 
     expect(summary).toContain('👢 Kicked by <@admin-1>');
   });
+
+  it('formats the CAPTCHA system actor as a product label instead of a Discord mention', () => {
+    const adminActionRepository = new InMemoryAdminActionRepository();
+    const userRepository = new InMemoryUserRepository();
+    const serverRepository = new InMemoryServerRepository();
+    const service = new AdminActionService(adminActionRepository, userRepository, serverRepository);
+
+    const summary = service.formatActionSummary({
+      id: 'action-captcha',
+      server_id: 'server-1',
+      user_id: 'user-1',
+      admin_id: 'drasil:captcha',
+      verification_event_id: 'ver-1',
+      detection_event_id: 'det-1',
+      action_type: AdminActionType.VERIFY,
+      action_at: new Date('2024-01-01T00:00:00.000Z'),
+      previous_status: VerificationStatus.PENDING,
+      new_status: VerificationStatus.VERIFIED,
+      notes: null,
+      metadata: null,
+    });
+
+    expect(summary).toContain('Verified by Drasil browser check');
+    expect(summary).not.toContain('<@drasil:captcha>');
+  });
 });

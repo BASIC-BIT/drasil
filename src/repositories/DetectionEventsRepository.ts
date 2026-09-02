@@ -1,6 +1,6 @@
 import { injectable, inject } from 'inversify';
 import { Prisma, PrismaClient, admin_action_type, detection_type } from '../db/prisma';
-import { DetectionEvent } from './types'; // Keep existing domain types
+import { DetectionEvent, VerificationStatus } from './types'; // Keep existing domain types
 import { TYPES } from '../di/symbols';
 import { RepositoryError } from './BaseRepository'; // Keep using RepositoryError
 import {
@@ -18,6 +18,7 @@ import {
 export interface IDetectionEventsRepository {
   create(data: Partial<DetectionEvent>): Promise<DetectionEvent>;
   findByServerAndUser(serverId: string, userId: string): Promise<DetectionEvent[]>;
+  findByVerificationEventId(verificationEventId: string): Promise<DetectionEvent[]>;
   findCountedByServerAndUser(serverId: string, userId: string): Promise<DetectionEvent[]>;
   findRecentByServer(serverId: string, limit?: number): Promise<DetectionEvent[]>;
   findUnresolvedObservedNotificationsByServer(serverId: string): Promise<DetectionEvent[]>;
@@ -163,6 +164,18 @@ export class DetectionEventsRepository implements IDetectionEventsRepository {
     }
   }
 
+  public async findByVerificationEventId(verificationEventId: string): Promise<DetectionEvent[]> {
+    try {
+      const events = await this.prisma.detection_events.findMany({
+        where: { latest_verification_event_id: verificationEventId },
+        orderBy: { detected_at: 'asc' },
+      });
+      return events as DetectionEvent[];
+    } catch (error) {
+      this.handleError(error, 'findByVerificationEventId');
+    }
+  }
+
   /**
    * Find detection events that still count toward future suspicion/accounting.
    * Full audit history remains available through findByServerAndUser.
@@ -263,11 +276,38 @@ export class DetectionEventsRepository implements IDetectionEventsRepository {
     verificationEventId: string
   ): Promise<DetectionEvent | null> {
     try {
-      const updatedEvent = await this.prisma.detection_events.update({
-        where: { id: detectionEventId },
-        data: { latest_verification_event_id: verificationEventId },
-      });
-      return updatedEvent as DetectionEvent | null;
+      return (await this.prisma.$transaction(async (transaction) => {
+        const lockedCases = await transaction.$queryRaw<
+          Array<{ id: string; status: VerificationStatus }>
+        >`
+          SELECT id::text, status::text AS status
+          FROM verification_events
+          WHERE id = ${verificationEventId}::uuid
+          FOR UPDATE
+        `;
+        if (lockedCases[0]?.status !== VerificationStatus.PENDING) {
+          return null;
+        }
+        const changed = await transaction.detection_events.updateMany({
+          where: {
+            id: detectionEventId,
+            OR: [
+              { latest_verification_event_id: null },
+              { latest_verification_event_id: { not: verificationEventId } },
+            ],
+          },
+          data: { latest_verification_event_id: verificationEventId },
+        });
+        if (changed.count === 1) {
+          await transaction.verification_events.update({
+            where: { id: verificationEventId },
+            data: { case_revision: { increment: 1 }, updated_at: new Date() },
+          });
+        }
+        return await transaction.detection_events.findUnique({
+          where: { id: detectionEventId },
+        });
+      })) as DetectionEvent | null;
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
         console.warn(`Attempted to link non-existent detection event: ${detectionEventId}`);

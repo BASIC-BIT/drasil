@@ -303,6 +303,10 @@ resource "aws_ecs_task_definition" "bot" {
           value = "true"
         },
         {
+          name  = "DRASIL_WEB_PUBLIC_URL"
+          value = var.drasil_web_public_url
+        },
+        {
           name  = "POSTHOG_HOST"
           value = var.posthog_host
         },

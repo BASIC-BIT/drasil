@@ -28,6 +28,7 @@ export type RoleQuarantineApplyStatus = 'off' | 'audit_only' | 'already_active' 
 export type RoleQuarantineRestoreStatus =
   | 'no_active_snapshot'
   | 'abandoned_membership_changed'
+  | 'held_pending_case'
   | 'partially_restored'
   | 'restored';
 export type RoleQuarantineAbandonStatus = 'no_active_snapshot' | 'abandoned';
@@ -52,6 +53,10 @@ export interface RoleQuarantineApplyResult {
 export interface QuarantineAttemptFence {
   readonly attemptId: string;
   assertOwner(): Promise<void>;
+}
+
+export interface RoleRestorationFence {
+  canRestoreRole(): Promise<boolean>;
 }
 
 export class RoleQuarantineApplyError extends Error {
@@ -131,7 +136,11 @@ export interface IRoleQuarantineService {
     newMember: GuildMember,
     verificationEvent: VerificationEvent
   ): Promise<RoleQuarantineActiveCaseUpdateResult>;
-  restoreMemberRoles(member: GuildMember, moderator?: User): Promise<RoleQuarantineRestoreResult>;
+  restoreMemberRoles(
+    member: GuildMember,
+    moderator?: User,
+    fence?: RoleRestorationFence
+  ): Promise<RoleQuarantineRestoreResult>;
   abandonActiveSnapshot(
     serverId: string,
     userId: string,
@@ -224,7 +233,8 @@ export class RoleQuarantineService implements IRoleQuarantineService {
 
   public async restoreMemberRoles(
     member: GuildMember,
-    moderator?: User
+    moderator?: User,
+    fence?: RoleRestorationFence
   ): Promise<RoleQuarantineRestoreResult> {
     const snapshot = await this.snapshotRepository.findActiveByServerAndUser(
       member.guild.id,
@@ -317,12 +327,76 @@ export class RoleQuarantineService implements IRoleQuarantineService {
         continue;
       }
 
+      if (fence && !(await fence.canRestoreRole())) {
+        await this.snapshotRepository.update(snapshot.id, {
+          status: RoleQuarantineSnapshotStatus.ACTIVE,
+          restoredRoleIds,
+          failedRestores: failedRestores as unknown as Prisma.JsonValue,
+          metadata: {
+            ...this.metadataToRecord(snapshot.metadata),
+            restore_skipped_roles: skippedRoles,
+            restore_held_pending_case_at: new Date().toISOString(),
+          } as unknown as Prisma.JsonValue,
+        });
+        return {
+          status: 'held_pending_case',
+          snapshotId: snapshot.id,
+          attemptedRoleIds,
+          restoredRoleIds,
+          skippedRoles,
+          failedRestores,
+        };
+      }
+
       try {
         await member.roles.add(role, this.formatRestoreReason(moderator));
-        restoredRoleIds.push(role.id);
       } catch (error) {
         failedRestores.push(this.toRoleDetail(role, this.formatError(error)));
+        continue;
       }
+
+      let postRestoreFenceError: unknown = null;
+      let canKeepRestoredRole = true;
+      if (fence) {
+        try {
+          canKeepRestoredRole = await fence.canRestoreRole();
+        } catch (error) {
+          postRestoreFenceError = error;
+          canKeepRestoredRole = false;
+        }
+      }
+      if (!canKeepRestoredRole) {
+        try {
+          await member.roles.remove(role, 'Drasil role quarantine restore halted by pending case');
+        } catch (error) {
+          restoredRoleIds.push(role.id);
+          failedRestores.push(
+            this.toRoleDetail(role, `pending-case compensation failed: ${this.formatError(error)}`)
+          );
+        }
+        await this.snapshotRepository.update(snapshot.id, {
+          status: RoleQuarantineSnapshotStatus.ACTIVE,
+          restoredRoleIds,
+          failedRestores: failedRestores as unknown as Prisma.JsonValue,
+          metadata: {
+            ...this.metadataToRecord(snapshot.metadata),
+            restore_skipped_roles: skippedRoles,
+            restore_held_pending_case_at: new Date().toISOString(),
+          } as unknown as Prisma.JsonValue,
+        });
+        if (postRestoreFenceError) {
+          throw postRestoreFenceError;
+        }
+        return {
+          status: 'held_pending_case',
+          snapshotId: snapshot.id,
+          attemptedRoleIds,
+          restoredRoleIds,
+          skippedRoles,
+          failedRestores,
+        };
+      }
+      restoredRoleIds.push(role.id);
     }
 
     const retryableSkippedRoles = skippedRoles.filter((role) =>
@@ -591,10 +665,6 @@ export class RoleQuarantineService implements IRoleQuarantineService {
       activeSnapshot = null;
     }
 
-    if (activeSnapshot && purpose === RoleQuarantineSnapshotPurpose.STANDARD_CASE) {
-      return this.resultFromActiveSnapshot(activeSnapshot, mode, currentRoleIds);
-    }
-
     if (mode === 'off') {
       return this.emptyApplyResult('off', mode, purpose, currentRoleIds);
     }
@@ -613,6 +683,13 @@ export class RoleQuarantineService implements IRoleQuarantineService {
       .map((classifiedRole) =>
         this.toRoleDetail(classifiedRole.role, classifiedRole.skipReason ?? 'skipped')
       );
+    if (
+      activeSnapshot &&
+      purpose === RoleQuarantineSnapshotPurpose.STANDARD_CASE &&
+      removableRoles.length === 0
+    ) {
+      return this.resultFromActiveSnapshot(activeSnapshot, mode, currentRoleIds);
+    }
     const newlyPlannedRoleIds = removableRoles.map((role) => role.id);
     const continuingCompromisedSnapshot =
       activeSnapshot?.purpose === RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT

@@ -18,6 +18,7 @@ import {
 } from '@/lib/setupArtifactActionQueue';
 import { createSetupDataAdapter } from '@/lib/setupDataAdapter';
 import { createSetupDashboardService } from '@/lib/setupDashboardService';
+import { assertCaptchaProviderConfigured } from '@/lib/turnstile';
 
 function readOptionalFormString(formData: FormData, key: string): string | null | undefined {
   const value = formData.get(key);
@@ -338,6 +339,7 @@ export async function saveGuildSetup(guildId: string, formData: FormData): Promi
     roleQuarantineMode: readOptionalFormValue(formData, 'roleQuarantineMode'),
     roleQuarantineExemptRoleIds: readFormStringArray(formData, 'roleQuarantineExemptRoleIds'),
     accountQuarantineEnabled: formData.get('accountQuarantineEnabled') === 'on',
+    ...readCaptchaSettingsFormValues(formData),
     manualIntakeEnabled: formData.get('manualIntakeEnabled') === 'on',
     manualIntakeRoleId: readOptionalFormString(formData, 'manualIntakeRoleId'),
     manualIntakeGracePeriodSeconds: readOptionalIntegerFormValue(
@@ -386,7 +388,20 @@ export async function saveGuildSetup(guildId: string, formData: FormData): Promi
     guildOwner: guild.owner,
     nextLevel: update.analyticsConsentLevel,
   });
+  assertCaptchaProviderConfigured(update.captchaMode);
 
   await service.updateGuildSetup(update);
   revalidatePath(`/admin/guild/${guildId}/setup`);
+}
+
+function readCaptchaSettingsFormValues(formData: FormData) {
+  return {
+    captchaMode: readOptionalFormValue(formData, 'captchaMode'),
+    captchaPassAction: readOptionalFormValue(formData, 'captchaPassAction'),
+    captchaChallengeLifetimeHours: readOptionalIntegerFormValue(
+      formData,
+      'captchaChallengeLifetimeHours'
+    ),
+    captchaMaxSubmissions: readOptionalIntegerFormValue(formData, 'captchaMaxSubmissions'),
+  };
 }

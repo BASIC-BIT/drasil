@@ -76,6 +76,9 @@ const caseActionMap: Record<CaseAction, ModerationInboxAction> = {
   verify_user: 'verify_user',
   quarantine_compromised_account: 'quarantine_compromised_account',
   view_history: 'view_history',
+  challenge_user: 'challenge_user',
+  retry_captcha: 'retry_captcha',
+  bypass_captcha: 'bypass_captcha',
 };
 
 const reportActionMap: Record<ReportQueueAction, ModerationInboxAction> = {
@@ -253,6 +256,7 @@ export function caseSummaryToInboxItem(item: CaseSummary): ModerationInboxItem {
     stale: item.stale,
     staleHours,
     caseKind: item.caseKind,
+    captchaChallenge: item.captchaChallenge,
     detailHref: `/admin/guild/${item.guildId}/cases/${item.id}`,
     links: item.surfaces.map((surface) => ({ label: surface.label, url: surface.url })),
     allowedActions: ['view_case', ...item.allowedActions.map((action) => caseActionMap[action])],

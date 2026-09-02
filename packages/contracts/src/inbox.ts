@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { captchaChallengeSummarySchema } from './cases';
 
 export const moderationInboxItemKindSchema = z.enum([
   'case',
@@ -30,6 +31,9 @@ export const moderationInboxActionSchema = z.enum([
   'mark_false_positive',
   'acknowledge',
   'open_discord',
+  'challenge_user',
+  'retry_captcha',
+  'bypass_captcha',
 ]);
 
 export const moderationInboxSubjectSchema = z.object({
@@ -61,6 +65,7 @@ export const moderationInboxItemSchema = z.object({
   stale: z.boolean(),
   staleHours: z.number().int().min(0),
   caseKind: z.enum(['standard', 'compromised_account']).optional(),
+  captchaChallenge: captchaChallengeSummarySchema.nullable().optional(),
   detailHref: z.string().nullable(),
   links: z.array(moderationInboxLinkSchema),
   allowedActions: z.array(moderationInboxActionSchema),

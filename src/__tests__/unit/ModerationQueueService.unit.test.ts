@@ -308,6 +308,7 @@ const buildVerificationEvent = (): VerificationEvent => ({
   notification_channel_id: 'admin-channel',
   notification_message_id: 'admin-message',
   status: VerificationStatus.PENDING,
+  case_revision: 0,
   created_at: new Date('2026-06-13T10:00:00Z'),
   updated_at: new Date('2026-06-13T10:00:00Z'),
   resolved_at: null,

@@ -91,8 +91,10 @@ describe('VerificationThreadAnalysisService (unit)', () => {
 
     const { message } = buildMessage();
     const handled = await service.handleThreadMessage(message as any);
+    const duplicateHandled = await service.handleThreadMessage(message as any);
 
     expect(handled).toBe(true);
+    expect(duplicateHandled).toBe(true);
     expect(
       notificationManager.mirrorVerificationThreadMessageToEvidenceThread
     ).toHaveBeenCalledWith(expect.objectContaining({ id: verificationEvent.id }), message);
@@ -101,6 +103,12 @@ describe('VerificationThreadAnalysisService (unit)', () => {
       message
     );
     expect(gptService.analyzeVerificationThreadResponses).not.toHaveBeenCalled();
+    await expect(verificationRepo.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        case_revision: 1,
+        metadata: expect.objectContaining({ subject_evidence_message_ids: [message.id] }),
+      })
+    );
   });
 
   it('does not rewrite support reminder response metadata after the first target reply', async () => {
@@ -481,6 +489,12 @@ describe('VerificationThreadAnalysisService (unit)', () => {
 
     expect(moderationQueueService.recordSupportThreadAttention).not.toHaveBeenCalled();
     expect(notificationManager.notifyVerificationThreadUserResponse).not.toHaveBeenCalled();
+    await expect(verificationRepo.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        case_revision: 1,
+        metadata: expect.objectContaining({ subject_evidence_message_ids: [message.id] }),
+      })
+    );
   });
 
   it('does not recreate recovery attention when release wins after the initial case read', async () => {
@@ -766,6 +780,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
 
     const updated = await verificationRepo.findById(verificationEvent.id);
     expect(updated?.metadata).toEqual({
+      subject_evidence_message_ids: ['msg-1'],
       support_thread_reminder: {
         reminderCount: 0,
         userRespondedAt: '2026-06-03T12:00:00.000Z',
@@ -1075,6 +1090,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
 
       const updated = await verificationRepo.findById(verificationEvent.id);
       expect(updated?.metadata).toEqual({
+        subject_evidence_message_ids: ['msg-1'],
         support_thread_reminder: {
           reminderCount: 0,
           userRespondedAt: '2026-06-03T12:00:00.000Z',
@@ -1110,6 +1126,11 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     const verificationRepo = {
       findByThreadId: jest.fn().mockResolvedValue(verificationEvent),
       findById: jest.fn().mockResolvedValue(verificationEvent),
+      recordSubjectCaseEvidence: jest.fn().mockResolvedValue({
+        ...verificationEvent,
+        case_revision: 1,
+        metadata: { subject_evidence_message_ids: ['msg-1'] },
+      }),
       update: jest
         .fn()
         .mockResolvedValueOnce({ ...verificationEvent, metadata: supportThreadReminderMetadata })

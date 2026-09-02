@@ -77,6 +77,9 @@ describeIntegration('UserModerationService (integration)', () => {
       restoreObservedDetectionActions: jest.fn().mockResolvedValue(true),
     };
     threadManager = {
+      retractCaptchaChallenge: jest.fn().mockResolvedValue(true),
+      sendCaptchaChallenge: jest.fn().mockResolvedValue('captcha-message-1'),
+      sendCaptchaStatus: jest.fn().mockResolvedValue(true),
       createVerificationThread: jest.fn().mockResolvedValue({} as any),
       createReportReviewThread: jest.fn().mockResolvedValue({} as any),
       createPrivateEvidenceThread: jest.fn().mockResolvedValue({} as any),
@@ -96,6 +99,55 @@ describeIntegration('UserModerationService (integration)', () => {
         promptAlreadyPresent: false,
       }),
     };
+  });
+
+  it('marks a member verified only when no pending case exists at the write', async () => {
+    const guildId = 'guild-captcha-member-fence';
+    const userId = 'user-captcha-member-fence';
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    await serverMemberRepository.upsertMember(guildId, userId, {
+      case_role_active: true,
+      verification_status: VerificationStatus.PENDING,
+    });
+    const pendingCase = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const verifiedAt = new Date();
+
+    await expect(
+      serverMemberRepository.markVerifiedIfNoPendingCase(guildId, userId, {
+        lastStatusChange: verifiedAt,
+        lastVerifiedAt: verifiedAt.toISOString(),
+        updatedBy: 'drasil:captcha',
+      })
+    ).resolves.toBeNull();
+    await expect(serverMemberRepository.findByServerAndUser(guildId, userId)).resolves.toEqual(
+      expect.objectContaining({
+        case_role_active: true,
+        verification_status: VerificationStatus.PENDING,
+      })
+    );
+
+    await prisma.verification_events.update({
+      where: { id: pendingCase.id },
+      data: { status: VerificationStatus.VERIFIED },
+    });
+    await expect(
+      serverMemberRepository.markVerifiedIfNoPendingCase(guildId, userId, {
+        lastStatusChange: verifiedAt,
+        lastVerifiedAt: verifiedAt.toISOString(),
+        updatedBy: 'drasil:captcha',
+      })
+    ).resolves.toEqual(
+      expect.objectContaining({
+        case_role_active: false,
+        verification_status: VerificationStatus.VERIFIED,
+      })
+    );
   });
 
   it('verifies a user and records admin action', async () => {

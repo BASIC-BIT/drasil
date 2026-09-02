@@ -28,6 +28,9 @@ const ACTION_TO_CODE: Record<string, string> = {
   repair: 'rp',
   sync_ban: 'sb',
   reopen: 'ro',
+  captcha: 'cp',
+  captcha_retry: 'cpr',
+  captcha_bypass: 'cpb',
   observed_open: 'oo',
   observed_close_report: 'ocr',
   observed_dismiss: 'od',
@@ -43,6 +46,8 @@ const ACTION_TO_CODE: Record<string, string> = {
   confirm_sync_ban: 'csb',
   confirm_kick: 'ck',
   confirm_reopen: 'cro',
+  confirm_captcha: 'ccp',
+  confirm_captcha_retry: 'ccpr',
   confirm_observed_open: 'coo',
   confirm_observed_close_report: 'cocr',
   confirm_observed_kick: 'cok',
@@ -76,8 +81,11 @@ function parseSurface(value: string): AdminActionSurface | null {
   return null;
 }
 
-export function buildCaseAdminActionsCustomId(userId: string): string {
-  return buildAdminActionCustomId('menu', 'case', userId);
+export function buildCaseAdminActionsCustomId(
+  userId: string,
+  verificationEventId?: string
+): string {
+  return buildAdminActionCustomId('menu', 'case', userId, undefined, verificationEventId);
 }
 
 export function buildObservedAdminActionsCustomId(
@@ -93,15 +101,26 @@ export function buildAdminActionCustomId(
   userId: string,
   detectionEventId?: string,
   verificationEventId?: string,
-  confirmationFingerprint?: string
+  confirmationFingerprint?: string,
+  captchaChallengeId?: string,
+  captchaGeneration?: number
 ): string {
-  const optionalParts = confirmationFingerprint
-    ? [detectionEventId ?? '_', verificationEventId ?? '_', confirmationFingerprint]
-    : verificationEventId
-      ? [detectionEventId ?? '_', verificationEventId]
-      : detectionEventId
-        ? [detectionEventId]
-        : [];
+  const isCaptchaRetry = action === 'captcha_retry' || action === 'confirm_captcha_retry';
+  if (
+    isCaptchaRetry &&
+    (!captchaChallengeId || !Number.isInteger(captchaGeneration) || (captchaGeneration ?? 0) < 1)
+  ) {
+    throw new Error('CAPTCHA retry custom IDs require a challenge ID and generation.');
+  }
+  const optionalParts = isCaptchaRetry
+    ? [captchaChallengeId as string, String(captchaGeneration)]
+    : confirmationFingerprint
+      ? [detectionEventId ?? '_', verificationEventId ?? '_', confirmationFingerprint]
+      : verificationEventId
+        ? [detectionEventId ?? '_', verificationEventId]
+        : detectionEventId
+          ? [detectionEventId]
+          : [];
   return assertCustomIdLength(
     [
       ADMIN_ACTION_CUSTOM_ID_PREFIX,
@@ -120,6 +139,8 @@ export interface ParsedAdminActionCustomId {
   readonly detectionEventId?: string;
   readonly verificationEventId?: string;
   readonly confirmationFingerprint?: string;
+  readonly captchaChallengeId?: string;
+  readonly captchaGeneration?: number;
 }
 
 export function parseAdminActionCustomId(customId: string): ParsedAdminActionCustomId | null {
@@ -139,6 +160,25 @@ export function parseAdminActionCustomId(customId: string): ParsedAdminActionCus
   const surface = parseSurface(CODE_TO_SURFACE[surfaceCode] ?? surfaceCode);
   if (!surface) {
     return null;
+  }
+
+  if (action === 'captcha_retry' || action === 'confirm_captcha_retry') {
+    const captchaGeneration = Number(verificationEventId);
+    if (
+      !detectionEventId ||
+      !Number.isInteger(captchaGeneration) ||
+      captchaGeneration < 1 ||
+      confirmationFingerprint
+    ) {
+      return null;
+    }
+    return {
+      action,
+      surface,
+      userId,
+      captchaChallengeId: detectionEventId,
+      captchaGeneration,
+    };
   }
 
   return {

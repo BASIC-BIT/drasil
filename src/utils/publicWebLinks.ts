@@ -1,4 +1,5 @@
 const PUBLIC_WEB_URL_ENV_NAMES = ['DRASIL_WEB_PUBLIC_URL', 'NEXT_PUBLIC_APP_URL'] as const;
+const CAPTCHA_PUBLIC_WEB_URL_ENV_NAMES = ['NEXT_PUBLIC_APP_URL', 'DRASIL_WEB_PUBLIC_URL'] as const;
 
 function normalizePublicWebUrl(value: string): string | null {
   try {
@@ -14,7 +15,13 @@ function normalizePublicWebUrl(value: string): string | null {
 }
 
 export function getPublicWebBaseUrl(): string | null {
-  for (const envName of PUBLIC_WEB_URL_ENV_NAMES) {
+  return getConfiguredPublicWebBaseUrl(PUBLIC_WEB_URL_ENV_NAMES);
+}
+
+function getConfiguredPublicWebBaseUrl(
+  envNames: readonly (typeof PUBLIC_WEB_URL_ENV_NAMES)[number][]
+): string | null {
+  for (const envName of envNames) {
     const value = process.env[envName];
     if (!value?.trim()) {
       continue;
@@ -58,4 +65,12 @@ export function buildAdminCaseDetailUrl(guildId: string, caseId: string): string
   return buildPublicWebUrl(
     `/admin/guild/${encodeURIComponent(guildId)}/cases/${encodeURIComponent(caseId)}`
   );
+}
+
+export function buildCaptchaChallengeUrl(token: string): string | null {
+  const baseUrl = getConfiguredPublicWebBaseUrl(CAPTCHA_PUBLIC_WEB_URL_ENV_NAMES);
+  if (!baseUrl) {
+    return null;
+  }
+  return new URL(`/captcha/${encodeURIComponent(token)}`, `${baseUrl}/`).toString();
 }

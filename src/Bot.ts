@@ -5,6 +5,7 @@ import { TYPES } from './di/symbols';
 import 'reflect-metadata';
 import { IEventHandler } from './controllers/EventHandler';
 import { IModerationActionRequestService } from './services/ModerationActionRequestService';
+import { ICaptchaChallengeService } from './services/CaptchaChallengeService';
 
 // Load environment variables
 dotenv.config();
@@ -29,17 +30,22 @@ export class Bot implements IBot {
   private client: Client;
   private eventHandler: IEventHandler;
   private moderationActionRequestService?: IModerationActionRequestService;
+  private captchaChallengeService?: ICaptchaChallengeService;
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
     @inject(TYPES.EventHandler) eventHandler: IEventHandler,
     @optional()
     @inject(TYPES.ModerationActionRequestService)
-    moderationActionRequestService?: IModerationActionRequestService
+    moderationActionRequestService?: IModerationActionRequestService,
+    @optional()
+    @inject(TYPES.CaptchaChallengeService)
+    captchaChallengeService?: ICaptchaChallengeService
   ) {
     this.client = client;
     this.eventHandler = eventHandler;
     this.moderationActionRequestService = moderationActionRequestService;
+    this.captchaChallengeService = captchaChallengeService;
   }
 
   /**
@@ -54,6 +60,7 @@ export class Bot implements IBot {
 
     await this.client.login(token);
     this.moderationActionRequestService?.start();
+    this.captchaChallengeService?.start();
     console.log('Bot started and logged in!');
   }
 
@@ -62,6 +69,7 @@ export class Bot implements IBot {
    */
   public async destroy(): Promise<void> {
     this.moderationActionRequestService?.stop();
+    this.captchaChallengeService?.stop();
     await this.client.destroy();
   }
 }

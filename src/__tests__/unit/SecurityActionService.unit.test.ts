@@ -3,10 +3,15 @@ import { SecurityActionService } from '../../services/SecurityActionService';
 import { DetectionResult } from '../../services/DetectionOrchestrator';
 import {
   AdminActionType,
+  CaseAttentionState,
+  CaseContainmentStatus,
+  CaseKind,
+  CaptchaChallengeRequestSource,
   DetectionType,
   ModerationOutcomeSource,
   ModerationOutcomeType,
   ReportIntakeStatus,
+  VerificationEvent,
   VerificationStatus,
 } from '../../repositories/types';
 import {
@@ -31,6 +36,7 @@ import {
   VERIFICATION_ACTION_FAILURES_METADATA_KEY,
 } from '../../utils/verificationActionFailures';
 import type { IModerationQueueService } from '../../services/ModerationQueueService';
+import type { ICaptchaChallengeService } from '../../services/CaptchaChallengeService';
 
 const buildMember = (guildId: string, userId: string): GuildMember => {
   const user = {
@@ -99,6 +105,7 @@ describe('SecurityActionService (unit)', () => {
       mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(false),
       notifyVerificationThreadUserResponse: jest.fn().mockResolvedValue(true),
       notifyAccountQuarantineAttention: jest.fn().mockResolvedValue(true),
+      notifyCaptchaAttention: jest.fn().mockResolvedValue(true),
       upsertObservedDetectionNotification: jest
         .fn()
         .mockResolvedValue({ id: 'observe-1' } as Message),
@@ -106,6 +113,9 @@ describe('SecurityActionService (unit)', () => {
       restoreObservedDetectionActions: jest.fn().mockResolvedValue(true),
     };
     threadManager = {
+      retractCaptchaChallenge: jest.fn().mockResolvedValue(true),
+      sendCaptchaChallenge: jest.fn().mockResolvedValue('captcha-message-1'),
+      sendCaptchaStatus: jest.fn().mockResolvedValue(true),
       createVerificationThread: jest
         .fn()
         .mockResolvedValue({ id: 'thread-1', url: 'https://discord.com/channels/thread-1' } as any),
@@ -145,6 +155,7 @@ describe('SecurityActionService (unit)', () => {
         return true;
       }),
       verifyUser: jest.fn().mockResolvedValue(true),
+      resolveCaptchaCase: jest.fn().mockResolvedValue({ status: 'resolved' }),
       kickUser: jest.fn().mockResolvedValue(true),
       banUser: jest.fn().mockResolvedValue(true),
       banUserById: jest.fn().mockResolvedValue(true),
@@ -326,6 +337,103 @@ describe('SecurityActionService (unit)', () => {
     expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member);
     expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not duplicate durable CAPTCHA attention when automatic issuance fails', async () => {
+    const guildId = 'guild-automatic-captcha-failure';
+    const userId = 'user-automatic-captcha-failure';
+    await serverRepository.upsertByGuildId(guildId, {
+      settings: { captcha_mode: 'suspicious_join' },
+    });
+    const member = buildMember(guildId, userId);
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 0.92,
+      reasons: ['New account requires review'],
+      triggerSource: DetectionType.NEW_ACCOUNT,
+      triggerContent: 'Suspicious new join',
+    };
+    const captchaChallengeService = {
+      findByCaseId: jest.fn().mockResolvedValue(null),
+      requestChallenge: jest.fn().mockRejectedValue(new Error('Database unavailable')),
+    } as unknown as jest.Mocked<ICaptchaChallengeService>;
+    const service = new SecurityActionService(
+      notificationManager,
+      detectionEventsRepository,
+      serverMemberRepository,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      adminActionService,
+      threadManager,
+      userModerationService,
+      {} as Client,
+      gptService as any,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      captchaChallengeService
+    );
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await expect(service.handleSuspiciousJoin(member, detectionResult)).rejects.toThrow(
+      'Database unavailable'
+    );
+
+    const [verificationEvent] = await verificationEventRepository.findByUserAndServer(
+      userId,
+      guildId
+    );
+
+    expect(captchaChallengeService.requestChallenge).toHaveBeenCalledWith({
+      verificationEventId: verificationEvent.id,
+      requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
+      caseWasCreatedBySuspiciousJoin: true,
+    });
+    expect(notificationManager.notifyCaptchaAttention).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('preserves the existing CAPTCHA notification when the challenge lookup fails', async () => {
+    const member = buildMember('guild-captcha-lookup', 'user-captcha-lookup');
+    const captchaChallengeService = {
+      findByCaseId: jest.fn().mockRejectedValue(new Error('CAPTCHA lookup unavailable')),
+    } as unknown as jest.Mocked<ICaptchaChallengeService>;
+    const service = new SecurityActionService(
+      notificationManager,
+      detectionEventsRepository,
+      serverMemberRepository,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      adminActionService,
+      threadManager,
+      userModerationService,
+      {} as Client,
+      gptService as any,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      captchaChallengeService
+    );
+    const verificationEvent = { id: 'verification-captcha-lookup' } as VerificationEvent;
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 0.9,
+      reasons: ['Suspicious join'],
+      triggerSource: DetectionType.NEW_ACCOUNT,
+      triggerContent: 'New join',
+    };
+
+    await expect(
+      (service as any).upsertNotification(member, detectionResult, verificationEvent)
+    ).rejects.toThrow('CAPTCHA lookup unavailable');
+
+    expect(notificationManager.upsertSuspiciousUserNotification).not.toHaveBeenCalled();
   });
 
   it('auto-kicks high-confidence message detections only when message policy allows it', async () => {
@@ -1304,7 +1412,8 @@ describe('SecurityActionService (unit)', () => {
       member,
       expect.any(Object),
       expect.any(Object),
-      sourceMessage
+      sourceMessage,
+      null
     );
   });
 
@@ -2405,6 +2514,56 @@ describe('SecurityActionService (unit)', () => {
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
   });
 
+  it('falls back to an observed alert when the active case closes before a report can link', async () => {
+    const guildId = 'guild-report-link-race';
+    const userId = 'user-report-link-race';
+    const member = buildMember(guildId, userId);
+    const initialDetection = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.8,
+      reasons: ['Initial detection'],
+      detected_at: new Date(),
+    });
+    const activeCase = await verificationEventRepository.createFromDetection(
+      initialDetection.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const originalLink =
+      detectionEventsRepository.linkToVerificationEvent.bind(detectionEventsRepository);
+    jest
+      .spyOn(detectionEventsRepository, 'linkToVerificationEvent')
+      .mockImplementationOnce(async () => {
+        await verificationEventRepository.update(activeCase.id, {
+          status: VerificationStatus.VERIFIED,
+          resolved_at: new Date(),
+        });
+        return null;
+      })
+      .mockImplementation((detectionEventId, verificationEventId) =>
+        originalLink(detectionEventId, verificationEventId)
+      );
+
+    await expect(
+      buildService().handleUserReport(
+        member,
+        { id: 'reporter-link-race' } as User,
+        'follow-up report'
+      )
+    ).resolves.toBe(true);
+
+    const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
+    const reportEvent = detectionEvents.find(
+      (event) => event.detection_type === DetectionType.USER_REPORT
+    );
+    expect(reportEvent?.latest_verification_event_id).toBeNull();
+    expect(notificationManager.upsertObservedDetectionNotification).toHaveBeenCalledTimes(1);
+    expect(notificationManager.upsertSuspiciousUserNotification).not.toHaveBeenCalled();
+  });
+
   it('adds a manual flag to an existing review-only pending case and restricts the user', async () => {
     const guildId = 'guild-4b';
     const userId = 'user-4b';
@@ -2497,6 +2656,74 @@ describe('SecurityActionService (unit)', () => {
     expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member);
     expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(2);
+  });
+
+  it('reroutes a detection when the active case closes before the detection can link', async () => {
+    const guildId = 'guild-detection-link-race';
+    const userId = 'user-detection-link-race';
+    const member = buildMember(guildId, userId);
+    const message = buildMessage(guildId, 'channel-detection-link-race');
+    const initialDetection = await detectionEventsRepository.create({
+      server_id: guildId,
+      user_id: userId,
+      detection_type: DetectionType.USER_REPORT,
+      confidence: 1,
+      reasons: ['Initial report'],
+      detected_at: new Date(),
+    });
+    const activeCase = await verificationEventRepository.createFromDetection(
+      initialDetection.id,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const originalLink =
+      detectionEventsRepository.linkToVerificationEvent.bind(detectionEventsRepository);
+    jest
+      .spyOn(detectionEventsRepository, 'linkToVerificationEvent')
+      .mockImplementationOnce(async () => {
+        await verificationEventRepository.update(activeCase.id, {
+          status: VerificationStatus.VERIFIED,
+          resolved_at: new Date(),
+        });
+        return null;
+      })
+      .mockImplementation((detectionEventId, verificationEventId) =>
+        originalLink(detectionEventId, verificationEventId)
+      );
+    const consoleWarn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 0.88,
+      reasons: ['Suspicious content after report'],
+      triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+      triggerContent: message.content,
+    };
+
+    try {
+      await expect(
+        buildService().handleSuspiciousMessage(member, detectionResult, message)
+      ).resolves.toBe(true);
+    } finally {
+      consoleWarn.mockRestore();
+    }
+
+    const verificationEvents = await verificationEventRepository.findByUserAndServer(
+      userId,
+      guildId
+    );
+    const replacementCase = verificationEvents.find(
+      (event) => event.status === VerificationStatus.PENDING
+    );
+    const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
+    const routedDetection = detectionEvents.find(
+      (event) => event.detection_type === DetectionType.SUSPICIOUS_CONTENT
+    );
+    expect(verificationEvents).toHaveLength(2);
+    expect(replacementCase).toBeDefined();
+    expect(routedDetection?.latest_verification_event_id).toBe(replacementCase?.id);
+    expect(userModerationService.applyCaseRole).toHaveBeenCalledTimes(1);
+    expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
   });
 
   it('posts an observed alert when a user report follows a resolved case', async () => {
@@ -3590,7 +3817,8 @@ describe('SecurityActionService (unit)', () => {
       member,
       expect.objectContaining({ triggerSource: DetectionType.USER_REPORT }),
       expect.objectContaining({ id: existingCase.id, thread_id: null }),
-      undefined
+      undefined,
+      null
     );
     expect(notificationManager.markObservedDetectionActionTaken).toHaveBeenCalledWith(
       detectionEvent.id,
@@ -3828,12 +4056,19 @@ describe('SecurityActionService (unit)', () => {
     const moderator = { id: 'admin-2' } as User;
     const member = buildMember(guildId, userId);
 
-    const verificationEvent = await verificationEventRepository.createFromDetection(
+    const createdEvent = await verificationEventRepository.createFromDetection(
       null,
       guildId,
       userId,
       VerificationStatus.VERIFIED
     );
+    const verificationEvent = (await verificationEventRepository.update(createdEvent.id, {
+      attention_state: CaseAttentionState.PARKED,
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      parked_at: new Date(),
+      parked_by: 'admin-quarantine',
+    }))!;
 
     const client = {
       guilds: {
@@ -3862,17 +4097,41 @@ describe('SecurityActionService (unit)', () => {
 
     const updatedEvent = await verificationEventRepository.findById(verificationEvent.id);
     expect(updatedEvent?.status).toBe(VerificationStatus.PENDING);
+    expect(updatedEvent?.case_revision).toBe(verificationEvent.case_revision + 1);
     expect(updatedEvent?.resolved_at).toBeNull();
     expect(updatedEvent?.resolved_by).toBeNull();
-    expect(threadManager.reopenVerificationThread).toHaveBeenCalledWith(verificationEvent);
+    expect(threadManager.reopenVerificationThread).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: verificationEvent.id,
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        case_revision: verificationEvent.case_revision + 1,
+        case_kind: CaseKind.STANDARD,
+        containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+        status: VerificationStatus.PENDING,
+      })
+    );
     expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member, moderator);
     expect(notificationManager.logActionToMessage).toHaveBeenCalledWith(
-      verificationEvent,
+      expect.objectContaining({
+        id: verificationEvent.id,
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        case_revision: verificationEvent.case_revision + 1,
+        case_kind: CaseKind.STANDARD,
+        containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+        status: VerificationStatus.PENDING,
+      }),
       AdminActionType.REOPEN,
       moderator
     );
     expect(notificationManager.updateNotificationButtons).toHaveBeenCalledWith(
-      verificationEvent,
+      expect.objectContaining({
+        id: verificationEvent.id,
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        case_revision: verificationEvent.case_revision + 1,
+        case_kind: CaseKind.STANDARD,
+        containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+        status: VerificationStatus.PENDING,
+      }),
       VerificationStatus.PENDING
     );
 

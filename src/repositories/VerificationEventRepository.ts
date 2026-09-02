@@ -10,6 +10,9 @@ import {
 import { TYPES } from '../di/symbols';
 import { RepositoryError } from './BaseRepository';
 import {
+  CaptchaChallengePassEffect,
+  CaptchaChallengeRequestSource,
+  CaptchaChallengeStatus,
   CaseAttentionState,
   CaseContainmentStatus,
   CaseKind,
@@ -18,6 +21,8 @@ import {
 } from './types'; // Use local enum
 import {
   CASE_ATTENTION_ATTEMPT_PREFIX,
+  CAPTCHA_FINALIZATION_ATTEMPT_PREFIX,
+  CAPTCHA_PRESENTATION_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_RECONCILIATION_ATTEMPT_PREFIX,
   CASE_TERMINAL_ACTION_ATTEMPT_PREFIX,
@@ -35,8 +40,32 @@ export interface TerminalActionCompletion {
   requiresTerminalActionClaim: boolean;
 }
 
+export interface CaptchaVerificationCompletionInput {
+  id: string;
+  serverId: string;
+  userId: string;
+  expectedCaseRevision: number;
+  challengeId: string;
+  generation: number;
+  resolvedBy: string;
+  resolvedAt: Date;
+}
+
+export interface CaptchaPresentationClaimInput {
+  id: string;
+  serverId: string;
+  userId: string;
+  challengeId: string;
+  generation: number;
+  expectedStatus: CaptchaChallengeStatus;
+  requireDeliveryError?: boolean;
+  attemptId: string;
+}
+
 class VerificationReleaseConflictError extends Error {}
 class TerminalActionClaimConflictError extends Error {}
+
+export const SUBJECT_EVIDENCE_MESSAGE_ID_LIMIT = 100;
 
 export interface IVerificationEventRepository {
   findByUserAndServer(
@@ -115,6 +144,18 @@ export interface IVerificationEventRepository {
     resolvedBy: string,
     resolvedAt: Date
   ): Promise<VerificationEvent[] | null>;
+  completeCaptchaVerification(
+    input: CaptchaVerificationCompletionInput
+  ): Promise<VerificationEvent | null>;
+  claimCaptchaPresentation(input: CaptchaPresentationClaimInput): Promise<VerificationEvent | null>;
+  claimCaptchaFinalization(
+    input: CaptchaVerificationCompletionInput,
+    attemptId: string,
+    staleBefore: Date
+  ): Promise<VerificationEvent | null>;
+  releaseCaptchaFinalization(id: string, attemptId: string): Promise<boolean>;
+  reopen(id: string): Promise<VerificationEvent | null>;
+  recordSubjectCaseEvidence(id: string, messageId: string): Promise<VerificationEvent | null>;
   rollbackCaseRoleRelease(id: string, attemptId: string): Promise<VerificationEvent | null>;
   renewQuarantineAttempt(id: string, attemptId: string): Promise<boolean>;
   recordQuarantineCaseRole(id: string, attemptId: string, roleId: string): Promise<boolean>;
@@ -215,8 +256,23 @@ export class VerificationEventRepository implements IVerificationEventRepository
             attention_state: CaseAttentionState.REVIEW_REQUIRED,
             OR: [
               { containment_status: { not: CaseContainmentStatus.IN_PROGRESS } },
-              { quarantine_lease_renewed_at: null },
-              { quarantine_lease_renewed_at: { lte: staleBefore } },
+              {
+                containment_status: CaseContainmentStatus.IN_PROGRESS,
+                AND: [
+                  {
+                    OR: [
+                      { quarantine_lease_renewed_at: null },
+                      { quarantine_lease_renewed_at: { lte: staleBefore } },
+                    ],
+                  },
+                  {
+                    OR: [
+                      { quarantine_attempt_id: null },
+                      { NOT: { quarantine_attempt_id: { contains: ':' } } },
+                    ],
+                  },
+                ],
+              },
             ],
           },
           data: {
@@ -562,6 +618,335 @@ export class VerificationEventRepository implements IVerificationEventRepository
     }
   }
 
+  public async completeCaptchaVerification(
+    input: CaptchaVerificationCompletionInput
+  ): Promise<VerificationEvent | null> {
+    try {
+      return await this.prisma.$transaction(async (transaction) => {
+        const policy = await transaction.$queryRaw<Array<{ guild_id: string }>>`
+          SELECT server.guild_id
+          FROM servers AS server
+          WHERE server.guild_id = ${input.serverId}
+            AND server.settings->>'captcha_mode' = 'suspicious_join'
+            AND server.settings->>'captcha_pass_action' = 'verify_join_only'
+          FOR UPDATE
+        `;
+        if (!policy[0]) {
+          return null;
+        }
+        const rows = await transaction.$queryRaw<VerificationEvent[]>`
+        UPDATE verification_events AS target
+        SET
+          status = ${VerificationStatus.VERIFIED}::verification_status,
+          resolved_by = ${input.resolvedBy},
+          resolved_at = ${input.resolvedAt},
+          notes = 'Security check completed.',
+          attention_state = ${CaseAttentionState.REVIEW_REQUIRED}::case_attention_state,
+          containment_status = ${CaseContainmentStatus.NOT_APPLICABLE}::case_containment_status,
+          quarantine_attempt_id = NULL,
+          quarantine_lease_renewed_at = NULL,
+          parked_at = NULL,
+          parked_by = NULL,
+          metadata = CASE
+            WHEN jsonb_typeof(target.metadata) = 'object' THEN target.metadata
+            ELSE '{}'::jsonb
+          END || jsonb_build_object(
+            'captcha_resolution',
+            jsonb_build_object(
+              'challenge_id', ${input.challengeId}::text,
+              'generation', ${input.generation}::integer,
+              'resolved_at', ${input.resolvedAt.toISOString()}::text
+            )
+          ),
+          updated_at = now()
+        WHERE target.id = ${input.id}::uuid
+          AND target.server_id = ${input.serverId}
+          AND target.user_id = ${input.userId}
+          AND target.status = ${VerificationStatus.PENDING}::verification_status
+          AND target.case_kind = ${CaseKind.STANDARD}::case_kind
+          AND target.containment_status <> ${CaseContainmentStatus.IN_PROGRESS}::case_containment_status
+          AND target.case_revision = ${input.expectedCaseRevision}
+          AND EXISTS (
+            SELECT 1
+            FROM captcha_challenges AS challenge
+            WHERE challenge.id = ${input.challengeId}::uuid
+              AND challenge.verification_event_id = target.id
+              AND challenge.server_id = target.server_id
+              AND challenge.user_id = target.user_id
+              AND challenge.generation = ${input.generation}
+              AND challenge.case_revision_at_issue = ${input.expectedCaseRevision}
+              AND challenge.status = ${CaptchaChallengeStatus.PASSED}::captcha_challenge_status
+              AND challenge.request_source = ${CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN}::captcha_challenge_request_source
+              AND challenge.pass_effect = ${CaptchaChallengePassEffect.VERIFY_JOIN_ONLY}::captcha_challenge_pass_effect
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM verification_events AS other
+            WHERE other.server_id = target.server_id
+              AND other.user_id = target.user_id
+              AND other.status = ${VerificationStatus.PENDING}::verification_status
+              AND other.id <> target.id
+          )
+        RETURNING target.*
+      `;
+        return rows[0] ?? null;
+      });
+    } catch (error) {
+      this.handleError(error, 'completeCaptchaVerification');
+    }
+  }
+
+  public async claimCaptchaPresentation(
+    input: CaptchaPresentationClaimInput
+  ): Promise<VerificationEvent | null> {
+    if (!input.attemptId.startsWith(CAPTCHA_PRESENTATION_ATTEMPT_PREFIX)) {
+      throw new RepositoryError('CAPTCHA presentation requires a presentation attempt ID.');
+    }
+    try {
+      const rows = await this.prisma.$queryRaw<VerificationEvent[]>`
+        UPDATE verification_events AS target
+        SET
+          containment_status = ${CaseContainmentStatus.IN_PROGRESS}::case_containment_status,
+          quarantine_attempt_id = ${input.attemptId},
+          quarantine_lease_renewed_at = now(),
+          updated_at = now()
+        WHERE target.id = ${input.id}::uuid
+          AND target.server_id = ${input.serverId}
+          AND target.user_id = ${input.userId}
+          AND target.status = ${VerificationStatus.PENDING}::verification_status
+          AND target.case_kind = ${CaseKind.STANDARD}::case_kind
+          AND (
+            (
+              target.containment_status <> ${CaseContainmentStatus.IN_PROGRESS}::case_containment_status
+              AND target.quarantine_attempt_id IS NULL
+            )
+            OR (
+              target.containment_status = ${CaseContainmentStatus.IN_PROGRESS}::case_containment_status
+              AND target.quarantine_attempt_id = ${input.attemptId}
+            )
+          )
+          AND EXISTS (
+            SELECT 1
+            FROM captcha_challenges AS challenge
+            WHERE challenge.id = ${input.challengeId}::uuid
+              AND challenge.verification_event_id = target.id
+              AND challenge.server_id = target.server_id
+              AND challenge.user_id = target.user_id
+              AND challenge.generation = ${input.generation}
+              AND challenge.status = ${input.expectedStatus}::captcha_challenge_status
+              AND (
+                ${input.requireDeliveryError ?? false} = false
+                OR (
+                  challenge.delivered_at IS NULL
+                  AND challenge.delivery_error_code IS NOT NULL
+                )
+              )
+          )
+        RETURNING target.*
+      `;
+      return rows[0] ?? null;
+    } catch (error) {
+      this.handleError(error, 'claimCaptchaPresentation');
+    }
+  }
+
+  public async claimCaptchaFinalization(
+    input: CaptchaVerificationCompletionInput,
+    attemptId: string,
+    staleBefore: Date
+  ): Promise<VerificationEvent | null> {
+    if (!attemptId.startsWith(CAPTCHA_FINALIZATION_ATTEMPT_PREFIX)) {
+      throw new RepositoryError('Invalid CAPTCHA finalization attempt ID.');
+    }
+    try {
+      const claimed = await this.prisma.verification_events.updateMany({
+        where: {
+          id: input.id,
+          server_id: input.serverId,
+          user_id: input.userId,
+          status: VerificationStatus.VERIFIED,
+          resolved_by: input.resolvedBy,
+          case_revision: input.expectedCaseRevision,
+          AND: [
+            {
+              metadata: {
+                path: ['captcha_resolution', 'challenge_id'],
+                equals: input.challengeId,
+              },
+            },
+            {
+              metadata: {
+                path: ['captcha_resolution', 'generation'],
+                equals: input.generation,
+              },
+            },
+            {
+              OR: [
+                {
+                  containment_status: { not: CaseContainmentStatus.IN_PROGRESS },
+                  quarantine_attempt_id: null,
+                },
+                {
+                  containment_status: CaseContainmentStatus.IN_PROGRESS,
+                  OR: [
+                    { quarantine_attempt_id: attemptId },
+                    {
+                      quarantine_attempt_id: { startsWith: CAPTCHA_FINALIZATION_ATTEMPT_PREFIX },
+                      OR: [
+                        { quarantine_lease_renewed_at: null },
+                        { quarantine_lease_renewed_at: { lte: staleBefore } },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        data: {
+          containment_status: CaseContainmentStatus.IN_PROGRESS,
+          quarantine_attempt_id: attemptId,
+          quarantine_lease_renewed_at: new Date(),
+          updated_at: new Date(),
+        },
+      });
+      if (claimed.count !== 1) {
+        return null;
+      }
+      return (await this.prisma.verification_events.findUnique({
+        where: { id: input.id },
+      })) as VerificationEvent | null;
+    } catch (error) {
+      this.handleError(error, 'claimCaptchaFinalization');
+    }
+  }
+
+  public async releaseCaptchaFinalization(id: string, attemptId: string): Promise<boolean> {
+    try {
+      const released = await this.prisma.verification_events.updateMany({
+        where: {
+          id,
+          status: VerificationStatus.VERIFIED,
+          containment_status: CaseContainmentStatus.IN_PROGRESS,
+          quarantine_attempt_id: attemptId,
+        },
+        data: {
+          containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+          quarantine_attempt_id: null,
+          quarantine_lease_renewed_at: null,
+          updated_at: new Date(),
+        },
+      });
+      return released.count === 1;
+    } catch (error) {
+      this.handleError(error, 'releaseCaptchaFinalization');
+    }
+  }
+
+  public async reopen(id: string): Promise<VerificationEvent | null> {
+    try {
+      return (await this.prisma.$transaction(async (transaction) => {
+        const candidates = await transaction.$queryRaw<Array<{ id: string }>>`
+          select verification.id::text
+          from verification_events as verification
+          where verification.id = ${id}::uuid
+            and verification.status <> ${VerificationStatus.PENDING}::verification_status
+            and verification.containment_status <> ${CaseContainmentStatus.IN_PROGRESS}::case_containment_status
+          for update of verification
+        `;
+        if (!candidates[0]) {
+          return null;
+        }
+        const reopenedAt = new Date();
+        await transaction.captcha_challenges.updateMany({
+          where: {
+            verification_event_id: id,
+            status: CaptchaChallengeStatus.PENDING,
+          },
+          data: {
+            status: CaptchaChallengeStatus.CANCELLED,
+            cancelled_at: reopenedAt,
+            updated_at: reopenedAt,
+          },
+        });
+        return await transaction.verification_events.update({
+          where: { id },
+          data: {
+            status: VerificationStatus.PENDING,
+            case_revision: { increment: 1 },
+            case_kind: CaseKind.STANDARD,
+            attention_state: CaseAttentionState.REVIEW_REQUIRED,
+            containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+            quarantine_attempt_id: null,
+            quarantine_lease_renewed_at: null,
+            quarantine_case_role_id: null,
+            parked_at: null,
+            parked_by: null,
+            resolved_at: null,
+            resolved_by: null,
+            updated_at: reopenedAt,
+          },
+        });
+      })) as VerificationEvent | null;
+    } catch (error) {
+      this.handleError(error, 'reopenVerification');
+    }
+  }
+
+  public async recordSubjectCaseEvidence(
+    id: string,
+    messageId: string
+  ): Promise<VerificationEvent | null> {
+    try {
+      const rows = await this.prisma.$queryRaw<VerificationEvent[]>`
+        WITH candidate AS (
+          SELECT
+            target.id,
+            CASE
+              WHEN jsonb_typeof(target.metadata) = 'object'
+                AND jsonb_typeof(target.metadata->'subject_evidence_message_ids') = 'array'
+                THEN target.metadata->'subject_evidence_message_ids'
+              ELSE '[]'::jsonb
+            END AS message_ids
+          FROM verification_events AS target
+          WHERE target.id = ${id}::uuid
+            AND target.status = ${VerificationStatus.PENDING}::verification_status
+          FOR UPDATE OF target
+        )
+        UPDATE verification_events AS target
+        SET
+          case_revision = target.case_revision + 1,
+          metadata = jsonb_set(
+            CASE
+              WHEN jsonb_typeof(target.metadata) = 'object' THEN target.metadata
+              ELSE '{}'::jsonb
+            END,
+            '{subject_evidence_message_ids}',
+            (
+              SELECT COALESCE(jsonb_agg(entry.value ORDER BY entry.ordinality), '[]'::jsonb)
+              FROM jsonb_array_elements(
+                candidate.message_ids || jsonb_build_array(${messageId}::text)
+              ) WITH ORDINALITY AS entry(value, ordinality)
+              WHERE entry.ordinality > GREATEST(
+                jsonb_array_length(candidate.message_ids) + 1
+                  - ${SUBJECT_EVIDENCE_MESSAGE_ID_LIMIT}::integer,
+                0
+              )
+            ),
+            true
+          ),
+          updated_at = now()
+        FROM candidate
+        WHERE target.id = candidate.id
+          AND NOT candidate.message_ids @> jsonb_build_array(${messageId}::text)
+        RETURNING target.*
+      `;
+      return rows[0] ?? null;
+    } catch (error) {
+      this.handleError(error, 'recordSubjectCaseEvidence');
+    }
+  }
+
   async rollbackCaseRoleRelease(id: string, attemptId: string): Promise<VerificationEvent | null> {
     try {
       return (await this.prisma.$transaction(async (transaction) => {
@@ -897,19 +1282,34 @@ export class VerificationEventRepository implements IVerificationEventRepository
       return (await this.prisma.verification_events.findMany({
         where: {
           status: VerificationStatus.PENDING,
-          case_kind: CaseKind.COMPROMISED_ACCOUNT,
           containment_status: CaseContainmentStatus.IN_PROGRESS,
           quarantine_attempt_id: { not: null },
-          OR: [
-            { quarantine_lease_renewed_at: null },
-            { quarantine_lease_renewed_at: { lte: staleBefore } },
-          ],
-          NOT: [
-            { quarantine_attempt_id: { startsWith: CASE_ROLE_RELEASE_ATTEMPT_PREFIX } },
+          AND: [
             {
-              quarantine_attempt_id: {
-                startsWith: CASE_ROLE_RELEASE_RECONCILIATION_ATTEMPT_PREFIX,
-              },
+              OR: [
+                { quarantine_lease_renewed_at: null },
+                { quarantine_lease_renewed_at: { lte: staleBefore } },
+              ],
+            },
+            {
+              OR: [
+                {
+                  quarantine_attempt_id: {
+                    startsWith: CAPTCHA_PRESENTATION_ATTEMPT_PREFIX,
+                  },
+                },
+                {
+                  case_kind: CaseKind.COMPROMISED_ACCOUNT,
+                  NOT: [
+                    { quarantine_attempt_id: { startsWith: CASE_ROLE_RELEASE_ATTEMPT_PREFIX } },
+                    {
+                      quarantine_attempt_id: {
+                        startsWith: CASE_ROLE_RELEASE_RECONCILIATION_ATTEMPT_PREFIX,
+                      },
+                    },
+                  ],
+                },
+              ],
             },
           ],
         },

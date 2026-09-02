@@ -57,6 +57,7 @@ import {
 } from '../../controllers/CaseCommandHandler';
 import { buildReportIntakeAdminActionsCustomId } from '../../utils/reportIntakeAdminActions';
 import { buildAccountQuarantinePreviewFingerprint } from '../../utils/accountQuarantinePreview';
+import { buildAdminActionCustomId } from '../../utils/adminActionCustomIds';
 import type { AccountQuarantinePreview } from '../../services/AccountQuarantineService';
 
 const buildMember = (guildId: string, userId: string, displayName = 'test-user'): GuildMember =>
@@ -206,6 +207,7 @@ const buildVerificationEvent = (
   notification_channel_id: null,
   notification_message_id: `message-${id}`,
   status: VerificationStatus.PENDING,
+  case_revision: 0,
   created_at: updatedAt,
   updated_at: updatedAt,
   resolved_at: null,
@@ -292,6 +294,7 @@ describe('InteractionHandler (unit)', () => {
     userModerationService = {
       applyCaseRole: jest.fn().mockResolvedValue(true),
       verifyUser: jest.fn().mockResolvedValue(true),
+      resolveCaptchaCase: jest.fn().mockResolvedValue({ status: 'resolved' }),
       kickUser: jest.fn().mockResolvedValue(true),
       banUser: jest.fn().mockResolvedValue(true),
       banUserById: jest.fn().mockResolvedValue(true),
@@ -398,6 +401,12 @@ describe('InteractionHandler (unit)', () => {
       completeTerminalActions: jest.fn(),
       completeCaseRoleRelease: jest.fn(),
       completeVerificationRelease: jest.fn(),
+      completeCaptchaVerification: jest.fn(),
+      claimCaptchaPresentation: jest.fn(),
+      claimCaptchaFinalization: jest.fn(),
+      releaseCaptchaFinalization: jest.fn(),
+      reopen: jest.fn(),
+      recordSubjectCaseEvidence: jest.fn(),
       rollbackCaseRoleRelease: jest.fn(),
       renewQuarantineAttempt: jest.fn(),
       recordQuarantineCaseRole: jest.fn(),
@@ -407,6 +416,9 @@ describe('InteractionHandler (unit)', () => {
       update: jest.fn(),
     };
     threadManager = {
+      retractCaptchaChallenge: jest.fn().mockResolvedValue(true),
+      sendCaptchaChallenge: jest.fn().mockResolvedValue('captcha-message-1'),
+      sendCaptchaStatus: jest.fn().mockResolvedValue(true),
       createVerificationThread: jest
         .fn()
         .mockResolvedValue({ url: 'https://discord.com/channels/thread-1' } as any),
@@ -1211,6 +1223,263 @@ describe('InteractionHandler (unit)', () => {
     expect(buttons.map((button: { label?: string }) => button.label)).toEqual(['Kick User']);
   });
 
+  it('binds CAPTCHA controls to the case notification the moderator selected', async () => {
+    const selectedCase = buildVerificationEvent('ver-selected', 'user-1');
+    const newestCase = buildVerificationEvent('ver-newest', 'user-1');
+    verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(newestCase);
+    verificationEventRepository.findById.mockResolvedValue(selectedCase);
+    verificationEventRepository.findByUserAndServer.mockResolvedValue([newestCase, selectedCase]);
+    (configService.getServerConfig as jest.Mock).mockResolvedValue({
+      settings: { captcha_mode: 'manual' },
+    });
+    const captchaChallengeService = {
+      findByCaseId: jest.fn().mockResolvedValue(null),
+    } as any;
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      captchaChallengeService
+    );
+    const interaction = buildInteraction(
+      buildAdminActionCustomId('menu', 'case', 'user-1', undefined, 'ver-selected'),
+      'guild-1',
+      { id: 'admin-1' } as User
+    );
+    grantOnlyModerationPermission(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(verificationEventRepository.findById).toHaveBeenCalledWith('ver-selected');
+    expect(captchaChallengeService.findByCaseId).toHaveBeenCalledWith('ver-selected');
+    const response = (interaction.reply as jest.Mock).mock.calls[0][0] as any;
+    const buttons = response.components.flatMap(
+      (row: { toJSON(): { components: any[] } }) => row.toJSON().components
+    );
+    expect(
+      buttons.find((button: { label?: string }) => button.label === 'Challenge User')?.custom_id
+    ).toBe('admin_actions:cp:c:user-1:_:ver-selected');
+  });
+
+  it('refuses a confirmed CAPTCHA action when the target has left the server', async () => {
+    const requestChallenge = jest.fn();
+    const captchaChallengeService = { requestChallenge } as any;
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      members: {
+        fetch: jest.fn().mockRejectedValue(new Error('Unknown Member')),
+      },
+    });
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      captchaChallengeService
+    );
+    const interaction = buildInteraction(
+      buildAdminActionCustomId('confirm_captcha', 'case', 'user-1', undefined, 'ver-1'),
+      'guild-1',
+      { id: 'admin-1' } as User
+    );
+    grantOnlyModerationPermission(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(requestChallenge).not.toHaveBeenCalled();
+    expect(interaction.followUp).toHaveBeenCalledWith({
+      content: 'The target is no longer a member of this server.',
+      flags: MessageFlags.Ephemeral,
+    });
+    consoleError.mockRestore();
+  });
+
+  it('submits the challenge identity carried by a confirmed CAPTCHA retry', async () => {
+    const challengeId = '11111111-1111-4111-8111-111111111111';
+    const requestChallenge = jest.fn().mockResolvedValue({
+      challenge: { id: challengeId, generation: 5 },
+      delivered: true,
+    });
+    const captchaChallengeService = {
+      findById: jest.fn().mockResolvedValue({
+        id: challengeId,
+        generation: 4,
+        server_id: 'guild-1',
+        user_id: 'user-1',
+        verification_event_id: 'ver-1',
+      }),
+      requestChallenge,
+    } as any;
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      members: { fetch: jest.fn().mockResolvedValue(buildMember('guild-1', 'user-1')) },
+    });
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      captchaChallengeService
+    );
+    const interaction = buildInteraction(
+      buildAdminActionCustomId(
+        'confirm_captcha_retry',
+        'case',
+        'user-1',
+        undefined,
+        undefined,
+        undefined,
+        challengeId,
+        4
+      ),
+      'guild-1',
+      { id: 'admin-1' } as User
+    );
+    grantOnlyModerationPermission(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(captchaChallengeService.findById).toHaveBeenCalledWith(challengeId);
+    expect(requestChallenge).toHaveBeenCalledWith({
+      expectedChallengeId: challengeId,
+      expectedGeneration: 4,
+      requestedBy: 'admin-1',
+      requestSource: 'moderator',
+      retry: true,
+      verificationEventId: 'ver-1',
+    });
+  });
+
+  it('binds the CAPTCHA bypass modal to the displayed challenge generation', async () => {
+    const captchaChallengeService = {
+      findByCaseId: jest.fn().mockResolvedValue({
+        generation: 2,
+        id: '11111111-1111-4111-8111-111111111111',
+      }),
+    } as any;
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      captchaChallengeService
+    );
+    const interaction = buildInteraction(
+      buildAdminActionCustomId('captcha_bypass', 'case', 'user-1', undefined, 'ver-1'),
+      'guild-1',
+      { id: 'admin-1' } as User
+    );
+    grantOnlyModerationPermission(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(captchaChallengeService.findByCaseId).toHaveBeenCalledWith('ver-1');
+    const modal = (interaction.showModal as jest.Mock).mock.calls[0][0];
+    expect(modal.toJSON().custom_id).toBe(
+      'captcha:bypass:ver-1:11111111-1111-4111-8111-111111111111:2'
+    );
+  });
+
+  it('submits the challenge identity carried by the CAPTCHA bypass modal', async () => {
+    const bypassChallenge = jest.fn().mockResolvedValue({
+      generation: 2,
+      id: '11111111-1111-4111-8111-111111111111',
+    });
+    const captchaChallengeService = { bypassChallenge } as any;
+    verificationEventRepository.findById.mockResolvedValue(
+      buildVerificationEvent('ver-1', 'user-1')
+    );
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      captchaChallengeService
+    );
+    const interaction = {
+      customId: 'captcha:bypass:ver-1:11111111-1111-4111-8111-111111111111:2',
+      guildId: 'guild-1',
+      user: { id: 'admin-1' } as User,
+      fields: {
+        getTextInputValue: jest.fn().mockReturnValue('  Reviewed manually.  '),
+      },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as unknown as ModalSubmitInteraction;
+    grantOnlyModerationPermission(interaction);
+
+    await handler.handleModalSubmit(interaction);
+
+    expect(bypassChallenge).toHaveBeenCalledWith({
+      expectedChallengeId: '11111111-1111-4111-8111-111111111111',
+      expectedGeneration: 2,
+      moderatorId: 'admin-1',
+      reason: 'Reviewed manually.',
+      verificationEventId: 'ver-1',
+    });
+  });
+
   it('shows observed admin actions with a resolved display label and no confirmation copy', async () => {
     process.env.DRASIL_WEB_PUBLIC_URL = 'https://drasilbot.com';
     delete process.env.NEXT_PUBLIC_APP_URL;
@@ -1358,6 +1627,7 @@ describe('InteractionHandler (unit)', () => {
       notification_channel_id: null,
       notification_message_id: 'message-1',
       status: VerificationStatus.PENDING,
+      case_revision: 0,
       created_at: new Date(),
       updated_at: new Date(),
       resolved_at: null,
@@ -1603,6 +1873,7 @@ describe('InteractionHandler (unit)', () => {
       notification_channel_id: null,
       notification_message_id: 'message-1',
       status: VerificationStatus.PENDING,
+      case_revision: 0,
       created_at: new Date(),
       updated_at: new Date(),
       resolved_at: null,
@@ -1648,6 +1919,7 @@ describe('InteractionHandler (unit)', () => {
       notification_channel_id: null,
       notification_message_id: 'message-1',
       status: VerificationStatus.VERIFIED,
+      case_revision: 0,
       created_at: new Date(),
       updated_at: new Date(),
       resolved_at: new Date(),

@@ -70,6 +70,17 @@ variable "posthog_debug" {
   default     = false
 }
 
+variable "drasil_web_public_url" {
+  type        = string
+  description = "Public HTTPS origin used by the bot when linking users to Drasil web flows."
+  default     = "https://drasilbot.com"
+
+  validation {
+    condition     = can(regex("^https://[^/]+$", var.drasil_web_public_url))
+    error_message = "drasil_web_public_url must be an HTTPS origin without a trailing slash."
+  }
+}
+
 variable "github_repo" {
   type        = string
   description = "GitHub repo in OWNER/REPO format used to restrict OIDC role assumption."

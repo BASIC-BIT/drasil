@@ -29,9 +29,12 @@ function normalizePublicAppUrl(value: string, name: string): string {
     if (url.protocol !== 'http:' && url.protocol !== 'https:') {
       throw new Error('Unsupported protocol.');
     }
-    return url.toString().replace(/\/+$/, '');
+    if (url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
+      throw new Error('Expected an origin.');
+    }
+    return url.origin;
   } catch {
-    throw new Error(`${name} must be a valid HTTP(S) URL.`);
+    throw new Error(`${name} must be a valid HTTP(S) origin.`);
   }
 }
 

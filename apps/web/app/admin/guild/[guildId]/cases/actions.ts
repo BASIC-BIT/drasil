@@ -37,6 +37,9 @@ const queuedCaseActions = new Set<CaseAction>([
   'reopen_case',
   'refresh_notification',
   'sync_existing_ban',
+  'challenge_user',
+  'retry_captcha',
+  'bypass_captcha',
 ]);
 
 const queueCaseActionErrorMessages = {
@@ -50,6 +53,8 @@ type DestructiveCaseAction = Extract<WebCaseAction, 'kick_user' | 'ban_user' | '
 
 interface CaseActionOptions {
   readonly attemptId: string | null;
+  readonly expectedCaptchaChallengeId?: string | null;
+  readonly expectedCaptchaGeneration?: number | null;
   readonly quarantinePhase: 'preview' | 'execute' | null;
   readonly previewRequestId: string | null;
   readonly reason: string | null;
@@ -225,6 +230,42 @@ async function assertCanQueueCaseAction(
     };
   }
 
+  if (action === 'challenge_user' || action === 'retry_captcha' || action === 'bypass_captcha') {
+    if (formData?.get('confirmAction') !== 'on') {
+      throw new Error('Confirm the security-check action before queueing it.');
+    }
+    const setupAdapter = createSetupDataAdapter();
+    const server = await setupAdapter.getServer(guild.id);
+    const mode = server?.settings.captcha_mode;
+    if (mode !== 'manual' && mode !== 'suspicious_join') {
+      throw new Error('Browser security checks are disabled for this server.');
+    }
+    const reason = action === 'bypass_captcha' ? readFormString(formData, 'reason') : null;
+    if (action === 'bypass_captcha' && !reason) {
+      throw new Error('A reason is required to continue without the browser check.');
+    }
+    const requiresDisplayedChallenge = action === 'retry_captcha' || action === 'bypass_captcha';
+    const expectedCaptchaChallengeId = requiresDisplayedChallenge
+      ? readFormString(formData, 'expectedCaptchaChallengeId')
+      : null;
+    const expectedCaptchaGeneration = requiresDisplayedChallenge
+      ? readFormPositiveInteger(formData, 'expectedCaptchaGeneration')
+      : null;
+    if (requiresDisplayedChallenge && (!expectedCaptchaChallengeId || !expectedCaptchaGeneration)) {
+      throw new Error(
+        'The displayed security check is no longer available. Refresh and try again.'
+      );
+    }
+    return {
+      attemptId: action === 'retry_captcha' || action === 'bypass_captcha' ? randomUUID() : null,
+      expectedCaptchaChallengeId,
+      expectedCaptchaGeneration,
+      quarantinePhase: null,
+      previewRequestId: null,
+      reason,
+    };
+  }
+
   const destructiveContext = destructiveActionContext(action);
   if (!destructiveContext) {
     return {
@@ -253,6 +294,15 @@ async function assertCanQueueCaseAction(
     previewRequestId: null,
     reason,
   };
+}
+
+function readFormPositiveInteger(formData: FormData | undefined, key: string): number | null {
+  const value = readFormString(formData, key);
+  if (!value) {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 async function performQueueCaseAction(
@@ -285,6 +335,8 @@ async function performQueueCaseAction(
     adminId: session.userId,
     attemptId: options.attemptId,
     caseId,
+    expectedCaptchaChallengeId: options.expectedCaptchaChallengeId,
+    expectedCaptchaGeneration: options.expectedCaptchaGeneration,
     guildId,
     quarantinePhase: options.quarantinePhase,
     previewRequestId: options.previewRequestId,
