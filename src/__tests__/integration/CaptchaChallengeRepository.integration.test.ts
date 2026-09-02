@@ -13,6 +13,7 @@ import {
   CaptchaChallengeRequestSource,
   CaptchaChallengeStatus,
   CaseContainmentStatus,
+  CaseKind,
   DetectionType,
   ModerationActionRequestType,
   VerificationStatus,
@@ -862,6 +863,35 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       expect.objectContaining({ id: challenge.id, status: CaptchaChallengeStatus.CANCELLED }),
     ]);
     await expect(challenges.cancelPendingForTerminalCases(10)).resolves.toEqual([]);
+  });
+
+  it('cancels a pending challenge after its case becomes compromised-account review', async () => {
+    const { verification } = await createCase(
+      'guild-captcha-compromised-case',
+      'user-captcha-compromised-case'
+    );
+    const challenges = new CaptchaChallengeRepository(prisma);
+    await enableManualCaptcha(verification.server_id);
+    const challenge = await challenges.create({
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      caseRevision: verification.case_revision,
+      tokenHash: 'compromised-case-hash',
+      expiresAt: new Date(Date.now() - 60_000),
+      requestedBy: 'moderator-1',
+    });
+    await prisma.verification_events.update({
+      where: { id: verification.id },
+      data: { case_kind: CaseKind.COMPROMISED_ACCOUNT },
+    });
+
+    await expect(challenges.expirePending(new Date(), 10)).resolves.toEqual([]);
+    await expect(challenges.cancelPendingForTerminalCases(10)).resolves.toEqual([
+      expect.objectContaining({ id: challenge.id, status: CaptchaChallengeStatus.CANCELLED }),
+    ]);
   });
 
   it('retries a cancelled challenge after its case is reopened', async () => {

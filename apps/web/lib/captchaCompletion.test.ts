@@ -14,6 +14,7 @@ import {
   beginCaptchaAttempt,
   completeCaptchaAttempt,
   getCaptchaFormConfiguration,
+  getCaptchaPublicChallenge,
   requeueCaptchaPassEffect,
 } from './captchaCompletion';
 
@@ -24,6 +25,7 @@ const challengeRow = {
   attempt_id: '00000000-0000-4000-8000-000000000001',
   attempt_generation: 1,
   case_revision_at_issue: 2,
+  case_kind: 'standard',
   case_status: 'pending',
   expires_at: new Date(Date.now() + 60_000),
   generation: 1,
@@ -87,6 +89,18 @@ describe('captcha completion transaction', () => {
     expect(getCaptchaFormConfiguration(challengeRow.id, 1)).toBeNull();
   });
 
+  it('presents a pending challenge as cancelled after the case becomes compromised', async () => {
+    mocked.getPostgresPool.mockReturnValue({
+      query: vi.fn(async () => ({
+        rows: [{ ...challengeRow, case_kind: 'compromised_account' }],
+      })),
+    });
+
+    await expect(getCaptchaPublicChallenge('a'.repeat(43))).resolves.toEqual(
+      expect.objectContaining({ id: challengeRow.id, status: 'cancelled' })
+    );
+  });
+
   it('bounds attempts across all identities for one challenge generation', async () => {
     const query = vi.fn(async (statement: string) => {
       if (statement.includes('from captcha_challenges c')) {
@@ -97,6 +111,9 @@ describe('captcha completion transaction', () => {
       }
       if (statement.includes('generation_count')) {
         return { rows: [{ generation_count: '100', recent_user_count: '0' }] };
+      }
+      if (statement.includes("set status = 'failed'")) {
+        return { rows: [{ id: challengeRow.id }] };
       }
       return { rows: [] };
     });
@@ -116,10 +133,16 @@ describe('captcha completion transaction', () => {
         idempotencyKey: '00000000-0000-4000-8000-000000000004',
       })
     ).resolves.toEqual({
-      state: 'rate_limited',
-      challenge: expect.objectContaining({ id: challengeRow.id }),
+      state: 'stale',
+      challenge: expect.objectContaining({ id: challengeRow.id, status: 'failed' }),
     });
     expect(query.mock.calls.some(([statement]) => statement.includes('insert into'))).toBe(false);
+    expect(mocked.insertModerationActionRequestWithReceipt).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        idempotencyKey: `captcha:attention:${challengeRow.id}:1:submission-limit`,
+      })
+    );
     expect(query.mock.calls.at(-1)?.[0]).toBe('commit');
   });
 

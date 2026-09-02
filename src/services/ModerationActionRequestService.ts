@@ -21,6 +21,7 @@ import {
 } from '../controllers/ReportInstructionsManager';
 import { Prisma } from '../db/prisma';
 import { TYPES } from '../di/symbols';
+import { DISCORD_UNKNOWN_MEMBER_ERROR_CODE, isDiscordErrorCode } from '../utils/discordErrors';
 import { IModerationActionRequestRepository } from '../repositories/ModerationActionRequestRepository';
 import { IMessageDeletionJobRepository } from '../repositories/MessageDeletionJobRepository';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
@@ -1111,9 +1112,15 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       return;
     }
 
-    const member = await this.fetchGuildMember(request.server_id, request.target_user_id).catch(
-      () => null
-    );
+    let member: GuildMember | null;
+    try {
+      member = await this.fetchGuildMember(request.server_id, request.target_user_id);
+    } catch (error) {
+      if (!isDiscordErrorCode(error, DISCORD_UNKNOWN_MEMBER_ERROR_CODE)) {
+        throw error;
+      }
+      member = null;
+    }
     if (!member) {
       if (verificationEvent?.status === VerificationStatus.PENDING) {
         await this.requireCaptchaAttention(verificationEvent, 'automatic_resolution_held');
@@ -1268,16 +1275,17 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     await this.notificationManager
       .updateCaptchaChallengePresentation?.(verificationEvent, challenge)
       .catch(() => false);
-    await this.threadManager
-      .sendCaptchaStatus(
-        verificationEvent,
-        reason === 'delivery_failed'
-          ? 'This security check link could not be delivered. Ask a moderator to retry.'
-          : reason === 'expired'
-            ? 'This security check expired. Ask a moderator to issue a new check.'
-            : 'This security check reached its attempt limit. Ask a moderator to issue a new check.'
-      )
-      .catch(() => false);
+    const statusSent = await this.threadManager.sendCaptchaStatus(
+      verificationEvent,
+      reason === 'delivery_failed'
+        ? 'This security check link could not be delivered. Ask a moderator to retry.'
+        : reason === 'expired'
+          ? 'This security check expired. Ask a moderator to issue a new check.'
+          : 'This security check reached its attempt limit. Ask a moderator to issue a new check.'
+    );
+    if (!statusSent) {
+      throw new Error(`Failed to deliver CAPTCHA status for case ${verificationEvent.id}.`);
+    }
     await this.requireCaptchaAttention(verificationEvent, reason);
     await this.repository.complete(request.id, {
       action_type: request.action_type,

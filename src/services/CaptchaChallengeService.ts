@@ -194,6 +194,9 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
         return { challenge, delivered: false };
       }
       const recorded = await this.challenges.recordDelivery(challenge.id, challenge.generation);
+      if (!recorded) {
+        await this.compensateRejectedDelivery(verificationEvent);
+      }
       await this.refreshCaptchaPresentation(verificationEvent, challenge);
       return { challenge, delivered: recorded };
     } catch (error) {
@@ -207,6 +210,17 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
       }
       await this.refreshCaptchaPresentation(verificationEvent, challenge);
       throw error;
+    }
+  }
+
+  private async compensateRejectedDelivery(verificationEvent: VerificationEvent): Promise<void> {
+    const current = await this.verificationEvents.findById(verificationEvent.id);
+    if (!current) {
+      return;
+    }
+    await this.threads.sendCaptchaStatus(current, 'This security check is no longer active.');
+    if (current.status !== VerificationStatus.PENDING) {
+      await this.threads.closeResolvedVerificationThreads(current, { execute: true });
     }
   }
 

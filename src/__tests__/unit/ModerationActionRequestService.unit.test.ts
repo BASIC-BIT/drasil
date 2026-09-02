@@ -1872,6 +1872,21 @@ describe('ModerationActionRequestService', () => {
     ]);
   });
 
+  it('keeps automatic CAPTCHA resolution retryable after a transient member fetch failure', async () => {
+    const { guild, repository, service, userModerationService } = buildService([
+      applyCaptchaPassRequest,
+    ]);
+    guild.members.fetch.mockRejectedValueOnce(new Error('Discord unavailable'));
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(userModerationService.resolveCaptchaCase).not.toHaveBeenCalled();
+    expect(repository.completed).toEqual([]);
+    expect(repository.failed).toEqual([
+      { id: 'captcha-pass-request-1', error: 'Discord unavailable' },
+    ]);
+  });
+
   it('rejects a CAPTCHA pass request that does not use the dedicated system actor', async () => {
     const { captchaChallengeService, repository, service, userModerationService } = buildService([
       { ...applyCaptchaPassRequest, actor_id: 'moderator-1' },
@@ -1920,6 +1935,24 @@ describe('ModerationActionRequestService', () => {
       {
         id: 'captcha-attention-request-1',
         error: 'Failed to notify moderators about CAPTCHA case ver-1.',
+      },
+    ]);
+  });
+
+  it('keeps CAPTCHA attention retryable when case-thread status delivery fails', async () => {
+    const { notificationManager, repository, service, threadManager } = buildService([
+      notifyCaptchaAttentionRequest,
+    ]);
+    threadManager.sendCaptchaStatus.mockResolvedValueOnce(false);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(notificationManager.notifyCaptchaAttention).not.toHaveBeenCalled();
+    expect(repository.completed).toEqual([]);
+    expect(repository.failed).toEqual([
+      {
+        id: 'captcha-attention-request-1',
+        error: 'Failed to deliver CAPTCHA status for case ver-1.',
       },
     ]);
   });

@@ -35,6 +35,7 @@ interface CaptchaChallengeRow {
   readonly expires_at: Date;
   readonly submission_count: number;
   readonly case_status: string;
+  readonly case_kind: string;
   readonly server_settings: unknown;
 }
 
@@ -97,7 +98,8 @@ function toPublicChallenge(row: CaptchaChallengeRow): CaptchaPublicChallenge {
   const featureDisabled =
     row.status === 'pending' && readCaptchaMode(row.server_settings) === 'off';
   const caseUnavailable =
-    row.status === 'pending' && (row.case_status !== 'pending' || featureDisabled);
+    row.status === 'pending' &&
+    (row.case_status !== 'pending' || row.case_kind !== 'standard' || featureDisabled);
   return {
     id: row.id,
     verificationEventId: row.verification_event_id,
@@ -135,6 +137,7 @@ async function selectChallenge(
        c.expires_at,
        c.submission_count,
        v.status::text as case_status,
+       v.case_kind::text as case_kind,
        coalesce(s.settings, '{}'::jsonb) as server_settings
      from captcha_challenges c
      join verification_events v on v.id = c.verification_event_id
@@ -285,11 +288,11 @@ async function findAttemptByIdempotencyKey(
   return result.rows[0] ?? null;
 }
 
-async function isAttemptRateLimited(
+async function readAttemptLimits(
   client: PoolClient,
   challenge: CaptchaChallengeRow,
   discordUserId: string
-): Promise<boolean> {
+): Promise<{ generationCount: number; recentUserCount: number }> {
   const result = await client.query<{
     generation_count: string;
     recent_user_count: string;
@@ -310,10 +313,40 @@ async function isAttemptRateLimited(
     ]
   );
   const counts = result.rows[0];
-  return (
-    Number(counts?.recent_user_count ?? 0) >= CAPTCHA_ATTEMPT_RATE_LIMIT ||
-    Number(counts?.generation_count ?? 0) >= CAPTCHA_CHALLENGE_ATTEMPT_LIMIT
+  return {
+    generationCount: Number(counts?.generation_count ?? 0),
+    recentUserCount: Number(counts?.recent_user_count ?? 0),
+  };
+}
+
+async function failExhaustedGeneration(
+  client: PoolClient,
+  challenge: CaptchaChallengeRow
+): Promise<void> {
+  const failed = await client.query<{ id: string }>(
+    `update captcha_challenges
+     set status = 'failed', updated_at = now()
+     where id = $1::uuid and generation = $2 and status = 'pending'
+     returning id::text`,
+    [challenge.id, challenge.generation]
   );
+  if (!failed.rows[0]) {
+    return;
+  }
+  await insertModerationActionRequestWithReceipt(client, {
+    actionType: 'notify_captcha_attention',
+    actorId: CAPTCHA_SYSTEM_ACTOR_ID,
+    actorSurface: 'captcha',
+    idempotencyKey: `captcha:attention:${challenge.id}:${challenge.generation}:submission-limit`,
+    metadata: {
+      challenge_id: challenge.id,
+      generation: challenge.generation,
+      reason: 'submission_limit',
+    },
+    serverId: challenge.server_id,
+    targetUserId: challenge.user_id,
+    verificationEventId: challenge.verification_event_id,
+  });
 }
 
 export async function recordCaptchaIdentityMismatch(input: {
@@ -329,17 +362,24 @@ export async function recordCaptchaIdentityMismatch(input: {
   try {
     await client.query('begin');
     const challenge = await selectChallenge(client, tokenHash, true);
-    if (
-      challenge &&
-      toPublicChallenge(challenge).status === 'pending' &&
-      !(await isAttemptRateLimited(client, challenge, input.discordUserId))
-    ) {
-      await insertAttempt(client, {
-        challenge,
-        discordUserId: input.discordUserId,
-        idempotencyKey: input.idempotencyKey,
-        validationState: 'identity_mismatch',
-      });
+    if (challenge && toPublicChallenge(challenge).status === 'pending') {
+      const limits = await readAttemptLimits(client, challenge, input.discordUserId);
+      if (
+        limits.recentUserCount < CAPTCHA_ATTEMPT_RATE_LIMIT &&
+        limits.generationCount < CAPTCHA_CHALLENGE_ATTEMPT_LIMIT
+      ) {
+        const inserted = await insertAttempt(client, {
+          challenge,
+          discordUserId: input.discordUserId,
+          idempotencyKey: input.idempotencyKey,
+          validationState: 'identity_mismatch',
+        });
+        if (inserted && limits.generationCount + 1 >= CAPTCHA_CHALLENGE_ATTEMPT_LIMIT) {
+          await failExhaustedGeneration(client, challenge);
+        }
+      } else if (limits.generationCount >= CAPTCHA_CHALLENGE_ATTEMPT_LIMIT) {
+        await failExhaustedGeneration(client, challenge);
+      }
     }
     await client.query('commit');
   } catch (error) {
@@ -390,7 +430,13 @@ export async function beginCaptchaAttempt(input: {
         challenge: publicChallenge,
       };
     }
-    if (await isAttemptRateLimited(client, challenge, input.identity.userId)) {
+    const limits = await readAttemptLimits(client, challenge, input.identity.userId);
+    if (limits.generationCount >= CAPTCHA_CHALLENGE_ATTEMPT_LIMIT) {
+      await failExhaustedGeneration(client, challenge);
+      await client.query('commit');
+      return { state: 'stale', challenge: { ...publicChallenge, status: 'failed' } };
+    }
+    if (limits.recentUserCount >= CAPTCHA_ATTEMPT_RATE_LIMIT) {
       await client.query('commit');
       return { state: 'rate_limited', challenge: publicChallenge };
     }
@@ -409,6 +455,17 @@ export async function beginCaptchaAttempt(input: {
         previousState: duplicate?.validation_state,
         challenge: publicChallenge,
       };
+    }
+    if (limits.generationCount + 1 >= CAPTCHA_CHALLENGE_ATTEMPT_LIMIT) {
+      await client.query(
+        `update captcha_challenge_attempts
+         set validation_state = 'stale', validated_at = now()
+         where id = $1::uuid and validation_state = 'started'`,
+        [attempt.id]
+      );
+      await failExhaustedGeneration(client, challenge);
+      await client.query('commit');
+      return { state: 'stale', challenge: { ...publicChallenge, status: 'failed' } };
     }
     await client.query('commit');
     return { state: 'ready', attemptId: attempt.id, challenge: publicChallenge };
@@ -442,6 +499,7 @@ export async function completeCaptchaAttempt(input: {
          c.expires_at,
          c.submission_count,
          v.status::text as case_status,
+         v.case_kind::text as case_kind,
          coalesce(s.settings, '{}'::jsonb) as server_settings
        from captcha_challenge_attempts a
        join captcha_challenges c on c.id = a.captcha_challenge_id
@@ -463,6 +521,7 @@ export async function completeCaptchaAttempt(input: {
     if (
       row.status !== 'pending' ||
       row.case_status !== 'pending' ||
+      row.case_kind !== 'standard' ||
       readCaptchaMode(row.server_settings) === 'off' ||
       row.attempt_generation !== row.generation ||
       row.expires_at.getTime() <= Date.now()

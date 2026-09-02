@@ -6,6 +6,7 @@ import {
   CaptchaChallengePassEffect,
   CaptchaChallengeRequestSource,
   CaptchaChallengeStatus,
+  CaseKind,
   ModerationActionRequestStatus,
   VerificationStatus,
 } from './types';
@@ -395,7 +396,10 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
         join verification_events as verification
           on verification.id = challenge.verification_event_id
         where challenge.status = ${CaptchaChallengeStatus.PENDING}::captcha_challenge_status
-          and verification.status <> ${VerificationStatus.PENDING}::verification_status
+          and (
+            verification.status <> ${VerificationStatus.PENDING}::verification_status
+            or verification.case_kind = ${CaseKind.COMPROMISED_ACCOUNT}::case_kind
+          )
         order by challenge.updated_at asc
         limit ${Math.max(1, Math.min(limit, 100))}
         for update of verification, challenge skip locked
@@ -438,6 +442,7 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
         where challenge.status = ${CaptchaChallengeStatus.PENDING}::captcha_challenge_status
           and challenge.expires_at <= ${now}
           and verification.status = ${VerificationStatus.PENDING}::verification_status
+          and verification.case_kind <> ${CaseKind.COMPROMISED_ACCOUNT}::case_kind
           and coalesce(server.settings->>'captcha_mode', 'off') <> 'off'
         order by challenge.expires_at asc
         limit ${Math.max(1, Math.min(limit, 100))}

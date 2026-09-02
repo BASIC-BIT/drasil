@@ -117,6 +117,10 @@ function createHarness(settings: Record<string, unknown> = { captcha_mode: 'manu
     getServerConfig: jest.fn().mockResolvedValue({ settings }),
   } as unknown as jest.Mocked<IConfigService>;
   const threads = {
+    closeResolvedVerificationThreads: jest.fn().mockResolvedValue({
+      closedAny: true,
+      results: [],
+    }),
     sendCaptchaChallenge: jest.fn().mockResolvedValue(true),
     sendCaptchaStatus: jest.fn().mockResolvedValue(true),
   } as unknown as jest.Mocked<IThreadManager>;
@@ -191,9 +195,12 @@ describe('CaptchaChallengeService', () => {
     );
   });
 
-  it('reports delivery as stale when the generation changes during the Discord send', async () => {
-    const { challenges, service } = createHarness();
+  it('compensates and recloses a terminal case when delivery loses the case race', async () => {
+    const { challenges, service, threads, verificationEvents } = createHarness();
     challenges.recordDelivery.mockResolvedValue(false);
+    verificationEvents.findById
+      .mockResolvedValueOnce(buildCase())
+      .mockResolvedValueOnce(buildCase({ status: VerificationStatus.VERIFIED }));
 
     await expect(
       service.requestChallenge({
@@ -201,6 +208,14 @@ describe('CaptchaChallengeService', () => {
         requestSource: CaptchaChallengeRequestSource.MODERATOR,
       })
     ).resolves.toMatchObject({ delivered: false });
+    expect(threads.sendCaptchaStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ status: VerificationStatus.VERIFIED }),
+      'This security check is no longer active.'
+    );
+    expect(threads.closeResolvedVerificationThreads).toHaveBeenCalledWith(
+      expect.objectContaining({ status: VerificationStatus.VERIFIED }),
+      { execute: true }
+    );
   });
 
   it('keeps an automatic pass evidence-only when that is the current setting', async () => {
