@@ -29,6 +29,78 @@ export interface CaptchaChallengeRetryInput extends CaptchaChallengeIssueInput {
   expectedGeneration: number;
 }
 
+interface CaptchaChallengeRetryState {
+  activePresentationRequestKey: string | null;
+  deliveryErrorCode: string | null;
+  outcome: CaptchaChallengeRequestOutcome;
+  outcomeAt: Date;
+  pendingDeliveryFailure: boolean;
+}
+
+interface CaptchaChallengeRetryRecord {
+  bypassed_at: Date | null;
+  cancelled_at: Date | null;
+  delivery_error_code: string | null;
+  generation: number;
+  id: string;
+  status: string;
+  updated_at: Date;
+}
+
+function getCaptchaChallengeRetryState(
+  challenge: CaptchaChallengeRetryRecord
+): CaptchaChallengeRetryState | null {
+  const keyPrefix = `${challenge.id}:${challenge.generation}`;
+  if (challenge.status === CaptchaChallengeStatus.PENDING) {
+    if (!challenge.delivery_error_code) {
+      return null;
+    }
+    return {
+      activePresentationRequestKey: `captcha:attention:${keyPrefix}:delivery-failed`,
+      deliveryErrorCode: challenge.delivery_error_code,
+      outcome: CaptchaChallengeRequestOutcome.DELIVERY_FAILED,
+      outcomeAt: challenge.updated_at,
+      pendingDeliveryFailure: true,
+    };
+  }
+  switch (challenge.status) {
+    case CaptchaChallengeStatus.FAILED:
+      return {
+        activePresentationRequestKey: `captcha:attention:${keyPrefix}:submission-limit`,
+        deliveryErrorCode: null,
+        outcome: CaptchaChallengeRequestOutcome.FAILED,
+        outcomeAt: challenge.updated_at,
+        pendingDeliveryFailure: false,
+      };
+    case CaptchaChallengeStatus.EXPIRED:
+      return {
+        activePresentationRequestKey: `captcha:attention:${keyPrefix}:expired`,
+        deliveryErrorCode: null,
+        outcome: CaptchaChallengeRequestOutcome.EXPIRED,
+        outcomeAt: challenge.updated_at,
+        pendingDeliveryFailure: false,
+      };
+    case CaptchaChallengeStatus.BYPASSED:
+      return {
+        activePresentationRequestKey: null,
+        deliveryErrorCode: null,
+        outcome: CaptchaChallengeRequestOutcome.BYPASSED,
+        outcomeAt: challenge.bypassed_at ?? challenge.updated_at,
+        pendingDeliveryFailure: false,
+      };
+    case CaptchaChallengeStatus.CANCELLED:
+      return {
+        activePresentationRequestKey: `captcha:presentation:${keyPrefix}:cancelled`,
+        deliveryErrorCode: null,
+        outcome: CaptchaChallengeRequestOutcome.CANCELLED,
+        outcomeAt: challenge.cancelled_at ?? challenge.updated_at,
+        pendingDeliveryFailure: false,
+      };
+    default:
+      return null;
+  }
+}
+
 export interface ICaptchaChallengeRepository {
   findById(id: string): Promise<CaptchaChallenge | null>;
   findByCaseId(verificationEventId: string): Promise<CaptchaChallenge | null>;
@@ -164,30 +236,15 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
       if (existing.status === CaptchaChallengeStatus.PASSED) {
         throw new Error('This case has already passed its security check.');
       }
-      const pendingDeliveryFailure =
-        existing.status === CaptchaChallengeStatus.PENDING && Boolean(existing.delivery_error_code);
-      const retryableStatus =
-        existing.status === CaptchaChallengeStatus.FAILED ||
-        existing.status === CaptchaChallengeStatus.EXPIRED ||
-        existing.status === CaptchaChallengeStatus.BYPASSED ||
-        existing.status === CaptchaChallengeStatus.CANCELLED;
-      if (!pendingDeliveryFailure && !retryableStatus) {
+      const retryState = getCaptchaChallengeRetryState(existing);
+      if (!retryState) {
         throw new Error('This CAPTCHA challenge is not eligible for retry.');
       }
-      const activePresentationRequestKey = pendingDeliveryFailure
-        ? `captcha:attention:${existing.id}:${existing.generation}:delivery-failed`
-        : existing.status === CaptchaChallengeStatus.FAILED
-          ? `captcha:attention:${existing.id}:${existing.generation}:submission-limit`
-          : existing.status === CaptchaChallengeStatus.EXPIRED
-            ? `captcha:attention:${existing.id}:${existing.generation}:expired`
-            : existing.status === CaptchaChallengeStatus.CANCELLED
-              ? `captcha:presentation:${existing.id}:${existing.generation}:cancelled`
-              : null;
-      if (activePresentationRequestKey) {
+      if (retryState.activePresentationRequestKey) {
         const activeAttention = await transaction.$queryRaw<Array<{ id: string }>>`
           select request.id::text
           from moderation_action_requests as request
-          where request.idempotency_key = ${activePresentationRequestKey}
+          where request.idempotency_key = ${retryState.activePresentationRequestKey}
             and request.status in (
               ${ModerationActionRequestStatus.QUEUED}::moderation_action_request_status,
               ${ModerationActionRequestStatus.PROCESSING}::moderation_action_request_status
@@ -201,21 +258,6 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
         }
       }
 
-      const generationOutcome = pendingDeliveryFailure
-        ? CaptchaChallengeRequestOutcome.DELIVERY_FAILED
-        : existing.status === CaptchaChallengeStatus.FAILED
-          ? CaptchaChallengeRequestOutcome.FAILED
-          : existing.status === CaptchaChallengeStatus.EXPIRED
-            ? CaptchaChallengeRequestOutcome.EXPIRED
-            : existing.status === CaptchaChallengeStatus.BYPASSED
-              ? CaptchaChallengeRequestOutcome.BYPASSED
-              : CaptchaChallengeRequestOutcome.CANCELLED;
-      const outcomeAt =
-        generationOutcome === CaptchaChallengeRequestOutcome.BYPASSED
-          ? (existing.bypassed_at ?? existing.updated_at)
-          : generationOutcome === CaptchaChallengeRequestOutcome.CANCELLED
-            ? (existing.cancelled_at ?? existing.updated_at)
-            : existing.updated_at;
       const archivedGeneration = await transaction.captcha_challenge_requests.updateMany({
         where: {
           captcha_challenge_id: existing.id,
@@ -223,9 +265,9 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
           outcome: null,
         },
         data: {
-          outcome: generationOutcome,
-          outcome_at: outcomeAt,
-          delivery_error_code: pendingDeliveryFailure ? existing.delivery_error_code : null,
+          outcome: retryState.outcome,
+          outcome_at: retryState.outcomeAt,
+          delivery_error_code: retryState.deliveryErrorCode,
         },
       });
       if (archivedGeneration.count !== 1) {
@@ -237,7 +279,9 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
           id: existing.id,
           generation: existing.generation,
           status: existing.status,
-          ...(pendingDeliveryFailure ? { delivery_error_code: existing.delivery_error_code } : {}),
+          ...(retryState.pendingDeliveryFailure
+            ? { delivery_error_code: retryState.deliveryErrorCode }
+            : {}),
         },
         data: {
           status: CaptchaChallengeStatus.PENDING,
