@@ -36,6 +36,7 @@ import {
   RoleQuarantineRestoreResult,
 } from './RoleQuarantineService';
 import {
+  CAPTCHA_FINALIZATION_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_LEASE_MS,
   CASE_TERMINAL_ACTION_ATTEMPT_PREFIX,
@@ -1370,20 +1371,57 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       return { status: 'held', reason: 'case_changed' };
     }
     completed = current;
-    await this.finalizeCaptchaResolvedVerificationEvent(
-      member,
-      completed,
-      actorId,
-      actorLabel,
-      restoreResult.metadata
+    const finalizationAttemptId = `${CAPTCHA_FINALIZATION_ATTEMPT_PREFIX}${randomUUID()}`;
+    const claimed = await this.verificationEventRepository.claimCaptchaFinalization(
+      {
+        id: completed.id,
+        serverId: member.guild.id,
+        userId: member.id,
+        expectedCaseRevision: input.expectedCaseRevision,
+        challengeId: input.challengeId,
+        generation: input.generation,
+        resolvedBy: actorId,
+        resolvedAt,
+      },
+      finalizationAttemptId,
+      new Date(Date.now() - CASE_ROLE_RELEASE_LEASE_MS)
     );
-    await this.ensureCaptchaModerationOutcome(
-      member,
-      completed,
-      actorId,
-      input.challengeId,
-      restoreResult.metadata
+    if (!claimed) {
+      return { status: 'held', reason: 'case_changed' };
+    }
+    try {
+      await this.finalizeCaptchaResolvedVerificationEvent(
+        member,
+        claimed,
+        actorId,
+        actorLabel,
+        restoreResult.metadata
+      );
+      await this.ensureCaptchaModerationOutcome(
+        member,
+        claimed,
+        actorId,
+        input.challengeId,
+        restoreResult.metadata
+      );
+    } catch (error) {
+      await this.verificationEventRepository
+        .releaseCaptchaFinalization(claimed.id, finalizationAttemptId)
+        .catch((releaseError) => {
+          console.error(
+            `Failed to release CAPTCHA finalization for case ${claimed.id}:`,
+            releaseError
+          );
+        });
+      throw error;
+    }
+    const released = await this.verificationEventRepository.releaseCaptchaFinalization(
+      claimed.id,
+      finalizationAttemptId
     );
+    if (!released) {
+      throw new Error(`Failed to release CAPTCHA finalization for case ${claimed.id}.`);
+    }
     return { status: 'resolved' };
   }
 

@@ -10,6 +10,7 @@ import {
   DetectionType,
   ModerationOutcomeSource,
   ModerationOutcomeType,
+  VerificationEvent,
   VerificationStatus,
 } from '../../repositories/types';
 import {
@@ -476,6 +477,55 @@ describe('UserModerationService (unit)', () => {
     await expect(
       moderationOutcomeRepository.findByVerificationEvent(verificationEvent.id)
     ).resolves.toHaveLength(0);
+  });
+
+  it('blocks a reopen while CAPTCHA finalization owns the case lease', async () => {
+    const guildId = 'guild-captcha-finalization-lease';
+    const userId = 'user-captcha-finalization-lease';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    let reopenDuringFinalization: VerificationEvent | null | undefined;
+    jest
+      .spyOn(adminActionService, 'getActionsForVerificationEvent')
+      .mockImplementation(async () => {
+        reopenDuringFinalization = await verificationEventRepository.reopen(verificationEvent.id);
+        return [];
+      });
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(
+      service.resolveCaptchaCase(member, {
+        challengeId: 'challenge-finalization-lease',
+        expectedCaseRevision: verificationEvent.case_revision,
+        generation: 1,
+        verificationEventId: verificationEvent.id,
+      })
+    ).resolves.toEqual({ status: 'resolved' });
+
+    expect(reopenDuringFinalization).toBeNull();
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+        quarantine_attempt_id: null,
+        status: VerificationStatus.VERIFIED,
+      })
+    );
   });
 
   it('keeps the case role when another pending case exists', async () => {

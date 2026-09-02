@@ -19,6 +19,7 @@ import {
 } from './types'; // Use local enum
 import {
   CASE_ATTENTION_ATTEMPT_PREFIX,
+  CAPTCHA_FINALIZATION_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_RECONCILIATION_ATTEMPT_PREFIX,
   CASE_TERMINAL_ACTION_ATTEMPT_PREFIX,
@@ -130,6 +131,12 @@ export interface IVerificationEventRepository {
   completeCaptchaVerification(
     input: CaptchaVerificationCompletionInput
   ): Promise<VerificationEvent | null>;
+  claimCaptchaFinalization(
+    input: CaptchaVerificationCompletionInput,
+    attemptId: string,
+    staleBefore: Date
+  ): Promise<VerificationEvent | null>;
+  releaseCaptchaFinalization(id: string, attemptId: string): Promise<boolean>;
   reopen(id: string): Promise<VerificationEvent | null>;
   recordSubjectCaseEvidence(id: string, messageId: string): Promise<VerificationEvent | null>;
   rollbackCaseRoleRelease(id: string, attemptId: string): Promise<VerificationEvent | null>;
@@ -596,7 +603,10 @@ export class VerificationEventRepository implements IVerificationEventRepository
           quarantine_lease_renewed_at = NULL,
           parked_at = NULL,
           parked_by = NULL,
-          metadata = COALESCE(target.metadata, '{}'::jsonb) || jsonb_build_object(
+          metadata = CASE
+            WHEN jsonb_typeof(target.metadata) = 'object' THEN target.metadata
+            ELSE '{}'::jsonb
+          END || jsonb_build_object(
             'captcha_resolution',
             jsonb_build_object(
               'challenge_id', ${input.challengeId}::text,
@@ -636,6 +646,94 @@ export class VerificationEventRepository implements IVerificationEventRepository
       return rows[0] ?? null;
     } catch (error) {
       this.handleError(error, 'completeCaptchaVerification');
+    }
+  }
+
+  public async claimCaptchaFinalization(
+    input: CaptchaVerificationCompletionInput,
+    attemptId: string,
+    staleBefore: Date
+  ): Promise<VerificationEvent | null> {
+    if (!attemptId.startsWith(CAPTCHA_FINALIZATION_ATTEMPT_PREFIX)) {
+      throw new RepositoryError('Invalid CAPTCHA finalization attempt ID.');
+    }
+    try {
+      const claimed = await this.prisma.verification_events.updateMany({
+        where: {
+          id: input.id,
+          server_id: input.serverId,
+          user_id: input.userId,
+          status: VerificationStatus.VERIFIED,
+          resolved_by: input.resolvedBy,
+          case_revision: input.expectedCaseRevision,
+          AND: [
+            {
+              metadata: {
+                path: ['captcha_resolution', 'challenge_id'],
+                equals: input.challengeId,
+              },
+            },
+            {
+              metadata: {
+                path: ['captcha_resolution', 'generation'],
+                equals: input.generation,
+              },
+            },
+            {
+              OR: [
+                {
+                  containment_status: { not: CaseContainmentStatus.IN_PROGRESS },
+                  quarantine_attempt_id: null,
+                },
+                {
+                  containment_status: CaseContainmentStatus.IN_PROGRESS,
+                  quarantine_attempt_id: { startsWith: CAPTCHA_FINALIZATION_ATTEMPT_PREFIX },
+                  OR: [
+                    { quarantine_lease_renewed_at: null },
+                    { quarantine_lease_renewed_at: { lte: staleBefore } },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        data: {
+          containment_status: CaseContainmentStatus.IN_PROGRESS,
+          quarantine_attempt_id: attemptId,
+          quarantine_lease_renewed_at: new Date(),
+          updated_at: new Date(),
+        },
+      });
+      if (claimed.count !== 1) {
+        return null;
+      }
+      return (await this.prisma.verification_events.findUnique({
+        where: { id: input.id },
+      })) as VerificationEvent | null;
+    } catch (error) {
+      this.handleError(error, 'claimCaptchaFinalization');
+    }
+  }
+
+  public async releaseCaptchaFinalization(id: string, attemptId: string): Promise<boolean> {
+    try {
+      const released = await this.prisma.verification_events.updateMany({
+        where: {
+          id,
+          status: VerificationStatus.VERIFIED,
+          containment_status: CaseContainmentStatus.IN_PROGRESS,
+          quarantine_attempt_id: attemptId,
+        },
+        data: {
+          containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+          quarantine_attempt_id: null,
+          quarantine_lease_renewed_at: null,
+          updated_at: new Date(),
+        },
+      });
+      return released.count === 1;
+    } catch (error) {
+      this.handleError(error, 'releaseCaptchaFinalization');
     }
   }
 

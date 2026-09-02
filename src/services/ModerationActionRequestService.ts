@@ -1204,14 +1204,12 @@ export class ModerationActionRequestService implements IModerationActionRequestS
         'This security check reached its attempt limit. Ask a moderator to issue a new check.'
       )
       .catch(() => false);
-    const notified = this.notificationManager.notifyCaptchaAttention
-      ? await this.notificationManager.notifyCaptchaAttention(verificationEvent, 'submission_limit')
-      : false;
+    await this.requireCaptchaAttention(verificationEvent, 'submission_limit');
     await this.repository.complete(request.id, {
       action_type: request.action_type,
       challenge_id: challengeId,
       generation,
-      notified,
+      notified: true,
       reason: 'submission_limit',
       target_user_id: request.target_user_id,
       verification_event_id: request.verification_event_id,

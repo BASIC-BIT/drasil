@@ -58,7 +58,10 @@ import {
   MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY,
   MODERATOR_BAN_ACTION_REQUIRES_REASON_SETTING_KEY,
 } from '../../utils/detectionResponseSettings';
-import { isCaseRoleReleaseRecoveryAttempt } from '../../utils/caseRoleRelease';
+import {
+  CAPTCHA_FINALIZATION_ATTEMPT_PREFIX,
+  isCaseRoleReleaseRecoveryAttempt,
+} from '../../utils/caseRoleRelease';
 import {
   DEFAULT_USER_REPORT_EXTERNAL_RESPONSE_MODE,
   DEFAULT_USER_REPORT_REASON_REQUIRED,
@@ -746,6 +749,86 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     };
     this.events[eventIndex] = completed;
     return { ...completed };
+  }
+
+  public async claimCaptchaFinalization(
+    input: {
+      id: string;
+      serverId: string;
+      userId: string;
+      expectedCaseRevision: number;
+      challengeId: string;
+      generation: number;
+      resolvedBy: string;
+      resolvedAt: Date;
+    },
+    attemptId: string,
+    staleBefore: Date
+  ): Promise<VerificationEvent | null> {
+    const eventIndex = this.events.findIndex((event) => {
+      const metadata =
+        event.metadata && typeof event.metadata === 'object' && !Array.isArray(event.metadata)
+          ? event.metadata
+          : {};
+      const resolution =
+        metadata.captcha_resolution &&
+        typeof metadata.captcha_resolution === 'object' &&
+        !Array.isArray(metadata.captcha_resolution)
+          ? metadata.captcha_resolution
+          : {};
+      const available =
+        event.containment_status !== CaseContainmentStatus.IN_PROGRESS &&
+        event.quarantine_attempt_id === null;
+      const staleCaptchaFinalization =
+        event.containment_status === CaseContainmentStatus.IN_PROGRESS &&
+        event.quarantine_attempt_id?.startsWith(CAPTCHA_FINALIZATION_ATTEMPT_PREFIX) === true &&
+        (!event.quarantine_lease_renewed_at ||
+          event.quarantine_lease_renewed_at.getTime() <= staleBefore.getTime());
+      return (
+        event.id === input.id &&
+        event.server_id === input.serverId &&
+        event.user_id === input.userId &&
+        event.status === VerificationStatus.VERIFIED &&
+        event.resolved_by === input.resolvedBy &&
+        event.case_revision === input.expectedCaseRevision &&
+        resolution.challenge_id === input.challengeId &&
+        resolution.generation === input.generation &&
+        (available || staleCaptchaFinalization)
+      );
+    });
+    if (eventIndex === -1) {
+      return null;
+    }
+    const claimed = {
+      ...this.events[eventIndex],
+      containment_status: CaseContainmentStatus.IN_PROGRESS,
+      quarantine_attempt_id: attemptId,
+      quarantine_lease_renewed_at: new Date(),
+      updated_at: new Date(),
+    };
+    this.events[eventIndex] = claimed;
+    return { ...claimed };
+  }
+
+  public async releaseCaptchaFinalization(id: string, attemptId: string): Promise<boolean> {
+    const eventIndex = this.events.findIndex(
+      (event) =>
+        event.id === id &&
+        event.status === VerificationStatus.VERIFIED &&
+        event.containment_status === CaseContainmentStatus.IN_PROGRESS &&
+        event.quarantine_attempt_id === attemptId
+    );
+    if (eventIndex === -1) {
+      return false;
+    }
+    this.events[eventIndex] = {
+      ...this.events[eventIndex],
+      containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+      quarantine_attempt_id: null,
+      quarantine_lease_renewed_at: null,
+      updated_at: new Date(),
+    };
+    return true;
   }
 
   public async recordSubjectCaseEvidence(

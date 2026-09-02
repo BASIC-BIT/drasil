@@ -1827,6 +1827,23 @@ describe('ModerationActionRequestService', () => {
     });
   });
 
+  it('keeps submission-limit attention retryable when moderator notification fails', async () => {
+    const { notificationManager, repository, service } = buildService([
+      notifyCaptchaAttentionRequest,
+    ]);
+    notificationManager.notifyCaptchaAttention.mockResolvedValueOnce(false);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(repository.completed).toEqual([]);
+    expect(repository.failed).toEqual([
+      {
+        id: 'captcha-attention-request-1',
+        error: 'Failed to notify moderators about CAPTCHA case ver-1.',
+      },
+    ]);
+  });
+
   it('discards submission-limit attention after the challenge generation changes', async () => {
     const { captchaChallengeService, notificationManager, repository, service, threadManager } =
       buildService([notifyCaptchaAttentionRequest]);

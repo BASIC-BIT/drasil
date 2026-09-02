@@ -13,6 +13,7 @@ import {
   VerificationStatus,
 } from '../../repositories/types';
 import { getPrismaClient } from '../testDb';
+import { CAPTCHA_FINALIZATION_ATTEMPT_PREFIX } from '../../utils/caseRoleRelease';
 
 const describeIntegration = process.env.JEST_INTEGRATION === '1' ? describe : describe.skip;
 
@@ -216,6 +217,72 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       })
     );
     await expect(verifications.completeCaptchaVerification(completion)).resolves.toBeNull();
+  });
+
+  it('serializes CAPTCHA finalization against case reopen', async () => {
+    const { verification } = await createCase(
+      'guild-captcha-finalization-lease',
+      'user-captcha-finalization-lease'
+    );
+    const challenges = new CaptchaChallengeRepository(prisma);
+    const verifications = new VerificationEventRepository(prisma);
+    const challenge = await challenges.create({
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
+      passEffect: CaptchaChallengePassEffect.VERIFY_JOIN_ONLY,
+      caseRevision: verification.case_revision,
+      tokenHash: 'finalization-lease-hash',
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    await prisma.captcha_challenges.update({
+      where: { id: challenge.id },
+      data: { status: CaptchaChallengeStatus.PASSED, passed_at: new Date() },
+    });
+    const completion = {
+      challengeId: challenge.id,
+      expectedCaseRevision: verification.case_revision,
+      generation: challenge.generation,
+      id: verification.id,
+      resolvedAt: new Date(),
+      resolvedBy: 'drasil:captcha',
+      serverId: verification.server_id,
+      userId: verification.user_id,
+    };
+    const completed = await verifications.completeCaptchaVerification(completion);
+    expect(completed).toEqual(
+      expect.objectContaining({
+        case_revision: completion.expectedCaseRevision,
+        containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+        metadata: expect.objectContaining({
+          captcha_resolution: expect.objectContaining({
+            challenge_id: completion.challengeId,
+            generation: completion.generation,
+          }),
+        }),
+        quarantine_attempt_id: null,
+        resolved_by: completion.resolvedBy,
+        status: VerificationStatus.VERIFIED,
+      })
+    );
+    const attemptId = `${CAPTCHA_FINALIZATION_ATTEMPT_PREFIX}integration`;
+
+    await expect(
+      verifications.claimCaptchaFinalization(completion, attemptId, new Date(0))
+    ).resolves.toEqual(
+      expect.objectContaining({
+        containment_status: CaseContainmentStatus.IN_PROGRESS,
+        quarantine_attempt_id: attemptId,
+      })
+    );
+    await expect(verifications.reopen(verification.id)).resolves.toBeNull();
+    await expect(
+      verifications.releaseCaptchaFinalization(verification.id, attemptId)
+    ).resolves.toBe(true);
+    await expect(verifications.reopen(verification.id)).resolves.toEqual(
+      expect.objectContaining({ status: VerificationStatus.PENDING })
+    );
   });
 
   it('distinguishes duplicate cases from public-link token collisions', async () => {
