@@ -116,18 +116,32 @@ export async function insertModerationActionRequestWithReceipt(
        $11::jsonb
      )
        on conflict (idempotency_key) do update
-       set status = 'queued',
+       set status = case
+             when moderation_action_requests.status in ('processing', 'completed')
+               then moderation_action_requests.status
+             else 'queued'
+           end,
           updated_at = now(),
           failed_at = null,
           last_error = null,
-          actor_id = excluded.actor_id,
-          actor_surface = excluded.actor_surface,
+          actor_id = case
+            when moderation_action_requests.status in ('processing', 'completed')
+              then moderation_action_requests.actor_id
+            else excluded.actor_id
+          end,
+          actor_surface = case
+            when moderation_action_requests.status in ('processing', 'completed')
+              then moderation_action_requests.actor_surface
+            else excluded.actor_surface
+          end,
           metadata = coalesce(moderation_action_requests.metadata, '{}'::jsonb) || excluded.metadata,
          message_deletion_job_id = coalesce(
            moderation_action_requests.message_deletion_job_id,
            excluded.message_deletion_job_id
           )
        where moderation_action_requests.status = 'failed'
+          or moderation_action_requests.action_type <>
+            'apply_captcha_pass'::moderation_action_request_type
        returning
          id::text,
          message_deletion_job_id::text as "messageDeletionJobId",

@@ -93,9 +93,12 @@ describe('queueSerializedModerationActionRequestWithReceipt', () => {
     expect(result).toEqual({ id: 'request-2', status: 'queued' });
     const insertSql = String(mocks.query.mock.calls[3]?.[0]);
     expect(insertSql).toContain('insert into moderation_action_requests');
-    expect(insertSql).toContain('actor_id = excluded.actor_id');
-    expect(insertSql).toContain('actor_surface = excluded.actor_surface');
+    expect(insertSql).toContain('actor_id = case');
+    expect(insertSql).toContain('else excluded.actor_id');
+    expect(insertSql).toContain('actor_surface = case');
+    expect(insertSql).toContain('else excluded.actor_surface');
     expect(insertSql).toContain("where moderation_action_requests.status = 'failed'");
+    expect(insertSql).toContain('or moderation_action_requests.action_type <>');
     expect(mocks.query).toHaveBeenLastCalledWith('commit');
     expect(mocks.release).toHaveBeenCalledTimes(1);
   });
@@ -121,6 +124,27 @@ describe('insertModerationActionRequestWithReceipt', () => {
 
     const statement = String(mocks.query.mock.calls[0]?.[0]);
     expect(statement).toContain("where moderation_action_requests.status = 'failed'");
+    expect(statement).toContain('or moderation_action_requests.action_type <>');
     expect(statement).toContain('and not exists (select 1 from upserted)');
+  });
+
+  it('preserves queued resubmission updates for other moderation actions', async () => {
+    mocks.query.mockResolvedValueOnce({ rows: [{ id: 'active-1', status: 'queued' }] });
+
+    await expect(
+      insertModerationActionRequestWithReceipt({ query: mocks.query } as never, {
+        actionType: 'ban_case_user',
+        actorId: 'moderator-2',
+        actorSurface: 'web',
+        idempotencyKey: 'web:case-action:ban:guild-1:case-1',
+        metadata: { reason: 'Corrected reason' },
+        serverId: 'guild-1',
+      })
+    ).resolves.toEqual({ id: 'active-1', status: 'queued' });
+
+    const statement = String(mocks.query.mock.calls[0]?.[0]);
+    expect(statement).toContain('metadata = coalesce');
+    expect(statement).toContain('else excluded.actor_id');
+    expect(statement).toContain('or moderation_action_requests.action_type <>');
   });
 });
