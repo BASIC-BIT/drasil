@@ -631,10 +631,19 @@ export class InteractionHandler implements IInteractionHandler {
       return;
     }
 
-    const activeCase = await this.verificationEventRepository.findActiveByUserAndServer(
-      parsed.userId,
-      guildId
-    );
+    const [activeCase, selectedCase] = await Promise.all([
+      this.verificationEventRepository.findActiveByUserAndServer(parsed.userId, guildId),
+      parsed.verificationEventId
+        ? this.verificationEventRepository.findById(parsed.verificationEventId)
+        : Promise.resolve(null),
+    ]);
+    const captchaCase = parsed.verificationEventId
+      ? selectedCase?.server_id === guildId &&
+        selectedCase.user_id === parsed.userId &&
+        selectedCase.status === VerificationStatus.PENDING
+        ? selectedCase
+        : null
+      : activeCase;
     const serverConfig = await this.configService.getServerConfig(guildId);
     const accountQuarantineEnabled = getAccountQuarantineSettings(serverConfig.settings).enabled;
     const captchaSettings = getCaptchaSettings(serverConfig.settings);
@@ -708,12 +717,16 @@ export class InteractionHandler implements IInteractionHandler {
           if (
             this.captchaChallengeService &&
             captchaSettings.mode !== 'off' &&
-            activeCase.case_kind !== CaseKind.COMPROMISED_ACCOUNT
+            captchaCase?.case_kind !== CaseKind.COMPROMISED_ACCOUNT
           ) {
-            const captchaChallenge = await this.captchaChallengeService.findByCaseId(activeCase.id);
-            const captchaParsed = { ...parsed, verificationEventId: activeCase.id };
+            const captchaChallenge = captchaCase
+              ? await this.captchaChallengeService.findByCaseId(captchaCase.id)
+              : null;
+            const captchaParsed = captchaCase
+              ? { ...parsed, verificationEventId: captchaCase.id }
+              : parsed;
             if (!alreadyBanned) {
-              if (!captchaChallenge) {
+              if (captchaCase && !captchaChallenge) {
                 actionButtons.push(
                   this.adminActionButton(
                     captchaParsed,
@@ -723,12 +736,13 @@ export class InteractionHandler implements IInteractionHandler {
                   )
                 );
               } else if (
-                captchaChallenge.status === CaptchaChallengeStatus.FAILED ||
-                captchaChallenge.status === CaptchaChallengeStatus.EXPIRED ||
-                captchaChallenge.status === CaptchaChallengeStatus.BYPASSED ||
-                captchaChallenge.status === CaptchaChallengeStatus.CANCELLED ||
-                (captchaChallenge.status === CaptchaChallengeStatus.PENDING &&
-                  Boolean(captchaChallenge.delivery_error_code))
+                captchaChallenge &&
+                (captchaChallenge.status === CaptchaChallengeStatus.FAILED ||
+                  captchaChallenge.status === CaptchaChallengeStatus.EXPIRED ||
+                  captchaChallenge.status === CaptchaChallengeStatus.BYPASSED ||
+                  captchaChallenge.status === CaptchaChallengeStatus.CANCELLED ||
+                  (captchaChallenge.status === CaptchaChallengeStatus.PENDING &&
+                    Boolean(captchaChallenge.delivery_error_code)))
               ) {
                 actionButtons.push(
                   this.adminActionButton(
@@ -745,6 +759,7 @@ export class InteractionHandler implements IInteractionHandler {
               }
             }
             if (
+              captchaCase &&
               captchaChallenge &&
               (captchaChallenge.status === CaptchaChallengeStatus.PENDING ||
                 captchaChallenge.status === CaptchaChallengeStatus.FAILED ||

@@ -46,7 +46,7 @@ import {
   type VerificationChannelPermissionSyncState,
 } from '../repositories/types';
 import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
-import { CAPTCHA_PASS_PRESENTATION_ATTEMPT_PREFIX } from '../utils/caseRoleRelease';
+import { CAPTCHA_PRESENTATION_ATTEMPT_PREFIX } from '../utils/caseRoleRelease';
 import { buildReportIntakeAdminActionsCustomId } from '../utils/reportIntakeAdminActions';
 import { IModerationQueueService } from './ModerationQueueService';
 import { CaptchaAttentionReason, INotificationManager } from './NotificationManager';
@@ -1154,17 +1154,18 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     challenge: CaptchaChallenge
   ): Promise<VerificationEvent> {
     if (verificationEvent.status !== VerificationStatus.PENDING) {
-      await this.updateCaptchaPassPresentation(verificationEvent, challenge);
+      await this.updateCaptchaPresentation(verificationEvent, challenge);
       return verificationEvent;
     }
 
-    const attemptId = `${CAPTCHA_PASS_PRESENTATION_ATTEMPT_PREFIX}${challenge.id}:${challenge.generation}`;
-    const claimed = await this.verificationEventRepository.claimCaptchaPassPresentation({
+    const attemptId = `${CAPTCHA_PRESENTATION_ATTEMPT_PREFIX}${challenge.id}:${challenge.generation}:passed`;
+    const claimed = await this.verificationEventRepository.claimCaptchaPresentation({
       id: verificationEvent.id,
       serverId: verificationEvent.server_id,
       userId: verificationEvent.user_id,
       challengeId: challenge.id,
       generation: challenge.generation,
+      expectedStatus: CaptchaChallengeStatus.PASSED,
       attemptId,
     });
     if (!claimed) {
@@ -1173,7 +1174,7 @@ export class ModerationActionRequestService implements IModerationActionRequestS
         throw new Error(`CAPTCHA case ${verificationEvent.id} is unavailable.`);
       }
       if (current.status !== VerificationStatus.PENDING) {
-        await this.updateCaptchaPassPresentation(current, challenge);
+        await this.updateCaptchaPresentation(current, challenge);
         return current;
       }
       throw new Error(
@@ -1183,7 +1184,7 @@ export class ModerationActionRequestService implements IModerationActionRequestS
 
     let presentationError: unknown = null;
     try {
-      await this.updateCaptchaPassPresentation(claimed, challenge);
+      await this.updateCaptchaPresentation(claimed, challenge);
       const statusSent = await this.threadManager.sendCaptchaStatus(
         claimed,
         'Security check completed.'
@@ -1215,9 +1216,10 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     return released;
   }
 
-  private async updateCaptchaPassPresentation(
+  private async updateCaptchaPresentation(
     verificationEvent: VerificationEvent,
-    challenge: CaptchaChallenge
+    challenge: CaptchaChallenge,
+    description = 'passed'
   ): Promise<void> {
     const presentationUpdated = this.notificationManager.updateCaptchaChallengePresentation
       ? await this.notificationManager.updateCaptchaChallengePresentation(
@@ -1227,7 +1229,7 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       : false;
     if (!presentationUpdated) {
       throw new Error(
-        `Failed to refresh passed CAPTCHA presentation for case ${verificationEvent.id}.`
+        `Failed to refresh ${description} CAPTCHA presentation for case ${verificationEvent.id}.`
       );
     }
   }
@@ -1242,6 +1244,122 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     if (!notified) {
       throw new Error(`Failed to notify moderators about CAPTCHA case ${verificationEvent.id}.`);
     }
+  }
+
+  private captchaChallengeMatchesAttentionReason(
+    challenge: CaptchaChallenge | null,
+    reason: 'delivery_failed' | 'submission_limit' | 'expired' | 'cancelled' | 'bypassed'
+  ): challenge is CaptchaChallenge {
+    return reason === 'delivery_failed'
+      ? challenge?.status === CaptchaChallengeStatus.PENDING &&
+          challenge.delivered_at === null &&
+          Boolean(challenge.delivery_error_code)
+      : reason === 'cancelled'
+        ? challenge?.status === CaptchaChallengeStatus.CANCELLED
+        : reason === 'bypassed'
+          ? challenge?.status === CaptchaChallengeStatus.BYPASSED
+          : challenge?.status ===
+            (reason === 'expired' ? CaptchaChallengeStatus.EXPIRED : CaptchaChallengeStatus.FAILED);
+  }
+
+  private async requireCaptchaStatusPresentation(
+    verificationEvent: VerificationEvent,
+    challenge: CaptchaChallenge,
+    reason: 'delivery_failed' | 'submission_limit' | 'expired' | 'cancelled' | 'bypassed'
+  ): Promise<boolean> {
+    const canPresentAfterResolution = reason === 'cancelled' || reason === 'bypassed';
+    if (verificationEvent.status !== VerificationStatus.PENDING) {
+      if (canPresentAfterResolution) {
+        await this.updateCaptchaPresentation(verificationEvent, challenge, reason);
+      }
+      return canPresentAfterResolution;
+    }
+
+    const attemptId = `${CAPTCHA_PRESENTATION_ATTEMPT_PREFIX}${challenge.id}:${challenge.generation}:${reason}`;
+    const claimed = await this.verificationEventRepository.claimCaptchaPresentation({
+      id: verificationEvent.id,
+      serverId: verificationEvent.server_id,
+      userId: verificationEvent.user_id,
+      challengeId: challenge.id,
+      generation: challenge.generation,
+      expectedStatus: challenge.status,
+      requireDeliveryError: reason === 'delivery_failed',
+      attemptId,
+    });
+    if (!claimed) {
+      const [current, currentChallenge] = await Promise.all([
+        this.verificationEventRepository.findById(verificationEvent.id),
+        this.captchaChallengeService?.findByCaseId(verificationEvent.id) ?? Promise.resolve(null),
+      ]);
+      if (!current) {
+        throw new Error(`CAPTCHA case ${verificationEvent.id} is unavailable.`);
+      }
+      const challengeStillMatches =
+        currentChallenge?.id === challenge.id &&
+        currentChallenge.generation === challenge.generation &&
+        this.captchaChallengeMatchesAttentionReason(currentChallenge, reason);
+      if (current.status !== VerificationStatus.PENDING) {
+        if (canPresentAfterResolution && challengeStillMatches) {
+          await this.updateCaptchaPresentation(current, currentChallenge, reason);
+          return true;
+        }
+        return false;
+      }
+      if (!challengeStillMatches) {
+        return false;
+      }
+      throw new Error(
+        `CAPTCHA case ${verificationEvent.id} changed before ${reason} could be presented.`
+      );
+    }
+
+    let presentationError: unknown = null;
+    try {
+      await this.updateCaptchaPresentation(claimed, challenge, reason);
+      if (reason === 'cancelled') {
+        const statusSent = await this.threadManager.sendCaptchaStatus(
+          claimed,
+          'This security check is no longer active.'
+        );
+        if (!statusSent) {
+          throw new Error(`Failed to deliver cancelled CAPTCHA status for case ${claimed.id}.`);
+        }
+      } else if (reason !== 'bypassed') {
+        const statusSent = await this.threadManager.sendCaptchaStatus(
+          claimed,
+          reason === 'delivery_failed'
+            ? 'This security check link could not be delivered. Ask a moderator to retry.'
+            : reason === 'expired'
+              ? 'This security check expired. Ask a moderator to issue a new check.'
+              : 'This security check reached its attempt limit. Ask a moderator to issue a new check.'
+        );
+        if (!statusSent) {
+          throw new Error(`Failed to deliver CAPTCHA status for case ${claimed.id}.`);
+        }
+        await this.requireCaptchaAttention(claimed, reason);
+      }
+    } catch (error) {
+      presentationError = error;
+    }
+
+    const released = await this.verificationEventRepository.updateQuarantineAttempt(
+      claimed.id,
+      attemptId,
+      {
+        case_kind: CaseKind.STANDARD,
+        attention_state: claimed.attention_state,
+        containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+        parked_at: null,
+        parked_by: null,
+      }
+    );
+    if (!released) {
+      throw new Error(`Failed to release CAPTCHA presentation claim for case ${claimed.id}.`);
+    }
+    if (presentationError) {
+      throw presentationError;
+    }
+    return true;
   }
 
   private async notifyCaptchaAttention(request: ModerationActionRequest): Promise<void> {
@@ -1284,19 +1402,7 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     ) {
       throw new Error('Security-check attention case binding is invalid.');
     }
-    const challengeStateMatches =
-      reason === 'delivery_failed'
-        ? challenge?.status === CaptchaChallengeStatus.PENDING &&
-          challenge.delivered_at === null &&
-          Boolean(challenge.delivery_error_code)
-        : reason === 'cancelled'
-          ? challenge?.status === CaptchaChallengeStatus.CANCELLED
-          : reason === 'bypassed'
-            ? challenge?.status === CaptchaChallengeStatus.BYPASSED
-            : challenge?.status ===
-              (reason === 'expired'
-                ? CaptchaChallengeStatus.EXPIRED
-                : CaptchaChallengeStatus.FAILED);
+    const challengeStateMatches = this.captchaChallengeMatchesAttentionReason(challenge, reason);
     if (
       (reason !== 'cancelled' &&
         reason !== 'bypassed' &&
@@ -1318,61 +1424,20 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       });
       return;
     }
-    if (reason === 'cancelled' || reason === 'bypassed') {
-      const presentationUpdated = this.notificationManager.updateCaptchaChallengePresentation
-        ? await this.notificationManager.updateCaptchaChallengePresentation(
-            verificationEvent,
-            challenge
-          )
-        : false;
-      if (!presentationUpdated) {
-        throw new Error(
-          `Failed to refresh ${reason} CAPTCHA presentation for case ${verificationEvent.id}.`
-        );
-      }
-      if (reason === 'cancelled' && verificationEvent.status === VerificationStatus.PENDING) {
-        const statusSent = await this.threadManager.sendCaptchaStatus(
-          verificationEvent,
-          'This security check is no longer active.'
-        );
-        if (!statusSent) {
-          throw new Error(
-            `Failed to deliver cancelled CAPTCHA status for case ${verificationEvent.id}.`
-          );
-        }
-      }
-      await this.repository.complete(request.id, {
-        action_type: request.action_type,
-        challenge_id: challengeId,
-        generation,
-        presented: true,
-        reason,
-        target_user_id: request.target_user_id,
-        verification_event_id: request.verification_event_id,
-      });
-      return;
-    }
-    await this.notificationManager
-      .updateCaptchaChallengePresentation?.(verificationEvent, challenge)
-      .catch(() => false);
-    const statusSent = await this.threadManager.sendCaptchaStatus(
+    const presented = await this.requireCaptchaStatusPresentation(
       verificationEvent,
-      reason === 'delivery_failed'
-        ? 'This security check link could not be delivered. Ask a moderator to retry.'
-        : reason === 'expired'
-          ? 'This security check expired. Ask a moderator to issue a new check.'
-          : 'This security check reached its attempt limit. Ask a moderator to issue a new check.'
+      challenge,
+      reason
     );
-    if (!statusSent) {
-      throw new Error(`Failed to deliver CAPTCHA status for case ${verificationEvent.id}.`);
-    }
-    await this.requireCaptchaAttention(verificationEvent, reason);
     await this.repository.complete(request.id, {
       action_type: request.action_type,
       challenge_id: challengeId,
       generation,
-      notified: true,
+      ...(reason === 'cancelled' || reason === 'bypassed'
+        ? { presented }
+        : { notified: presented }),
       reason,
+      ...(!presented ? { stale: true } : {}),
       target_user_id: request.target_user_id,
       verification_event_id: request.verification_event_id,
     });

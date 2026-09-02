@@ -22,7 +22,7 @@ import {
 import {
   CASE_ATTENTION_ATTEMPT_PREFIX,
   CAPTCHA_FINALIZATION_ATTEMPT_PREFIX,
-  CAPTCHA_PASS_PRESENTATION_ATTEMPT_PREFIX,
+  CAPTCHA_PRESENTATION_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_RECONCILIATION_ATTEMPT_PREFIX,
   CASE_TERMINAL_ACTION_ATTEMPT_PREFIX,
@@ -51,12 +51,14 @@ export interface CaptchaVerificationCompletionInput {
   resolvedAt: Date;
 }
 
-export interface CaptchaPassPresentationClaimInput {
+export interface CaptchaPresentationClaimInput {
   id: string;
   serverId: string;
   userId: string;
   challengeId: string;
   generation: number;
+  expectedStatus: CaptchaChallengeStatus;
+  requireDeliveryError?: boolean;
   attemptId: string;
 }
 
@@ -145,9 +147,7 @@ export interface IVerificationEventRepository {
   completeCaptchaVerification(
     input: CaptchaVerificationCompletionInput
   ): Promise<VerificationEvent | null>;
-  claimCaptchaPassPresentation(
-    input: CaptchaPassPresentationClaimInput
-  ): Promise<VerificationEvent | null>;
+  claimCaptchaPresentation(input: CaptchaPresentationClaimInput): Promise<VerificationEvent | null>;
   claimCaptchaFinalization(
     input: CaptchaVerificationCompletionInput,
     attemptId: string,
@@ -256,8 +256,23 @@ export class VerificationEventRepository implements IVerificationEventRepository
             attention_state: CaseAttentionState.REVIEW_REQUIRED,
             OR: [
               { containment_status: { not: CaseContainmentStatus.IN_PROGRESS } },
-              { quarantine_lease_renewed_at: null },
-              { quarantine_lease_renewed_at: { lte: staleBefore } },
+              {
+                containment_status: CaseContainmentStatus.IN_PROGRESS,
+                AND: [
+                  {
+                    OR: [
+                      { quarantine_lease_renewed_at: null },
+                      { quarantine_lease_renewed_at: { lte: staleBefore } },
+                    ],
+                  },
+                  {
+                    OR: [
+                      { quarantine_attempt_id: null },
+                      { NOT: { quarantine_attempt_id: { contains: ':' } } },
+                    ],
+                  },
+                ],
+              },
             ],
           },
           data: {
@@ -681,11 +696,11 @@ export class VerificationEventRepository implements IVerificationEventRepository
     }
   }
 
-  public async claimCaptchaPassPresentation(
-    input: CaptchaPassPresentationClaimInput
+  public async claimCaptchaPresentation(
+    input: CaptchaPresentationClaimInput
   ): Promise<VerificationEvent | null> {
-    if (!input.attemptId.startsWith(CAPTCHA_PASS_PRESENTATION_ATTEMPT_PREFIX)) {
-      throw new RepositoryError('CAPTCHA pass presentation requires a presentation attempt ID.');
+    if (!input.attemptId.startsWith(CAPTCHA_PRESENTATION_ATTEMPT_PREFIX)) {
+      throw new RepositoryError('CAPTCHA presentation requires a presentation attempt ID.');
     }
     try {
       const rows = await this.prisma.$queryRaw<VerificationEvent[]>`
@@ -718,13 +733,20 @@ export class VerificationEventRepository implements IVerificationEventRepository
               AND challenge.server_id = target.server_id
               AND challenge.user_id = target.user_id
               AND challenge.generation = ${input.generation}
-              AND challenge.status = ${CaptchaChallengeStatus.PASSED}::captcha_challenge_status
+              AND challenge.status = ${input.expectedStatus}::captcha_challenge_status
+              AND (
+                ${input.requireDeliveryError ?? false} = false
+                OR (
+                  challenge.delivered_at IS NULL
+                  AND challenge.delivery_error_code IS NOT NULL
+                )
+              )
           )
         RETURNING target.*
       `;
       return rows[0] ?? null;
     } catch (error) {
-      this.handleError(error, 'claimCaptchaPassPresentation');
+      this.handleError(error, 'claimCaptchaPresentation');
     }
   }
 

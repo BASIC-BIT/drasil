@@ -68,6 +68,18 @@ export function captchaProviderConfigurationIssues(): string[] {
   return issues;
 }
 
+export function assertCaptchaProviderConfigured(mode: string | undefined): void {
+  if (!mode || mode === 'off') {
+    return;
+  }
+  const issues = captchaProviderConfigurationIssues();
+  if (issues.length > 0) {
+    throw new Error(
+      `Configure the browser security-check provider before enabling it: ${issues.join(', ')}.`
+    );
+  }
+}
+
 function sanitizeErrorCodes(values: readonly string[] | undefined): string[] {
   return [...new Set(values ?? [])]
     .slice(0, 12)

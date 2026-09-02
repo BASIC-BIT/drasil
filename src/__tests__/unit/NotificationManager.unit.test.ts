@@ -282,7 +282,7 @@ describe('NotificationManager (unit)', () => {
       'verify_user-1',
       'ban_user-1',
       'close_user-1',
-      'admin_actions:m:c:user-1',
+      'admin_actions:m:c:user-1:_:ver-1',
     ]);
   });
 

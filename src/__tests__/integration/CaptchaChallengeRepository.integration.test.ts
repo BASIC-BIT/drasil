@@ -23,7 +23,7 @@ import {
 import { getPrismaClient } from '../testDb';
 import {
   CAPTCHA_FINALIZATION_ATTEMPT_PREFIX,
-  CAPTCHA_PASS_PRESENTATION_ATTEMPT_PREFIX,
+  CAPTCHA_PRESENTATION_ATTEMPT_PREFIX,
   CASE_TERMINAL_ACTION_ATTEMPT_PREFIX,
 } from '../../utils/caseRoleRelease';
 
@@ -1464,15 +1464,16 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       where: { id: challenge.id },
       data: { status: CaptchaChallengeStatus.PASSED, passed_at: new Date() },
     });
-    const presentationAttemptId = `${CAPTCHA_PASS_PRESENTATION_ATTEMPT_PREFIX}${challenge.id}:${challenge.generation}`;
+    const presentationAttemptId = `${CAPTCHA_PRESENTATION_ATTEMPT_PREFIX}${challenge.id}:${challenge.generation}:passed`;
 
     await expect(
-      verifications.claimCaptchaPassPresentation({
+      verifications.claimCaptchaPresentation({
         id: verification.id,
         serverId: verification.server_id,
         userId: verification.user_id,
         challengeId: challenge.id,
         generation: challenge.generation,
+        expectedStatus: CaptchaChallengeStatus.PASSED,
         attemptId: presentationAttemptId,
       })
     ).resolves.toEqual(
@@ -1481,6 +1482,15 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
         quarantine_attempt_id: presentationAttemptId,
       })
     );
+    await expect(
+      verifications.claimQuarantineAttempt(
+        verification.id,
+        verification.server_id,
+        verification.user_id,
+        'quarantine-attempt',
+        new Date(Date.now() + 60_000)
+      )
+    ).resolves.toBeNull();
     await expect(
       verifications.claimTerminalActions(
         [verification.id],
@@ -1510,6 +1520,36 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
         status: VerificationStatus.PENDING,
       })
     );
+    await prisma.captcha_challenges.update({
+      where: { id: challenge.id },
+      data: { status: CaptchaChallengeStatus.EXPIRED },
+    });
+    const expiredPresentationAttemptId = `${CAPTCHA_PRESENTATION_ATTEMPT_PREFIX}${challenge.id}:${challenge.generation}:expired`;
+    await expect(
+      verifications.claimCaptchaPresentation({
+        id: verification.id,
+        serverId: verification.server_id,
+        userId: verification.user_id,
+        challengeId: challenge.id,
+        generation: challenge.generation,
+        expectedStatus: CaptchaChallengeStatus.EXPIRED,
+        attemptId: expiredPresentationAttemptId,
+      })
+    ).resolves.toEqual(
+      expect.objectContaining({
+        containment_status: CaseContainmentStatus.IN_PROGRESS,
+        quarantine_attempt_id: expiredPresentationAttemptId,
+      })
+    );
+    await expect(
+      verifications.updateQuarantineAttempt(verification.id, expiredPresentationAttemptId, {
+        case_kind: CaseKind.STANDARD,
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+        parked_at: null,
+        parked_by: null,
+      })
+    ).resolves.toEqual(expect.objectContaining({ status: VerificationStatus.PENDING }));
     await expect(
       verifications.claimTerminalActions(
         [verification.id],

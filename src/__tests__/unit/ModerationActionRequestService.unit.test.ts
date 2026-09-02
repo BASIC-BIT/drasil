@@ -1051,11 +1051,11 @@ describe('ModerationActionRequestService', () => {
       user_id: 'user-1',
     } as any;
     const verificationEventRepository = {
-      claimCaptchaPassPresentation: jest.fn(
-        async (): Promise<any> => ({
+      claimCaptchaPresentation: jest.fn(
+        async (input: { attemptId: string }): Promise<any> => ({
           ...pendingVerificationEvent,
           containment_status: CaseContainmentStatus.IN_PROGRESS,
-          quarantine_attempt_id: 'captcha-pass-presentation:challenge-1:1',
+          quarantine_attempt_id: input.attemptId,
         })
       ),
       findById: jest.fn(async (): Promise<any> => pendingVerificationEvent),
@@ -1883,7 +1883,7 @@ describe('ModerationActionRequestService', () => {
         thread_id: 'thread-1',
         user_id: 'user-1',
       } as any);
-    verificationEventRepository.claimCaptchaPassPresentation.mockResolvedValueOnce(null);
+    verificationEventRepository.claimCaptchaPresentation.mockResolvedValueOnce(null);
 
     await expect(service.processPendingRequests()).resolves.toBe(1);
 
@@ -2070,6 +2070,40 @@ describe('ModerationActionRequestService', () => {
         error: 'Failed to deliver CAPTCHA status for case ver-1.',
       },
     ]);
+  });
+
+  it('does not post terminal CAPTCHA alerts after a moderator resolves the case first', async () => {
+    const { notificationManager, repository, service, threadManager, verificationEventRepository } =
+      buildService([notifyCaptchaAttentionRequest]);
+    verificationEventRepository.findById
+      .mockResolvedValueOnce({
+        id: 'ver-1',
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        case_kind: CaseKind.STANDARD,
+        case_revision: 2,
+        containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+        server_id: 'guild-1',
+        status: VerificationStatus.PENDING,
+        thread_id: 'thread-1',
+        user_id: 'user-1',
+      } as any)
+      .mockResolvedValueOnce({
+        id: 'ver-1',
+        server_id: 'guild-1',
+        status: VerificationStatus.CLOSED_NO_ACTION,
+        thread_id: 'thread-1',
+        user_id: 'user-1',
+      } as any);
+    verificationEventRepository.claimCaptchaPresentation.mockResolvedValueOnce(null);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(threadManager.sendCaptchaStatus).not.toHaveBeenCalled();
+    expect(notificationManager.notifyCaptchaAttention).not.toHaveBeenCalled();
+    expect(repository.completed[0]).toEqual({
+      id: 'captcha-attention-request-1',
+      result: expect.objectContaining({ notified: false, stale: true }),
+    });
   });
 
   it('keeps expired attention retryable when moderator notification fails', async () => {

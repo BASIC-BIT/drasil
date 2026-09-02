@@ -81,8 +81,11 @@ function parseSurface(value: string): AdminActionSurface | null {
   return null;
 }
 
-export function buildCaseAdminActionsCustomId(userId: string): string {
-  return buildAdminActionCustomId('menu', 'case', userId);
+export function buildCaseAdminActionsCustomId(
+  userId: string,
+  verificationEventId?: string
+): string {
+  return buildAdminActionCustomId('menu', 'case', userId, undefined, verificationEventId);
 }
 
 export function buildObservedAdminActionsCustomId(

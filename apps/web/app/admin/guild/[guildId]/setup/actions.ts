@@ -18,6 +18,7 @@ import {
 } from '@/lib/setupArtifactActionQueue';
 import { createSetupDataAdapter } from '@/lib/setupDataAdapter';
 import { createSetupDashboardService } from '@/lib/setupDashboardService';
+import { assertCaptchaProviderConfigured } from '@/lib/turnstile';
 
 function readOptionalFormString(formData: FormData, key: string): string | null | undefined {
   const value = formData.get(key);
@@ -387,6 +388,7 @@ export async function saveGuildSetup(guildId: string, formData: FormData): Promi
     guildOwner: guild.owner,
     nextLevel: update.analyticsConsentLevel,
   });
+  assertCaptchaProviderConfigured(update.captchaMode);
 
   await service.updateGuildSetup(update);
   revalidatePath(`/admin/guild/${guildId}/setup`);

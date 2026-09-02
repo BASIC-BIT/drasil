@@ -1298,8 +1298,8 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     return { ...updated };
   }
 
-  async claimCaptchaPassPresentation(
-    input: import('../../repositories/VerificationEventRepository').CaptchaPassPresentationClaimInput
+  async claimCaptchaPresentation(
+    input: import('../../repositories/VerificationEventRepository').CaptchaPresentationClaimInput
   ): Promise<VerificationEvent | null> {
     const eventIndex = this.events.findIndex(
       (event) =>

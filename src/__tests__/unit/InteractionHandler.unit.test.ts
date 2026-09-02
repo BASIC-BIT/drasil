@@ -402,7 +402,7 @@ describe('InteractionHandler (unit)', () => {
       completeCaseRoleRelease: jest.fn(),
       completeVerificationRelease: jest.fn(),
       completeCaptchaVerification: jest.fn(),
-      claimCaptchaPassPresentation: jest.fn(),
+      claimCaptchaPresentation: jest.fn(),
       claimCaptchaFinalization: jest.fn(),
       releaseCaptchaFinalization: jest.fn(),
       reopen: jest.fn(),
@@ -1220,6 +1220,57 @@ describe('InteractionHandler (unit)', () => {
       (row: { toJSON(): { components: any[] } }) => row.toJSON().components
     );
     expect(buttons.map((button: { label?: string }) => button.label)).toEqual(['Kick User']);
+  });
+
+  it('binds CAPTCHA controls to the case notification the moderator selected', async () => {
+    const selectedCase = buildVerificationEvent('ver-selected', 'user-1');
+    const newestCase = buildVerificationEvent('ver-newest', 'user-1');
+    verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(newestCase);
+    verificationEventRepository.findById.mockResolvedValue(selectedCase);
+    verificationEventRepository.findByUserAndServer.mockResolvedValue([newestCase, selectedCase]);
+    (configService.getServerConfig as jest.Mock).mockResolvedValue({
+      settings: { captcha_mode: 'manual' },
+    });
+    const captchaChallengeService = {
+      findByCaseId: jest.fn().mockResolvedValue(null),
+    } as any;
+    const handler = new InteractionHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      captchaChallengeService
+    );
+    const interaction = buildInteraction(
+      buildAdminActionCustomId('menu', 'case', 'user-1', undefined, 'ver-selected'),
+      'guild-1',
+      { id: 'admin-1' } as User
+    );
+    grantOnlyModerationPermission(interaction);
+
+    await handler.handleButtonInteraction(interaction);
+
+    expect(verificationEventRepository.findById).toHaveBeenCalledWith('ver-selected');
+    expect(captchaChallengeService.findByCaseId).toHaveBeenCalledWith('ver-selected');
+    const response = (interaction.reply as jest.Mock).mock.calls[0][0] as any;
+    const buttons = response.components.flatMap(
+      (row: { toJSON(): { components: any[] } }) => row.toJSON().components
+    );
+    expect(
+      buttons.find((button: { label?: string }) => button.label === 'Challenge User')?.custom_id
+    ).toBe('admin_actions:cp:c:user-1:_:ver-selected');
   });
 
   it('refuses a confirmed CAPTCHA action when the target has left the server', async () => {

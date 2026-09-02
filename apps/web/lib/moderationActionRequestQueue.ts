@@ -140,8 +140,11 @@ export async function insertModerationActionRequestWithReceipt(
            excluded.message_deletion_job_id
           )
        where moderation_action_requests.status = 'failed'
-          or moderation_action_requests.action_type <>
-            'apply_captcha_pass'::moderation_action_request_type
+          or (
+            moderation_action_requests.status = 'queued'
+            and moderation_action_requests.action_type <>
+              'apply_captcha_pass'::moderation_action_request_type
+          )
        returning
          id::text,
          message_deletion_job_id::text as "messageDeletionJobId",

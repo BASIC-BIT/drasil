@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   CAPTCHA_TURNSTILE_ACTION,
+  assertCaptchaProviderConfigured,
   captchaProviderConfigurationIssues,
   validateTurnstileToken,
 } from './turnstile';
@@ -39,6 +40,21 @@ describe('Turnstile server-side validation', () => {
       'DRASIL_CAPTCHA_BINDING_SECRET',
       'TURNSTILE_EXPECTED_HOSTNAME must match the public web URL hostname',
     ]);
+  });
+
+  it('blocks CAPTCHA enablement until provider configuration is complete', () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://drasil.example');
+    vi.stubEnv('TURNSTILE_EXPECTED_HOSTNAME', 'drasil.example');
+
+    expect(() => assertCaptchaProviderConfigured('off')).not.toThrow();
+    expect(() => assertCaptchaProviderConfigured('manual')).toThrow(
+      'Configure the browser security-check provider before enabling it: NEXT_PUBLIC_TURNSTILE_SITE_KEY, TURNSTILE_SECRET_KEY, DRASIL_CAPTCHA_BINDING_SECRET.'
+    );
+
+    vi.stubEnv('NEXT_PUBLIC_TURNSTILE_SITE_KEY', 'site-key');
+    vi.stubEnv('TURNSTILE_SECRET_KEY', 'secret-key');
+    vi.stubEnv('DRASIL_CAPTCHA_BINDING_SECRET', 'binding-secret');
+    expect(() => assertCaptchaProviderConfigured('suspicious_join')).not.toThrow();
   });
 
   it('accepts only an exact hostname, action, and challenge binding', async () => {

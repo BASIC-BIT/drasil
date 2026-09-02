@@ -322,6 +322,7 @@ describe('ThreadManager (unit)', () => {
       surface: 'case',
       action: 'menu',
       userId: member.id,
+      verificationEventId: 'ver-1',
     });
   });
 
@@ -606,6 +607,7 @@ describe('ThreadManager (unit)', () => {
       surface: 'case',
       action: 'menu',
       userId: member.id,
+      verificationEventId: 'ver-1',
     });
     expect(result).toEqual({
       threadId: 'thread-1',

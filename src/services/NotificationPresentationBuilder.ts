@@ -394,7 +394,7 @@ export class NotificationPresentationBuilder {
   ): ActionRowBuilder<ButtonBuilder> {
     const buttons = [
       new ButtonBuilder()
-        .setCustomId(buildCaseAdminActionsCustomId(userId))
+        .setCustomId(buildCaseAdminActionsCustomId(userId, options.verificationEventId))
         .setLabel('Admin Actions')
         .setStyle(ButtonStyle.Primary),
     ];
@@ -422,13 +422,14 @@ export class NotificationPresentationBuilder {
           options.includeBanAction !== false,
           options.caseMembershipState ?? 'in_server',
           options.caseAttentionState === CaseAttentionState.PARKED,
-          options.caseKind === CaseKind.COMPROMISED_ACCOUNT
+          options.caseKind === CaseKind.COMPROMISED_ACCOUNT,
+          options.verificationEventId
         )
       : [
           this.createCustomButton(`reopen_${userId}`, 'Reopen', ButtonStyle.Primary),
           this.createCustomButton(`history_${userId}`, 'History', ButtonStyle.Secondary),
           this.createCustomButton(
-            buildCaseAdminActionsCustomId(userId),
+            buildCaseAdminActionsCustomId(userId, options.verificationEventId),
             'Other Actions',
             ButtonStyle.Secondary
           ),
@@ -529,7 +530,8 @@ export class NotificationPresentationBuilder {
     includeBanAction: boolean,
     caseMembershipState: CaseMembershipState,
     isParked: boolean,
-    isCompromisedAccount: boolean
+    isCompromisedAccount: boolean,
+    verificationEventId?: string
   ): ButtonBuilder[] {
     if (isParked) {
       const buttons = [this.createCustomButton(`verify_${userId}`, 'Verify', ButtonStyle.Success)];
@@ -538,7 +540,7 @@ export class NotificationPresentationBuilder {
       }
       buttons.push(
         this.createCustomButton(
-          buildCaseAdminActionsCustomId(userId),
+          buildCaseAdminActionsCustomId(userId, verificationEventId),
           'Other Actions',
           ButtonStyle.Secondary
         )
@@ -560,7 +562,7 @@ export class NotificationPresentationBuilder {
       }
       buttons.push(
         this.createCustomButton(
-          buildCaseAdminActionsCustomId(userId),
+          buildCaseAdminActionsCustomId(userId, verificationEventId),
           'Other Actions',
           ButtonStyle.Secondary
         )
@@ -580,7 +582,7 @@ export class NotificationPresentationBuilder {
     }
     buttons.push(
       this.createCustomButton(
-        buildCaseAdminActionsCustomId(userId),
+        buildCaseAdminActionsCustomId(userId, verificationEventId),
         'Other Actions',
         ButtonStyle.Secondary
       )

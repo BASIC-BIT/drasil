@@ -799,7 +799,8 @@ export class ThreadManager implements IThreadManager {
 
   private async sendInitialVerificationPrompt(
     member: GuildMember,
-    thread: ThreadChannel
+    thread: ThreadChannel,
+    verificationEventId: string
   ): Promise<void> {
     const rawInitialPrompt = await this.getInitialVerificationPrompt(member);
     const initialPrompt = enforceDiscordMessageLimit(rawInitialPrompt);
@@ -817,7 +818,7 @@ export class ThreadManager implements IThreadManager {
         roles: [],
         repliedUser: false,
       },
-      components: [this.presentationBuilder.createActionRow(member.id)],
+      components: [this.presentationBuilder.createActionRow(member.id, { verificationEventId })],
     });
   }
 
@@ -919,7 +920,7 @@ export class ThreadManager implements IThreadManager {
 
       // Send an initial message to the thread
       setupStage = 'send initial verification prompt';
-      await this.sendInitialVerificationPrompt(member, thread);
+      await this.sendInitialVerificationPrompt(member, thread, verificationEvent.id);
 
       return thread;
     } catch (error) {
@@ -961,7 +962,7 @@ export class ThreadManager implements IThreadManager {
     await this.addFlaggedUserToVerificationThread(member, thread);
     const promptAlreadyPresent = await this.hasInitialVerificationPrompt(member, thread);
     if (!promptAlreadyPresent) {
-      await this.sendInitialVerificationPrompt(member, thread);
+      await this.sendInitialVerificationPrompt(member, thread, verificationEvent.id);
     }
 
     return {

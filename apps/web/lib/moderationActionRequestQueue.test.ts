@@ -98,7 +98,8 @@ describe('queueSerializedModerationActionRequestWithReceipt', () => {
     expect(insertSql).toContain('actor_surface = case');
     expect(insertSql).toContain('else excluded.actor_surface');
     expect(insertSql).toContain("where moderation_action_requests.status = 'failed'");
-    expect(insertSql).toContain('or moderation_action_requests.action_type <>');
+    expect(insertSql).toContain("moderation_action_requests.status = 'queued'");
+    expect(insertSql).toContain('and moderation_action_requests.action_type <>');
     expect(mocks.query).toHaveBeenLastCalledWith('commit');
     expect(mocks.release).toHaveBeenCalledTimes(1);
   });
@@ -109,7 +110,7 @@ describe('insertModerationActionRequestWithReceipt', () => {
     vi.clearAllMocks();
   });
 
-  it('leaves queued, processing, and completed stable-key requests untouched', async () => {
+  it('leaves queued, processing, and completed CAPTCHA pass requests untouched', async () => {
     mocks.query.mockResolvedValueOnce({ rows: [{ id: 'active-1', status: 'processing' }] });
 
     await expect(
@@ -124,7 +125,8 @@ describe('insertModerationActionRequestWithReceipt', () => {
 
     const statement = String(mocks.query.mock.calls[0]?.[0]);
     expect(statement).toContain("where moderation_action_requests.status = 'failed'");
-    expect(statement).toContain('or moderation_action_requests.action_type <>');
+    expect(statement).toContain("moderation_action_requests.status = 'queued'");
+    expect(statement).toContain('and moderation_action_requests.action_type <>');
     expect(statement).toContain('and not exists (select 1 from upserted)');
   });
 
@@ -145,6 +147,27 @@ describe('insertModerationActionRequestWithReceipt', () => {
     const statement = String(mocks.query.mock.calls[0]?.[0]);
     expect(statement).toContain('metadata = coalesce');
     expect(statement).toContain('else excluded.actor_id');
-    expect(statement).toContain('or moderation_action_requests.action_type <>');
+    expect(statement).toContain("moderation_action_requests.status = 'queued'");
+    expect(statement).toContain('and moderation_action_requests.action_type <>');
+  });
+
+  it('leaves processing non-CAPTCHA request payloads untouched', async () => {
+    mocks.query.mockResolvedValueOnce({ rows: [{ id: 'active-1', status: 'processing' }] });
+
+    await expect(
+      insertModerationActionRequestWithReceipt({ query: mocks.query } as never, {
+        actionType: 'ban_case_user',
+        actorId: 'moderator-2',
+        actorSurface: 'web',
+        idempotencyKey: 'web:case-action:ban:guild-1:case-1',
+        metadata: { reason: 'Different reason' },
+        serverId: 'guild-1',
+      })
+    ).resolves.toEqual({ id: 'active-1', status: 'processing' });
+
+    const statement = String(mocks.query.mock.calls[0]?.[0]);
+    expect(statement).toContain("moderation_action_requests.status = 'queued'");
+    expect(statement).toContain('and moderation_action_requests.action_type <>');
+    expect(statement).toContain('and not exists (select 1 from upserted)');
   });
 });

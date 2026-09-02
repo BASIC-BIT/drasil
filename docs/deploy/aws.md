@@ -93,7 +93,10 @@ When Vercel is configured for the custom domain, also set `NEXT_PUBLIC_APP_URL=h
 The managed ECS task sets `DRASIL_WEB_PUBLIC_URL` from the Terraform
 `drasil_web_public_url` variable so bot-authored CAPTCHA and dashboard links use the same public
 origin.
-and add `https://drasilbot.com/api/auth/discord/callback` to the Discord OAuth redirect list.
+Add both web callback URLs to the Discord OAuth redirect list:
+
+- `https://drasilbot.com/api/auth/discord/callback`
+- `https://drasilbot.com/api/captcha/auth/callback`
 
 If Route 53 already created the hosted zone during domain registration, adopt it into Terraform state
 before the first local apply:
