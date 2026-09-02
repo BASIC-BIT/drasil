@@ -68,8 +68,12 @@ export async function GET(request: NextRequest) {
     }
 
     const response = challengeRedirect(request, token, 'confirmed');
+    const identityCookieName = getCaptchaIdentityCookieName(challenge.id, challenge.generation);
+    if (!identityCookieName) {
+      throw new Error('CAPTCHA challenge identity is invalid.');
+    }
     response.cookies.set(
-      getCaptchaIdentityCookieName(challenge.id, challenge.generation),
+      identityCookieName,
       encodeCaptchaIdentity(
         createCaptchaIdentity({
           challengeId: challenge.id,

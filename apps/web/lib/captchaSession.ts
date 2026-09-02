@@ -1,4 +1,4 @@
-import { createHmac, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import {
   CAPTCHA_IDENTITY_COOKIE,
@@ -16,8 +16,10 @@ const captchaOAuthStateSchema = z.object({
   expiresAt: z.number(),
 });
 
+const captchaChallengeIdSchema = z.string().uuid();
+
 const captchaIdentitySchema = z.object({
-  challengeId: z.string().uuid(),
+  challengeId: captchaChallengeIdSchema,
   generation: z.number().int().positive(),
   userId: z.string(),
   issuedAt: z.number(),
@@ -27,16 +29,23 @@ const captchaIdentitySchema = z.object({
 export type CaptchaOAuthState = z.infer<typeof captchaOAuthStateSchema>;
 export type CaptchaIdentity = z.infer<typeof captchaIdentitySchema>;
 
-function cookieBindingSuffix(value: string): string {
-  return createHmac('sha256', getSessionSecret()).update(value).digest('base64url').slice(0, 32);
+const CAPTCHA_OAUTH_STATE_NONCE_PATTERN = /^[A-Za-z0-9_-]{32}$/;
+
+export function getCaptchaOAuthStateCookieName(state: string): string | null {
+  return CAPTCHA_OAUTH_STATE_NONCE_PATTERN.test(state)
+    ? `${CAPTCHA_OAUTH_STATE_COOKIE}_${state}`
+    : null;
 }
 
-export function getCaptchaOAuthStateCookieName(state: string): string {
-  return `${CAPTCHA_OAUTH_STATE_COOKIE}_${cookieBindingSuffix(state)}`;
-}
-
-export function getCaptchaIdentityCookieName(challengeId: string, generation: number): string {
-  return `${CAPTCHA_IDENTITY_COOKIE}_${cookieBindingSuffix(`${challengeId}:${generation}`)}`;
+export function getCaptchaIdentityCookieName(
+  challengeId: string,
+  generation: number
+): string | null {
+  return captchaChallengeIdSchema.safeParse(challengeId).success &&
+    Number.isSafeInteger(generation) &&
+    generation > 0
+    ? `${CAPTCHA_IDENTITY_COOKIE}_${challengeId}_${generation}`
+    : null;
 }
 
 export function createCaptchaOAuthState(token: string): CaptchaOAuthState {

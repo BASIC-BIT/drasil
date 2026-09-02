@@ -68,15 +68,20 @@ describe('CAPTCHA browser session cookies', () => {
   });
 
   it('isolates OAuth state and identity cookies for concurrent challenge tabs', () => {
-    const firstStateCookie = getCaptchaOAuthStateCookieName('state-1');
-    const secondStateCookie = getCaptchaOAuthStateCookieName('state-2');
-    const firstIdentityCookie = getCaptchaIdentityCookieName('challenge-1', 1);
-    const secondIdentityCookie = getCaptchaIdentityCookieName('challenge-1', 2);
+    const firstState = 'a'.repeat(32);
+    const secondState = 'b'.repeat(32);
+    const challengeId = '54a8589e-b63a-4ea6-86b6-78169955b3f1';
+    const firstStateCookie = getCaptchaOAuthStateCookieName(firstState);
+    const secondStateCookie = getCaptchaOAuthStateCookieName(secondState);
+    const firstIdentityCookie = getCaptchaIdentityCookieName(challengeId, 1);
+    const secondIdentityCookie = getCaptchaIdentityCookieName(challengeId, 2);
 
-    expect(firstStateCookie).toBe(getCaptchaOAuthStateCookieName('state-1'));
+    expect(firstStateCookie).toBe(getCaptchaOAuthStateCookieName(firstState));
     expect(firstStateCookie).not.toBe(secondStateCookie);
     expect(firstStateCookie).toMatch(new RegExp(`^${CAPTCHA_OAUTH_STATE_COOKIE}_[A-Za-z0-9_-]+$`));
     expect(firstIdentityCookie).not.toBe(secondIdentityCookie);
     expect(firstIdentityCookie).toMatch(new RegExp(`^${CAPTCHA_IDENTITY_COOKIE}_[A-Za-z0-9_-]+$`));
+    expect(getCaptchaOAuthStateCookieName('invalid state')).toBeNull();
+    expect(getCaptchaIdentityCookieName('invalid challenge', 1)).toBeNull();
   });
 });

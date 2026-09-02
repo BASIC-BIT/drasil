@@ -18,6 +18,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ toke
 
   const redirectUri = `${getPublicAppUrl(request.url)}/api/captcha/auth/callback`;
   const state = createCaptchaOAuthState(token);
+  const stateCookieName = getCaptchaOAuthStateCookieName(state.state);
+  if (!stateCookieName) {
+    throw new Error('Failed to create a valid CAPTCHA OAuth state nonce.');
+  }
   const authorizeUrl = new URL('https://discord.com/oauth2/authorize');
   authorizeUrl.searchParams.set('client_id', requireEnv('DISCORD_CLIENT_ID'));
   authorizeUrl.searchParams.set('redirect_uri', redirectUri);
@@ -27,7 +31,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ toke
 
   const response = NextResponse.redirect(authorizeUrl);
   response.cookies.set(
-    getCaptchaOAuthStateCookieName(state.state),
+    stateCookieName,
     encodeCaptchaOAuthState(state),
     buildSessionCookieOptions(OAUTH_STATE_MAX_AGE_SECONDS)
   );
