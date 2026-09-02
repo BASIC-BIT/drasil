@@ -20,6 +20,7 @@ import {
 import { CaptchaChallengeService } from '../../services/CaptchaChallengeService';
 import type { IThreadManager } from '../../services/ThreadManager';
 import type { INotificationManager } from '../../services/NotificationManager';
+import type { IModerationActionRequestRepository } from '../../repositories/ModerationActionRequestRepository';
 
 const now = new Date('2026-08-31T12:00:00.000Z');
 
@@ -98,6 +99,7 @@ function createHarness(settings: Record<string, unknown> = { captcha_mode: 'manu
     cancelPendingForCase: jest.fn().mockResolvedValue(true),
     cancelPendingForDisabledServers: jest.fn().mockResolvedValue([]),
     expirePending: jest.fn().mockResolvedValue([]),
+    findExpiredNeedingAttention: jest.fn().mockResolvedValue([]),
   };
   const verificationEvents = {
     findById: jest.fn().mockResolvedValue(buildCase()),
@@ -116,13 +118,17 @@ function createHarness(settings: Record<string, unknown> = { captcha_mode: 'manu
   const notifications = {
     notifyCaptchaAttention: jest.fn().mockResolvedValue(true),
   } as unknown as jest.Mocked<INotificationManager>;
+  const moderationActionRequests = {
+    enqueue: jest.fn().mockResolvedValue({}),
+  } as unknown as jest.Mocked<IModerationActionRequestRepository>;
   const service = new CaptchaChallengeService(
     challenges,
     verificationEvents,
     detectionEvents,
     config,
     threads,
-    notifications
+    notifications,
+    moderationActionRequests
   );
 
   return {
@@ -130,6 +136,7 @@ function createHarness(settings: Record<string, unknown> = { captcha_mode: 'manu
     challenges,
     config,
     detectionEvents,
+    moderationActionRequests,
     notifications,
     service,
     threads,
@@ -172,6 +179,18 @@ describe('CaptchaChallengeService', () => {
     expect(input.tokenHash).not.toBe(token);
     expect(input.tokenHash).toBe(createHash('sha256').update(token).digest('hex'));
     expect(challenges.recordDelivery).toHaveBeenCalledWith('challenge-1', 1);
+  });
+
+  it('reports delivery as stale when the generation changes during the Discord send', async () => {
+    const { challenges, service } = createHarness();
+    challenges.recordDelivery.mockResolvedValue(false);
+
+    await expect(
+      service.requestChallenge({
+        verificationEventId: 'case-1',
+        requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      })
+    ).resolves.toMatchObject({ delivered: false });
   });
 
   it('keeps an automatic pass evidence-only when that is the current setting', async () => {
@@ -281,7 +300,7 @@ describe('CaptchaChallengeService', () => {
   });
 
   it('does not post expiry status after the challenge generation is retried', async () => {
-    const { challenges, notifications, service, threads } = createHarness();
+    const { challenges, moderationActionRequests, service, threads } = createHarness();
     const expired = buildChallenge({ status: CaptchaChallengeStatus.EXPIRED, generation: 1 });
     challenges.expirePending.mockResolvedValue([expired]);
     challenges.findById.mockResolvedValue(
@@ -295,7 +314,29 @@ describe('CaptchaChallengeService', () => {
     ).runExpirySweep();
 
     expect(threads.sendCaptchaStatus).not.toHaveBeenCalled();
-    expect(notifications.notifyCaptchaAttention).not.toHaveBeenCalled();
+    expect(moderationActionRequests.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('queues expired moderator attention with a stable generation key', async () => {
+    const { challenges, moderationActionRequests, service } = createHarness();
+    const expired = buildChallenge({ status: CaptchaChallengeStatus.EXPIRED });
+    challenges.expirePending.mockResolvedValue([expired]);
+    challenges.findExpiredNeedingAttention.mockResolvedValue([expired]);
+    challenges.findById.mockResolvedValue(expired);
+
+    await (
+      service as unknown as {
+        runExpirySweep(): Promise<void>;
+      }
+    ).runExpirySweep();
+
+    expect(moderationActionRequests.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionType: 'notify_captcha_attention',
+        idempotencyKey: 'captcha:attention:challenge-1:1:expired',
+        metadata: expect.objectContaining({ reason: 'expired' }),
+      })
+    );
   });
 
   it('keeps a passed moderator challenge as evidence only', async () => {

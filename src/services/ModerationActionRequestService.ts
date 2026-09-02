@@ -1155,7 +1155,8 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     ) {
       throw new Error('Security-check attention request is invalid.');
     }
-    if (this.readMetadataString(request.metadata, 'reason') !== 'submission_limit') {
+    const reason = this.readMetadataString(request.metadata, 'reason');
+    if (reason !== 'submission_limit' && reason !== 'expired') {
       throw new Error('Security-check attention reason is invalid.');
     }
     if (!this.captchaChallengeService) {
@@ -1184,14 +1185,15 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       !challenge ||
       challenge.id !== challengeId ||
       challenge.generation !== generation ||
-      challenge.status !== CaptchaChallengeStatus.FAILED
+      challenge.status !==
+        (reason === 'expired' ? CaptchaChallengeStatus.EXPIRED : CaptchaChallengeStatus.FAILED)
     ) {
       await this.repository.complete(request.id, {
         action_type: request.action_type,
         challenge_id: challengeId,
         generation,
         notified: false,
-        reason: 'submission_limit',
+        reason,
         stale: true,
         target_user_id: request.target_user_id,
         verification_event_id: request.verification_event_id,
@@ -1201,16 +1203,18 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     await this.threadManager
       .sendCaptchaStatus(
         verificationEvent,
-        'This security check reached its attempt limit. Ask a moderator to issue a new check.'
+        reason === 'expired'
+          ? 'This security check expired. Ask a moderator to issue a new check.'
+          : 'This security check reached its attempt limit. Ask a moderator to issue a new check.'
       )
       .catch(() => false);
-    await this.requireCaptchaAttention(verificationEvent, 'submission_limit');
+    await this.requireCaptchaAttention(verificationEvent, reason);
     await this.repository.complete(request.id, {
       action_type: request.action_type,
       challenge_id: challengeId,
       generation,
       notified: true,
-      reason: 'submission_limit',
+      reason,
       target_user_id: request.target_user_id,
       verification_event_id: request.verification_event_id,
     });

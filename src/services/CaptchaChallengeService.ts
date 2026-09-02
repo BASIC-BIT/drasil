@@ -8,11 +8,13 @@ import {
 } from '../repositories/CaptchaChallengeRepository';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
+import { IModerationActionRequestRepository } from '../repositories/ModerationActionRequestRepository';
 import {
   CaptchaChallenge,
   CaptchaChallengeRequestSource,
   CaptchaChallengeStatus,
   CaseKind,
+  ModerationActionRequestType,
   VerificationEvent,
   VerificationStatus,
 } from '../repositories/types';
@@ -87,7 +89,10 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     @inject(TYPES.ThreadManager) private readonly threads: IThreadManager,
     @inject(TYPES.NotificationManager)
     @optional()
-    private readonly notifications?: INotificationManager
+    private readonly notifications?: INotificationManager,
+    @inject(TYPES.ModerationActionRequestRepository)
+    @optional()
+    private readonly moderationActionRequests?: IModerationActionRequestRepository
   ) {}
 
   public start(): void {
@@ -181,8 +186,8 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
         await this.notifyAttention(verificationEvent, 'delivery_failed');
         return { challenge, delivered: false };
       }
-      await this.challenges.recordDelivery(challenge.id, challenge.generation);
-      return { challenge, delivered: true };
+      const recorded = await this.challenges.recordDelivery(challenge.id, challenge.generation);
+      return { challenge, delivered: recorded };
     } catch (error) {
       await this.challenges.recordDeliveryFailure(
         challenge.id,
@@ -306,12 +311,11 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
               );
               return false;
             });
-          if (challenge.status === CaptchaChallengeStatus.EXPIRED) {
-            if (await this.isCurrentChallengeState(challenge)) {
-              await this.notifyAttention(verificationEvent, 'expired');
-            }
-          }
         }
+      }
+      const needingAttention = await this.challenges.findExpiredNeedingAttention(50);
+      for (const challenge of needingAttention) {
+        await this.queueExpiredAttention(challenge);
       }
     } catch (error) {
       console.error('Failed to expire CAPTCHA challenges:', error);
@@ -321,6 +325,35 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
   private async isCurrentChallengeState(challenge: CaptchaChallenge): Promise<boolean> {
     const current = await this.challenges.findById(challenge.id);
     return current?.generation === challenge.generation && current.status === challenge.status;
+  }
+
+  private async queueExpiredAttention(challenge: CaptchaChallenge): Promise<void> {
+    if (!this.moderationActionRequests) {
+      throw new Error('Moderation action requests are unavailable for CAPTCHA expiry attention.');
+    }
+    const verificationEvent = await this.verificationEvents.findById(
+      challenge.verification_event_id
+    );
+    if (
+      verificationEvent?.status !== VerificationStatus.PENDING ||
+      !(await this.isCurrentChallengeState(challenge))
+    ) {
+      return;
+    }
+    await this.moderationActionRequests.enqueue({
+      serverId: challenge.server_id,
+      actionType: ModerationActionRequestType.NOTIFY_CAPTCHA_ATTENTION,
+      actorId: 'drasil:captcha',
+      actorSurface: 'captcha',
+      targetUserId: challenge.user_id,
+      verificationEventId: challenge.verification_event_id,
+      idempotencyKey: `captcha:attention:${challenge.id}:${challenge.generation}:expired`,
+      metadata: {
+        challenge_id: challenge.id,
+        generation: challenge.generation,
+        reason: 'expired',
+      },
+    });
   }
 
   private async notifyAttention(

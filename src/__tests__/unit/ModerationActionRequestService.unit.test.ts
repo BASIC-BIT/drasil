@@ -168,6 +168,17 @@ const notifyCaptchaAttentionRequest: ModerationActionRequest = {
   },
 };
 
+const notifyExpiredCaptchaAttentionRequest: ModerationActionRequest = {
+  ...notifyCaptchaAttentionRequest,
+  id: 'captcha-expired-attention-request-1',
+  idempotency_key: 'captcha:attention:challenge-1:1:expired',
+  metadata: {
+    challenge_id: 'challenge-1',
+    generation: 1,
+    reason: 'expired',
+  },
+};
+
 const accountQuarantinePreviewRequest: ModerationActionRequest = {
   ...verifyRequest,
   action_type: ModerationActionRequestType.PREVIEW_ACCOUNT_QUARANTINE,
@@ -1839,6 +1850,35 @@ describe('ModerationActionRequestService', () => {
     expect(repository.failed).toEqual([
       {
         id: 'captcha-attention-request-1',
+        error: 'Failed to notify moderators about CAPTCHA case ver-1.',
+      },
+    ]);
+  });
+
+  it('keeps expired attention retryable when moderator notification fails', async () => {
+    const { captchaChallengeService, notificationManager, repository, service, threadManager } =
+      buildService([notifyExpiredCaptchaAttentionRequest]);
+    captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+      generation: 1,
+      id: 'challenge-1',
+      status: 'expired',
+    });
+    notificationManager.notifyCaptchaAttention.mockResolvedValueOnce(false);
+
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+
+    expect(threadManager.sendCaptchaStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'ver-1' }),
+      'This security check expired. Ask a moderator to issue a new check.'
+    );
+    expect(notificationManager.notifyCaptchaAttention).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'ver-1' }),
+      'expired'
+    );
+    expect(repository.completed).toEqual([]);
+    expect(repository.failed).toEqual([
+      {
+        id: 'captcha-expired-attention-request-1',
         error: 'Failed to notify moderators about CAPTCHA case ver-1.',
       },
     ]);

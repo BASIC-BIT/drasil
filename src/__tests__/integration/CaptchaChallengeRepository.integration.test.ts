@@ -1,6 +1,7 @@
 import { PrismaClient } from '../../db/prisma';
 import { CaptchaChallengeRepository } from '../../repositories/CaptchaChallengeRepository';
 import { DetectionEventsRepository } from '../../repositories/DetectionEventsRepository';
+import { ModerationActionRequestRepository } from '../../repositories/ModerationActionRequestRepository';
 import { ServerRepository } from '../../repositories/ServerRepository';
 import { UserRepository } from '../../repositories/UserRepository';
 import {
@@ -13,6 +14,7 @@ import {
   CaptchaChallengeStatus,
   CaseContainmentStatus,
   DetectionType,
+  ModerationActionRequestType,
   VerificationStatus,
 } from '../../repositories/types';
 import { getPrismaClient } from '../testDb';
@@ -390,6 +392,51 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       expect.objectContaining({ id: challenge.id, status: CaptchaChallengeStatus.EXPIRED }),
     ]);
     await expect(challenges.expirePending(new Date(), 10)).resolves.toEqual([]);
+  });
+
+  it('rediscovers failed expiry attention but excludes active and completed requests', async () => {
+    const { verification } = await createCase(
+      'guild-captcha-expiry-attention',
+      'user-captcha-expiry-attention'
+    );
+    const challenges = new CaptchaChallengeRepository(prisma);
+    const requests = new ModerationActionRequestRepository(prisma);
+    const challenge = await challenges.create({
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      caseRevision: verification.case_revision,
+      tokenHash: 'expiry-attention-hash',
+      expiresAt: new Date(Date.now() - 60_000),
+      requestedBy: 'moderator-1',
+    });
+    await challenges.expirePending(new Date(), 10);
+    const idempotencyKey = `captcha:attention:${challenge.id}:1:expired`;
+    const requestInput = {
+      serverId: verification.server_id,
+      actionType: ModerationActionRequestType.NOTIFY_CAPTCHA_ATTENTION,
+      actorId: 'drasil:captcha',
+      actorSurface: 'captcha',
+      targetUserId: verification.user_id,
+      verificationEventId: verification.id,
+      idempotencyKey,
+      metadata: { challenge_id: challenge.id, generation: 1, reason: 'expired' },
+    };
+
+    await expect(challenges.findExpiredNeedingAttention(10)).resolves.toEqual([
+      expect.objectContaining({ id: challenge.id }),
+    ]);
+    const queued = await requests.enqueue(requestInput);
+    await expect(challenges.findExpiredNeedingAttention(10)).resolves.toEqual([]);
+    await requests.fail(queued.id, 'Discord unavailable');
+    await expect(challenges.findExpiredNeedingAttention(10)).resolves.toEqual([
+      expect.objectContaining({ id: challenge.id }),
+    ]);
+    const requeued = await requests.enqueue(requestInput);
+    await requests.complete(requeued.id, { notified: true });
+    await expect(challenges.findExpiredNeedingAttention(10)).resolves.toEqual([]);
   });
 
   it('allows an immediate retry after challenge delivery fails', async () => {

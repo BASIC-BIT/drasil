@@ -42,6 +42,7 @@ export interface ICaptchaChallengeRepository {
   cancelPendingForCase(verificationEventId: string): Promise<boolean>;
   cancelPendingForDisabledServers(limit: number): Promise<CaptchaChallenge[]>;
   expirePending(now: Date, limit: number): Promise<CaptchaChallenge[]>;
+  findExpiredNeedingAttention(limit: number): Promise<CaptchaChallenge[]>;
 }
 
 @injectable()
@@ -358,5 +359,34 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
       }
     }
     return expired;
+  }
+
+  public async findExpiredNeedingAttention(limit: number): Promise<CaptchaChallenge[]> {
+    return await this.prisma.$queryRaw<CaptchaChallenge[]>`
+      select challenge.*
+      from captcha_challenges as challenge
+      join verification_events as verification
+        on verification.id = challenge.verification_event_id
+      where challenge.status = ${CaptchaChallengeStatus.EXPIRED}::captcha_challenge_status
+        and verification.status = 'pending'::verification_status
+        and not exists (
+          select 1
+          from moderation_action_requests as request
+          where request.idempotency_key = concat(
+            'captcha:attention:',
+            challenge.id::text,
+            ':',
+            challenge.generation::text,
+            ':expired'
+          )
+            and request.status in (
+              'queued'::moderation_action_request_status,
+              'processing'::moderation_action_request_status,
+              'completed'::moderation_action_request_status
+            )
+        )
+      order by challenge.updated_at asc nulls first
+      limit ${Math.max(1, Math.min(limit, 100))}
+    `;
   }
 }
