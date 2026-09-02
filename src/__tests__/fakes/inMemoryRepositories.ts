@@ -6,10 +6,11 @@ import type {
   ServerSetupConfigurationUpdate,
 } from '../../repositories/ServerRepository';
 import type { IUserRepository } from '../../repositories/UserRepository';
-import type {
-  IVerificationEventRepository,
-  TerminalActionCompletion,
-  VerificationReleaseCompletion,
+import {
+  SUBJECT_EVIDENCE_MESSAGE_ID_LIMIT,
+  type IVerificationEventRepository,
+  type TerminalActionCompletion,
+  type VerificationReleaseCompletion,
 } from '../../repositories/VerificationEventRepository';
 import type { IReportIntakeRepository } from '../../repositories/ReportIntakeRepository';
 import type { IModerationOutcomeRepository } from '../../repositories/ModerationOutcomeRepository';
@@ -861,7 +862,9 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       case_revision: existing.case_revision + 1,
       metadata: {
         ...metadata,
-        subject_evidence_message_ids: [...subjectEvidenceMessageIds, messageId],
+        subject_evidence_message_ids: [...subjectEvidenceMessageIds, messageId].slice(
+          -SUBJECT_EVIDENCE_MESSAGE_ID_LIMIT
+        ),
       },
       updated_at: new Date(),
     };

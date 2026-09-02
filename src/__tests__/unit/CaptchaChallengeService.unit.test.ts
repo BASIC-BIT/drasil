@@ -19,6 +19,7 @@ import {
 } from '../../repositories/types';
 import { CaptchaChallengeService } from '../../services/CaptchaChallengeService';
 import type { IThreadManager } from '../../services/ThreadManager';
+import type { INotificationManager } from '../../services/NotificationManager';
 
 const now = new Date('2026-08-31T12:00:00.000Z');
 
@@ -112,12 +113,16 @@ function createHarness(settings: Record<string, unknown> = { captcha_mode: 'manu
     sendCaptchaChallenge: jest.fn().mockResolvedValue(true),
     sendCaptchaStatus: jest.fn().mockResolvedValue(true),
   } as unknown as jest.Mocked<IThreadManager>;
+  const notifications = {
+    notifyCaptchaAttention: jest.fn().mockResolvedValue(true),
+  } as unknown as jest.Mocked<INotificationManager>;
   const service = new CaptchaChallengeService(
     challenges,
     verificationEvents,
     detectionEvents,
     config,
-    threads
+    threads,
+    notifications
   );
 
   return {
@@ -125,6 +130,7 @@ function createHarness(settings: Record<string, unknown> = { captcha_mode: 'manu
     challenges,
     config,
     detectionEvents,
+    notifications,
     service,
     threads,
     verificationEvents,
@@ -272,6 +278,24 @@ describe('CaptchaChallengeService', () => {
     ).rejects.toThrow('The security check changed before it could be bypassed.');
 
     expect(challenges.bypass).not.toHaveBeenCalled();
+  });
+
+  it('does not post expiry status after the challenge generation is retried', async () => {
+    const { challenges, notifications, service, threads } = createHarness();
+    const expired = buildChallenge({ status: CaptchaChallengeStatus.EXPIRED, generation: 1 });
+    challenges.expirePending.mockResolvedValue([expired]);
+    challenges.findById.mockResolvedValue(
+      buildChallenge({ status: CaptchaChallengeStatus.PENDING, generation: 2 })
+    );
+
+    await (
+      service as unknown as {
+        runExpirySweep(): Promise<void>;
+      }
+    ).runExpirySweep();
+
+    expect(threads.sendCaptchaStatus).not.toHaveBeenCalled();
+    expect(notifications.notifyCaptchaAttention).not.toHaveBeenCalled();
   });
 
   it('keeps a passed moderator challenge as evidence only', async () => {

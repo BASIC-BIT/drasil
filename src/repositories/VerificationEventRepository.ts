@@ -51,6 +51,8 @@ export interface CaptchaVerificationCompletionInput {
 class VerificationReleaseConflictError extends Error {}
 class TerminalActionClaimConflictError extends Error {}
 
+export const SUBJECT_EVIDENCE_MESSAGE_ID_LIMIT = 100;
+
 export interface IVerificationEventRepository {
   findByUserAndServer(
     userId: string,
@@ -778,6 +780,19 @@ export class VerificationEventRepository implements IVerificationEventRepository
   ): Promise<VerificationEvent | null> {
     try {
       const rows = await this.prisma.$queryRaw<VerificationEvent[]>`
+        WITH candidate AS (
+          SELECT
+            target.id,
+            CASE
+              WHEN jsonb_typeof(target.metadata) = 'object'
+                AND jsonb_typeof(target.metadata->'subject_evidence_message_ids') = 'array'
+                THEN target.metadata->'subject_evidence_message_ids'
+              ELSE '[]'::jsonb
+            END AS message_ids
+          FROM verification_events AS target
+          WHERE target.id = ${id}::uuid
+            AND target.status = ${VerificationStatus.PENDING}::verification_status
+        )
         UPDATE verification_events AS target
         SET
           case_revision = target.case_revision + 1,
@@ -787,26 +802,23 @@ export class VerificationEventRepository implements IVerificationEventRepository
               ELSE '{}'::jsonb
             END,
             '{subject_evidence_message_ids}',
-            CASE
-              WHEN jsonb_typeof(target.metadata) = 'object'
-                AND jsonb_typeof(target.metadata->'subject_evidence_message_ids') = 'array'
-                THEN target.metadata->'subject_evidence_message_ids'
-              ELSE '[]'::jsonb
-            END
-              || jsonb_build_array(${messageId}::text),
+            (
+              SELECT COALESCE(jsonb_agg(entry.value ORDER BY entry.ordinality), '[]'::jsonb)
+              FROM jsonb_array_elements(
+                candidate.message_ids || jsonb_build_array(${messageId}::text)
+              ) WITH ORDINALITY AS entry(value, ordinality)
+              WHERE entry.ordinality > GREATEST(
+                jsonb_array_length(candidate.message_ids) + 1
+                  - ${SUBJECT_EVIDENCE_MESSAGE_ID_LIMIT}::integer,
+                0
+              )
+            ),
             true
           ),
           updated_at = now()
-        WHERE target.id = ${id}::uuid
-          AND target.status = ${VerificationStatus.PENDING}::verification_status
-          AND NOT (
-            CASE
-              WHEN jsonb_typeof(target.metadata) = 'object'
-                AND jsonb_typeof(target.metadata->'subject_evidence_message_ids') = 'array'
-                THEN target.metadata->'subject_evidence_message_ids'
-              ELSE '[]'::jsonb
-            END @> jsonb_build_array(${messageId}::text)
-          )
+        FROM candidate
+        WHERE target.id = candidate.id
+          AND NOT candidate.message_ids @> jsonb_build_array(${messageId}::text)
         RETURNING target.*
       `;
       return rows[0] ?? null;

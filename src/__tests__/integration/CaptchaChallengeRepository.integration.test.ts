@@ -3,7 +3,10 @@ import { CaptchaChallengeRepository } from '../../repositories/CaptchaChallengeR
 import { DetectionEventsRepository } from '../../repositories/DetectionEventsRepository';
 import { ServerRepository } from '../../repositories/ServerRepository';
 import { UserRepository } from '../../repositories/UserRepository';
-import { VerificationEventRepository } from '../../repositories/VerificationEventRepository';
+import {
+  SUBJECT_EVIDENCE_MESSAGE_ID_LIMIT,
+  VerificationEventRepository,
+} from '../../repositories/VerificationEventRepository';
 import {
   CaptchaChallengePassEffect,
   CaptchaChallengeRequestSource,
@@ -622,5 +625,28 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     await expect(
       verifications.recordSubjectCaseEvidence(verification.id, 'message-2')
     ).resolves.toEqual(expect.objectContaining({ case_revision: 2 }));
+  });
+
+  it('bounds remembered subject message IDs while preserving the newest entries', async () => {
+    const { verification } = await createCase(
+      'guild-captcha-subject-evidence-bound',
+      'user-captcha-subject-evidence-bound'
+    );
+    const existingMessageIds = Array.from(
+      { length: SUBJECT_EVIDENCE_MESSAGE_ID_LIMIT },
+      (_, index) => `message-${index}`
+    );
+    await prisma.verification_events.update({
+      where: { id: verification.id },
+      data: { metadata: { subject_evidence_message_ids: existingMessageIds } },
+    });
+    const verifications = new VerificationEventRepository(prisma);
+
+    const updated = await verifications.recordSubjectCaseEvidence(verification.id, 'message-new');
+    const storedMessageIds = (updated?.metadata as { subject_evidence_message_ids?: unknown })
+      .subject_evidence_message_ids;
+
+    expect(storedMessageIds).toHaveLength(SUBJECT_EVIDENCE_MESSAGE_ID_LIMIT);
+    expect(storedMessageIds).toEqual([...existingMessageIds.slice(1), 'message-new']);
   });
 });

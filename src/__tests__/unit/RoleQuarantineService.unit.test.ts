@@ -359,6 +359,36 @@ describe('RoleQuarantineService (unit)', () => {
     expect(member.roles.cache.has(privilegedRole.id)).toBe(true);
   });
 
+  it('holds role restoration when a pending case appears immediately before the add', async () => {
+    const communityRole = createRole({ id: 'community-role', name: 'Community' });
+    const member = createMember([], [communityRole]);
+    const snapshots = new InMemoryRoleQuarantineSnapshotRepository();
+    const snapshot = await snapshots.create({
+      serverId: 'guild-1',
+      userId: 'user-1',
+      verificationEventId: 'verification-1',
+      mode: 'on',
+      purpose: RoleQuarantineSnapshotPurpose.STANDARD_CASE,
+      originalRoleIds: [communityRole.id],
+      plannedRoleIds: [communityRole.id],
+      removedRoleIds: [communityRole.id],
+    });
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'on' }),
+      snapshots
+    );
+    const fence = { canRestoreRole: jest.fn().mockResolvedValue(false) };
+
+    const result = await service.restoreMemberRoles(member, undefined, fence);
+
+    expect(result.status).toBe('held_pending_case');
+    expect(fence.canRestoreRole).toHaveBeenCalledTimes(1);
+    expect(member.roles.add).not.toHaveBeenCalled();
+    await expect(snapshots.findActiveByServerAndUser('guild-1', 'user-1')).resolves.toEqual(
+      expect.objectContaining({ id: snapshot.id, status: RoleQuarantineSnapshotStatus.ACTIVE })
+    );
+  });
+
   it('does not restore a manual intake trigger role from an older active quarantine snapshot', async () => {
     const manualRole = createRole({ id: '100000000000000010', name: 'Manual Intake' });
     const communityRole = createRole({ id: 'community-role', name: 'Community' });

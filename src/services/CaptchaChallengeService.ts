@@ -288,7 +288,10 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
         const verificationEvent = await this.verificationEvents.findById(
           challenge.verification_event_id
         );
-        if (verificationEvent?.status === VerificationStatus.PENDING) {
+        if (
+          verificationEvent?.status === VerificationStatus.PENDING &&
+          (await this.isCurrentChallengeState(challenge))
+        ) {
           await this.threads
             .sendCaptchaStatus(
               verificationEvent,
@@ -304,13 +307,20 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
               return false;
             });
           if (challenge.status === CaptchaChallengeStatus.EXPIRED) {
-            await this.notifyAttention(verificationEvent, 'expired');
+            if (await this.isCurrentChallengeState(challenge)) {
+              await this.notifyAttention(verificationEvent, 'expired');
+            }
           }
         }
       }
     } catch (error) {
       console.error('Failed to expire CAPTCHA challenges:', error);
     }
+  }
+
+  private async isCurrentChallengeState(challenge: CaptchaChallenge): Promise<boolean> {
+    const current = await this.challenges.findById(challenge.id);
+    return current?.generation === challenge.generation && current.status === challenge.status;
   }
 
   private async notifyAttention(

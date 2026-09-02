@@ -551,7 +551,87 @@ describe('CaseRoleReleaseReconciliationService (unit)', () => {
 
     await service.runOnce();
 
-    expect(roleQuarantine.restoreMemberRoles).toHaveBeenCalledWith(member);
+    expect(roleQuarantine.restoreMemberRoles).toHaveBeenCalledWith(
+      member,
+      undefined,
+      expect.objectContaining({ canRestoreRole: expect.any(Function) })
+    );
+  });
+
+  it('rechecks for a pending case inside role restoration after member fetch', async () => {
+    const verificationEvents = new InMemoryVerificationEventRepository();
+    const completedCase = await verificationEvents.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationEvents.update(completedCase.id, {
+      status: VerificationStatus.VERIFIED,
+      resolved_by: 'drasil:captcha',
+      resolved_at: new Date(),
+      case_kind: CaseKind.STANDARD,
+    });
+    const snapshot = {
+      id: 'snapshot-concurrent-pending',
+      server_id: 'guild-1',
+      user_id: 'user-1',
+      verification_event_id: completedCase.id,
+      status: RoleQuarantineSnapshotStatus.ACTIVE,
+      mode: 'on',
+      purpose: RoleQuarantineSnapshotPurpose.STANDARD_CASE,
+      original_role_ids: ['role-1'],
+      planned_role_ids: ['role-1'],
+      removed_role_ids: ['role-1'],
+      restored_role_ids: [],
+      skipped_roles: [],
+      failed_removals: [],
+      failed_restores: [],
+      created_at: new Date(),
+      updated_at: new Date(),
+      restored_at: null,
+      restored_by: null,
+      metadata: {},
+    };
+    const member = { id: 'user-1' };
+    let fenceAllowed: boolean | null = null;
+    const roleQuarantine = {
+      restoreMemberRoles: jest.fn().mockImplementation(async (...args: unknown[]) => {
+        const fence = args[2] as { canRestoreRole(): Promise<boolean> };
+        await verificationEvents.createFromDetection(
+          null,
+          'guild-1',
+          'user-1',
+          VerificationStatus.PENDING
+        );
+        fenceAllowed = await fence.canRestoreRole();
+        return {
+          status: fenceAllowed ? 'restored' : 'held_pending_case',
+        };
+      }),
+    };
+    const notifications = {
+      notifyAccountQuarantineAttention: jest.fn().mockResolvedValue(true),
+    };
+    const service = buildService({
+      client: {
+        guilds: {
+          cache: new Map([
+            ['guild-1', { id: 'guild-1', members: { fetch: jest.fn().mockResolvedValue(member) } }],
+          ]),
+          fetch: jest.fn(),
+        },
+      },
+      verificationEvents,
+      snapshots: { findActiveCompletedForRestoration: jest.fn().mockResolvedValue([snapshot]) },
+      roleQuarantine,
+      notifications,
+    });
+
+    await service.runOnce();
+
+    expect(fenceAllowed).toBe(false);
+    expect(notifications.notifyAccountQuarantineAttention).not.toHaveBeenCalled();
   });
 
   it('does not restore roles while the member has a newer pending case', async () => {

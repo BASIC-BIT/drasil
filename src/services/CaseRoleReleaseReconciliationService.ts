@@ -299,11 +299,18 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
         this.roleRestorationAlertedSnapshotIds.delete(snapshot.id);
         return;
       }
-      const result = await this.roleQuarantineService.restoreMemberRoles(member);
+      const result = await this.roleQuarantineService.restoreMemberRoles(member, undefined, {
+        canRestoreRole: async () =>
+          !(await this.verificationEventRepository.findActiveByUserAndServer(
+            snapshot.user_id,
+            snapshot.server_id
+          )),
+      });
       if (
         result.status === 'restored' ||
         result.status === 'no_active_snapshot' ||
-        result.status === 'abandoned_membership_changed'
+        result.status === 'abandoned_membership_changed' ||
+        result.status === 'held_pending_case'
       ) {
         this.roleRestorationAlertedSnapshotIds.delete(snapshot.id);
         return;

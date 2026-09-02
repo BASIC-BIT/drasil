@@ -28,6 +28,7 @@ export type RoleQuarantineApplyStatus = 'off' | 'audit_only' | 'already_active' 
 export type RoleQuarantineRestoreStatus =
   | 'no_active_snapshot'
   | 'abandoned_membership_changed'
+  | 'held_pending_case'
   | 'partially_restored'
   | 'restored';
 export type RoleQuarantineAbandonStatus = 'no_active_snapshot' | 'abandoned';
@@ -52,6 +53,10 @@ export interface RoleQuarantineApplyResult {
 export interface QuarantineAttemptFence {
   readonly attemptId: string;
   assertOwner(): Promise<void>;
+}
+
+export interface RoleRestorationFence {
+  canRestoreRole(): Promise<boolean>;
 }
 
 export class RoleQuarantineApplyError extends Error {
@@ -131,7 +136,11 @@ export interface IRoleQuarantineService {
     newMember: GuildMember,
     verificationEvent: VerificationEvent
   ): Promise<RoleQuarantineActiveCaseUpdateResult>;
-  restoreMemberRoles(member: GuildMember, moderator?: User): Promise<RoleQuarantineRestoreResult>;
+  restoreMemberRoles(
+    member: GuildMember,
+    moderator?: User,
+    fence?: RoleRestorationFence
+  ): Promise<RoleQuarantineRestoreResult>;
   abandonActiveSnapshot(
     serverId: string,
     userId: string,
@@ -224,7 +233,8 @@ export class RoleQuarantineService implements IRoleQuarantineService {
 
   public async restoreMemberRoles(
     member: GuildMember,
-    moderator?: User
+    moderator?: User,
+    fence?: RoleRestorationFence
   ): Promise<RoleQuarantineRestoreResult> {
     const snapshot = await this.snapshotRepository.findActiveByServerAndUser(
       member.guild.id,
@@ -315,6 +325,27 @@ export class RoleQuarantineService implements IRoleQuarantineService {
       if (member.roles.cache.has(role.id)) {
         restoredRoleIds.push(role.id);
         continue;
+      }
+
+      if (fence && !(await fence.canRestoreRole())) {
+        await this.snapshotRepository.update(snapshot.id, {
+          status: RoleQuarantineSnapshotStatus.ACTIVE,
+          restoredRoleIds,
+          failedRestores: failedRestores as unknown as Prisma.JsonValue,
+          metadata: {
+            ...this.metadataToRecord(snapshot.metadata),
+            restore_skipped_roles: skippedRoles,
+            restore_held_pending_case_at: new Date().toISOString(),
+          } as unknown as Prisma.JsonValue,
+        });
+        return {
+          status: 'held_pending_case',
+          snapshotId: snapshot.id,
+          attemptedRoleIds,
+          restoredRoleIds,
+          skippedRoles,
+          failedRestores,
+        };
       }
 
       try {
