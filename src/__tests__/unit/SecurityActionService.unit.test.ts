@@ -3,6 +3,7 @@ import { SecurityActionService } from '../../services/SecurityActionService';
 import { DetectionResult } from '../../services/DetectionOrchestrator';
 import {
   AdminActionType,
+  CaptchaChallengeRequestSource,
   DetectionType,
   ModerationOutcomeSource,
   ModerationOutcomeType,
@@ -31,6 +32,7 @@ import {
   VERIFICATION_ACTION_FAILURES_METADATA_KEY,
 } from '../../utils/verificationActionFailures';
 import type { IModerationQueueService } from '../../services/ModerationQueueService';
+import type { ICaptchaChallengeService } from '../../services/CaptchaChallengeService';
 
 const buildMember = (guildId: string, userId: string): GuildMember => {
   const user = {
@@ -99,6 +101,7 @@ describe('SecurityActionService (unit)', () => {
       mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(false),
       notifyVerificationThreadUserResponse: jest.fn().mockResolvedValue(true),
       notifyAccountQuarantineAttention: jest.fn().mockResolvedValue(true),
+      notifyCaptchaAttention: jest.fn().mockResolvedValue(true),
       upsertObservedDetectionNotification: jest
         .fn()
         .mockResolvedValue({ id: 'observe-1' } as Message),
@@ -329,6 +332,66 @@ describe('SecurityActionService (unit)', () => {
     expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member);
     expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
     expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(2);
+  });
+
+  it('surfaces automatic CAPTCHA issuance failures after notifying moderators', async () => {
+    const guildId = 'guild-automatic-captcha-failure';
+    const userId = 'user-automatic-captcha-failure';
+    await serverRepository.upsertByGuildId(guildId, {
+      settings: { captcha_mode: 'suspicious_join' },
+    });
+    const member = buildMember(guildId, userId);
+    const detectionResult: DetectionResult = {
+      label: 'SUSPICIOUS',
+      confidence: 0.92,
+      reasons: ['New account requires review'],
+      triggerSource: DetectionType.NEW_ACCOUNT,
+      triggerContent: 'Suspicious new join',
+    };
+    const captchaChallengeService = {
+      findByCaseId: jest.fn().mockResolvedValue(null),
+      requestChallenge: jest.fn().mockRejectedValue(new Error('Database unavailable')),
+    } as unknown as jest.Mocked<ICaptchaChallengeService>;
+    const service = new SecurityActionService(
+      notificationManager,
+      detectionEventsRepository,
+      serverMemberRepository,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      adminActionService,
+      threadManager,
+      userModerationService,
+      {} as Client,
+      gptService as any,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      captchaChallengeService
+    );
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await expect(service.handleSuspiciousJoin(member, detectionResult)).rejects.toThrow(
+      'Database unavailable'
+    );
+
+    const [verificationEvent] = await verificationEventRepository.findByUserAndServer(
+      userId,
+      guildId
+    );
+
+    expect(captchaChallengeService.requestChallenge).toHaveBeenCalledWith({
+      verificationEventId: verificationEvent.id,
+      requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
+      caseWasCreatedBySuspiciousJoin: true,
+    });
+    expect(notificationManager.notifyCaptchaAttention).toHaveBeenCalledWith(
+      expect.objectContaining({ id: verificationEvent.id }),
+      'delivery_failed'
+    );
+    warn.mockRestore();
   });
 
   it('auto-kicks high-confidence message detections only when message policy allows it', async () => {

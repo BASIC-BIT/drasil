@@ -1448,7 +1448,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       return { status: 'held', reason: 'case_changed' };
     }
     completed = current;
-    const finalizationAttemptId = `${CAPTCHA_FINALIZATION_ATTEMPT_PREFIX}${randomUUID()}`;
+    const finalizationAttemptId = `${CAPTCHA_FINALIZATION_ATTEMPT_PREFIX}${input.challengeId}:${input.generation}`;
     const claimed = await this.verificationEventRepository.claimCaptchaFinalization(
       {
         id: completed.id,

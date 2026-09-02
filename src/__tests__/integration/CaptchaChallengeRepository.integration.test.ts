@@ -61,9 +61,15 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     });
   }
 
+  async function enableManualCaptcha(serverId: string): Promise<void> {
+    const servers = new ServerRepository(prisma);
+    await servers.updateSettings(serverId, { captcha_mode: 'manual' });
+  }
+
   it('keeps one aggregate per case and preserves per-generation bypass audit on retry', async () => {
     const { verification } = await createCase('guild-captcha-retry', 'user-captcha-retry');
     const challenges = new CaptchaChallengeRepository(prisma);
+    await enableManualCaptcha(verification.server_id);
     const initial = await challenges.create({
       verificationEventId: verification.id,
       serverId: verification.server_id,
@@ -138,6 +144,7 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       'user-captcha-stale-retry'
     );
     const challenges = new CaptchaChallengeRepository(prisma);
+    await enableManualCaptcha(verification.server_id);
     const initial = await challenges.create({
       verificationEventId: verification.id,
       serverId: verification.server_id,
@@ -194,6 +201,7 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       'user-captcha-bypass-closed-case'
     );
     const challenges = new CaptchaChallengeRepository(prisma);
+    await enableManualCaptcha(verification.server_id);
     const challenge = await challenges.create({
       verificationEventId: verification.id,
       serverId: verification.server_id,
@@ -213,6 +221,36 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
         status: VerificationStatus.VERIFIED,
       },
     });
+
+    await expect(
+      challenges.bypass(challenge.id, challenge.generation, 'moderator-1', 'Reviewed manually')
+    ).resolves.toBeNull();
+    await expect(prisma.captcha_challenge_bypasses.count()).resolves.toBe(0);
+    await expect(challenges.findById(challenge.id)).resolves.toEqual(
+      expect.objectContaining({ status: CaptchaChallengeStatus.PENDING })
+    );
+  });
+
+  it('rejects a bypass after the server disables CAPTCHA', async () => {
+    const { verification } = await createCase(
+      'guild-captcha-bypass-disabled',
+      'user-captcha-bypass-disabled'
+    );
+    const servers = new ServerRepository(prisma);
+    const challenges = new CaptchaChallengeRepository(prisma);
+    await enableManualCaptcha(verification.server_id);
+    const challenge = await challenges.create({
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      caseRevision: verification.case_revision,
+      tokenHash: 'bypass-disabled-hash',
+      expiresAt: new Date(Date.now() + 60_000),
+      requestedBy: 'moderator-1',
+    });
+    await servers.updateSettings(verification.server_id, { captcha_mode: 'off' });
 
     await expect(
       challenges.bypass(challenge.id, challenge.generation, 'moderator-1', 'Reviewed manually')
@@ -326,6 +364,21 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
         quarantine_attempt_id: attemptId,
       })
     );
+    await expect(
+      verifications.claimCaptchaFinalization(completion, attemptId, new Date(0))
+    ).resolves.toEqual(
+      expect.objectContaining({
+        containment_status: CaseContainmentStatus.IN_PROGRESS,
+        quarantine_attempt_id: attemptId,
+      })
+    );
+    await expect(
+      verifications.claimCaptchaFinalization(
+        completion,
+        `${CAPTCHA_FINALIZATION_ATTEMPT_PREFIX}different`,
+        new Date(0)
+      )
+    ).resolves.toBeNull();
     await expect(verifications.reopen(verification.id)).resolves.toBeNull();
     await expect(
       verifications.releaseCaptchaFinalization(verification.id, attemptId)

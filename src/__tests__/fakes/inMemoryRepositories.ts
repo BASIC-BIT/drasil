@@ -785,6 +785,9 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
         event.quarantine_attempt_id?.startsWith(CAPTCHA_FINALIZATION_ATTEMPT_PREFIX) === true &&
         (!event.quarantine_lease_renewed_at ||
           event.quarantine_lease_renewed_at.getTime() <= staleBefore.getTime());
+      const matchingCaptchaFinalization =
+        event.containment_status === CaseContainmentStatus.IN_PROGRESS &&
+        event.quarantine_attempt_id === attemptId;
       return (
         event.id === input.id &&
         event.server_id === input.serverId &&
@@ -794,7 +797,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
         event.case_revision === input.expectedCaseRevision &&
         resolution.challenge_id === input.challengeId &&
         resolution.generation === input.generation &&
-        (available || staleCaptchaFinalization)
+        (available || matchingCaptchaFinalization || staleCaptchaFinalization)
       );
     });
     if (eventIndex === -1) {

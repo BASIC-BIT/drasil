@@ -30,6 +30,7 @@ import type { IModerationQueueService } from '../../services/ModerationQueueServ
 import type { IRoleQuarantineService } from '../../services/RoleQuarantineService';
 import type { ICaptchaChallengeRepository } from '../../repositories/CaptchaChallengeRepository';
 import {
+  CAPTCHA_FINALIZATION_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_LEASE_MS,
   CASE_TERMINAL_ACTION_ATTEMPT_PREFIX,
@@ -463,6 +464,69 @@ describe('UserModerationService (unit)', () => {
 
     expect(roleManager.removeCaseRole).toHaveBeenCalledTimes(1);
     expect(threadManager.resolveVerificationThread).toHaveBeenCalledTimes(2);
+    await expect(adminActionRepository.findByUserAndServer(userId, guildId)).resolves.toHaveLength(
+      1
+    );
+    await expect(
+      moderationOutcomeRepository.findByVerificationEvent(verificationEvent.id)
+    ).resolves.toHaveLength(1);
+  });
+
+  it('immediately resumes the same CAPTCHA finalization after its lease release fails', async () => {
+    const guildId = 'guild-captcha-release-resume';
+    const userId = 'user-captcha-release-resume';
+    const member = buildMember(guildId, userId);
+    await serverRepository.getOrCreateServer(guildId);
+    await userRepository.getOrCreateUser(userId, 'test-user');
+    const verificationEvent = await verificationEventRepository.createFromDetection(
+      null,
+      guildId,
+      userId,
+      VerificationStatus.PENDING
+    );
+    const input = {
+      verificationEventId: verificationEvent.id,
+      challengeId: 'challenge-release-resume',
+      generation: 2,
+      expectedCaseRevision: verificationEvent.case_revision,
+    };
+    const releaseCaptchaFinalization = verificationEventRepository.releaseCaptchaFinalization.bind(
+      verificationEventRepository
+    );
+    jest
+      .spyOn(verificationEventRepository, 'releaseCaptchaFinalization')
+      .mockResolvedValueOnce(false)
+      .mockImplementation(releaseCaptchaFinalization);
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+
+    await expect(service.resolveCaptchaCase(member, input)).rejects.toThrow(
+      `Failed to release CAPTCHA finalization for case ${verificationEvent.id}.`
+    );
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        containment_status: CaseContainmentStatus.IN_PROGRESS,
+        quarantine_attempt_id: `${CAPTCHA_FINALIZATION_ATTEMPT_PREFIX}${input.challengeId}:${input.generation}`,
+      })
+    );
+
+    await expect(service.resolveCaptchaCase(member, input)).resolves.toEqual({
+      status: 'resolved',
+    });
+    await expect(verificationEventRepository.findById(verificationEvent.id)).resolves.toEqual(
+      expect.objectContaining({
+        containment_status: CaseContainmentStatus.NOT_APPLICABLE,
+        quarantine_attempt_id: null,
+      })
+    );
     await expect(adminActionRepository.findByUserAndServer(userId, guildId)).resolves.toHaveLength(
       1
     );

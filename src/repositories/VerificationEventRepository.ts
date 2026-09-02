@@ -700,10 +700,15 @@ export class VerificationEventRepository implements IVerificationEventRepository
                 },
                 {
                   containment_status: CaseContainmentStatus.IN_PROGRESS,
-                  quarantine_attempt_id: { startsWith: CAPTCHA_FINALIZATION_ATTEMPT_PREFIX },
                   OR: [
-                    { quarantine_lease_renewed_at: null },
-                    { quarantine_lease_renewed_at: { lte: staleBefore } },
+                    { quarantine_attempt_id: attemptId },
+                    {
+                      quarantine_attempt_id: { startsWith: CAPTCHA_FINALIZATION_ATTEMPT_PREFIX },
+                      OR: [
+                        { quarantine_lease_renewed_at: null },
+                        { quarantine_lease_renewed_at: { lte: staleBefore } },
+                      ],
+                    },
                   ],
                 },
               ],

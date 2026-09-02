@@ -280,6 +280,8 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
         from captcha_challenges as challenge
         join verification_events as verification
           on verification.id = challenge.verification_event_id
+        join servers as server
+          on server.guild_id = challenge.server_id
         where challenge.id = ${id}::uuid
           and challenge.generation = ${generation}
           and challenge.status in (
@@ -288,7 +290,8 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
             ${CaptchaChallengeStatus.EXPIRED}::captcha_challenge_status
           )
           and verification.status = ${VerificationStatus.PENDING}::verification_status
-        for update of verification, challenge
+          and coalesce(server.settings->>'captcha_mode', 'off') <> 'off'
+        for update of verification, challenge, server
       `;
       if (!eligible[0]) {
         return null;
