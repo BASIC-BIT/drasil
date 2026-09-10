@@ -358,8 +358,39 @@ jobs:
           const messages = JSON.parse(fs.readFileSync(executionFile, "utf8"));
           const result = messages.findLast((message) => message.type === "result");
 
+          // The action prints its own result summary with the SDK's `result` string
+          // stripped ("full output hidden for security"), so a failure here used to say
+          // only that it failed. Repeat the structured fields next to the error and add
+          // the two the action never prints, `stop_reason` and `api_error_status`, plus a
+          // bounded prefix of the result text: for a usage-limit or auth rejection that
+          // text is the whole diagnosis. The text is model free-form, so it is truncated
+          // and JSON-encoded to a single line, which also means no PR-controlled string
+          // can start a line with "::" and forge a workflow command.
+          const RESULT_TEXT_LIMIT = 500;
+
+          const fail = (reason) => {
+            if (!result) {
+              console.log(`::error::${reason} No result message in the execution file.`);
+              process.exit(1);
+            }
+            const text = typeof result.result === "string" ? result.result : "";
+            const fields = [
+              `subtype=${result.subtype}`,
+              `is_error=${result.is_error}`,
+              `num_turns=${result.num_turns}`,
+              `duration_ms=${result.duration_ms}`,
+              `total_cost_usd=${result.total_cost_usd}`,
+              `stop_reason=${result.stop_reason}`,
+              `api_error_status=${result.api_error_status ?? "none"}`,
+              `result_len=${text.length}`,
+              `result=${JSON.stringify(text.slice(0, RESULT_TEXT_LIMIT))}`,
+            ].join(" ");
+            console.log(`::error::${reason} ${fields}`);
+            process.exit(1);
+          };
+
           if (!result || result.subtype !== "success" || result.is_error) {
-            throw new Error("Claude did not finish with a successful non-error result.");
+            fail("Claude did not finish with a successful non-error result.");
           }
 
           const markdownFromContent = (content) => Array.isArray(content)
@@ -386,7 +417,7 @@ jobs:
           const markdown = resultMarkdown || assistantMarkdown;
 
           if (!markdown) {
-            throw new Error("Claude did not return a Markdown review body.");
+            fail("Claude did not return a Markdown review body.");
           }
 
           fs.writeFileSync(reviewFile, `${markdown}\n`);
