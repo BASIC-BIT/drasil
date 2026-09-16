@@ -1214,10 +1214,6 @@ export class SecurityActionService implements ISecurityActionService {
     return [`Profile image description: ${escapeMarkdown(description.summary)}`];
   }
 
-  private formatAiAuthoredInlineCode(value: string): string {
-    return `\`${value.replace(/`/g, "'")}\``;
-  }
-
   private formatRecentMessages(messages: MessageContext[], guildId: string): string[] {
     if (messages.length === 0) {
       return ['Stored message context: none available.'];
