@@ -186,7 +186,7 @@ describe('SecurityActionService (unit)', () => {
         isFallback: false,
       }),
       describeProfileImages: jest.fn().mockResolvedValue({
-        summary: 'Profile images contain a stylized landscape.',
+        summary: 'Profile images contain **mountains**, ||stars||, and ~~clouds~~.',
         analyzedImageCount: 1,
         model: 'gpt-5.4-mini',
         promptVersion: 'profile-image-description-v2',
@@ -665,7 +665,7 @@ describe('SecurityActionService (unit)', () => {
     expect(verificationEvents[0].metadata).toEqual(
       expect.objectContaining({
         profile_image_description: {
-          summary: 'Profile images contain a stylized landscape.',
+          summary: 'Profile images contain **mountains**, ||stars||, and ~~clouds~~.',
           analyzed_image_count: 1,
           model: 'gpt-5.4-mini',
           prompt_version: 'profile-image-description-v2',
@@ -689,7 +689,7 @@ describe('SecurityActionService (unit)', () => {
     expect(evidenceThread.send).toHaveBeenCalledWith(
       expect.objectContaining({
         content: expect.stringContaining(
-          'Profile image description: Profile images contain a stylized landscape.\n\n'
+          'Profile image description: Profile images contain \\*\\*mountains\\*\\*, \\|\\|stars\\|\\|, and \\~\\~clouds\\~\\~.\n\n'
         ),
       })
     );

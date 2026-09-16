@@ -10,6 +10,7 @@ import {
   InteractionContextType,
   Role,
   ThreadChannel,
+  escapeMarkdown,
 } from 'discord.js';
 import { TYPES } from '../di/symbols';
 import { INotificationManager } from './NotificationManager';
@@ -1210,7 +1211,7 @@ export class SecurityActionService implements ISecurityActionService {
       return ['Profile image description: unavailable.'];
     }
 
-    return [`Profile image description: ${description.summary}`];
+    return [`Profile image description: ${escapeMarkdown(description.summary)}`];
   }
 
   private formatAiAuthoredInlineCode(value: string): string {
