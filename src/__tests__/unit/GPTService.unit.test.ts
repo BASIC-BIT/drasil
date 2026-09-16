@@ -27,6 +27,27 @@ describe('GPTService (unit)', () => {
     return { openai, parse };
   }
 
+  it('preserves a single profile image description beyond the old limits', async () => {
+    const summary =
+      'The avatar shows a translucent pink and orange abstract figure on a blue background. ' +
+      'The banner shows purple geometric shapes with soft lighting across a dark background. ' +
+      'Neither image contains visible text or a watermark.';
+    const { openai, parse } = buildOpenAiMock({ summary });
+    const result = await new GPTService(openai).describeProfileImages({
+      username: 'test-user',
+      avatarUrl: 'https://cdn.discordapp.com/avatar.png',
+      bannerUrl: 'https://cdn.discordapp.com/banner.png',
+    });
+    expect(summary.length).toBeGreaterThan(160);
+    expect(result.summary).toBe(summary);
+    expect(result.isFallback).toBe(false);
+    expect(result.analyzedImageCount).toBe(2);
+    expect(result).not.toHaveProperty('avatarDescription');
+    expect(result).not.toHaveProperty('bannerDescription');
+    expect(result).not.toHaveProperty('riskNotes');
+    expect(parse.mock.calls[0][0].instructions).toContain('Prefer one or two short sentences.');
+  });
+
   it('parses structured suspicious profile analysis', async () => {
     const { openai, parse } = buildOpenAiMock(
       {

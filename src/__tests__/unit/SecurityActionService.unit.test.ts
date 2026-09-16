@@ -187,12 +187,9 @@ describe('SecurityActionService (unit)', () => {
       }),
       describeProfileImages: jest.fn().mockResolvedValue({
         summary: 'Profile images contain a stylized landscape.',
-        avatarDescription: 'A mountain beneath a night sky.',
-        bannerDescription: null,
-        riskNotes: ['No obvious impersonation markers.'],
         analyzedImageCount: 1,
         model: 'gpt-5.4-mini',
-        promptVersion: 'profile-image-triage-v1',
+        promptVersion: 'profile-image-description-v2',
         isFallback: false,
       }),
     };
@@ -665,6 +662,17 @@ describe('SecurityActionService (unit)', () => {
       expect.any(Object)
     );
     expect(arrayBuffer).not.toHaveBeenCalled();
+    expect(verificationEvents[0].metadata).toEqual(
+      expect.objectContaining({
+        profile_image_description: {
+          summary: 'Profile images contain a stylized landscape.',
+          analyzed_image_count: 1,
+          model: 'gpt-5.4-mini',
+          prompt_version: 'profile-image-description-v2',
+          is_fallback: false,
+        },
+      })
+    );
     expect(gptService.describeProfileImages).toHaveBeenCalledWith(
       expect.objectContaining({
         avatarUrl: 'https://cdn.discordapp.com/visible-avatar.png',
@@ -681,7 +689,7 @@ describe('SecurityActionService (unit)', () => {
     expect(evidenceThread.send).toHaveBeenCalledWith(
       expect.objectContaining({
         content: expect.stringContaining(
-          'AI visual assessment:\n- Summary: `Profile images contain a stylized landscape.`\n- Avatar: `A mountain beneath a night sky.`\n- Visual notes: `No obvious impersonation markers.`'
+          'Profile image description: Profile images contain a stylized landscape.\n\n'
         ),
       })
     );
