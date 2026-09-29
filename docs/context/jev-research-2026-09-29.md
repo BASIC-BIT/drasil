@@ -1,0 +1,31 @@
+# Jev research for Drasil (2026-09-29)
+
+## Availability
+
+TypeSafe introduced Jev on September 15 as an early-access model. Its current public documentation describes a Playground, account dashboard, API keys, a production HTTP endpoint, and a JavaScript/TypeScript SDK. The [console login](https://console.typesafe.ai/login) is publicly reachable. This establishes a documented hosted product, but I did not create an account or make a paid call, so I cannot verify whether a new Drasil account receives access immediately or must still be admitted. [Launch post](https://typesafe.ai/blog/introducing-system-one-models-and-jev), [quick start](https://docs.typesafe.ai/introduction/quickstart), [API reference](https://docs.typesafe.ai/api), [JavaScript SDK](https://docs.typesafe.ai/sdk/javascript).
+
+Jev is a proprietary hosted model, not a downloadable model. The customer agreement licenses API integration into an application for end users, subject to account and usage terms. [Customer agreement, sections 2.1-2.3](https://typesafe.ai/legal/mca).
+
+## What it offers
+
+- `POST https://api.typesafe.ai/v1/systemone` accepts a text or JSON `state` and named questions. Noul returns a yes probability; Choice returns a selected label, option probabilities, and confidence; Score returns a rubric score, level probabilities, and confidence. Multiple questions share one request and are evaluated independently. [API reference](https://docs.typesafe.ai/api), [introduction](https://docs.typesafe.ai/introduction).
+- The current version is `jev-1.13.0`. `jev-latest` points to that version but can move, so pinning is appropriate if thresholds are calibrated against a version. TypeSafe lists $0.042 per million input tokens and free output tokens. Published limits are 1,200 requests/minute and 250,000 tokens/second, which TypeSafe says may change without notice. The budget is 64k tokens for a request and 32k for `state` plus the longest question. Input is text only. English is its strongest language. [Models](https://docs.typesafe.ai/models).
+- TypeSafe claims 70-500 ms end-to-end latency and low cost for the tasks it measured, with an explicit note that its published evaluations were generally run from West Coast laptops near the service. These are vendor measurements, not a Discord spam benchmark. [Launch post, technical results](https://typesafe.ai/blog/introducing-system-one-models-and-jev), [workflow evaluations](https://evals.typesafe.ai/).
+
+At 500 input tokens per message, the published token rate implies about $0.000021 per call, or $2.10 per 100,000 calls, before any surrounding costs. This is an estimate, not a measured Drasil bill. [Models pricing](https://docs.typesafe.ai/models).
+
+## Fit for spam and scam detection
+
+Jev's closed-set decisions fit narrow judgments such as whether a message makes an unsolicited promotional offer, requests a move off-platform, impersonates a trusted role, or warrants moderator review. It can return several such probabilities in one call, leaving Drasil's existing code to combine them with deterministic signals. Its output cannot generate a reasoned evidence narrative, so it would not replace a model path that needs prose. [Primitives](https://docs.typesafe.ai/introduction), [model limitations](https://docs.typesafe.ai/model-jaggedness/jev-1.13).
+
+The critical limitation is adversarial input. TypeSafe says Jev 1.13 does **not** treat text in `state` as hostile by default; injected instructions and misleading framing can move its answer. Spam messages are attacker-authored state. TypeSafe also warns that unrelated or long state reduces accuracy, and that its literal reading can miss intended policy boundaries. Count links, repetitions, account age, and timing in code; send only the semantic context needed for each judgment. [Jev 1.13 jaggedness](https://docs.typesafe.ai/model-jaggedness/jev-1.13).
+
+The vendor's [moderation consistency cookbook](https://docs.typesafe.ai/cookbooks/consistency_choice_cookbook) uses one borderline synthetic post, eight Choice questions, and 15 repeats. It reports Jev label flips on two of eight questions. Adding a top-probability threshold of 0.60 raised repeat label agreement to 99.2%, while 74.2% of answers received an automatic label. This measures repeatability on that constructed example, **not** spam/scam precision, recall, false-positive rate, or resistance to attacker prompts. The vendor's broader [workflow evaluation](https://evals.typesafe.ai/) compares outputs to consensus from larger models rather than independently labeled spam cases.
+
+**Recommendation:** Jev is worth a small, opt-in shadow evaluation against Drasil's labeled messages and existing heuristic/GPT decisions. Start with observed, no-action scores. Measure misses on real scams, false positives on ordinary messages, adversarial instruction attempts, languages, latency, and outage behavior before using its output for moderation actions. There is no evidence here that it is ready to replace Drasil's current detector or to kick users on its own.
+
+## Data and operating terms
+
+TypeSafe says it does not train or fine-tune models on customer input or output. The [privacy policy](https://typesafe.ai/legal/privacy-policy) says inputs can be collected to provide and improve the service, with service-provider disclosures; it has no fixed public deletion period. The [customer agreement](https://typesafe.ai/legal/mca) permits perpetual processing of customer data to derive telemetry, monitor fraud/abuse, and comply with law, and permits unrestricted use of telemetry. The [DPA](https://typesafe.ai/legal/data-processing) describes retention for as long as necessary for the processing purpose and law. TypeSafe advertises zero-data-retention only for enterprise customers who arrange it with sales. These terms warrant review before sending live Discord messages or personal data. [Legal overview](https://docs.typesafe.ai/legal).
+
+The API documents `429` rate limiting and `529` overload; its SDKs retry with backoff. A moderation path must define what happens on those errors. The customer agreement also says output may be inaccurate and the customer must evaluate it independently. [API reference](https://docs.typesafe.ai/api), [customer agreement](https://typesafe.ai/legal/mca).

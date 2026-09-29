@@ -138,6 +138,37 @@ describe('NotificationPresentationBuilder (unit)', () => {
     }
   });
 
+  it('shows both classifier results when they disagree', () => {
+    const embed = builder.createObservedDetectionEmbed(
+      buildMember(),
+      buildDetectionResult({
+        gptAnalysis: {
+          result: 'OK',
+          confidence: 0.2,
+          reasons: [],
+          reasonCodes: ['normal_context'],
+          primarySignal: 'none',
+          summary: 'Context looks normal.',
+          model: 'gpt-5.4-mini',
+          promptVersion: 'test',
+          isFallback: false,
+        },
+        jevAnalysis: {
+          result: 'SUSPICIOUS',
+          suspiciousProbability: 0.91,
+          reasonCodes: ['scam_link'],
+          model: 'jev-1.13.0',
+        },
+      }),
+      []
+    );
+
+    expect(getField(embed, 'Risk Analysis')).toContain(
+      'Two checks: GPT did not flag; Jev flagged.'
+    );
+    expect(getField(embed, 'Risk Analysis')).toContain('Jev reason: scam_link');
+  });
+
   it('replaces the typed browser security-check field as the challenge advances', () => {
     const embed = new EmbedBuilder().setTitle('Suspicious User');
     builder.upsertCaptchaChallengePresentation(

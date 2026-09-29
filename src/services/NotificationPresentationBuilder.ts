@@ -1668,6 +1668,30 @@ export class NotificationPresentationBuilder {
 
   private formatGptDiagnosticFieldValue(detectionResult: DetectionResult): string | null {
     const analysis = detectionResult.gptAnalysis;
+    const jev = detectionResult.jevAnalysis;
+    if (jev) {
+      const gptResult =
+        !analysis || analysis.isFallback
+          ? 'unavailable'
+          : analysis.result === 'SUSPICIOUS'
+            ? 'flagged'
+            : 'did not flag';
+      const jevResult =
+        jev.result === 'UNAVAILABLE'
+          ? 'unavailable'
+          : jev.result === 'SUSPICIOUS'
+            ? 'flagged'
+            : 'did not flag';
+      return this.formatCompactEmbedFieldValue(
+        [`Two checks: GPT ${gptResult}; Jev ${jevResult}.`],
+        [
+          analysis && !analysis.isFallback
+            ? `GPT assessment: ${this.formatAiAuthoredInlineCode(analysis.summary)}`
+            : null,
+          jev.reasonCodes.length ? `Jev reason: ${jev.reasonCodes.join(', ')}` : null,
+        ]
+      );
+    }
     if (!analysis) {
       return null;
     }

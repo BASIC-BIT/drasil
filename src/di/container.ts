@@ -9,6 +9,7 @@ import { TYPES } from './symbols';
 // Import services and repositories
 import { HeuristicService, IHeuristicService } from '../services/HeuristicService';
 import { GPTService, IGPTService } from '../services/GPTService';
+import { JevService } from '../services/JevService';
 import { RoleManager, IRoleManager } from '../services/RoleManager';
 import { NotificationManager, INotificationManager } from '../services/NotificationManager';
 import { ServerRepository, IServerRepository } from '../repositories/ServerRepository';
@@ -278,6 +279,7 @@ function configureServices(container: Container): void {
   container.bind<IHeuristicService>(TYPES.HeuristicService).to(HeuristicService).inSingletonScope();
 
   container.bind<IGPTService>(TYPES.GPTService).to(GPTService).inSingletonScope();
+  container.bind<JevService>(TYPES.JevService).to(JevService).inSingletonScope();
 
   container.bind<IRoleManager>(TYPES.RoleManager).to(RoleManager).inSingletonScope();
 

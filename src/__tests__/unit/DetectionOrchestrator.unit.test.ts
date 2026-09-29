@@ -8,6 +8,7 @@ import {
   UserProfileData,
 } from '../../services/GPTService';
 import { DetectionType } from '../../repositories/types';
+import { JevService } from '../../services/JevService';
 import {
   InMemoryDetectionEventsRepository,
   InMemoryServerRepository,
@@ -203,6 +204,80 @@ describe('DetectionOrchestrator (unit)', () => {
         reason_codes: ['suspicious_keyword'],
       },
     });
+  });
+
+  it('flags a message when Jev flags and GPT does not', async () => {
+    heuristicService.analyzeMessage.mockReturnValue({ result: 'OK', reasons: [] });
+    gptService.analyzeProfile.mockResolvedValue(makeGptAnalysis());
+    const jevService = {
+      analyzeProfile: jest.fn().mockResolvedValue({
+        result: 'SUSPICIOUS',
+        suspiciousProbability: 0.91,
+        reasonCodes: ['scam_link'],
+        model: 'jev-1.13.0',
+      }),
+    } as unknown as JevService;
+    const orchestrator = new DetectionOrchestrator(
+      heuristicService,
+      gptService,
+      detectionEventsRepository,
+      userRepository,
+      serverRepository,
+      undefined,
+      jevService
+    );
+    const profile: UserProfileData = {
+      username: 'new-user',
+      accountCreatedAt: new Date(),
+      joinedServerAt: new Date(),
+      recentMessages: [],
+    };
+
+    const result = await orchestrator.detectMessage(serverId, userId, 'claim here', profile);
+
+    expect(result.label).toBe('SUSPICIOUS');
+    expect(result.confidence).toBe(0.91);
+    expect(result.gptAnalysis?.result).toBe('OK');
+    expect(result.jevAnalysis?.result).toBe('SUSPICIOUS');
+    expect(jevService.analyzeProfile as jest.Mock).toHaveBeenCalledTimes(1);
+    const events = await detectionEventsRepository.findByServerAndUser(serverId, userId);
+    expect(events[0].metadata).toMatchObject({
+      gpt: { result: 'OK' },
+      jev: { result: 'SUSPICIOUS', reason_codes: ['scam_link'] },
+    });
+  });
+
+  it('flags a join when only Jev flags it', async () => {
+    gptService.analyzeProfile.mockResolvedValue(makeGptAnalysis());
+    const jevService = {
+      analyzeProfile: jest.fn().mockResolvedValue({
+        result: 'SUSPICIOUS',
+        suspiciousProbability: 0.88,
+        reasonCodes: ['impersonation'],
+        model: 'jev-1.13.0',
+      }),
+    } as unknown as JevService;
+    const orchestrator = new DetectionOrchestrator(
+      heuristicService,
+      gptService,
+      detectionEventsRepository,
+      userRepository,
+      serverRepository,
+      undefined,
+      jevService
+    );
+    const profile: UserProfileData = {
+      username: 'established-user',
+      accountCreatedAt: new Date('2020-01-01T00:00:00Z'),
+      joinedServerAt: new Date('2020-01-01T00:00:00Z'),
+      recentMessages: [],
+    };
+
+    const result = await orchestrator.detectNewJoin(serverId, userId, profile);
+
+    expect(result.label).toBe('SUSPICIOUS');
+    expect(result.confidence).toBe(0.88);
+    expect(result.jevAnalysis?.reasonCodes).toEqual(['impersonation']);
   });
 
   it('skips GPT when recent high-confidence detections exist', async () => {
