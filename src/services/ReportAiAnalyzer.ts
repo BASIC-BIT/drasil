@@ -76,7 +76,7 @@ export class ReportAiAnalyzer {
       ...gptAnalysis,
       gptResult: gptAnalysis.isFallback ? undefined : gptAnalysis.result,
       jevAnalysis,
-      result: jevFlagged && gptAnalysis.result === 'low_risk' ? 'needs_review' : gptAnalysis.result,
+      result: jevFlagged ? 'likely_abusive' : gptAnalysis.result,
       confidence: jevFlagged
         ? Math.max(
             gptAnalysis.result === 'likely_abusive' ? gptAnalysis.confidence : 0,
@@ -91,13 +91,10 @@ export class ReportAiAnalyzer {
             ]),
           ]
         : gptAnalysis.reasonCodes,
-      recommendedAction:
-        jevFlagged && gptAnalysis.recommendedAction !== 'open_case'
-          ? 'manual_review'
-          : gptAnalysis.recommendedAction,
+      recommendedAction: jevFlagged ? 'open_case' : gptAnalysis.recommendedAction,
       summary:
         jevFlagged && gptAnalysis.result === 'low_risk'
-          ? 'Reported text needs moderator review.'
+          ? 'Reported text was flagged for moderator review.'
           : gptAnalysis.summary,
       isFallback: gptAnalysis.isFallback && jevAnalysis.result === 'UNAVAILABLE',
     };

@@ -43,7 +43,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     return { message: base, messages };
   };
 
-  it('records a Jev-only reply flag for moderator review without restricting', async () => {
+  it('routes a Jev-only reply flag through the configured verification action', async () => {
     const verificationRepo = new InMemoryVerificationEventRepository();
     const detectionRepo = new InMemoryDetectionEventsRepository();
     const detectionEvent = await detectionRepo.create({
@@ -122,7 +122,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
         gptResult: 'likely_legitimate',
         result: 'likely_suspicious',
         confidence: 0.97,
-        recommendedAction: 'manual_review',
+        recommendedAction: 'restrict',
         jevAnalysis: expect.objectContaining({ reasonCodes: ['evasive_reply'] }),
       }),
       1
@@ -132,7 +132,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
         thread_analysis: expect.objectContaining({
           latestAnalysis: expect.objectContaining({
             gptResult: 'likely_legitimate',
-            recommendedAction: 'manual_review',
+            recommendedAction: 'restrict',
           }),
         }),
       })

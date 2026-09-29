@@ -286,12 +286,7 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
                 ]),
               ]
             : gptAnalysis.reasonCodes,
-          recommendedAction:
-            jevFlagged &&
-            (gptAnalysis.recommendedAction !== 'restrict' ||
-              gptAnalysis.result !== 'likely_suspicious')
-              ? 'manual_review'
-              : gptAnalysis.recommendedAction,
+          recommendedAction: jevFlagged ? 'restrict' : gptAnalysis.recommendedAction,
           summary:
             jevFlagged && gptAnalysis.result !== 'likely_suspicious'
               ? 'Verification replies need moderator review.'

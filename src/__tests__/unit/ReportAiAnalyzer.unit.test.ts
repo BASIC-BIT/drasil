@@ -3,7 +3,7 @@ import type { JevService } from '../../services/JevService';
 import type { IGPTService } from '../../services/GPTService';
 import type { IServerRepository } from '../../repositories/ServerRepository';
 
-it('sends report text to both checks and keeps a Jev-only flag at manual review', async () => {
+it('sends report text to both checks and routes a Jev-only flag through report action settings', async () => {
   const serverRepository = {
     findByGuildId: jest.fn().mockResolvedValue({
       settings: { report_ai_max_action: 'open_case', report_ai_open_case_threshold: 0.5 },
@@ -51,9 +51,24 @@ it('sends report text to both checks and keeps a Jev-only flag at manual review'
   );
   expect(result).toMatchObject({
     gptResult: 'low_risk',
-    result: 'needs_review',
+    result: 'likely_abusive',
     confidence: 0.96,
-    recommendedAction: 'manual_review',
+    recommendedAction: 'open_case',
     jevAnalysis: { result: 'SUSPICIOUS', reasonCodes: ['scam_link'] },
   });
+
+  jest.mocked(serverRepository.findByGuildId).mockResolvedValueOnce({
+    settings: { report_ai_max_action: 'hints' },
+  } as any);
+  const capped = await new ReportAiAnalyzer(
+    serverRepository,
+    gptService,
+    jevService
+  ).analyzeIfEnabled({
+    serverId: 'server',
+    targetUserId: 'target',
+    reporterId: 'reporter',
+    reportedMessageContent: 'Claim a prize at example.test',
+  });
+  expect(capped).toMatchObject({ result: 'likely_abusive', recommendedAction: 'manual_review' });
 });
