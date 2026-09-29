@@ -5,7 +5,7 @@ import {
   selectEligibleReportImageAttachments,
 } from '../utils/reportAiSettings';
 import type { IGPTService, ReportAIAnalysis } from './GPTService';
-import type { JevService } from './JevService';
+import type { JevProfileAnalysis, JevService } from './JevService';
 
 export interface ReportAiAnalysisInput {
   serverId: string;
@@ -63,41 +63,44 @@ export class ReportAiAnalyzer {
         : undefined,
     ]);
 
-    const jevFlagged = jevAnalysis?.result === 'SUSPICIOUS';
-    const analysis: ReportAIAnalysis = jevAnalysis
-      ? {
-          ...gptAnalysis,
-          gptResult: gptAnalysis.isFallback ? undefined : gptAnalysis.result,
-          jevAnalysis,
-          result:
-            jevFlagged && gptAnalysis.result === 'low_risk' ? 'needs_review' : gptAnalysis.result,
-          confidence: jevFlagged
-            ? Math.max(
-                gptAnalysis.result === 'likely_abusive' ? gptAnalysis.confidence : 0,
-                jevAnalysis.suspiciousProbability ?? 0
-              )
-            : gptAnalysis.confidence,
-          reasonCodes: jevFlagged
-            ? [
-                ...new Set([
-                  ...(gptAnalysis.isFallback ? [] : gptAnalysis.reasonCodes),
-                  ...jevAnalysis.reasonCodes,
-                ]),
-              ]
-            : gptAnalysis.reasonCodes,
-          recommendedAction:
-            jevFlagged && gptAnalysis.recommendedAction !== 'open_case'
-              ? 'manual_review'
-              : gptAnalysis.recommendedAction,
-          summary:
-            jevFlagged && gptAnalysis.result === 'low_risk'
-              ? 'Reported text needs moderator review.'
-              : gptAnalysis.summary,
-          isFallback: gptAnalysis.isFallback && jevAnalysis.result === 'UNAVAILABLE',
-        }
-      : gptAnalysis;
+    return this.capAction(this.combineAnalysis(gptAnalysis, jevAnalysis), settings);
+  }
 
-    return this.capAction(analysis, settings);
+  private combineAnalysis(
+    gptAnalysis: ReportAIAnalysis,
+    jevAnalysis?: JevProfileAnalysis
+  ): ReportAIAnalysis {
+    if (!jevAnalysis) return gptAnalysis;
+    const jevFlagged = jevAnalysis.result === 'SUSPICIOUS';
+    return {
+      ...gptAnalysis,
+      gptResult: gptAnalysis.isFallback ? undefined : gptAnalysis.result,
+      jevAnalysis,
+      result: jevFlagged && gptAnalysis.result === 'low_risk' ? 'needs_review' : gptAnalysis.result,
+      confidence: jevFlagged
+        ? Math.max(
+            gptAnalysis.result === 'likely_abusive' ? gptAnalysis.confidence : 0,
+            jevAnalysis.suspiciousProbability ?? 0
+          )
+        : gptAnalysis.confidence,
+      reasonCodes: jevFlagged
+        ? [
+            ...new Set([
+              ...(gptAnalysis.isFallback ? [] : gptAnalysis.reasonCodes),
+              ...jevAnalysis.reasonCodes,
+            ]),
+          ]
+        : gptAnalysis.reasonCodes,
+      recommendedAction:
+        jevFlagged && gptAnalysis.recommendedAction !== 'open_case'
+          ? 'manual_review'
+          : gptAnalysis.recommendedAction,
+      summary:
+        jevFlagged && gptAnalysis.result === 'low_risk'
+          ? 'Reported text needs moderator review.'
+          : gptAnalysis.summary,
+      isFallback: gptAnalysis.isFallback && jevAnalysis.result === 'UNAVAILABLE',
+    };
   }
 
   private capAction(
