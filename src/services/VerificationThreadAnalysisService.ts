@@ -523,10 +523,9 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
   private formatThreadMessage(message: Message, userId: string): string {
     const role = message.author.id === userId ? 'member' : message.author.bot ? 'bot' : 'moderator';
     const attachments = [...((message as Partial<Message>).attachments?.values() ?? [])].map(
-      (attachment) =>
-        `[attachment: ${attachment.name}, ${attachment.contentType ?? 'unknown type'}]`
+      (attachment) => ({ name: attachment.name, contentType: attachment.contentType })
     );
-    return `[${role}] ${[message.content.trim(), ...attachments].filter(Boolean).join('\n')}`;
+    return JSON.stringify({ role, content: message.content.trim(), attachments });
   }
 
   private async getStaffNotes(message: Message, event: VerificationEvent): Promise<string[]> {
