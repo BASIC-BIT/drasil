@@ -65,7 +65,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
       thread_id: 'thread-1',
       private_evidence_thread_id: 'evidence-thread-1',
       notification_message_id: 'notif-1',
-      metadata: { profile_image_description: { avatar_description: 'A cartoon avatar.' } },
+      metadata: { profile_image_description: { summary: 'A cartoon avatar.' } },
     });
     const gptService = {
       analyzeVerificationThreadResponses: jest.fn().mockResolvedValue({
@@ -186,7 +186,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
             attachments: [],
           }),
         ],
-        profileImageDescription: 'avatar_description: A cartoon avatar.',
+        profileImageDescription: 'A cartoon avatar.',
       })
     );
     expect(notificationManager.updateVerificationThreadAnalysis).toHaveBeenCalledWith(
@@ -212,6 +212,13 @@ describe('VerificationThreadAnalysisService (unit)', () => {
       })
     );
 
+    const storedVerificationEvent = await verificationRepo.findById(verificationEvent.id);
+    await verificationRepo.update(verificationEvent.id, {
+      metadata: {
+        ...(storedVerificationEvent?.metadata as Record<string, unknown>),
+        profile_image_description: { avatar_description: 'Older avatar note.' },
+      },
+    });
     jest.spyOn(detectionRepo, 'findById').mockResolvedValue({
       ...detectionEvent,
       channel_id: null,
@@ -224,6 +231,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
 
     expect(jevService.analyzeVerificationReplies).toHaveBeenLastCalledWith(
       expect.objectContaining({
+        profileImageDescription: 'avatar_description: Older avatar note.',
         flaggedMessage: JSON.stringify({
           role: 'member',
           content: 'Stored original message',

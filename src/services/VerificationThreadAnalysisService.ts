@@ -585,6 +585,10 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
   private getProfileImageDescription(metadata: unknown): string | undefined {
     const description = this.asObject(this.asObject(metadata)?.profile_image_description);
     if (!description) return undefined;
+    if (typeof description.summary === 'string' && description.summary.trim()) {
+      return description.summary;
+    }
+    // Cases opened before profile-image-description-v2 store separate avatar and banner fields.
     const fields = ['avatar_description', 'banner_description'] as const;
     const lines = fields.flatMap((field) =>
       typeof description[field] === 'string' ? [`${field}: ${description[field]}`] : []
