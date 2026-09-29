@@ -553,21 +553,26 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
     message: Message,
     detectionEvent: DetectionEvent | null
   ): Promise<string | undefined> {
-    const storedContent = this.asObject(detectionEvent?.metadata)?.content;
+    const metadata = this.asObject(detectionEvent?.metadata);
+    const storedContent = metadata?.content;
+    const isReportedMessage =
+      detectionEvent?.detection_type === DetectionType.USER_REPORT &&
+      (metadata?.type === 'message_report' || metadata?.type === 'external_message_report');
     const storedMessage =
-      detectionEvent?.detection_type === DetectionType.SUSPICIOUS_CONTENT &&
+      (detectionEvent?.detection_type === DetectionType.SUSPICIOUS_CONTENT || isReportedMessage) &&
       typeof storedContent === 'string'
         ? JSON.stringify({ role: 'member', content: storedContent, attachments: [] })
         : undefined;
+    if (storedMessage) return storedMessage;
     if (!detectionEvent?.channel_id || !detectionEvent.message_id) {
-      return storedMessage;
+      return undefined;
     }
     const channel = await message.client.channels
       .fetch(detectionEvent.channel_id)
       .catch(() => null);
-    if (!channel?.isTextBased() || !('messages' in channel)) return storedMessage;
+    if (!channel?.isTextBased() || !('messages' in channel)) return undefined;
     const source = await channel.messages.fetch(detectionEvent.message_id).catch(() => null);
-    return source ? this.formatThreadMessage(source, detectionEvent.user_id) : storedMessage;
+    return source ? this.formatThreadMessage(source, detectionEvent.user_id) : undefined;
   }
 
   private getProfileImageDescription(metadata: unknown): string | undefined {

@@ -100,6 +100,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
           settings: {
             verification_ai_max_action: 'restrict',
             verification_ai_restrict_threshold: 0.5,
+            verification_ai_thread_analysis_message_limit: 4,
           },
         }),
       } as any,
@@ -225,6 +226,45 @@ describe('VerificationThreadAnalysisService (unit)', () => {
         flaggedMessage: JSON.stringify({
           role: 'member',
           content: 'Stored original message',
+          attachments: [],
+        }),
+      })
+    );
+
+    jest.spyOn(detectionRepo, 'findById').mockResolvedValue({
+      ...detectionEvent,
+      metadata: { content: 'Original flagged text before the live message was edited' },
+    });
+    const editedFollowup = { ...message, id: 'msg-3', content: 'One more detail.' };
+    messages.set(editedFollowup.id, editedFollowup);
+    await service.handleThreadMessage(editedFollowup as any);
+
+    expect(jevService.analyzeVerificationReplies).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        flaggedMessage: JSON.stringify({
+          role: 'member',
+          content: 'Original flagged text before the live message was edited',
+          attachments: [],
+        }),
+      })
+    );
+
+    jest.spyOn(detectionRepo, 'findById').mockResolvedValue({
+      ...detectionEvent,
+      detection_type: DetectionType.USER_REPORT,
+      channel_id: null,
+      message_id: null,
+      metadata: { type: 'message_report', content: 'Deleted reported message' },
+    });
+    const reportFollowup = { ...message, id: 'msg-4', content: 'The report was mistaken.' };
+    messages.set(reportFollowup.id, reportFollowup);
+    await service.handleThreadMessage(reportFollowup as any);
+
+    expect(jevService.analyzeVerificationReplies).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        flaggedMessage: JSON.stringify({
+          role: 'member',
+          content: 'Deleted reported message',
           attachments: [],
         }),
       })
