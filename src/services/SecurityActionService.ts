@@ -10,6 +10,7 @@ import {
   InteractionContextType,
   Role,
   ThreadChannel,
+  escapeMarkdown,
 } from 'discord.js';
 import { TYPES } from '../di/symbols';
 import { INotificationManager } from './NotificationManager';
@@ -1198,9 +1199,6 @@ export class SecurityActionService implements ISecurityActionService {
   ): Record<string, unknown> {
     return {
       summary: description.summary,
-      avatar_description: description.avatarDescription,
-      banner_description: description.bannerDescription,
-      risk_notes: description.riskNotes,
       analyzed_image_count: description.analyzedImageCount,
       model: description.model,
       prompt_version: description.promptVersion,
@@ -1259,30 +1257,7 @@ export class SecurityActionService implements ISecurityActionService {
       return ['Profile image description: unavailable.'];
     }
 
-    if (description.isFallback) {
-      return [`Profile image description: ${description.summary}`];
-    }
-
-    const lines = [
-      'AI visual assessment:',
-      `- Summary: ${this.formatAiAuthoredInlineCode(description.summary)}`,
-    ];
-    if (description.avatarDescription) {
-      lines.push(`- Avatar: ${this.formatAiAuthoredInlineCode(description.avatarDescription)}`);
-    }
-    if (description.bannerDescription) {
-      lines.push(`- Banner: ${this.formatAiAuthoredInlineCode(description.bannerDescription)}`);
-    }
-    if (description.riskNotes.length > 0) {
-      lines.push(
-        `- Visual notes: ${this.formatAiAuthoredInlineCode(description.riskNotes.join('; '))}`
-      );
-    }
-    return lines;
-  }
-
-  private formatAiAuthoredInlineCode(value: string): string {
-    return `\`${value.replace(/`/g, "'")}\``;
+    return [`Profile image description: ${escapeMarkdown(description.summary)}`];
   }
 
   private formatRecentMessages(messages: MessageContext[], guildId: string): string[] {
