@@ -28,7 +28,7 @@ describe('JevService', () => {
             choice: 'SUSPICIOUS',
             probabilities: { OK: 0.08, SUSPICIOUS: 0.92 },
           },
-          primary_reason: { type: 'choice', choice: 'scam_link' },
+          primary_reason: { type: 'choice', choice: 'fraudulent_offer' },
         },
       }),
     } as Response);
@@ -38,7 +38,7 @@ describe('JevService', () => {
     expect(result).toMatchObject({
       result: 'SUSPICIOUS',
       suspiciousProbability: 0.92,
-      reasonCodes: ['scam_link'],
+      reasonCodes: ['fraudulent_offer'],
     });
     const [, request] = fetchMock.mock.calls[0];
     expect(JSON.parse(String(request?.body)).state.recent_messages).toEqual(profile.recentMessages);
@@ -76,19 +76,51 @@ describe('JevService', () => {
             choice: 'OK',
             probabilities: { OK: 0.9, SUSPICIOUS: 0.1 },
           },
-          primary_reason: { type: 'choice', choice: 'insufficient_signal' },
+          primary_reason: { type: 'choice', choice: 'none' },
         },
       }),
     } as Response);
 
     await new JevService().analyzeReportText('r'.repeat(1200), 'm'.repeat(2200));
-    await new JevService().analyzeVerificationReplies('user', ['a'.repeat(1200)], ['reason']);
+    await new JevService().analyzeVerificationReplies({
+      serverId: 'server',
+      userId: 'user',
+      username: 'user',
+      messages: ['a'.repeat(1200)],
+      detectionReasons: ['reason'],
+      detectionType: 'suspicious_content',
+      flaggedMessage: '[member] Claim a prize',
+      staffNotes: ['[moderator] Prior reply dodged the question'],
+      profileImageDescription: 'avatar_description: A cartoon avatar.',
+    });
 
-    const reportState = JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).state;
-    const replyState = JSON.parse(String(fetchMock.mock.calls[1][1]?.body)).state;
+    const reportRequest = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    const reportState = reportRequest.state;
+    const replyRequest = JSON.parse(String(fetchMock.mock.calls[1][1]?.body));
+    const replyState = replyRequest.state;
     expect(reportState.report_reason).toHaveLength(1000);
     expect(reportState.reported_message).toHaveLength(2000);
-    expect(replyState.replies[0]).toHaveLength(1000);
+    expect(Object.keys(reportRequest.questions.primary_reason.criteria)).toEqual([
+      'phishing_or_credential_request',
+      'fraudulent_offer',
+      'impersonation',
+      'unsolicited_promotion',
+      'none',
+    ]);
+    expect(replyState.verification_conversation[0]).toHaveLength(1200);
     expect(replyState.detection_reasons).toEqual(['reason']);
+    expect(replyState.originally_flagged_message).toContain('Claim a prize');
+    expect(replyState.moderator_notes).toEqual(['[moderator] Prior reply dodged the question']);
+    expect(replyState.profile_image_description).toContain('A cartoon avatar.');
+    expect(Object.keys(replyRequest.questions.primary_reason.criteria)).toEqual([
+      'scripted_replies',
+      'evades_questions',
+      'tries_to_bypass_verification',
+      'phishing_or_credential_request',
+      'fraudulent_offer',
+      'impersonation',
+      'unsolicited_promotion',
+      'none',
+    ]);
   });
 });

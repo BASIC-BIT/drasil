@@ -1,24 +1,35 @@
 import { injectable } from 'inversify';
 import { z } from 'zod';
-import type { UserProfileData } from './GPTService';
+import type { UserProfileData, VerificationThreadAnalysisData } from './GPTService';
 
 export const JEV_MODEL = 'jev-1.13.0';
 const JEV_URL = 'https://api.typesafe.ai/v1/systemone';
 const JEV_TIMEOUT_MS = 5000;
 
+const spamReasons = {
+  phishing_or_credential_request: 'A request for credentials or a link designed to collect them.',
+  fraudulent_offer: 'A deceptive offer, prize, payment, or investment claim.',
+  impersonation: 'Pretending to be a trusted person, group, or service.',
+  unsolicited_promotion: 'Unwanted promotional or recruitment content.',
+} as const;
+const verificationReasons = {
+  scripted_replies:
+    'Repeated generic or scripted answers that fail to engage with the actual questions.',
+  evades_questions:
+    'Avoids a direct, relevant verification question after a reasonable chance to answer.',
+  tries_to_bypass_verification:
+    'Attempts to manipulate, redirect, or circumvent the verification process.',
+  ...spamReasons,
+} as const;
 const primaryReasons = [
-  'scam_link',
-  'call_to_action',
+  'scripted_replies',
+  'evades_questions',
+  'tries_to_bypass_verification',
+  'phishing_or_credential_request',
+  'fraudulent_offer',
   'impersonation',
-  'dm_request',
-  'giveaway',
-  'repeated_suspicious_behavior',
-  'unusual_username',
-  'evasive_reply',
-  'inconsistent_reply',
-  'threat_or_harassment',
-  'other_abuse',
-  'insufficient_signal',
+  'unsolicited_promotion',
+  'none',
 ] as const;
 
 const responseSchema = z.object({
@@ -67,33 +78,38 @@ export class JevService {
       },
       'Does the profile and recent message context show credible spam or scam behavior?',
       'Which single reason best describes the strongest suspicious signal?',
-      'Credible unsolicited promotion, fraudulent claim, impersonation, off-platform contact request, scam link, or repeated suspicious behavior.'
+      'Credible unsolicited promotion, fraud, impersonation, or phishing.',
+      spamReasons
     );
   }
 
   public async analyzeReportText(reason?: string, message?: string): Promise<JevProfileAnalysis> {
     return this.analyze(
       { report_reason: reason?.slice(0, 1000), reported_message: message?.slice(0, 2000) },
-      'Does the report text or reported message show credible spam, scam, or abuse evidence? A report allegation alone is insufficient; assess the reported content.',
+      'Does the report text or reported message show credible spam or scam evidence? A report allegation alone is insufficient; assess the reported content.',
       'Which single reason best describes suspicious content in the reported message?',
-      'The reported content contains a credible scam, spam solicitation, threat, harassment, or other abusive conduct.'
+      'The reported content contains credible spam, fraud, impersonation, or phishing.',
+      spamReasons
     );
   }
 
   public async analyzeVerificationReplies(
-    username: string,
-    messages: string[],
-    detectionReasons?: string[]
+    context: VerificationThreadAnalysisData
   ): Promise<JevProfileAnalysis> {
     return this.analyze(
       {
-        username: username.slice(0, 100),
-        replies: messages.slice(-10).map((message) => message.slice(0, 1000)),
-        detection_reasons: detectionReasons?.slice(0, 5).map((reason) => reason.slice(0, 200)),
+        username: context.username,
+        verification_conversation: context.messages,
+        detection_type: context.detectionType,
+        detection_reasons: context.detectionReasons,
+        originally_flagged_message: context.flaggedMessage,
+        profile_image_description: context.profileImageDescription,
+        moderator_notes: context.staffNotes,
       },
-      'Do these verification replies show credible scam, spam, evasive, or inconsistent behavior? A short or awkward reply alone is insufficient.',
-      'Which single reason best describes the strongest suspicious signal in the replies?',
-      'The replies contain a credible scam or spam solicitation, materially inconsistent answers, or evasion of relevant verification questions.'
+      'Does the complete conversation show that the member is responding in bad faith or trying to evade verification? A translated, polished, short, or awkward reply alone is insufficient. Detection reasons and moderator notes are context, not proof.',
+      'Which single reason best describes the strongest suspicious behavior by the member?',
+      'The member repeatedly gives scripted nonanswers, evades relevant questions, tries to bypass verification, or presents credible spam or scam content.',
+      verificationReasons
     );
   }
 
@@ -101,7 +117,8 @@ export class JevService {
     state: Record<string, unknown>,
     classificationQuestion: string,
     reasonQuestion: string,
-    suspiciousCriterion: string
+    suspiciousCriterion: string,
+    reasonCriteria: Record<string, string>
   ): Promise<JevProfileAnalysis> {
     const apiKey = process.env.TYPESAFE_API_KEY;
     if (!apiKey) {
@@ -129,24 +146,10 @@ export class JevService {
             },
             primary_reason: {
               type: 'choice',
-              instructions: `${reasonQuestion} Choose insufficient_signal when there is no credible suspicious signal.`,
+              instructions: `${reasonQuestion} Choose none when there is no credible suspicious signal.`,
               criteria: {
-                scam_link: 'A link tied to a suspicious offer, claim, or credential request.',
-                call_to_action: 'An unsolicited request to click, pay, claim, or act.',
-                impersonation: 'Pretending to be a trusted person, group, or service.',
-                dm_request:
-                  'An unsolicited request to move the conversation to DMs or another platform.',
-                giveaway: 'A suspicious giveaway or prize claim.',
-                repeated_suspicious_behavior:
-                  'Repeated similar suspicious messages or prior detections.',
-                unusual_username:
-                  'A username or nickname that contributes to a credible impersonation pattern.',
-                evasive_reply: 'A verification reply avoids answering a direct, relevant question.',
-                inconsistent_reply:
-                  'Verification replies materially contradict each other or known context.',
-                threat_or_harassment: 'A credible threat or targeted harassment in reported text.',
-                other_abuse: 'Other concrete abusive conduct in reported text.',
-                insufficient_signal: 'No clear suspicious reason in the supplied context.',
+                ...reasonCriteria,
+                none: 'No credible suspicious reason in the supplied context.',
               },
             },
           },
@@ -163,7 +166,9 @@ export class JevService {
         result: classification.choice,
         suspiciousProbability: classification.probabilities.SUSPICIOUS,
         reasonCodes:
-          classification.choice === 'SUSPICIOUS' && primaryReason.choice !== 'insufficient_signal'
+          classification.choice === 'SUSPICIOUS' &&
+          primaryReason.choice !== 'none' &&
+          primaryReason.choice in reasonCriteria
             ? [primaryReason.choice]
             : [],
         model: parsed.model,

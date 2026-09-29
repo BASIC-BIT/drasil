@@ -52,6 +52,8 @@ describe('VerificationThreadAnalysisService (unit)', () => {
       detection_type: DetectionType.SUSPICIOUS_CONTENT,
       confidence: 0.8,
       reasons: ['Suspicious content'],
+      channel_id: 'source-channel',
+      message_id: 'source-message',
     });
     const verificationEvent = await verificationRepo.createFromDetection(
       detectionEvent.id,
@@ -61,7 +63,9 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     );
     await verificationRepo.update(verificationEvent.id, {
       thread_id: 'thread-1',
+      private_evidence_thread_id: 'evidence-thread-1',
       notification_message_id: 'notif-1',
+      metadata: { profile_image_description: { avatar_description: 'A cartoon avatar.' } },
     });
     const gptService = {
       analyzeVerificationThreadResponses: jest.fn().mockResolvedValue({
@@ -107,14 +111,70 @@ describe('VerificationThreadAnalysisService (unit)', () => {
       jevService
     );
     const { message, messages } = buildMessage();
+    messages.set('prompt', {
+      id: 'prompt',
+      content: 'Why did you join?',
+      author: { id: 'bot-1', bot: true },
+      createdTimestamp: messageCreatedTimestamp - 2,
+    });
+    messages.set('question', {
+      id: 'question',
+      content: 'Which race?',
+      author: { id: 'mod-1', bot: false },
+      createdTimestamp: messageCreatedTimestamp - 1,
+    });
     messages.set(message.id, message);
+    const evidenceMessages = new Collection<string, any>();
+    evidenceMessages.set('snapshot', {
+      id: 'snapshot',
+      content: 'Bot evidence snapshot',
+      author: { id: 'bot-1', bot: true },
+      createdTimestamp: messageCreatedTimestamp - 2,
+    });
+    evidenceMessages.set('staff-note', {
+      id: 'staff-note',
+      content: 'Member previously asked to skip the question.',
+      author: { id: 'mod-1', bot: false },
+      createdTimestamp: messageCreatedTimestamp - 1,
+    });
+    (message as any).client = {
+      channels: {
+        fetch: jest.fn(async (id: string) => {
+          if (id === 'evidence-thread-1') {
+            return { isThread: () => true, messages: { fetch: async () => evidenceMessages } };
+          }
+          if (id === 'source-channel') {
+            return {
+              isTextBased: () => true,
+              messages: {
+                fetch: async () => ({
+                  content: 'Claim a free prize at example.test',
+                  author: { id: 'user-1', bot: false },
+                  attachments: new Collection(),
+                }),
+              },
+            };
+          }
+          return null;
+        }),
+      },
+    };
 
     await service.handleThreadMessage(message as any);
 
     expect(jevService.analyzeVerificationReplies).toHaveBeenCalledWith(
-      'runner',
-      [message.content],
-      ['Suspicious content']
+      expect.objectContaining({
+        username: 'runner',
+        messages: [
+          '[bot] Why did you join?',
+          '[moderator] Which race?',
+          `[member] ${message.content}`,
+        ],
+        detectionReasons: ['Suspicious content'],
+        flaggedMessage: '[member] Claim a free prize at example.test',
+        staffNotes: ['[moderator] Member previously asked to skip the question.'],
+        profileImageDescription: 'avatar_description: A cartoon avatar.',
+      })
     );
     expect(notificationManager.updateVerificationThreadAnalysis).toHaveBeenCalledWith(
       expect.anything(),
@@ -859,8 +919,8 @@ describe('VerificationThreadAnalysisService (unit)', () => {
         serverId: 'guild-1',
         userId: 'user-1',
         messages: [
-          'Hi, I found the server from the Doom Discord.',
-          'I joined for the weekly speedrun races.',
+          '[member] Hi, I found the server from the Doom Discord.',
+          '[member] I joined for the weekly speedrun races.',
         ],
         detectionReasons: ['Recent suspicious activity'],
       })

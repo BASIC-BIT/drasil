@@ -1,9 +1,13 @@
 import { injectable, inject, optional } from 'inversify';
-import type { Message } from 'discord.js';
+import type { Message, ThreadChannel } from 'discord.js';
 import { randomUUID } from 'node:crypto';
 import { TYPES } from '../di/symbols';
 import type { IConfigService } from '../config/ConfigService';
-import type { IGPTService, VerificationThreadAnalysisResult } from './GPTService';
+import type {
+  IGPTService,
+  VerificationThreadAnalysisData,
+  VerificationThreadAnalysisResult,
+} from './GPTService';
 import type { JevProfileAnalysis, JevService } from './JevService';
 import type { INotificationManager } from './NotificationManager';
 import type { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
@@ -12,6 +16,7 @@ import {
   CaseAttentionState,
   CaseContainmentStatus,
   CaseKind,
+  DetectionEvent,
   VerificationEvent,
   VerificationStatus,
 } from '../repositories/types';
@@ -241,29 +246,33 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
       return;
     }
 
-    const responses = await this.collectUserResponses(
-      message,
-      verificationEvent.user_id,
-      settings.messageLimit
+    const threadMessages = await this.fetchThreadMessages(message.channel as ThreadChannel);
+    const responses = threadMessages.filter(
+      (entry) => entry.author.id === verificationEvent.user_id
     );
     if (responses.length === 0) {
       return;
     }
 
-    const detectionReasons = await this.getDetectionReasons(verificationEvent.detection_event_id);
-    const [gptAnalysis, jevAnalysis] = await Promise.all([
-      this.gptService.analyzeVerificationThreadResponses({
-        serverId: verificationEvent.server_id,
-        userId: verificationEvent.user_id,
-        username: message.author.username,
-        messages: responses,
-        detectionReasons,
-      }),
-      this.jevService?.analyzeVerificationReplies(
-        message.author.username,
-        responses,
-        detectionReasons
+    const detectionEvent = verificationEvent.detection_event_id
+      ? await this.detectionEventsRepository.findById(verificationEvent.detection_event_id)
+      : null;
+    const analysisData: VerificationThreadAnalysisData = {
+      serverId: verificationEvent.server_id,
+      userId: verificationEvent.user_id,
+      username: message.author.username,
+      messages: threadMessages.map((entry) =>
+        this.formatThreadMessage(entry, verificationEvent.user_id)
       ),
+      detectionReasons: detectionEvent?.reasons,
+      detectionType: detectionEvent?.detection_type,
+      flaggedMessage: await this.getFlaggedMessage(message, detectionEvent),
+      staffNotes: await this.getStaffNotes(message, verificationEvent),
+      profileImageDescription: this.getProfileImageDescription(verificationEvent.metadata),
+    };
+    const [gptAnalysis, jevAnalysis] = await Promise.all([
+      this.gptService.analyzeVerificationThreadResponses(analysisData),
+      this.jevService?.analyzeVerificationReplies(analysisData),
     ]);
     const jevFlagged = jevAnalysis?.result === 'SUSPICIOUS';
     const rawAnalysis: VerificationThreadAnalysisResult = jevAnalysis
@@ -490,30 +499,78 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
     };
   }
 
-  private async collectUserResponses(
-    message: Message,
-    userId: string,
-    limit: number
-  ): Promise<string[]> {
-    const fetchedMessages = await message.channel.messages.fetch({
-      limit: VERIFICATION_THREAD_ANALYSIS_FETCH_LIMIT,
-    });
-    return [...fetchedMessages.values()]
-      .filter((entry) => entry.author.id === userId)
-      .sort((left, right) => left.createdTimestamp - right.createdTimestamp)
-      .map((entry) => entry.content.trim())
-      .filter((content) => content.length > 0)
-      .slice(-limit);
+  private async fetchThreadMessages(thread: ThreadChannel): Promise<Message[]> {
+    const messages = new Map<string, Message>();
+    let before: string | undefined;
+    do {
+      const page = await thread.messages.fetch({
+        limit: VERIFICATION_THREAD_ANALYSIS_FETCH_LIMIT,
+        ...(before ? { before } : {}),
+      });
+      for (const entry of page.values()) messages.set(entry.id, entry);
+      before =
+        page.size === VERIFICATION_THREAD_ANALYSIS_FETCH_LIMIT
+          ? [...page.values()].reduce((oldest, entry) =>
+              entry.createdTimestamp < oldest.createdTimestamp ? entry : oldest
+            ).id
+          : undefined;
+    } while (before);
+    return [...messages.values()].sort(
+      (left, right) => left.createdTimestamp - right.createdTimestamp
+    );
   }
 
-  private async getDetectionReasons(
-    detectionEventId: string | null
-  ): Promise<string[] | undefined> {
-    if (!detectionEventId) {
+  private formatThreadMessage(message: Message, userId: string): string {
+    const role = message.author.id === userId ? 'member' : message.author.bot ? 'bot' : 'moderator';
+    const attachments = [...((message as Partial<Message>).attachments?.values() ?? [])].map(
+      (attachment) =>
+        `[attachment: ${attachment.name}, ${attachment.contentType ?? 'unknown type'}]`
+    );
+    return `[${role}] ${[message.content.trim(), ...attachments].filter(Boolean).join('\n')}`;
+  }
+
+  private async getStaffNotes(message: Message, event: VerificationEvent): Promise<string[]> {
+    if (!event.private_evidence_thread_id || event.private_evidence_thread_id === event.thread_id) {
+      return [];
+    }
+    const channel = await message.client.channels
+      .fetch(event.private_evidence_thread_id)
+      .catch(() => null);
+    if (!channel?.isThread()) return [];
+    const notes = await this.fetchThreadMessages(channel).catch((error: unknown) => {
+      console.warn(
+        `[VerificationThreadAnalysis] Could not load staff notes for case ${event.id}:`,
+        error
+      );
+      return [];
+    });
+    return notes
+      .filter((entry) => !entry.author.bot && entry.author.id !== event.user_id)
+      .map((entry) => this.formatThreadMessage(entry, event.user_id));
+  }
+
+  private async getFlaggedMessage(
+    message: Message,
+    detectionEvent: DetectionEvent | null
+  ): Promise<string | undefined> {
+    if (!detectionEvent?.channel_id || !detectionEvent.message_id) {
       return undefined;
     }
+    const channel = await message.client.channels
+      .fetch(detectionEvent.channel_id)
+      .catch(() => null);
+    if (!channel?.isTextBased() || !('messages' in channel)) return undefined;
+    const source = await channel.messages.fetch(detectionEvent.message_id).catch(() => null);
+    return source ? this.formatThreadMessage(source, detectionEvent.user_id) : undefined;
+  }
 
-    const detectionEvent = await this.detectionEventsRepository.findById(detectionEventId);
-    return detectionEvent?.reasons;
+  private getProfileImageDescription(metadata: unknown): string | undefined {
+    const description = this.asObject(this.asObject(metadata)?.profile_image_description);
+    if (!description) return undefined;
+    const fields = ['avatar_description', 'banner_description'] as const;
+    const lines = fields.flatMap((field) =>
+      typeof description[field] === 'string' ? [`${field}: ${description[field]}`] : []
+    );
+    return lines.length ? lines.join('\n') : undefined;
   }
 }
