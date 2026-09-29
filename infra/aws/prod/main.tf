@@ -1,4 +1,5 @@
 data "aws_availability_zones" "available" {
+  #checkov:skip=CKV_AWS_394:Pinning zone IDs for existing subnets requires a state-aware migration.
   state = "available"
 }
 
