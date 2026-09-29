@@ -112,6 +112,12 @@ describe('JevService', () => {
     expect(replyState.originally_flagged_message).toContain('Claim a prize');
     expect(replyState.moderator_notes).toEqual(['[moderator] Prior reply dodged the question']);
     expect(replyState.profile_image_description).toContain('A cartoon avatar.');
+    expect(replyRequest.questions.classification.instructions).toContain(
+      'not independent grounds to flag these replies'
+    );
+    expect(replyRequest.questions.primary_reason.instructions).toContain(
+      'Do not choose a reason shown only by the original flag or staff notes.'
+    );
     expect(Object.keys(replyRequest.questions.primary_reason.criteria)).toEqual([
       'scripted_replies',
       'evades_questions',

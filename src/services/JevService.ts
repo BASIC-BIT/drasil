@@ -106,9 +106,9 @@ export class JevService {
         profile_image_description: context.profileImageDescription,
         moderator_notes: context.staffNotes,
       },
-      'Does the complete conversation show that the member is responding in bad faith or trying to evade verification? A translated, polished, short, or awkward reply alone is insufficient. Detection reasons and moderator notes are context, not proof.',
-      'Which single reason best describes the strongest suspicious behavior by the member?',
-      'The member repeatedly gives scripted nonanswers, evades relevant questions, tries to bypass verification, or presents credible spam or scam content.',
+      "Do the member's verification replies show bad faith or evasion in response to the actual questions? A translated, polished, short, or awkward reply alone is insufficient. The original flag, flagged message, image descriptions, and moderator notes are context, not independent grounds to flag these replies.",
+      'Which single reason best describes suspicious behavior in the verification replies? Do not choose a reason shown only by the original flag or staff notes.',
+      "The member's verification replies repeatedly give scripted nonanswers, evade relevant questions, try to bypass verification, or contain credible spam or scam content.",
       verificationReasons
     );
   }
