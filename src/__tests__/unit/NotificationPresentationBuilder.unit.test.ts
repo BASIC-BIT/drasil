@@ -205,15 +205,15 @@ describe('NotificationPresentationBuilder (unit)', () => {
       {
         gptResult: 'likely_legitimate',
         jevAnalysis: {
-          result: 'SUSPICIOUS',
-          suspiciousProbability: 0.9,
-          reasonCodes: ['evasive_reply'],
+          result: 'UNAVAILABLE',
+          suspiciousProbability: null,
+          reasonCodes: [],
           model: 'jev-test',
         },
-        result: 'likely_suspicious',
-        confidence: 0.9,
-        summary: 'Needs moderator review.',
-        reasonCodes: ['evasive_reply'],
+        result: 'likely_legitimate',
+        confidence: 0.8,
+        summary: 'The member answered the questions directly.',
+        reasonCodes: [],
         legitimacySignals: [],
         suspicionSignals: [],
         recommendedAction: 'manual_review',
@@ -225,10 +225,10 @@ describe('NotificationPresentationBuilder (unit)', () => {
     );
     expect(
       getField(replyEmbed, NotificationPresentationBuilder.THREAD_ANALYSIS_FIELD_NAME)
-    ).toContain('GPT did not flag; Jev flagged');
+    ).toContain('GPT did not flag; Jev unavailable');
     expect(
       getField(replyEmbed, NotificationPresentationBuilder.THREAD_ANALYSIS_FIELD_NAME)
-    ).toContain('Jev reason: evasive_reply');
+    ).toContain('The member answered the questions directly.');
   });
 
   it('replaces the typed browser security-check field as the challenge advances', () => {

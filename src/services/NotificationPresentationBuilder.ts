@@ -1571,6 +1571,9 @@ export class NotificationPresentationBuilder {
         analysis.recommendedAction
           ? `**Suggested action:** ${this.formatThreadAnalysisAction(analysis.recommendedAction)}`
           : null,
+        analysis.jevAnalysis?.result === 'UNAVAILABLE' && analysis.gptResult
+          ? `**GPT assessment:** ${this.formatAiAuthoredInlineCode(analysis.summary)}`
+          : null,
         analysis.jevAnalysis?.reasonCodes.length
           ? `Jev reason: ${analysis.jevAnalysis.reasonCodes.join(', ')}`
           : null,
@@ -1651,6 +1654,9 @@ export class NotificationPresentationBuilder {
       ],
       [
         `**Suggested action:** ${this.formatReportAnalysisAction(analysis.recommendedAction)}`,
+        analysis.jevAnalysis?.result === 'UNAVAILABLE' && analysis.gptResult
+          ? `**GPT assessment:** ${this.formatAiAuthoredInlineCode(analysis.summary)}`
+          : null,
         analysis.jevAnalysis?.reasonCodes.length
           ? `Jev reason: ${analysis.jevAnalysis.reasonCodes.join(', ')}`
           : null,
