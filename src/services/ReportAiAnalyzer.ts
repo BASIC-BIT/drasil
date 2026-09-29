@@ -63,20 +63,32 @@ export class ReportAiAnalyzer {
         : undefined,
     ]);
 
-    return this.capAction(this.combineAnalysis(gptAnalysis, jevAnalysis), settings);
+    return this.capAction(
+      this.combineAnalysis(gptAnalysis, jevAnalysis, Boolean(reportedMessageContent?.trim())),
+      settings
+    );
   }
 
   private combineAnalysis(
     gptAnalysis: ReportAIAnalysis,
-    jevAnalysis?: JevProfileAnalysis
+    jevAnalysis: JevProfileAnalysis | undefined,
+    hasReportedMessageContent: boolean
   ): ReportAIAnalysis {
     if (!jevAnalysis) return gptAnalysis;
     const jevFlagged = jevAnalysis.result === 'SUSPICIOUS';
+    const jevEscalates = jevFlagged && hasReportedMessageContent;
+    const allegationOnlyFlag =
+      jevFlagged && !hasReportedMessageContent && gptAnalysis.result === 'low_risk';
     return {
       ...gptAnalysis,
       gptResult: gptAnalysis.isFallback ? undefined : gptAnalysis.result,
+      gptSummary: gptAnalysis.isFallback ? undefined : gptAnalysis.summary,
       jevAnalysis,
-      result: jevFlagged ? 'likely_abusive' : gptAnalysis.result,
+      result: jevEscalates
+        ? 'likely_abusive'
+        : allegationOnlyFlag
+          ? 'needs_review'
+          : gptAnalysis.result,
       confidence: jevFlagged
         ? Math.max(
             gptAnalysis.result === 'likely_abusive' ? gptAnalysis.confidence : 0,
@@ -91,10 +103,16 @@ export class ReportAiAnalyzer {
             ]),
           ]
         : gptAnalysis.reasonCodes,
-      recommendedAction: jevFlagged ? 'open_case' : gptAnalysis.recommendedAction,
+      recommendedAction: jevEscalates
+        ? 'open_case'
+        : allegationOnlyFlag
+          ? 'manual_review'
+          : gptAnalysis.recommendedAction,
       summary:
         jevFlagged && gptAnalysis.result === 'low_risk'
-          ? 'Reported text was flagged for moderator review.'
+          ? hasReportedMessageContent
+            ? 'Reported text was flagged for moderator review.'
+            : 'Report allegation needs moderator review.'
           : gptAnalysis.summary,
       isFallback: gptAnalysis.isFallback && jevAnalysis.result === 'UNAVAILABLE',
     };

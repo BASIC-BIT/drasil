@@ -175,6 +175,7 @@ describe('NotificationPresentationBuilder (unit)', () => {
       buildDetectionResult({
         reportAiAnalysis: {
           gptResult: 'low_risk',
+          gptSummary: 'No abuse found in the reported message.',
           jevAnalysis: {
             result: 'SUSPICIOUS',
             suspiciousProbability: 0.9,
@@ -197,6 +198,9 @@ describe('NotificationPresentationBuilder (unit)', () => {
       []
     );
     expect(getField(reportEmbed, 'Report Triage')).toContain('GPT did not flag; Jev flagged');
+    expect(getField(reportEmbed, 'Report Triage')).toContain(
+      'No abuse found in the reported message.'
+    );
     expect(getField(reportEmbed, 'Report Triage')).toContain('Jev reason: scam_link');
 
     const replyEmbed = new EmbedBuilder();
@@ -204,6 +208,7 @@ describe('NotificationPresentationBuilder (unit)', () => {
       replyEmbed,
       {
         gptResult: 'likely_legitimate',
+        gptSummary: 'The member answered the questions directly.',
         jevAnalysis: {
           result: 'UNAVAILABLE',
           suspiciousProbability: null,

@@ -1,6 +1,7 @@
 const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const { parse: parseDotenv } = require('dotenv');
 
 const repoRoot = path.resolve(__dirname, '..');
 const envPath = path.join(repoRoot, '.env');
@@ -47,11 +48,18 @@ function quoteEnvValue(value) {
 const discordTokenSecret =
   process.env.DRASIL_DISCORD_TOKEN_SECRET || `drasil/${environment}/DISCORD_TOKEN`;
 const openAiSecret = process.env.DRASIL_OPENAI_SECRET || `drasil/${environment}/OPENAI_API_KEY`;
+const typeSafeSecret = process.env.DRASIL_TYPESAFE_SECRET;
 const prismaPasswordSecret =
   process.env.DRASIL_PRISMA_PASSWORD_SECRET || `drasil/${environment}/PRISMA_DB_PASSWORD`;
 
 const discordToken = getSecret(discordTokenSecret);
 const openAiKey = getSecret(openAiSecret);
+const existingTypeSafeKey = fs.existsSync(envPath)
+  ? parseDotenv(fs.readFileSync(envPath)).TYPESAFE_API_KEY
+  : undefined;
+const typeSafeKey = typeSafeSecret
+  ? getSecret(typeSafeSecret)
+  : process.env.TYPESAFE_API_KEY || existingTypeSafeKey;
 const prismaPassword = getSecret(prismaPasswordSecret);
 const databaseUrl = `postgresql://prisma:${encodeUrlCredential(prismaPassword)}@${postgresHost}:${postgresPort}/${postgresDb}?schema=public`;
 const postgresDbUrl = `postgresql://${encodeUrlCredential(postgresUser)}:${encodeUrlCredential(postgresPassword)}@${postgresHost}:${postgresPort}/${postgresDb}?schema=public`;
@@ -63,6 +71,7 @@ const lines = [
   `DRASIL_USER_INSTALL_REPORTING_ENABLED=${quoteEnvValue(process.env.DRASIL_USER_INSTALL_REPORTING_ENABLED || 'true')}`,
   `DISCORD_TOKEN=${quoteEnvValue(discordToken)}`,
   `OPENAI_API_KEY=${quoteEnvValue(openAiKey)}`,
+  ...(typeSafeKey ? [`TYPESAFE_API_KEY=${quoteEnvValue(typeSafeKey)}`] : []),
   `PRISMA_DB_PASSWORD=${quoteEnvValue(prismaPassword)}`,
   `DATABASE_URL=${quoteEnvValue(databaseUrl)}`,
   `POSTGRES_DB_URL=${quoteEnvValue(postgresDbUrl)}`,

@@ -51,10 +51,27 @@ it('sends report text to both checks and routes a Jev-only flag through report a
   );
   expect(result).toMatchObject({
     gptResult: 'low_risk',
+    gptSummary: 'No abuse found.',
     result: 'likely_abusive',
     confidence: 0.96,
     recommendedAction: 'open_case',
     jevAnalysis: { result: 'SUSPICIOUS', reasonCodes: ['scam_link'] },
+  });
+
+  const allegationOnly = await new ReportAiAnalyzer(
+    serverRepository,
+    gptService,
+    jevService
+  ).analyzeIfEnabled({
+    serverId: 'server',
+    targetUserId: 'target',
+    reporterId: 'reporter',
+    reason: 'They sent a phishing link',
+  });
+  expect(allegationOnly).toMatchObject({
+    result: 'needs_review',
+    recommendedAction: 'manual_review',
+    jevAnalysis: { result: 'SUSPICIOUS' },
   });
 
   jest.mocked(serverRepository.findByGuildId).mockResolvedValueOnce({

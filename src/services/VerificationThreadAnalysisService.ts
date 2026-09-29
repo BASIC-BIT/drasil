@@ -39,6 +39,7 @@ interface ThreadAnalysisMetadata {
   analyzedMessageIds: string[];
   latestAnalysis?: {
     gptResult?: VerificationThreadAnalysisResult['result'];
+    gptSummary?: string;
     jevAnalysis?: JevProfileAnalysis;
     result: 'likely_legitimate' | 'needs_review' | 'likely_suspicious';
     confidence: number;
@@ -280,6 +281,7 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
       ? {
           ...gptAnalysis,
           gptResult: gptAnalysis.isFallback ? undefined : gptAnalysis.result,
+          gptSummary: gptAnalysis.isFallback ? undefined : gptAnalysis.summary,
           jevAnalysis,
           result: jevFlagged ? 'likely_suspicious' : gptAnalysis.result,
           confidence: jevFlagged
@@ -329,6 +331,7 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
             analyzedMessageIds: nextAnalyzedMessageIds,
             latestAnalysis: {
               ...(analysis.gptResult ? { gptResult: analysis.gptResult } : {}),
+              ...(analysis.gptSummary ? { gptSummary: analysis.gptSummary } : {}),
               ...(analysis.jevAnalysis ? { jevAnalysis: { ...analysis.jevAnalysis } } : {}),
               result: analysis.result,
               confidence: analysis.confidence,
@@ -461,6 +464,10 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
                 latestAnalysis.gptResult === 'needs_review' ||
                 latestAnalysis.gptResult === 'likely_suspicious'
                   ? latestAnalysis.gptResult
+                  : undefined,
+              gptSummary:
+                typeof latestAnalysis.gptSummary === 'string'
+                  ? latestAnalysis.gptSummary
                   : undefined,
               jevAnalysis: this.asObject(latestAnalysis.jevAnalysis) as unknown as
                 | JevProfileAnalysis

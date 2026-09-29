@@ -51,6 +51,7 @@ interface ThreadAnalysisMetadata {
   analyzedMessageIds?: unknown;
   latestAnalysis?: {
     gptResult?: 'likely_legitimate' | 'needs_review' | 'likely_suspicious';
+    gptSummary?: string;
     jevAnalysis?: import('./JevService').JevProfileAnalysis;
     result: 'likely_legitimate' | 'needs_review' | 'likely_suspicious';
     confidence: number;
@@ -1540,6 +1541,7 @@ export class NotificationPresentationBuilder {
 
   private formatThreadAnalysisFieldValue(analysis: {
     gptResult?: 'likely_legitimate' | 'needs_review' | 'likely_suspicious';
+    gptSummary?: string;
     jevAnalysis?: import('./JevService').JevProfileAnalysis;
     result: 'likely_legitimate' | 'needs_review' | 'likely_suspicious';
     confidence: number;
@@ -1571,8 +1573,8 @@ export class NotificationPresentationBuilder {
         analysis.recommendedAction
           ? `**Suggested action:** ${this.formatThreadAnalysisAction(analysis.recommendedAction)}`
           : null,
-        analysis.jevAnalysis?.result === 'UNAVAILABLE' && analysis.gptResult
-          ? `**GPT assessment:** ${this.formatAiAuthoredInlineCode(analysis.summary)}`
+        analysis.jevAnalysis && analysis.gptSummary
+          ? `**GPT assessment:** ${this.formatAiAuthoredInlineCode(analysis.gptSummary)}`
           : null,
         analysis.jevAnalysis?.reasonCodes.length
           ? `Jev reason: ${analysis.jevAnalysis.reasonCodes.join(', ')}`
@@ -1654,8 +1656,8 @@ export class NotificationPresentationBuilder {
       ],
       [
         `**Suggested action:** ${this.formatReportAnalysisAction(analysis.recommendedAction)}`,
-        analysis.jevAnalysis?.result === 'UNAVAILABLE' && analysis.gptResult
-          ? `**GPT assessment:** ${this.formatAiAuthoredInlineCode(analysis.summary)}`
+        analysis.jevAnalysis && analysis.gptSummary
+          ? `**GPT assessment:** ${this.formatAiAuthoredInlineCode(analysis.gptSummary)}`
           : null,
         analysis.jevAnalysis?.reasonCodes.length
           ? `Jev reason: ${analysis.jevAnalysis.reasonCodes.join(', ')}`
@@ -1852,6 +1854,8 @@ export class NotificationPresentationBuilder {
           latestAnalysis.gptResult === 'likely_suspicious'
             ? latestAnalysis.gptResult
             : undefined,
+        gptSummary:
+          typeof latestAnalysis.gptSummary === 'string' ? latestAnalysis.gptSummary : undefined,
         jevAnalysis:
           latestAnalysis.jevAnalysis && typeof latestAnalysis.jevAnalysis === 'object'
             ? (latestAnalysis.jevAnalysis as import('./JevService').JevProfileAnalysis)

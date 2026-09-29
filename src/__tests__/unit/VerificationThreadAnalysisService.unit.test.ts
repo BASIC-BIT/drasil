@@ -193,6 +193,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
       expect.anything(),
       expect.objectContaining({
         gptResult: 'likely_legitimate',
+        gptSummary: 'Reply looks ordinary.',
         result: 'likely_suspicious',
         confidence: 0.97,
         recommendedAction: 'restrict',
