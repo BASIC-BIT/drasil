@@ -209,6 +209,26 @@ describe('VerificationThreadAnalysisService (unit)', () => {
         }),
       })
     );
+
+    jest.spyOn(detectionRepo, 'findById').mockResolvedValue({
+      ...detectionEvent,
+      channel_id: null,
+      message_id: null,
+      metadata: { content: 'Stored original message' },
+    });
+    const followup = { ...message, id: 'msg-2', content: 'The weekly races are on Friday.' };
+    messages.set(followup.id, followup);
+    await service.handleThreadMessage(followup as any);
+
+    expect(jevService.analyzeVerificationReplies).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        flaggedMessage: JSON.stringify({
+          role: 'member',
+          content: 'Stored original message',
+          attachments: [],
+        }),
+      })
+    );
   });
 
   it('mirrors support-check replies before skipping disabled thread analysis', async () => {

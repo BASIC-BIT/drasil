@@ -44,7 +44,12 @@ import {
 import { IUserModerationService } from './UserModerationService';
 import { IAdminActionService } from './AdminActionService';
 import { getUserReportSettings } from '../utils/userReportSettings';
-import type { IGPTService, ProfileImageDescription, ReportAIAnalysis } from './GPTService';
+import type {
+  GPTProfileAnalysis,
+  IGPTService,
+  ProfileImageDescription,
+  ReportAIAnalysis,
+} from './GPTService';
 import { getReportAiSettings, ReportAttachmentMetadata } from '../utils/reportAiSettings';
 import { getReportIntakeSettings } from '../utils/reportIntakeSettings';
 import {
@@ -69,7 +74,7 @@ import {
 } from './ProductAnalyticsService';
 import { getConfidenceBucket } from '../utils/analyticsHelpers';
 import { ReportAiAnalyzer } from './ReportAiAnalyzer';
-import type { JevService } from './JevService';
+import type { JevProfileAnalysis, JevService } from './JevService';
 import { ReportDetectionBuilder } from './ReportDetectionBuilder';
 import { RoleIntakeProcessor } from './RoleIntakeProcessor';
 import type { ICaptchaChallengeService } from './CaptchaChallengeService';
@@ -636,6 +641,39 @@ export class SecurityActionService implements ISecurityActionService {
   private createDetectionResultFromEvent(detectionEvent: DetectionEvent): DetectionResult {
     const metadata = this.metadataToRecord(detectionEvent.metadata);
     const content = typeof metadata.content === 'string' ? metadata.content : undefined;
+    const gpt = this.metadataToRecord(metadata.gpt);
+    const jev = this.metadataToRecord(metadata.jev);
+    const gptAnalysis: GPTProfileAnalysis | undefined =
+      (gpt.result === 'OK' || gpt.result === 'SUSPICIOUS') && typeof gpt.summary === 'string'
+        ? {
+            result: gpt.result,
+            confidence: typeof gpt.confidence === 'number' ? gpt.confidence : 0,
+            reasons: detectionEvent.reasons,
+            reasonCodes: Array.isArray(gpt.reason_codes)
+              ? gpt.reason_codes.filter((code): code is string => typeof code === 'string')
+              : [],
+            primarySignal:
+              typeof gpt.primary_signal === 'string'
+                ? (gpt.primary_signal as GPTProfileAnalysis['primarySignal'])
+                : 'none',
+            summary: gpt.summary,
+            model: typeof gpt.model === 'string' ? gpt.model : '',
+            promptVersion: typeof gpt.prompt_version === 'string' ? gpt.prompt_version : '',
+            isFallback: gpt.is_fallback === true,
+          }
+        : undefined;
+    const jevAnalysis: JevProfileAnalysis | undefined =
+      jev.result === 'OK' || jev.result === 'SUSPICIOUS' || jev.result === 'UNAVAILABLE'
+        ? {
+            result: jev.result,
+            suspiciousProbability:
+              typeof jev.suspicious_probability === 'number' ? jev.suspicious_probability : null,
+            reasonCodes: Array.isArray(jev.reason_codes)
+              ? jev.reason_codes.filter((code): code is string => typeof code === 'string')
+              : [],
+            model: typeof jev.model === 'string' ? jev.model : '',
+          }
+        : undefined;
 
     return {
       label: 'SUSPICIOUS',
@@ -644,6 +682,8 @@ export class SecurityActionService implements ISecurityActionService {
       triggerSource: detectionEvent.detection_type,
       triggerContent: content ?? '',
       detectionEventId: detectionEvent.id,
+      gptAnalysis,
+      jevAnalysis,
       reportAiAnalysis: this.reportAiAnalyzer.getAnalysisFromMetadata(metadata),
     };
   }

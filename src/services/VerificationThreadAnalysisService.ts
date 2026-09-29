@@ -17,6 +17,7 @@ import {
   CaseContainmentStatus,
   CaseKind,
   DetectionEvent,
+  DetectionType,
   VerificationEvent,
   VerificationStatus,
 } from '../repositories/types';
@@ -552,15 +553,21 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
     message: Message,
     detectionEvent: DetectionEvent | null
   ): Promise<string | undefined> {
+    const storedContent = this.asObject(detectionEvent?.metadata)?.content;
+    const storedMessage =
+      detectionEvent?.detection_type === DetectionType.SUSPICIOUS_CONTENT &&
+      typeof storedContent === 'string'
+        ? JSON.stringify({ role: 'member', content: storedContent, attachments: [] })
+        : undefined;
     if (!detectionEvent?.channel_id || !detectionEvent.message_id) {
-      return undefined;
+      return storedMessage;
     }
     const channel = await message.client.channels
       .fetch(detectionEvent.channel_id)
       .catch(() => null);
-    if (!channel?.isTextBased() || !('messages' in channel)) return undefined;
+    if (!channel?.isTextBased() || !('messages' in channel)) return storedMessage;
     const source = await channel.messages.fetch(detectionEvent.message_id).catch(() => null);
-    return source ? this.formatThreadMessage(source, detectionEvent.user_id) : undefined;
+    return source ? this.formatThreadMessage(source, detectionEvent.user_id) : storedMessage;
   }
 
   private getProfileImageDescription(metadata: unknown): string | undefined {
