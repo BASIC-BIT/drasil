@@ -71,7 +71,9 @@ export class JevService {
             recent_messages: profile.recentMessages
               .slice(-5)
               .map((message) => message.slice(0, 500)),
-            channel_context: profile.channelContext?.slice(-3),
+            channel_context: profile.channelContext
+              ?.slice(-3)
+              .map((context) => context.slice(0, 500)),
             has_moderation_permissions: profile.hasModerationPermissions,
             past_detections: profile.pastDetectionCount,
             past_false_positives: profile.pastFalsePositiveDetectionCount,
