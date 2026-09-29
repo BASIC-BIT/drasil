@@ -50,6 +50,8 @@ type ObservedActionKind = 'alert' | 'report';
 interface ThreadAnalysisMetadata {
   analyzedMessageIds?: unknown;
   latestAnalysis?: {
+    gptResult?: 'likely_legitimate' | 'needs_review' | 'likely_suspicious';
+    jevAnalysis?: import('./JevService').JevProfileAnalysis;
     result: 'likely_legitimate' | 'needs_review' | 'likely_suspicious';
     confidence: number;
     summary: string;
@@ -1537,6 +1539,8 @@ export class NotificationPresentationBuilder {
   }
 
   private formatThreadAnalysisFieldValue(analysis: {
+    gptResult?: 'likely_legitimate' | 'needs_review' | 'likely_suspicious';
+    jevAnalysis?: import('./JevService').JevProfileAnalysis;
     result: 'likely_legitimate' | 'needs_review' | 'likely_suspicious';
     confidence: number;
     summary: string;
@@ -1559,11 +1563,16 @@ export class NotificationPresentationBuilder {
     return this.formatCompactEmbedFieldValue(
       [
         `**${this.formatThreadAnalysisResult(analysis.result)}** (${this.formatConfidencePhrase(analysis.confidence)}, ${responseLabel})`,
-        `**AI Assessment:** ${this.formatAiAuthoredInlineCode(analysis.summary)}`,
+        analysis.jevAnalysis
+          ? `Two checks: GPT ${analysis.gptResult === 'likely_suspicious' ? 'flagged' : analysis.gptResult === 'likely_legitimate' ? 'did not flag' : analysis.gptResult === 'needs_review' ? 'needs review' : 'unavailable'}; Jev ${analysis.jevAnalysis.result === 'SUSPICIOUS' ? 'flagged' : analysis.jevAnalysis.result === 'UNAVAILABLE' ? 'unavailable' : 'did not flag'}.`
+          : `**AI Assessment:** ${this.formatAiAuthoredInlineCode(analysis.summary)}`,
       ],
       [
         analysis.recommendedAction
           ? `**Suggested action:** ${this.formatThreadAnalysisAction(analysis.recommendedAction)}`
+          : null,
+        analysis.jevAnalysis?.reasonCodes.length
+          ? `Jev reason: ${analysis.jevAnalysis.reasonCodes.join(', ')}`
           : null,
       ]
     );
@@ -1636,9 +1645,16 @@ export class NotificationPresentationBuilder {
             ? `, ${analysis.analyzedImageCount} ${analysis.analyzedImageCount === 1 ? 'image' : 'images'} analyzed`
             : ''
         })`,
-        `**AI Assessment:** ${this.formatAiAuthoredInlineCode(analysis.summary)}`,
+        analysis.jevAnalysis
+          ? `Two checks: GPT ${analysis.gptResult === 'likely_abusive' ? 'flagged' : analysis.gptResult === 'low_risk' ? 'did not flag' : analysis.gptResult === 'needs_review' ? 'needs review' : 'unavailable'}; Jev ${analysis.jevAnalysis.result === 'SUSPICIOUS' ? 'flagged' : analysis.jevAnalysis.result === 'UNAVAILABLE' ? 'unavailable' : 'did not flag'}.`
+          : `**AI Assessment:** ${this.formatAiAuthoredInlineCode(analysis.summary)}`,
       ],
-      [`**Suggested action:** ${this.formatReportAnalysisAction(analysis.recommendedAction)}`]
+      [
+        `**Suggested action:** ${this.formatReportAnalysisAction(analysis.recommendedAction)}`,
+        analysis.jevAnalysis?.reasonCodes.length
+          ? `Jev reason: ${analysis.jevAnalysis.reasonCodes.join(', ')}`
+          : null,
+      ]
     );
   }
 
@@ -1824,6 +1840,16 @@ export class NotificationPresentationBuilder {
     return {
       ...metadataRecord,
       latestAnalysis: {
+        gptResult:
+          latestAnalysis.gptResult === 'likely_legitimate' ||
+          latestAnalysis.gptResult === 'needs_review' ||
+          latestAnalysis.gptResult === 'likely_suspicious'
+            ? latestAnalysis.gptResult
+            : undefined,
+        jevAnalysis:
+          latestAnalysis.jevAnalysis && typeof latestAnalysis.jevAnalysis === 'object'
+            ? (latestAnalysis.jevAnalysis as import('./JevService').JevProfileAnalysis)
+            : undefined,
         result,
         confidence: latestAnalysis.confidence,
         summary: latestAnalysis.summary,
@@ -1850,7 +1876,8 @@ export class NotificationPresentationBuilder {
             ? latestAnalysis.recommendedAction
             : 'manual_review',
         isFallback:
-          latestAnalysis.isFallback === true || reasonCodes.includes('ai_analysis_unavailable'),
+          latestAnalysis.isFallback === true ||
+          (latestAnalysis.isFallback !== false && reasonCodes.includes('ai_analysis_unavailable')),
         analyzedMessageCount: latestAnalysis.analyzedMessageCount,
       },
     };

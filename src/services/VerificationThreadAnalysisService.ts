@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { TYPES } from '../di/symbols';
 import type { IConfigService } from '../config/ConfigService';
 import type { IGPTService, VerificationThreadAnalysisResult } from './GPTService';
+import type { JevProfileAnalysis, JevService } from './JevService';
 import type { INotificationManager } from './NotificationManager';
 import type { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import type { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
@@ -31,6 +32,8 @@ import {
 interface ThreadAnalysisMetadata {
   analyzedMessageIds: string[];
   latestAnalysis?: {
+    gptResult?: VerificationThreadAnalysisResult['result'];
+    jevAnalysis?: JevProfileAnalysis;
     result: 'likely_legitimate' | 'needs_review' | 'likely_suspicious';
     confidence: number;
     summary: string;
@@ -62,7 +65,8 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
     private detectionEventsRepository: IDetectionEventsRepository,
     @inject(TYPES.ModerationQueueService)
     @optional()
-    private moderationQueueService?: IModerationQueueService
+    private moderationQueueService?: IModerationQueueService,
+    @inject(TYPES.JevService) @optional() private jevService?: JevService
   ) {}
 
   public async handleThreadMessage(message: Message): Promise<boolean> {
@@ -247,13 +251,54 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
     }
 
     const detectionReasons = await this.getDetectionReasons(verificationEvent.detection_event_id);
-    const rawAnalysis = await this.gptService.analyzeVerificationThreadResponses({
-      serverId: verificationEvent.server_id,
-      userId: verificationEvent.user_id,
-      username: message.author.username,
-      messages: responses,
-      detectionReasons,
-    });
+    const [gptAnalysis, jevAnalysis] = await Promise.all([
+      this.gptService.analyzeVerificationThreadResponses({
+        serverId: verificationEvent.server_id,
+        userId: verificationEvent.user_id,
+        username: message.author.username,
+        messages: responses,
+        detectionReasons,
+      }),
+      this.jevService?.analyzeVerificationReplies(
+        message.author.username,
+        responses,
+        detectionReasons
+      ),
+    ]);
+    const jevFlagged = jevAnalysis?.result === 'SUSPICIOUS';
+    const rawAnalysis: VerificationThreadAnalysisResult = jevAnalysis
+      ? {
+          ...gptAnalysis,
+          gptResult: gptAnalysis.isFallback ? undefined : gptAnalysis.result,
+          jevAnalysis,
+          result: jevFlagged ? 'likely_suspicious' : gptAnalysis.result,
+          confidence: jevFlagged
+            ? Math.max(
+                gptAnalysis.result === 'likely_suspicious' ? gptAnalysis.confidence : 0,
+                jevAnalysis.suspiciousProbability ?? 0
+              )
+            : gptAnalysis.confidence,
+          reasonCodes: jevFlagged
+            ? [
+                ...new Set([
+                  ...(gptAnalysis.isFallback ? [] : gptAnalysis.reasonCodes),
+                  ...jevAnalysis.reasonCodes,
+                ]),
+              ]
+            : gptAnalysis.reasonCodes,
+          recommendedAction:
+            jevFlagged &&
+            (gptAnalysis.recommendedAction !== 'restrict' ||
+              gptAnalysis.result !== 'likely_suspicious')
+              ? 'manual_review'
+              : gptAnalysis.recommendedAction,
+          summary:
+            jevFlagged && gptAnalysis.result !== 'likely_suspicious'
+              ? 'Verification replies need moderator review.'
+              : gptAnalysis.summary,
+          isFallback: gptAnalysis.isFallback && jevAnalysis.result === 'UNAVAILABLE',
+        }
+      : gptAnalysis;
     const analysis = this.capRecommendedAction(rawAnalysis, settings);
 
     const nextAnalyzedMessageIds = [...metadata.analyzedMessageIds, message.id].slice(
@@ -278,6 +323,8 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
           thread_analysis: {
             analyzedMessageIds: nextAnalyzedMessageIds,
             latestAnalysis: {
+              ...(analysis.gptResult ? { gptResult: analysis.gptResult } : {}),
+              ...(analysis.jevAnalysis ? { jevAnalysis: { ...analysis.jevAnalysis } } : {}),
               result: analysis.result,
               confidence: analysis.confidence,
               summary: analysis.summary,
@@ -404,6 +451,15 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
         typeof latestAnalysis.summary === 'string' &&
         typeof latestAnalysis.analyzedMessageCount === 'number'
           ? {
+              gptResult:
+                latestAnalysis.gptResult === 'likely_legitimate' ||
+                latestAnalysis.gptResult === 'needs_review' ||
+                latestAnalysis.gptResult === 'likely_suspicious'
+                  ? latestAnalysis.gptResult
+                  : undefined,
+              jevAnalysis: this.asObject(latestAnalysis.jevAnalysis) as unknown as
+                | JevProfileAnalysis
+                | undefined,
               result,
               confidence: latestAnalysis.confidence,
               summary: latestAnalysis.summary,
@@ -431,7 +487,8 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
                   : 'manual_review',
               isFallback:
                 latestAnalysis.isFallback === true ||
-                reasonCodes.includes('ai_analysis_unavailable'),
+                (latestAnalysis.isFallback !== false &&
+                  reasonCodes.includes('ai_analysis_unavailable')),
               analyzedMessageCount: latestAnalysis.analyzedMessageCount,
             }
           : undefined,

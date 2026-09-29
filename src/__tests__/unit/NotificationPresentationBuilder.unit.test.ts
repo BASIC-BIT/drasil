@@ -169,6 +169,68 @@ describe('NotificationPresentationBuilder (unit)', () => {
     expect(getField(embed, 'Risk Analysis')).toContain('Jev reason: scam_link');
   });
 
+  it('shows both report and verification text verdicts to moderators', () => {
+    const reportEmbed = builder.createObservedDetectionEmbed(
+      buildMember(),
+      buildDetectionResult({
+        reportAiAnalysis: {
+          gptResult: 'low_risk',
+          jevAnalysis: {
+            result: 'SUSPICIOUS',
+            suspiciousProbability: 0.9,
+            reasonCodes: ['scam_link'],
+            model: 'jev-test',
+          },
+          result: 'needs_review',
+          confidence: 0.9,
+          summary: 'Needs moderator review.',
+          reasonCodes: ['scam_link'],
+          evidenceCategories: [],
+          concerns: [],
+          recommendedAction: 'manual_review',
+          analyzedImageCount: 0,
+          model: 'gpt-test',
+          promptVersion: 'report-test',
+          isFallback: false,
+        },
+      }),
+      []
+    );
+    expect(getField(reportEmbed, 'Report Triage')).toContain('GPT did not flag; Jev flagged');
+    expect(getField(reportEmbed, 'Report Triage')).toContain('Jev reason: scam_link');
+
+    const replyEmbed = new EmbedBuilder();
+    builder.upsertThreadAnalysisField(
+      replyEmbed,
+      {
+        gptResult: 'likely_legitimate',
+        jevAnalysis: {
+          result: 'SUSPICIOUS',
+          suspiciousProbability: 0.9,
+          reasonCodes: ['evasive_reply'],
+          model: 'jev-test',
+        },
+        result: 'likely_suspicious',
+        confidence: 0.9,
+        summary: 'Needs moderator review.',
+        reasonCodes: ['evasive_reply'],
+        legitimacySignals: [],
+        suspicionSignals: [],
+        recommendedAction: 'manual_review',
+        model: 'gpt-test',
+        promptVersion: 'reply-test',
+        isFallback: false,
+      },
+      1
+    );
+    expect(
+      getField(replyEmbed, NotificationPresentationBuilder.THREAD_ANALYSIS_FIELD_NAME)
+    ).toContain('GPT did not flag; Jev flagged');
+    expect(
+      getField(replyEmbed, NotificationPresentationBuilder.THREAD_ANALYSIS_FIELD_NAME)
+    ).toContain('Jev reason: evasive_reply');
+  });
+
   it('replaces the typed browser security-check field as the challenge advances', () => {
     const embed = new EmbedBuilder().setTitle('Suspicious User');
     builder.upsertCaptchaChallengePresentation(

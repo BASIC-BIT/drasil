@@ -63,4 +63,32 @@ describe('JevService', () => {
 
     expect(result.result).toBe('UNAVAILABLE');
   });
+
+  it('limits report and reply text before sending it to TypeSafe', async () => {
+    process.env.TYPESAFE_API_KEY = 'test-key';
+    const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        model: 'jev-1.13.0',
+        answers: {
+          classification: {
+            type: 'choice',
+            choice: 'OK',
+            probabilities: { OK: 0.9, SUSPICIOUS: 0.1 },
+          },
+          primary_reason: { type: 'choice', choice: 'insufficient_signal' },
+        },
+      }),
+    } as Response);
+
+    await new JevService().analyzeReportText('r'.repeat(1200), 'm'.repeat(2200));
+    await new JevService().analyzeVerificationReplies('user', ['a'.repeat(1200)], ['reason']);
+
+    const reportState = JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).state;
+    const replyState = JSON.parse(String(fetchMock.mock.calls[1][1]?.body)).state;
+    expect(reportState.report_reason).toHaveLength(1000);
+    expect(reportState.reported_message).toHaveLength(2000);
+    expect(replyState.replies[0]).toHaveLength(1000);
+    expect(replyState.detection_reasons).toEqual(['reason']);
+  });
 });

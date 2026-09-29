@@ -43,6 +43,102 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     return { message: base, messages };
   };
 
+  it('records a Jev-only reply flag for moderator review without restricting', async () => {
+    const verificationRepo = new InMemoryVerificationEventRepository();
+    const detectionRepo = new InMemoryDetectionEventsRepository();
+    const detectionEvent = await detectionRepo.create({
+      server_id: 'guild-1',
+      user_id: 'user-1',
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.8,
+      reasons: ['Suspicious content'],
+    });
+    const verificationEvent = await verificationRepo.createFromDetection(
+      detectionEvent.id,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationRepo.update(verificationEvent.id, {
+      thread_id: 'thread-1',
+      notification_message_id: 'notif-1',
+    });
+    const gptService = {
+      analyzeVerificationThreadResponses: jest.fn().mockResolvedValue({
+        result: 'likely_legitimate',
+        confidence: 0.99,
+        summary: 'Reply looks ordinary.',
+        reasonCodes: [],
+        legitimacySignals: [],
+        suspicionSignals: [],
+        recommendedAction: 'none',
+        model: 'gpt-test',
+        promptVersion: 'verification-test',
+        isFallback: false,
+      }),
+    } as any;
+    const jevService = {
+      analyzeVerificationReplies: jest.fn().mockResolvedValue({
+        result: 'SUSPICIOUS',
+        suspiciousProbability: 0.97,
+        reasonCodes: ['evasive_reply'],
+        model: 'jev-test',
+      }),
+    } as any;
+    const notificationManager = {
+      updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(true),
+      mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(true),
+      notifyVerificationThreadUserResponse: jest.fn().mockResolvedValue(true),
+    } as any;
+    const service = new VerificationThreadAnalysisService(
+      {
+        getServerConfig: jest.fn().mockResolvedValue({
+          settings: {
+            verification_ai_max_action: 'restrict',
+            verification_ai_restrict_threshold: 0.5,
+          },
+        }),
+      } as any,
+      gptService,
+      notificationManager,
+      verificationRepo,
+      detectionRepo,
+      undefined,
+      jevService
+    );
+    const { message, messages } = buildMessage();
+    messages.set(message.id, message);
+
+    await service.handleThreadMessage(message as any);
+
+    expect(jevService.analyzeVerificationReplies).toHaveBeenCalledWith(
+      'runner',
+      [message.content],
+      ['Suspicious content']
+    );
+    expect(notificationManager.updateVerificationThreadAnalysis).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        gptResult: 'likely_legitimate',
+        result: 'likely_suspicious',
+        confidence: 0.97,
+        recommendedAction: 'manual_review',
+        jevAnalysis: expect.objectContaining({ reasonCodes: ['evasive_reply'] }),
+      }),
+      1
+    );
+    expect((await verificationRepo.findById(verificationEvent.id))?.metadata).toEqual(
+      expect.objectContaining({
+        thread_analysis: expect.objectContaining({
+          latestAnalysis: expect.objectContaining({
+            gptResult: 'likely_legitimate',
+            recommendedAction: 'manual_review',
+          }),
+        }),
+      })
+    );
+  });
+
   it('mirrors support-check replies before skipping disabled thread analysis', async () => {
     const verificationRepo = new InMemoryVerificationEventRepository();
     const detectionRepo = new InMemoryDetectionEventsRepository();

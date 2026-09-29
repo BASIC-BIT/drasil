@@ -194,6 +194,8 @@ export interface VerificationThreadAnalysisData {
 }
 
 export interface VerificationThreadAnalysisResult {
+  gptResult?: 'likely_legitimate' | 'needs_review' | 'likely_suspicious';
+  jevAnalysis?: import('./JevService').JevProfileAnalysis;
   result: 'likely_legitimate' | 'needs_review' | 'likely_suspicious';
   confidence: number;
   summary: string;
@@ -225,6 +227,8 @@ export interface ReportIntakeEvidenceExtractionData {
 }
 
 export interface ReportAIAnalysis {
+  gptResult?: 'low_risk' | 'needs_review' | 'likely_abusive';
+  jevAnalysis?: import('./JevService').JevProfileAnalysis;
   result: 'low_risk' | 'needs_review' | 'likely_abusive';
   confidence: number;
   summary: string;

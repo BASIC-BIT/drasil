@@ -1,0 +1,59 @@
+import { ReportAiAnalyzer } from '../../services/ReportAiAnalyzer';
+import type { JevService } from '../../services/JevService';
+import type { IGPTService } from '../../services/GPTService';
+import type { IServerRepository } from '../../repositories/ServerRepository';
+
+it('sends report text to both checks and keeps a Jev-only flag at manual review', async () => {
+  const serverRepository = {
+    findByGuildId: jest.fn().mockResolvedValue({
+      settings: { report_ai_max_action: 'open_case', report_ai_open_case_threshold: 0.5 },
+    }),
+  } as unknown as IServerRepository;
+  const gptService = {
+    analyzeReportEvidence: jest.fn().mockResolvedValue({
+      result: 'low_risk',
+      confidence: 0.99,
+      summary: 'No abuse found.',
+      reasonCodes: [],
+      evidenceCategories: [],
+      concerns: [],
+      recommendedAction: 'none',
+      analyzedImageCount: 0,
+      model: 'gpt-test',
+      promptVersion: 'report-test',
+      isFallback: false,
+    }),
+  } as unknown as IGPTService;
+  const jevService = {
+    analyzeReportText: jest.fn().mockResolvedValue({
+      result: 'SUSPICIOUS',
+      suspiciousProbability: 0.96,
+      reasonCodes: ['scam_link'],
+      model: 'jev-test',
+    }),
+  } as unknown as JevService;
+
+  const result = await new ReportAiAnalyzer(
+    serverRepository,
+    gptService,
+    jevService
+  ).analyzeIfEnabled({
+    serverId: 'server',
+    targetUserId: 'target',
+    reporterId: 'reporter',
+    reason: 'Please check this message',
+    reportedMessageContent: 'Claim a prize at example.test',
+  });
+
+  expect(jevService.analyzeReportText).toHaveBeenCalledWith(
+    'Please check this message',
+    'Claim a prize at example.test'
+  );
+  expect(result).toMatchObject({
+    gptResult: 'low_risk',
+    result: 'needs_review',
+    confidence: 0.96,
+    recommendedAction: 'manual_review',
+    jevAnalysis: { result: 'SUSPICIOUS', reasonCodes: ['scam_link'] },
+  });
+});

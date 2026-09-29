@@ -69,6 +69,7 @@ import {
 } from './ProductAnalyticsService';
 import { getConfidenceBucket } from '../utils/analyticsHelpers';
 import { ReportAiAnalyzer } from './ReportAiAnalyzer';
+import type { JevService } from './JevService';
 import { ReportDetectionBuilder } from './ReportDetectionBuilder';
 import { RoleIntakeProcessor } from './RoleIntakeProcessor';
 import type { ICaptchaChallengeService } from './CaptchaChallengeService';
@@ -437,7 +438,8 @@ export class SecurityActionService implements ISecurityActionService {
     reportIntakeRepository?: IReportIntakeRepository,
     @inject(TYPES.CaptchaChallengeService)
     @optional()
-    captchaChallengeService?: ICaptchaChallengeService
+    captchaChallengeService?: ICaptchaChallengeService,
+    @inject(TYPES.JevService) @optional() jevService?: JevService
   ) {
     this.notificationManager = notificationManager;
     this.detectionEventsRepository = detectionEventsRepository;
@@ -456,7 +458,11 @@ export class SecurityActionService implements ISecurityActionService {
     this.messageDeletionService = messageDeletionService;
     this.reportIntakeRepository = reportIntakeRepository;
     this.captchaChallengeService = captchaChallengeService;
-    this.reportAiAnalyzer = new ReportAiAnalyzer(this.serverRepository, this.gptService);
+    this.reportAiAnalyzer = new ReportAiAnalyzer(
+      this.serverRepository,
+      this.gptService,
+      jevService
+    );
     this.reportDetectionBuilder = new ReportDetectionBuilder(
       this.detectionEventsRepository,
       this.reportAiAnalyzer
