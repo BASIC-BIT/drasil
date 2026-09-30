@@ -89,12 +89,13 @@ export class ReportAiAnalyzer {
         : allegationOnlyFlag
           ? 'needs_review'
           : gptAnalysis.result,
-      confidence: jevFlagged
-        ? Math.max(
-            gptAnalysis.result === 'likely_abusive' ? gptAnalysis.confidence : 0,
-            jevAnalysis.suspiciousProbability ?? 0
-          )
-        : gptAnalysis.confidence,
+      confidence:
+        jevEscalates || allegationOnlyFlag
+          ? Math.max(
+              gptAnalysis.result === 'likely_abusive' ? gptAnalysis.confidence : 0,
+              jevAnalysis.suspiciousProbability ?? 0
+            )
+          : gptAnalysis.confidence,
       reasonCodes: jevFlagged
         ? [
             ...new Set([

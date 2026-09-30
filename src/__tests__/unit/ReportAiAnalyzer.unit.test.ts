@@ -74,6 +74,35 @@ it('sends report text to both checks and routes a Jev-only flag through report a
     jevAnalysis: { result: 'SUSPICIOUS' },
   });
 
+  jest.mocked(gptService.analyzeReportEvidence).mockResolvedValueOnce({
+    result: 'needs_review',
+    confidence: 0.42,
+    summary: 'Review the allegation.',
+    reasonCodes: [],
+    evidenceCategories: [],
+    concerns: [],
+    recommendedAction: 'manual_review',
+    analyzedImageCount: 0,
+    model: 'gpt-test',
+    promptVersion: 'report-test',
+    isFallback: false,
+  });
+  const existingReview = await new ReportAiAnalyzer(
+    serverRepository,
+    gptService,
+    jevService
+  ).analyzeIfEnabled({
+    serverId: 'server',
+    targetUserId: 'target',
+    reporterId: 'reporter',
+    reason: 'They sent a phishing link',
+  });
+  expect(existingReview).toMatchObject({
+    result: 'needs_review',
+    confidence: 0.42,
+    recommendedAction: 'manual_review',
+  });
+
   jest.mocked(serverRepository.findByGuildId).mockResolvedValueOnce({
     settings: { report_ai_max_action: 'hints' },
   } as any);
