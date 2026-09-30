@@ -109,6 +109,7 @@ export class NotificationPresentationBuilder {
       ? `<t:${joinedServerTimestamp}:F> (<t:${joinedServerTimestamp}:R>)`
       : 'Unknown';
 
+    const isUserReport = detectionResult.triggerSource === DetectionType.USER_REPORT;
     const signalField = this.formatSignalField(detectionResult);
     let embedColor = CASE_COLOR_PENDING;
 
@@ -144,9 +145,11 @@ export class NotificationPresentationBuilder {
       .setDescription(
         resolutionPresentation
           ? `<@${member.id}> has been handled. No further moderator action is pending.`
-          : countedDetectionEvents.length > 1
-            ? `<@${member.id}> has been flagged as suspicious ${countedDetectionEvents.length} times.`
-            : `<@${member.id}> has been flagged as suspicious.`
+          : isUserReport
+            ? `<@${member.id}> has an open case awaiting moderator review.`
+            : countedDetectionEvents.length > 1
+              ? `<@${member.id}> has been flagged as suspicious ${countedDetectionEvents.length} times.`
+              : `<@${member.id}> has been flagged as suspicious.`
       )
       .setThumbnail(member.user.displayAvatarURL())
       .addFields(
@@ -167,13 +170,27 @@ export class NotificationPresentationBuilder {
         { name: 'User ID', value: member.id, inline: true },
         { name: 'Account Created', value: accountCreatedFormatted, inline: false },
         { name: 'Joined Server', value: joinedServerFormatted, inline: false },
-        signalField,
-        {
-          name: 'Trigger',
-          value: this.formatSuspiciousDetectionTrigger(detectionResult, sourceMessage),
-          inline: false,
-        },
-        { name: 'Reasons', value: reasonsFormatted || 'No specific reason provided', inline: false }
+        ...(isUserReport
+          ? [
+              {
+                name: 'Report',
+                value: this.formatUserReport(detectionResult, detectionEvents, member.guild.id),
+                inline: false,
+              },
+            ]
+          : [
+              signalField,
+              {
+                name: 'Trigger',
+                value: this.formatSuspiciousDetectionTrigger(detectionResult, sourceMessage),
+                inline: false,
+              },
+              {
+                name: 'Reasons',
+                value: reasonsFormatted || 'No specific reason provided',
+                inline: false,
+              },
+            ])
       )
       .setTimestamp();
 
@@ -223,7 +240,7 @@ export class NotificationPresentationBuilder {
       });
     }
 
-    if (detectionHistory) {
+    if (detectionHistory && (!isUserReport || detectionEvents.length > 1)) {
       embed.addFields({ name: 'Detection History', value: detectionHistory, inline: false });
     }
 
@@ -254,6 +271,7 @@ export class NotificationPresentationBuilder {
     const joinedServerTimestamp = member.joinedAt
       ? Math.floor(member.joinedAt.getTime() / 1000)
       : null;
+    const isUserReport = detectionResult.triggerSource === DetectionType.USER_REPORT;
     const signalField = this.formatSignalField(detectionResult);
     const reasonsFormatted = detectionResult.reasons.map((reason) => `• ${reason}`).join('\n');
     const recentEvents = detectionEvents.slice(0, 5);
@@ -268,7 +286,9 @@ export class NotificationPresentationBuilder {
       .setColor(0xffc107)
       .setTitle('Suspicious Activity Observed')
       .setDescription(
-        `Drasil observed suspicious activity from <@${member.id}>. No case was opened automatically.`
+        isUserReport
+          ? `<@${member.id}> was reported by a user. No case was opened automatically.`
+          : `Drasil observed suspicious activity from <@${member.id}>. No case was opened automatically.`
       )
       .setThumbnail(member.user.displayAvatarURL())
       .addFields(
@@ -290,23 +310,34 @@ export class NotificationPresentationBuilder {
             : 'Unknown',
           inline: false,
         },
-        signalField,
-        {
-          name: 'Trigger',
-          value: this.truncateEmbedFieldValue(
-            this.formatObservedDetectionTrigger(detectionResult, sourceMessage)
-          ),
-        },
-        {
-          name: 'Reasons',
-          value: this.truncateEmbedFieldValue(reasonsFormatted || 'No specific reason provided'),
-        }
+        ...(isUserReport
+          ? [
+              {
+                name: 'Report',
+                value: this.formatUserReport(detectionResult, detectionEvents, member.guild.id),
+              },
+            ]
+          : [
+              signalField,
+              {
+                name: 'Trigger',
+                value: this.truncateEmbedFieldValue(
+                  this.formatObservedDetectionTrigger(detectionResult, sourceMessage)
+                ),
+              },
+              {
+                name: 'Reasons',
+                value: this.truncateEmbedFieldValue(
+                  reasonsFormatted || 'No specific reason provided'
+                ),
+              },
+            ])
       )
       .setTimestamp();
 
     this.addOptionalAnalysisFields(embed, detectionResult, detectionEvents);
 
-    if (detectionHistory) {
+    if (detectionHistory && (!isUserReport || detectionEvents.length > 1)) {
       embed.addFields({
         name: 'Recent Detection History',
         value: this.truncateEmbedFieldValue(detectionHistory),
@@ -326,7 +357,7 @@ export class NotificationPresentationBuilder {
     }
 
     if (detectionResult.triggerSource === DetectionType.USER_REPORT) {
-      return 'User Report Submitted';
+      return 'Moderation Case Opened';
     }
 
     if (detectionResult.triggerSource === DetectionType.ADMIN_CASE) {
@@ -688,6 +719,9 @@ export class NotificationPresentationBuilder {
     hasGuild?: boolean
   ): void {
     const actionLogField = embed.data.fields?.find((field) => field.name === 'Action Log');
+    const previousAction = embed.data.fields?.find(
+      (field) => field.name === NotificationPresentationBuilder.LATEST_ADMIN_ACTION_FIELD_NAME
+    )?.value;
     this.upsertLatestAdminActionField(embed, actionTaken, adminId, timestamp);
 
     if (threadUrl && actionTaken === AdminActionType.CREATE_THREAD) {
@@ -706,11 +740,20 @@ export class NotificationPresentationBuilder {
     }
     this.upsertHandledResolutionField(embed, actionTaken, adminId, timestamp);
 
-    const actionLogContent = `• ${this.formatAdminActionEvent(actionTaken, adminId, timestamp)}`;
-    if (actionLogField) {
-      actionLogField.value = `${actionLogField.value}\n${actionLogContent}`;
-    } else {
-      embed.addFields({ name: 'Action Log', value: actionLogContent, inline: false });
+    const currentAction = this.formatAdminActionEvent(actionTaken, adminId, timestamp);
+    const history = [
+      ...new Set([
+        ...(actionLogField?.value.split('\n') ?? []),
+        ...(previousAction ? [`• ${previousAction}`] : []),
+      ]),
+    ].filter((entry) => entry !== `• ${currentAction}`);
+    embed.setFields(...(embed.data.fields ?? []).filter((field) => field.name !== 'Action Log'));
+    if (history.length > 0) {
+      embed.addFields({
+        name: 'Action Log',
+        value: this.truncateEmbedFieldValue(history.join('\n')),
+        inline: false,
+      });
     }
   }
 
@@ -946,6 +989,9 @@ export class NotificationPresentationBuilder {
   }
 
   private getPendingTitleFromExistingEmbed(embed: EmbedBuilder): string {
+    if (embed.data.fields?.some((field) => field.name === 'Report')) {
+      return 'Moderation Case Opened';
+    }
     const trigger = embed.data.fields?.find((field) => field.name === 'Trigger')?.value ?? '';
     if (trigger.startsWith('Flagged via user report:')) {
       return 'User Report Submitted';
@@ -961,7 +1007,9 @@ export class NotificationPresentationBuilder {
   private getPendingDescriptionFromExistingEmbed(embed: EmbedBuilder): string {
     const userId = embed.data.fields?.find((field) => field.name === 'User ID')?.value;
     if (userId) {
-      return `<@${userId}> has been flagged as suspicious.`;
+      return embed.data.fields?.some((field) => field.name === 'Report')
+        ? `<@${userId}> has an open case awaiting moderator review.`
+        : `<@${userId}> has been flagged as suspicious.`;
     }
 
     return 'Case is pending moderator review.';
@@ -1428,7 +1476,9 @@ export class NotificationPresentationBuilder {
     embed.setColor(CASE_COLOR_WARNING);
     embed.setTitle('Suspicious Activity Observed');
     embed.setDescription(
-      `Drasil observed suspicious activity from ${userReference}. No case was opened automatically.`
+      embed.data.fields?.some((field) => field.name === 'Report')
+        ? `${userReference} was reported by a user. No case was opened automatically.`
+        : `Drasil observed suspicious activity from ${userReference}. No case was opened automatically.`
     );
   }
 
@@ -1481,7 +1531,14 @@ export class NotificationPresentationBuilder {
       const skippedCount = this.formatUnknownValue(record.skipped_role_count);
       const failedCount = this.formatUnknownValue(record.failed_removal_count);
       lines.push(
-        `Case role: ${status}${mode ? ` (${mode})` : ''}; removed ${removedCount || '0'} of ${plannedCount || '0'} planned role(s), skipped ${skippedCount || '0'}, failed ${failedCount || '0'}.`
+        status === 'quarantined' &&
+          mode === 'on' &&
+          removedCount &&
+          removedCount === plannedCount &&
+          skippedCount === '0' &&
+          failedCount === '0'
+          ? `Active · ${removedCount} ${removedCount === '1' ? 'role' : 'roles'} removed`
+          : `Case role: ${status}${mode ? ` (${mode})` : ''}; removed ${removedCount || '0'} of ${plannedCount || '0'} planned role(s), skipped ${skippedCount || '0'}, failed ${failedCount || '0'}.`
       );
     }
 
@@ -1652,7 +1709,7 @@ export class NotificationPresentationBuilder {
         })`,
         analysis.jevAnalysis
           ? `Two checks: GPT ${analysis.gptResult === 'likely_abusive' ? 'flagged' : analysis.gptResult === 'low_risk' ? 'did not flag' : analysis.gptResult === 'needs_review' ? 'needs review' : 'unavailable'}; Jev ${analysis.jevAnalysis.result === 'SUSPICIOUS' ? 'flagged' : analysis.jevAnalysis.result === 'UNAVAILABLE' ? 'unavailable' : 'did not flag'}.`
-          : `**AI Assessment:** ${this.formatAiAuthoredInlineCode(analysis.summary)}`,
+          : `**Assessment:** ${this.formatAiAuthoredInlineCode(analysis.summary)}`,
       ],
       [
         `**Suggested action:** ${this.formatReportAnalysisAction(analysis.recommendedAction)}`,
@@ -1903,15 +1960,40 @@ export class NotificationPresentationBuilder {
     return 'Low';
   }
 
+  private formatUserReport(
+    detectionResult: DetectionResult,
+    detectionEvents: DetectionEvent[],
+    guildId: string
+  ): string {
+    const event = detectionEvents.find(
+      (candidate) => candidate.id === detectionResult.detectionEventId
+    );
+    const metadata = this.metadataToRecord(event?.metadata);
+    const reporterId =
+      typeof metadata.reporterId === 'string' && /^\d+$/.test(metadata.reporterId)
+        ? metadata.reporterId
+        : null;
+    let reason =
+      typeof metadata.reason === 'string' ? metadata.reason : detectionResult.triggerContent;
+    let threadId: string | undefined;
+    // Shipped intake events store routing details in the reason, before reporter context.
+    if (
+      metadata.source === 'report_intake' &&
+      reason.startsWith('Report intake target confirmed by ')
+    ) {
+      const routingDetails = reason.split('\nReporter context: ')[0];
+      threadId = routingDetails.match(/^Report thread ID: (\d+)\r?$/m)?.[1];
+      reason = reason.match(/(?:^|\n)Reporter context: ([\s\S]*)$/)?.[1] ?? '';
+    }
+    const reportLine = `Reported by ${reporterId ? `<@${reporterId}>` : 'a user'}${threadId ? ` · [View report](https://discord.com/channels/${guildId}/${threadId})` : ''}`;
+    return this.truncateEmbedFieldValue([reportLine, reason].filter(Boolean).join('\n'));
+  }
+
   private formatSignalField(detectionResult: DetectionResult): {
     name: string;
     value: string;
     inline: true;
   } {
-    if (detectionResult.triggerSource === DetectionType.USER_REPORT) {
-      return { name: 'Report Signal', value: 'Reported by user', inline: true };
-    }
-
     return {
       name: 'Detection Confidence',
       value: this.formatConfidenceLabel(detectionResult.confidence),
