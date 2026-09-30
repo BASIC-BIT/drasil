@@ -252,6 +252,25 @@ describe('NotificationPresentationBuilder (unit)', () => {
     );
   });
 
+  it('retains the newest complete history entries when the action log fills up', () => {
+    const embed = new EmbedBuilder();
+    for (let index = 0; index < 40; index++) {
+      builder.upsertAdminActionLog(embed, AdminActionType.OPEN_CASE, 'admin-1', 1800000000 + index);
+    }
+    const history = getField(embed, 'Action Log')!;
+    expect(history.length).toBeLessThanOrEqual(1024);
+    expect(history).toContain('<t:1800000038:F>');
+    expect(history).not.toContain('<t:1800000000:F>');
+    expect(
+      history.split('\n').every((entry) => /^• Opened case by <@admin-1> at <t:\d+:F>$/.test(entry))
+    ).toBe(true);
+    builder.upsertAdminActionLog(embed, AdminActionType.VERIFY, 'admin-2', 1800000040);
+    expect(getField(embed, 'Action Log')).toContain('<t:1800000039:F>');
+    expect(getField(embed, 'Latest Admin Action')).toBe(
+      'Verified by <@admin-2> at <t:1800000040:F>'
+    );
+  });
+
   it('compacts successful quarantine while keeping incomplete-removal warnings', () => {
     const restriction = {
       status: 'quarantined',
@@ -342,6 +361,24 @@ describe('NotificationPresentationBuilder (unit)', () => {
     );
     builder.addObservedActionRevertedField(observed, 'undid the action', 'admin-1', 1800000100);
     expect(observed.data.description).toBe(
+      '<@user-1> was reported by a user. No case was opened automatically.'
+    );
+  });
+
+  it('preserves legacy report wording when undoing an observed action', () => {
+    const embed = new EmbedBuilder().addFields(
+      { name: 'User ID', value: 'user-1' },
+      { name: 'Trigger', value: 'Flagged via user report: `scam DM`' }
+    );
+    builder.addObservedActionTakenField(
+      embed,
+      'opened a case',
+      'admin-1',
+      1800000000,
+      AdminActionType.OPEN_CASE
+    );
+    builder.addObservedActionRevertedField(embed, 'undid the action', 'admin-1', 1800000100);
+    expect(embed.data.description).toBe(
       '<@user-1> was reported by a user. No case was opened automatically.'
     );
   });
@@ -686,7 +723,7 @@ describe('NotificationPresentationBuilder (unit)', () => {
     );
 
     expect(embed.data.title).toBe('User Report Submitted');
-    expect(embed.data.description).toBe('<@user-1> has been flagged as suspicious.');
+    expect(embed.data.description).toBe('<@user-1> has an open case awaiting moderator review.');
     expect(embed.data.color).toBe(0xff0000);
     expect(getField(embed, 'Resolution')).toBeUndefined();
     expect(getField(embed, 'Latest Admin Action')).toBe('Reopened by <@admin-2>');

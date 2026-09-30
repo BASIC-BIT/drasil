@@ -747,6 +747,9 @@ export class NotificationPresentationBuilder {
         ...(previousAction ? [`• ${previousAction}`] : []),
       ]),
     ].filter((entry) => entry !== `• ${currentAction}`);
+    while (history.length > 1 && history.join('\n').length > EMBED_FIELD_VALUE_MAX_LENGTH) {
+      history.shift();
+    }
     embed.setFields(...(embed.data.fields ?? []).filter((field) => field.name !== 'Action Log'));
     if (history.length > 0) {
       embed.addFields({
@@ -993,7 +996,7 @@ export class NotificationPresentationBuilder {
       return 'Moderation Case Opened';
     }
     const trigger = embed.data.fields?.find((field) => field.name === 'Trigger')?.value ?? '';
-    if (trigger.startsWith('Flagged via user report:')) {
+    if (this.isUserReportEmbed(embed)) {
       return 'User Report Submitted';
     }
 
@@ -1004,10 +1007,20 @@ export class NotificationPresentationBuilder {
     return 'Suspicious User Detected';
   }
 
+  private isUserReportEmbed(embed: EmbedBuilder): boolean {
+    return (
+      embed.data.fields?.some(
+        (field) =>
+          field.name === 'Report' ||
+          (field.name === 'Trigger' && field.value.startsWith('Flagged via user report:'))
+      ) ?? false
+    );
+  }
+
   private getPendingDescriptionFromExistingEmbed(embed: EmbedBuilder): string {
     const userId = embed.data.fields?.find((field) => field.name === 'User ID')?.value;
     if (userId) {
-      return embed.data.fields?.some((field) => field.name === 'Report')
+      return this.isUserReportEmbed(embed)
         ? `<@${userId}> has an open case awaiting moderator review.`
         : `<@${userId}> has been flagged as suspicious.`;
     }
@@ -1476,7 +1489,7 @@ export class NotificationPresentationBuilder {
     embed.setColor(CASE_COLOR_WARNING);
     embed.setTitle('Suspicious Activity Observed');
     embed.setDescription(
-      embed.data.fields?.some((field) => field.name === 'Report')
+      this.isUserReportEmbed(embed)
         ? `${userReference} was reported by a user. No case was opened automatically.`
         : `Drasil observed suspicious activity from ${userReference}. No case was opened automatically.`
     );
