@@ -284,6 +284,39 @@ describe('NotificationPresentationBuilder (unit)', () => {
     expect(getField(incomplete, 'Role Quarantine')).toContain('failed 2');
   });
 
+  it('does not label restored quarantine as active', () => {
+    const embed = builder.createSuspiciousUserEmbed(
+      buildMember(),
+      buildDetectionResult(),
+      buildVerificationEvent({
+        status: VerificationStatus.VERIFIED,
+        metadata: {
+          role_quarantine: {
+            restriction: {
+              status: 'quarantined',
+              mode: 'on',
+              removed_role_count: 12,
+              planned_role_count: 12,
+              skipped_role_count: 0,
+              failed_removal_count: 0,
+            },
+            restore: {
+              status: 'restored',
+              restored_role_count: 12,
+              attempted_role_count: 12,
+              skipped_role_count: 0,
+              failed_restore_count: 0,
+            },
+          },
+        },
+      }),
+      []
+    );
+    expect(getField(embed, 'Role Quarantine')).not.toContain('Active');
+    expect(getField(embed, 'Role Quarantine')).toContain('removed 12 of 12');
+    expect(getField(embed, 'Role Quarantine')).toContain('Restore: restored; restored 12 of 12');
+  });
+
   it('preserves report wording when a handled case is reopened or an observed action is undone', () => {
     const result = buildDetectionResult({ triggerSource: DetectionType.USER_REPORT });
     const embed = builder.createSuspiciousUserEmbed(

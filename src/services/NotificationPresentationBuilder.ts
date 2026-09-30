@@ -1531,7 +1531,8 @@ export class NotificationPresentationBuilder {
       const skippedCount = this.formatUnknownValue(record.skipped_role_count);
       const failedCount = this.formatUnknownValue(record.failed_removal_count);
       lines.push(
-        status === 'quarantined' &&
+        !(roleQuarantine as Record<string, unknown>).restore &&
+          status === 'quarantined' &&
           mode === 'on' &&
           removedCount &&
           removedCount === plannedCount &&
