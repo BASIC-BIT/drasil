@@ -138,6 +138,104 @@ describe('NotificationPresentationBuilder (unit)', () => {
     }
   });
 
+  it('shows both classifier results when they disagree', () => {
+    const embed = builder.createObservedDetectionEmbed(
+      buildMember(),
+      buildDetectionResult({
+        gptAnalysis: {
+          result: 'OK',
+          confidence: 0.2,
+          reasons: [],
+          reasonCodes: ['normal_context'],
+          primarySignal: 'none',
+          summary: 'Context looks normal.',
+          model: 'gpt-5.4-mini',
+          promptVersion: 'test',
+          isFallback: false,
+        },
+        jevAnalysis: {
+          result: 'SUSPICIOUS',
+          suspiciousProbability: 0.91,
+          reasonCodes: ['scam_link'],
+          model: 'jev-1.13.0',
+        },
+      }),
+      []
+    );
+
+    expect(getField(embed, 'Risk Analysis')).toContain(
+      'Two checks: GPT did not flag; Jev flagged.'
+    );
+    expect(getField(embed, 'Risk Analysis')).toContain('Jev reason: scam_link');
+  });
+
+  it('shows both report and verification text verdicts to moderators', () => {
+    const reportEmbed = builder.createObservedDetectionEmbed(
+      buildMember(),
+      buildDetectionResult({
+        reportAiAnalysis: {
+          gptResult: 'low_risk',
+          gptSummary: 'No abuse found in the reported message.',
+          jevAnalysis: {
+            result: 'SUSPICIOUS',
+            suspiciousProbability: 0.9,
+            reasonCodes: ['scam_link'],
+            model: 'jev-test',
+          },
+          result: 'needs_review',
+          confidence: 0.9,
+          summary: 'Needs moderator review.',
+          reasonCodes: ['scam_link'],
+          evidenceCategories: [],
+          concerns: [],
+          recommendedAction: 'manual_review',
+          analyzedImageCount: 0,
+          model: 'gpt-test',
+          promptVersion: 'report-test',
+          isFallback: false,
+        },
+      }),
+      []
+    );
+    expect(getField(reportEmbed, 'Report Triage')).toContain('GPT did not flag; Jev flagged');
+    expect(getField(reportEmbed, 'Report Triage')).toContain(
+      'No abuse found in the reported message.'
+    );
+    expect(getField(reportEmbed, 'Report Triage')).toContain('Jev reason: scam_link');
+
+    const replyEmbed = new EmbedBuilder();
+    builder.upsertThreadAnalysisField(
+      replyEmbed,
+      {
+        gptResult: 'likely_legitimate',
+        gptSummary: 'The member answered the questions directly.',
+        jevAnalysis: {
+          result: 'UNAVAILABLE',
+          suspiciousProbability: null,
+          reasonCodes: [],
+          model: 'jev-test',
+        },
+        result: 'likely_legitimate',
+        confidence: 0.8,
+        summary: 'The member answered the questions directly.',
+        reasonCodes: [],
+        legitimacySignals: [],
+        suspicionSignals: [],
+        recommendedAction: 'manual_review',
+        model: 'gpt-test',
+        promptVersion: 'reply-test',
+        isFallback: false,
+      },
+      1
+    );
+    expect(
+      getField(replyEmbed, NotificationPresentationBuilder.THREAD_ANALYSIS_FIELD_NAME)
+    ).toContain('GPT did not flag; Jev unavailable');
+    expect(
+      getField(replyEmbed, NotificationPresentationBuilder.THREAD_ANALYSIS_FIELD_NAME)
+    ).toContain('The member answered the questions directly.');
+  });
+
   it('replaces the typed browser security-check field as the challenge advances', () => {
     const embed = new EmbedBuilder().setTitle('Suspicious User');
     builder.upsertCaptchaChallengePresentation(

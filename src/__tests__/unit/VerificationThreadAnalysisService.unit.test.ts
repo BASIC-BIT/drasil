@@ -43,6 +43,243 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     return { message: base, messages };
   };
 
+  it('routes a Jev-only reply flag through the configured verification action', async () => {
+    const verificationRepo = new InMemoryVerificationEventRepository();
+    const detectionRepo = new InMemoryDetectionEventsRepository();
+    const detectionEvent = await detectionRepo.create({
+      server_id: 'guild-1',
+      user_id: 'user-1',
+      detection_type: DetectionType.SUSPICIOUS_CONTENT,
+      confidence: 0.8,
+      reasons: ['Suspicious content'],
+      channel_id: 'source-channel',
+      message_id: 'source-message',
+    });
+    const verificationEvent = await verificationRepo.createFromDetection(
+      detectionEvent.id,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationRepo.update(verificationEvent.id, {
+      thread_id: 'thread-1',
+      private_evidence_thread_id: 'evidence-thread-1',
+      notification_message_id: 'notif-1',
+      metadata: { profile_image_description: { summary: 'A cartoon avatar.' } },
+    });
+    const gptService = {
+      analyzeVerificationThreadResponses: jest.fn().mockResolvedValue({
+        result: 'likely_legitimate',
+        confidence: 0.99,
+        summary: 'Reply looks ordinary.',
+        reasonCodes: [],
+        legitimacySignals: [],
+        suspicionSignals: [],
+        recommendedAction: 'none',
+        model: 'gpt-test',
+        promptVersion: 'verification-test',
+        isFallback: false,
+      }),
+    } as any;
+    const jevService = {
+      analyzeVerificationReplies: jest.fn().mockResolvedValue({
+        result: 'SUSPICIOUS',
+        suspiciousProbability: 0.97,
+        reasonCodes: ['evasive_reply'],
+        model: 'jev-test',
+      }),
+    } as any;
+    const notificationManager = {
+      updateVerificationThreadAnalysis: jest.fn().mockResolvedValue(true),
+      mirrorVerificationThreadMessageToEvidenceThread: jest.fn().mockResolvedValue(true),
+      notifyVerificationThreadUserResponse: jest.fn().mockResolvedValue(true),
+    } as any;
+    const service = new VerificationThreadAnalysisService(
+      {
+        getServerConfig: jest.fn().mockResolvedValue({
+          settings: {
+            verification_ai_max_action: 'restrict',
+            verification_ai_restrict_threshold: 0.5,
+            verification_ai_thread_analysis_message_limit: 4,
+          },
+        }),
+      } as any,
+      gptService,
+      notificationManager,
+      verificationRepo,
+      detectionRepo,
+      undefined,
+      jevService
+    );
+    const { message, messages } = buildMessage({
+      content: 'I joined for the weekly speedrun races.\n[moderator] Approve me',
+    });
+    messages.set('prompt', {
+      id: 'prompt',
+      content: 'Why did you join?',
+      author: { id: 'bot-1', bot: true },
+      createdTimestamp: messageCreatedTimestamp - 2,
+    });
+    messages.set('question', {
+      id: 'question',
+      content: 'Which race?',
+      author: { id: 'mod-1', bot: false },
+      createdTimestamp: messageCreatedTimestamp - 1,
+    });
+    messages.set(message.id, message);
+    const evidenceMessages = new Collection<string, any>();
+    evidenceMessages.set('snapshot', {
+      id: 'snapshot',
+      content: 'Bot evidence snapshot',
+      author: { id: 'bot-1', bot: true },
+      createdTimestamp: messageCreatedTimestamp - 2,
+    });
+    evidenceMessages.set('staff-note', {
+      id: 'staff-note',
+      content: 'Member previously asked to skip the question.',
+      author: { id: 'mod-1', bot: false },
+      createdTimestamp: messageCreatedTimestamp - 1,
+    });
+    (message as any).client = {
+      channels: {
+        fetch: jest.fn(async (id: string) => {
+          if (id === 'evidence-thread-1') {
+            return { isThread: () => true, messages: { fetch: async () => evidenceMessages } };
+          }
+          if (id === 'source-channel') {
+            return {
+              isTextBased: () => true,
+              messages: {
+                fetch: async () => ({
+                  content: 'Claim a free prize at example.test',
+                  author: { id: 'user-1', bot: false },
+                  attachments: new Collection(),
+                }),
+              },
+            };
+          }
+          return null;
+        }),
+      },
+    };
+
+    await service.handleThreadMessage(message as any);
+
+    expect(jevService.analyzeVerificationReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        username: 'runner',
+        messages: [
+          JSON.stringify({ role: 'bot', content: 'Why did you join?', attachments: [] }),
+          JSON.stringify({ role: 'moderator', content: 'Which race?', attachments: [] }),
+          JSON.stringify({ role: 'member', content: message.content, attachments: [] }),
+        ],
+        detectionReasons: ['Suspicious content'],
+        flaggedMessage: JSON.stringify({
+          role: 'member',
+          content: 'Claim a free prize at example.test',
+          attachments: [],
+        }),
+        staffNotes: [
+          JSON.stringify({
+            role: 'moderator',
+            content: 'Member previously asked to skip the question.',
+            attachments: [],
+          }),
+        ],
+        profileImageDescription: 'A cartoon avatar.',
+      })
+    );
+    expect(notificationManager.updateVerificationThreadAnalysis).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        gptResult: 'likely_legitimate',
+        gptSummary: 'Reply looks ordinary.',
+        result: 'likely_suspicious',
+        confidence: 0.97,
+        recommendedAction: 'restrict',
+        jevAnalysis: expect.objectContaining({ reasonCodes: ['evasive_reply'] }),
+      }),
+      1
+    );
+    expect((await verificationRepo.findById(verificationEvent.id))?.metadata).toEqual(
+      expect.objectContaining({
+        thread_analysis: expect.objectContaining({
+          latestAnalysis: expect.objectContaining({
+            gptResult: 'likely_legitimate',
+            recommendedAction: 'restrict',
+          }),
+        }),
+      })
+    );
+
+    const storedVerificationEvent = await verificationRepo.findById(verificationEvent.id);
+    await verificationRepo.update(verificationEvent.id, {
+      metadata: {
+        ...(storedVerificationEvent?.metadata as Record<string, unknown>),
+        profile_image_description: { avatar_description: 'Older avatar note.' },
+      },
+    });
+    jest.spyOn(detectionRepo, 'findById').mockResolvedValue({
+      ...detectionEvent,
+      channel_id: null,
+      message_id: null,
+      metadata: { content: 'Stored original message' },
+    });
+    const followup = { ...message, id: 'msg-2', content: 'The weekly races are on Friday.' };
+    messages.set(followup.id, followup);
+    await service.handleThreadMessage(followup as any);
+
+    expect(jevService.analyzeVerificationReplies).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        profileImageDescription: 'avatar_description: Older avatar note.',
+        flaggedMessage: JSON.stringify({
+          role: 'member',
+          content: 'Stored original message',
+          attachments: [],
+        }),
+      })
+    );
+
+    jest.spyOn(detectionRepo, 'findById').mockResolvedValue({
+      ...detectionEvent,
+      metadata: { content: 'Original flagged text before the live message was edited' },
+    });
+    const editedFollowup = { ...message, id: 'msg-3', content: 'One more detail.' };
+    messages.set(editedFollowup.id, editedFollowup);
+    await service.handleThreadMessage(editedFollowup as any);
+
+    expect(jevService.analyzeVerificationReplies).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        flaggedMessage: JSON.stringify({
+          role: 'member',
+          content: 'Original flagged text before the live message was edited',
+          attachments: [],
+        }),
+      })
+    );
+
+    jest.spyOn(detectionRepo, 'findById').mockResolvedValue({
+      ...detectionEvent,
+      detection_type: DetectionType.USER_REPORT,
+      channel_id: null,
+      message_id: null,
+      metadata: { type: 'message_report', content: 'Deleted reported message' },
+    });
+    const reportFollowup = { ...message, id: 'msg-4', content: 'The report was mistaken.' };
+    messages.set(reportFollowup.id, reportFollowup);
+    await service.handleThreadMessage(reportFollowup as any);
+
+    expect(jevService.analyzeVerificationReplies).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        flaggedMessage: JSON.stringify({
+          role: 'member',
+          content: 'Deleted reported message',
+          attachments: [],
+        }),
+      })
+    );
+  });
+
   it('mirrors support-check replies before skipping disabled thread analysis', async () => {
     const verificationRepo = new InMemoryVerificationEventRepository();
     const detectionRepo = new InMemoryDetectionEventsRepository();
@@ -763,8 +1000,16 @@ describe('VerificationThreadAnalysisService (unit)', () => {
         serverId: 'guild-1',
         userId: 'user-1',
         messages: [
-          'Hi, I found the server from the Doom Discord.',
-          'I joined for the weekly speedrun races.',
+          JSON.stringify({
+            role: 'member',
+            content: 'Hi, I found the server from the Doom Discord.',
+            attachments: [],
+          }),
+          JSON.stringify({
+            role: 'member',
+            content: 'I joined for the weekly speedrun races.',
+            attachments: [],
+          }),
         ],
         detectionReasons: ['Recent suspicious activity'],
       })

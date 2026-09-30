@@ -74,6 +74,7 @@ Override with environment variables when needed:
 - `DRASIL_ENV`
 - `DRASIL_DISCORD_TOKEN_SECRET`
 - `DRASIL_OPENAI_SECRET`
+- `DRASIL_TYPESAFE_SECRET` (optional Secrets Manager ID for Jev; an existing local `TYPESAFE_API_KEY` is retained when unset)
 - `DRASIL_PRISMA_PASSWORD_SECRET`
 - `POSTGRES_HOST`
 - `POSTGRES_PORT`

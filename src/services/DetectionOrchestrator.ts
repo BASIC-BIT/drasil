@@ -7,6 +7,7 @@
 import { injectable, inject, optional } from 'inversify';
 import { IHeuristicService } from './HeuristicService';
 import { GPTProfileAnalysis, IGPTService, ReportAIAnalysis, UserProfileData } from './GPTService';
+import { JevProfileAnalysis, JevService } from './JevService';
 import { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
 import { IUserRepository } from '../repositories/UserRepository'; // Added
 import { IServerRepository } from '../repositories/ServerRepository'; // Added
@@ -34,6 +35,7 @@ export interface DetectionResult {
   profileData?: UserProfileData;
   detectionEventId?: string;
   gptAnalysis?: GPTProfileAnalysis;
+  jevAnalysis?: JevProfileAnalysis;
   gptTriggerReasons?: DetectionGptTriggerReason[];
   reportAiAnalysis?: ReportAIAnalysis;
 }
@@ -100,6 +102,7 @@ export interface IDetectionOrchestrator {
 export class DetectionOrchestrator implements IDetectionOrchestrator {
   private heuristicService: IHeuristicService;
   private gptService: IGPTService;
+  private jevService?: JevService;
   private detectionEventsRepository: IDetectionEventsRepository;
   private userRepository: IUserRepository; // Added
   private serverRepository: IServerRepository; // Added
@@ -121,10 +124,12 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
     @inject(TYPES.ServerRepository) serverRepository: IServerRepository, // Added
     @inject(TYPES.ProductAnalyticsService)
     @optional()
-    productAnalyticsService?: IProductAnalyticsService
+    productAnalyticsService?: IProductAnalyticsService,
+    @inject(TYPES.JevService) @optional() jevService?: JevService
   ) {
     this.heuristicService = heuristicService;
     this.gptService = gptService;
+    this.jevService = jevService;
     this.detectionEventsRepository = detectionEventsRepository;
     this.userRepository = userRepository; // Added
     this.serverRepository = serverRepository; // Added
@@ -288,10 +293,13 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
 
       let result: DetectionResult;
       let gptAnalysis: GPTProfileAnalysis | undefined;
+      let jevAnalysis: JevProfileAnalysis | undefined;
 
       if (shouldUseGPT) {
-        // Use the analyzeProfile method that conforms to the IGPTService interface
-        gptAnalysis = await this.gptService.analyzeProfile(profileData);
+        [gptAnalysis, jevAnalysis] = await Promise.all([
+          this.gptService.analyzeProfile(profileData),
+          this.jevService?.analyzeProfile(profileData),
+        ]);
 
         if (gptAnalysis.result === 'SUSPICIOUS') {
           suspicionScore = Math.max(suspicionScore, gptAnalysis.confidence);
@@ -303,14 +311,29 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
           reasons = [...reasons, ...gptAnalysis.reasons];
         }
 
+        const jevFlagged = jevAnalysis?.result === 'SUSPICIOUS';
+        if (jevFlagged) {
+          reasons.push('Suspicious profile or message context');
+        }
+
         result = {
-          label: suspicionScore >= 0.5 ? 'SUSPICIOUS' : 'OK',
-          confidence: this.toConfidence(suspicionScore),
+          label:
+            suspicionScore >= 0.5 || gptAnalysis.result === 'SUSPICIOUS' || jevFlagged
+              ? 'SUSPICIOUS'
+              : 'OK',
+          confidence: Math.max(
+            suspicionScore >= 0.5 ? this.toConfidence(suspicionScore) : 0,
+            gptAnalysis.result === 'SUSPICIOUS' && suspicionScore < 0.5
+              ? gptAnalysis.confidence
+              : 0,
+            jevFlagged ? (jevAnalysis?.suspiciousProbability ?? 0) : 0
+          ),
           reasons: reasons,
           triggerSource: DetectionType.SUSPICIOUS_CONTENT,
           triggerContent: content,
           profileData: profileData,
           gptAnalysis,
+          jevAnalysis,
           gptTriggerReasons,
         };
       } else {
@@ -337,6 +360,7 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
           metadata: withDetectionTestingMetadata({
             content: content,
             ...(gptAnalysis ? { gpt: this.createGptMetadata(gptAnalysis) } : {}),
+            ...(jevAnalysis ? { jev: this.createJevMetadata(jevAnalysis) } : {}),
           }),
         });
 
@@ -391,7 +415,10 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
       profileData.recentHighConfidenceDetectionCount = recentSuspiciousEvents.length;
 
       // Use the analyzeProfile method from the interface
-      const gptAnalysis = await this.gptService.analyzeProfile(profileData);
+      const [gptAnalysis, jevAnalysis] = await Promise.all([
+        this.gptService.analyzeProfile(profileData),
+        this.jevService?.analyzeProfile(profileData),
+      ]);
 
       // Calculate suspicion score
       let suspicionScore = 0;
@@ -408,16 +435,24 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
       if (gptAnalysis.result === 'SUSPICIOUS') {
         suspicionScore += 0.7;
       }
+      const jevFlagged = jevAnalysis?.result === 'SUSPICIOUS';
+      if (jevFlagged) {
+        reasons.push('Suspicious profile or message context');
+      }
 
       // Assign initial result to a variable
       const initialResult: DetectionResult = {
-        label: suspicionScore >= 0.5 ? 'SUSPICIOUS' : 'OK',
-        confidence: this.toConfidence(suspicionScore),
+        label: suspicionScore >= 0.5 || jevFlagged ? 'SUSPICIOUS' : 'OK',
+        confidence: Math.max(
+          suspicionScore >= 0.5 ? this.toConfidence(suspicionScore) : 0,
+          jevFlagged ? (jevAnalysis.suspiciousProbability ?? 0) : 0
+        ),
         reasons: reasons,
         triggerSource: DetectionType.NEW_ACCOUNT,
         triggerContent: 'Server Join',
         profileData: profileData,
         gptAnalysis,
+        jevAnalysis,
       };
 
       // Only persist detection events for suspicious results.
@@ -433,6 +468,7 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
           metadata: withDetectionTestingMetadata({
             join: true,
             gpt: this.createGptMetadata(gptAnalysis),
+            ...(jevAnalysis ? { jev: this.createJevMetadata(jevAnalysis) } : {}),
           }),
         });
 
@@ -509,5 +545,14 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
     }
 
     return metadata;
+  }
+
+  private createJevMetadata(analysis: JevProfileAnalysis): Record<string, unknown> {
+    return {
+      model: analysis.model,
+      result: analysis.result,
+      suspicious_probability: analysis.suspiciousProbability,
+      reason_codes: analysis.reasonCodes,
+    };
   }
 }

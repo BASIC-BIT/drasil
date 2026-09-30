@@ -5,6 +5,7 @@ import {
   selectEligibleReportImageAttachments,
 } from '../utils/reportAiSettings';
 import type { IGPTService, ReportAIAnalysis } from './GPTService';
+import type { JevProfileAnalysis, JevService } from './JevService';
 
 export interface ReportAiAnalysisInput {
   serverId: string;
@@ -18,7 +19,8 @@ export interface ReportAiAnalysisInput {
 export class ReportAiAnalyzer {
   public constructor(
     private readonly serverRepository: IServerRepository,
-    private readonly gptService?: IGPTService
+    private readonly gptService?: IGPTService,
+    private readonly jevService?: JevService
   ) {}
 
   public getAnalysisFromMetadata(metadata: Record<string, unknown>): ReportAIAnalysis | undefined {
@@ -47,16 +49,74 @@ export class ReportAiAnalyzer {
       return undefined;
     }
 
-    const analysis = await this.gptService.analyzeReportEvidence({
-      serverId: data.serverId,
-      targetUserId: data.targetUserId,
-      reporterId: data.reporterId,
-      reportReason,
-      reportedMessageContent,
-      attachments: eligibleImages,
-    });
+    const [gptAnalysis, jevAnalysis] = await Promise.all([
+      this.gptService.analyzeReportEvidence({
+        serverId: data.serverId,
+        targetUserId: data.targetUserId,
+        reporterId: data.reporterId,
+        reportReason,
+        reportedMessageContent,
+        attachments: eligibleImages,
+      }),
+      reportReason || reportedMessageContent
+        ? this.jevService?.analyzeReportText(reportReason, reportedMessageContent)
+        : undefined,
+    ]);
 
-    return this.capAction(analysis, settings);
+    return this.capAction(
+      this.combineAnalysis(gptAnalysis, jevAnalysis, Boolean(reportedMessageContent?.trim())),
+      settings
+    );
+  }
+
+  private combineAnalysis(
+    gptAnalysis: ReportAIAnalysis,
+    jevAnalysis: JevProfileAnalysis | undefined,
+    hasReportedMessageContent: boolean
+  ): ReportAIAnalysis {
+    if (!jevAnalysis) return gptAnalysis;
+    const jevFlagged = jevAnalysis.result === 'SUSPICIOUS';
+    const jevEscalates = jevFlagged && hasReportedMessageContent;
+    const allegationOnlyFlag =
+      jevFlagged && !hasReportedMessageContent && gptAnalysis.result === 'low_risk';
+    return {
+      ...gptAnalysis,
+      gptResult: gptAnalysis.isFallback ? undefined : gptAnalysis.result,
+      gptSummary: gptAnalysis.isFallback ? undefined : gptAnalysis.summary,
+      jevAnalysis,
+      result: jevEscalates
+        ? 'likely_abusive'
+        : allegationOnlyFlag
+          ? 'needs_review'
+          : gptAnalysis.result,
+      confidence:
+        jevEscalates || allegationOnlyFlag
+          ? Math.max(
+              gptAnalysis.result === 'likely_abusive' ? gptAnalysis.confidence : 0,
+              jevAnalysis.suspiciousProbability ?? 0
+            )
+          : gptAnalysis.confidence,
+      reasonCodes: jevFlagged
+        ? [
+            ...new Set([
+              ...(gptAnalysis.isFallback ? [] : gptAnalysis.reasonCodes),
+              ...jevAnalysis.reasonCodes,
+            ]),
+          ]
+        : gptAnalysis.reasonCodes,
+      recommendedAction: jevEscalates
+        ? 'open_case'
+        : allegationOnlyFlag
+          ? 'manual_review'
+          : gptAnalysis.recommendedAction,
+      summary:
+        jevFlagged && gptAnalysis.result === 'low_risk'
+          ? hasReportedMessageContent
+            ? 'Reported text was flagged for moderator review.'
+            : 'Report allegation needs moderator review.'
+          : gptAnalysis.summary,
+      isFallback: gptAnalysis.isFallback && jevAnalysis.result === 'UNAVAILABLE',
+    };
   }
 
   private capAction(

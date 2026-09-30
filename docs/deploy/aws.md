@@ -139,6 +139,7 @@ Terraform creates these Secrets Manager secrets:
 
 - `drasil/prod/DISCORD_TOKEN`
 - `drasil/prod/OPENAI_API_KEY`
+- `drasil/prod/TYPESAFE_API_KEY`
 - `drasil/prod/DATABASE_URL`
 - `drasil/prod/OBSERVABILITY_HASH_KEY`
 - `drasil/prod/POSTHOG_PROJECT_API_KEY`
@@ -152,6 +153,9 @@ aws secretsmanager put-secret-value \
 ```
 
 Repeat for the other secrets.
+
+Set `TYPESAFE_API_KEY` before deploying the Jev-enabled bot task. Without it, Jev reports
+unavailable and the existing GPT check still runs.
 
 `POSTHOG_PROJECT_API_KEY` is the PostHog project API key used by the server SDK.
 The default `POSTHOG_HOST` is the US ingestion endpoint; set `posthog_host` to

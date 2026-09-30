@@ -2869,6 +2869,19 @@ describe('SecurityActionService (unit)', () => {
       detected_at: new Date(),
       metadata: {
         content: 'free discord nitro',
+        gpt: {
+          result: 'OK',
+          confidence: 0.8,
+          summary: 'No suspicious content found.',
+          reason_codes: [],
+          is_fallback: false,
+        },
+        jev: {
+          result: 'SUSPICIOUS',
+          suspicious_probability: 0.92,
+          reason_codes: ['impersonation'],
+          model: 'jev-test',
+        },
         observed_notification_channel_id: 'alerts-channel',
         observed_notification_message_id: 'observed-message',
         observed_evidence_thread_id: 'observed-evidence-thread',
@@ -2900,6 +2913,19 @@ describe('SecurityActionService (unit)', () => {
       })
     );
     expect(notificationManager.markObservedDetectionActionTaken).not.toHaveBeenCalled();
+    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledWith(
+      member,
+      expect.objectContaining({
+        gptAnalysis: expect.objectContaining({ result: 'OK' }),
+        jevAnalysis: expect.objectContaining({
+          result: 'SUSPICIOUS',
+          reasonCodes: ['impersonation'],
+        }),
+      }),
+      expect.anything(),
+      undefined,
+      null
+    );
     expect(notificationManager.logActionToMessage).toHaveBeenCalledWith(
       expect.objectContaining({ notification_message_id: 'observed-message' }),
       AdminActionType.OPEN_CASE,

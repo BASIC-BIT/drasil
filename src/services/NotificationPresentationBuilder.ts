@@ -50,6 +50,9 @@ type ObservedActionKind = 'alert' | 'report';
 interface ThreadAnalysisMetadata {
   analyzedMessageIds?: unknown;
   latestAnalysis?: {
+    gptResult?: 'likely_legitimate' | 'needs_review' | 'likely_suspicious';
+    gptSummary?: string;
+    jevAnalysis?: import('./JevService').JevProfileAnalysis;
     result: 'likely_legitimate' | 'needs_review' | 'likely_suspicious';
     confidence: number;
     summary: string;
@@ -1537,6 +1540,9 @@ export class NotificationPresentationBuilder {
   }
 
   private formatThreadAnalysisFieldValue(analysis: {
+    gptResult?: 'likely_legitimate' | 'needs_review' | 'likely_suspicious';
+    gptSummary?: string;
+    jevAnalysis?: import('./JevService').JevProfileAnalysis;
     result: 'likely_legitimate' | 'needs_review' | 'likely_suspicious';
     confidence: number;
     summary: string;
@@ -1559,11 +1565,19 @@ export class NotificationPresentationBuilder {
     return this.formatCompactEmbedFieldValue(
       [
         `**${this.formatThreadAnalysisResult(analysis.result)}** (${this.formatConfidencePhrase(analysis.confidence)}, ${responseLabel})`,
-        `**AI Assessment:** ${this.formatAiAuthoredInlineCode(analysis.summary)}`,
+        analysis.jevAnalysis
+          ? `Two checks: GPT ${analysis.gptResult === 'likely_suspicious' ? 'flagged' : analysis.gptResult === 'likely_legitimate' ? 'did not flag' : analysis.gptResult === 'needs_review' ? 'needs review' : 'unavailable'}; Jev ${analysis.jevAnalysis.result === 'SUSPICIOUS' ? 'flagged' : analysis.jevAnalysis.result === 'UNAVAILABLE' ? 'unavailable' : 'did not flag'}.`
+          : `**AI Assessment:** ${this.formatAiAuthoredInlineCode(analysis.summary)}`,
       ],
       [
         analysis.recommendedAction
           ? `**Suggested action:** ${this.formatThreadAnalysisAction(analysis.recommendedAction)}`
+          : null,
+        analysis.jevAnalysis && analysis.gptSummary
+          ? `**GPT assessment:** ${this.formatAiAuthoredInlineCode(analysis.gptSummary)}`
+          : null,
+        analysis.jevAnalysis?.reasonCodes.length
+          ? `Jev reason: ${analysis.jevAnalysis.reasonCodes.join(', ')}`
           : null,
       ]
     );
@@ -1636,9 +1650,19 @@ export class NotificationPresentationBuilder {
             ? `, ${analysis.analyzedImageCount} ${analysis.analyzedImageCount === 1 ? 'image' : 'images'} analyzed`
             : ''
         })`,
-        `**AI Assessment:** ${this.formatAiAuthoredInlineCode(analysis.summary)}`,
+        analysis.jevAnalysis
+          ? `Two checks: GPT ${analysis.gptResult === 'likely_abusive' ? 'flagged' : analysis.gptResult === 'low_risk' ? 'did not flag' : analysis.gptResult === 'needs_review' ? 'needs review' : 'unavailable'}; Jev ${analysis.jevAnalysis.result === 'SUSPICIOUS' ? 'flagged' : analysis.jevAnalysis.result === 'UNAVAILABLE' ? 'unavailable' : 'did not flag'}.`
+          : `**AI Assessment:** ${this.formatAiAuthoredInlineCode(analysis.summary)}`,
       ],
-      [`**Suggested action:** ${this.formatReportAnalysisAction(analysis.recommendedAction)}`]
+      [
+        `**Suggested action:** ${this.formatReportAnalysisAction(analysis.recommendedAction)}`,
+        analysis.jevAnalysis && analysis.gptSummary
+          ? `**GPT assessment:** ${this.formatAiAuthoredInlineCode(analysis.gptSummary)}`
+          : null,
+        analysis.jevAnalysis?.reasonCodes.length
+          ? `Jev reason: ${analysis.jevAnalysis.reasonCodes.join(', ')}`
+          : null,
+      ]
     );
   }
 
@@ -1668,6 +1692,30 @@ export class NotificationPresentationBuilder {
 
   private formatGptDiagnosticFieldValue(detectionResult: DetectionResult): string | null {
     const analysis = detectionResult.gptAnalysis;
+    const jev = detectionResult.jevAnalysis;
+    if (jev) {
+      const gptResult =
+        !analysis || analysis.isFallback
+          ? 'unavailable'
+          : analysis.result === 'SUSPICIOUS'
+            ? 'flagged'
+            : 'did not flag';
+      const jevResult =
+        jev.result === 'UNAVAILABLE'
+          ? 'unavailable'
+          : jev.result === 'SUSPICIOUS'
+            ? 'flagged'
+            : 'did not flag';
+      return this.formatCompactEmbedFieldValue(
+        [`Two checks: GPT ${gptResult}; Jev ${jevResult}.`],
+        [
+          analysis && !analysis.isFallback
+            ? `GPT assessment: ${this.formatAiAuthoredInlineCode(analysis.summary)}`
+            : null,
+          jev.reasonCodes.length ? `Jev reason: ${jev.reasonCodes.join(', ')}` : null,
+        ]
+      );
+    }
     if (!analysis) {
       return null;
     }
@@ -1800,6 +1848,18 @@ export class NotificationPresentationBuilder {
     return {
       ...metadataRecord,
       latestAnalysis: {
+        gptResult:
+          latestAnalysis.gptResult === 'likely_legitimate' ||
+          latestAnalysis.gptResult === 'needs_review' ||
+          latestAnalysis.gptResult === 'likely_suspicious'
+            ? latestAnalysis.gptResult
+            : undefined,
+        gptSummary:
+          typeof latestAnalysis.gptSummary === 'string' ? latestAnalysis.gptSummary : undefined,
+        jevAnalysis:
+          latestAnalysis.jevAnalysis && typeof latestAnalysis.jevAnalysis === 'object'
+            ? (latestAnalysis.jevAnalysis as import('./JevService').JevProfileAnalysis)
+            : undefined,
         result,
         confidence: latestAnalysis.confidence,
         summary: latestAnalysis.summary,
@@ -1826,7 +1886,8 @@ export class NotificationPresentationBuilder {
             ? latestAnalysis.recommendedAction
             : 'manual_review',
         isFallback:
-          latestAnalysis.isFallback === true || reasonCodes.includes('ai_analysis_unavailable'),
+          latestAnalysis.isFallback === true ||
+          (latestAnalysis.isFallback !== false && reasonCodes.includes('ai_analysis_unavailable')),
         analyzedMessageCount: latestAnalysis.analyzedMessageCount,
       },
     };

@@ -37,6 +37,7 @@ output "secrets" {
   value = {
     DISCORD_TOKEN           = aws_secretsmanager_secret.discord_token.arn
     OPENAI_API_KEY          = aws_secretsmanager_secret.openai_api_key.arn
+    TYPESAFE_API_KEY        = aws_secretsmanager_secret.typesafe_api_key.arn
     DATABASE_URL            = aws_secretsmanager_secret.database_url.arn
     OBSERVABILITY_HASH_KEY  = aws_secretsmanager_secret.observability_hash_key.arn
     POSTHOG_PROJECT_API_KEY = aws_secretsmanager_secret.posthog_project_api_key.arn
