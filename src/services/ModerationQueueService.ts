@@ -652,34 +652,49 @@ export class ModerationQueueService implements IModerationQueueService {
           ? `<@${verificationEvent.user_id}> left or was removed while this case is still pending.`
           : `<@${verificationEvent.user_id}> has an open case awaiting moderator action.`
       )
-      .addFields(
-        {
-          name: 'User',
-          value: `<@${verificationEvent.user_id}> (\`${verificationEvent.user_id}\`)`,
-          inline: false,
-        },
-        { name: 'Case', value: `\`${verificationEvent.id}\``, inline: false },
-        {
-          name: 'Created',
-          value: this.formatTimestamp(verificationEvent.created_at),
-          inline: true,
-        },
-        {
-          name: 'Threads',
-          value: this.formatCaseThreads(verificationEvent),
-          inline: false,
-        }
-      )
+      .addFields({
+        name: 'Created',
+        value: this.formatTimestamp(verificationEvent.created_at),
+        inline: true,
+      })
       .setTimestamp();
 
-    const notificationLink = this.formatMessageLink(
-      verificationEvent.server_id,
-      verificationEvent.notification_channel_id,
-      verificationEvent.notification_message_id
-    );
-    if (notificationLink) {
-      embed.addFields({ name: 'Admin Notification', value: notificationLink, inline: false });
+    const notificationUrl =
+      verificationEvent.notification_channel_id && verificationEvent.notification_message_id
+        ? `https://discord.com/channels/${verificationEvent.server_id}/${verificationEvent.notification_channel_id}/${verificationEvent.notification_message_id}`
+        : null;
+    if (notificationUrl) {
+      embed.setURL(notificationUrl);
     }
+    const actionRows = this.presentationBuilder.createAdminNotificationActionRows(
+      verificationEvent.user_id,
+      {
+        guildId: verificationEvent.server_id,
+        verificationEventId: verificationEvent.id,
+        verificationStatus: verificationEvent.status,
+        caseKind: verificationEvent.case_kind,
+        caseMembershipState: this.presentationBuilder.getCaseMembershipState(verificationEvent),
+        includeBanAction,
+      }
+    );
+    const navigationButtons = [
+      ...(
+        [
+          ['Support thread', verificationEvent.thread_id],
+          ['Evidence thread', verificationEvent.private_evidence_thread_id],
+        ] as const
+      ).flatMap(([label, threadId]) =>
+        threadId
+          ? [
+              new ButtonBuilder()
+                .setLabel(label)
+                .setStyle(ButtonStyle.Link)
+                .setURL(`https://discord.com/channels/${verificationEvent.server_id}/${threadId}`),
+            ]
+          : []
+      ),
+      ...actionRows.slice(1).flatMap((row) => row.components),
+    ];
 
     if (memberLeft) {
       embed.addFields({
@@ -693,17 +708,22 @@ export class ModerationQueueService implements IModerationQueueService {
     return {
       allowedMentions: { parse: [] },
       embeds: [embed],
-      components: this.presentationBuilder.createAdminNotificationActionRows(
-        verificationEvent.user_id,
-        {
-          guildId: verificationEvent.server_id,
-          verificationEventId: verificationEvent.id,
-          verificationStatus: verificationEvent.status,
-          caseKind: verificationEvent.case_kind,
-          caseMembershipState: this.presentationBuilder.getCaseMembershipState(verificationEvent),
-          includeBanAction,
-        }
-      ),
+      components: [
+        ...(notificationUrl
+          ? [
+              new ActionRowBuilder<ButtonBuilder>().addComponents(
+                new ButtonBuilder()
+                  .setLabel('View case')
+                  .setStyle(ButtonStyle.Link)
+                  .setURL(notificationUrl)
+              ),
+            ]
+          : []),
+        ...(navigationButtons.length
+          ? [new ActionRowBuilder<ButtonBuilder>().addComponents(...navigationButtons)]
+          : []),
+        actionRows[0],
+      ],
     };
   }
 
@@ -1015,17 +1035,6 @@ export class ModerationQueueService implements IModerationQueueService {
       return [];
     }
     return [...content.matchAll(/<@&(\d+)>/g)].map((match) => match[1]);
-  }
-
-  private formatCaseThreads(verificationEvent: VerificationEvent): string {
-    const entries = [
-      verificationEvent.thread_id ? `Support check: <#${verificationEvent.thread_id}>` : null,
-      verificationEvent.private_evidence_thread_id
-        ? `Private evidence: <#${verificationEvent.private_evidence_thread_id}>`
-        : null,
-    ].filter((value): value is string => Boolean(value));
-
-    return entries.length ? entries.join('\n') : 'No case threads recorded yet.';
   }
 
   private formatMessageLink(

@@ -612,7 +612,7 @@ describe('NotificationManager (unit)', () => {
     );
     expect(reportField?.value).toBe(
       '**Needs review** (Medium confidence, 1 image analyzed)\n' +
-        '**AI Assessment:** `Reporter evidence needs moderator review.`\n' +
+        '**Assessment:** `Reporter evidence needs moderator review.`\n' +
         '**Suggested action:** Open a case'
     );
 
@@ -1146,8 +1146,7 @@ describe('NotificationManager (unit)', () => {
     expect(latestAction?.value).toContain('Created verification thread by <@admin-1> at <t:');
     expect(latestAction?.value).toContain(':F>');
     expect(threadField?.value).toContain('Click here to view the thread');
-    expect(actionLog?.value).toContain('Created verification thread by <@admin-1> at <t:');
-    expect(actionLog?.value).toContain(':F>');
+    expect(actionLog).toBeUndefined();
   });
 
   it('updates the admin notification with concise thread analysis details', async () => {

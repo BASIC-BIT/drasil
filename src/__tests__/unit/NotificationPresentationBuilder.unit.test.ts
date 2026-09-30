@@ -138,6 +138,251 @@ describe('NotificationPresentationBuilder (unit)', () => {
     }
   });
 
+  it('renders stored intake reports once with a reporter mention and thread link', () => {
+    const reason =
+      'Report intake target confirmed by staff.\nReport intake ID: intake-1\nReport thread ID: 1554640900225900658\nEvidence entries: 3\nReporter context: Unsolicited DM.\nPlease review it.';
+    const event = buildDetectionEvent({
+      detection_type: DetectionType.USER_REPORT,
+      metadata: { source: 'report_intake', reporterId: '233815839806193664', reason },
+    });
+    const detection = buildDetectionResult({
+      triggerSource: DetectionType.USER_REPORT,
+      detectionEventId: event.id,
+      triggerContent: reason,
+      reasons: [`Reported by user 233815839806193664. Reason: ${reason}`],
+    });
+    const anotherReport = buildDetectionEvent({
+      id: 'other-report',
+      detection_type: DetectionType.USER_REPORT,
+      metadata: { reporterId: '999999999999999999', reason: 'A different report' },
+    });
+    for (const embed of [
+      builder.createSuspiciousUserEmbed(buildMember(), detection, buildVerificationEvent(), [
+        event,
+      ]),
+      builder.createObservedDetectionEmbed(buildMember(), detection, [anotherReport, event]),
+    ]) {
+      expect(getField(embed, 'Report')).toBe(
+        'Reported by <@233815839806193664> · [View report](https://discord.com/channels/guild-1/1554640900225900658)\nUnsolicited DM.\nPlease review it.'
+      );
+      expect(getField(embed, 'Trigger')).toBeUndefined();
+      expect(getField(embed, 'Reasons')).toBeUndefined();
+      expect(getField(embed, 'Report Signal')).toBeUndefined();
+      expect(JSON.stringify(embed.toJSON())).not.toContain('intake-1');
+      expect(JSON.stringify(embed.toJSON())).not.toContain('Evidence entries');
+    }
+    const caseEmbed = builder.createSuspiciousUserEmbed(
+      buildMember(),
+      detection,
+      buildVerificationEvent(),
+      [event]
+    );
+    expect(caseEmbed.data.description).toBe(
+      '<@user-1> has an open case awaiting moderator review.'
+    );
+    expect(getField(caseEmbed, 'Detection History')).toBeUndefined();
+    const multipleEvents = builder.createSuspiciousUserEmbed(
+      buildMember(),
+      detection,
+      buildVerificationEvent(),
+      [event, anotherReport]
+    );
+    expect(getField(multipleEvents, 'Detection History')).toContain('user report');
+  });
+
+  it('keeps ordinary report reasons and handles missing or invalid report metadata', () => {
+    const detection = buildDetectionResult({
+      triggerSource: DetectionType.USER_REPORT,
+      triggerContent: 'Please review this message.\nEvidence entries: this is reporter text.',
+      detectionEventId: 'missing',
+    });
+    const embed = builder.createSuspiciousUserEmbed(
+      buildMember(),
+      detection,
+      buildVerificationEvent(),
+      [buildDetectionEvent({ metadata: { reporterId: 'wrong-reporter', reason: 'Wrong reason' } })]
+    );
+    expect(getField(embed, 'Report')).toBe(
+      'Reported by a user\nPlease review this message.\nEvidence entries: this is reporter text.'
+    );
+    const invalidMetadata = builder.createObservedDetectionEmbed(
+      buildMember(),
+      { ...detection, detectionEventId: 'event-1' },
+      [
+        buildDetectionEvent({
+          detection_type: DetectionType.USER_REPORT,
+          metadata: { reporterId: '@everyone', reason: 'Review this DM.' },
+        }),
+      ]
+    );
+    expect(getField(invalidMetadata, 'Report')).toBe('Reported by a user\nReview this DM.');
+  });
+
+  it('omits intake routing details when no reporter context was provided', () => {
+    const reason =
+      'Report intake target confirmed by reporter.\nReport intake ID: intake-2\nEvidence entries: 2';
+    const embed = builder.createObservedDetectionEmbed(
+      buildMember(),
+      buildDetectionResult({
+        triggerSource: DetectionType.USER_REPORT,
+        triggerContent: reason,
+        detectionEventId: 'event-1',
+      }),
+      [
+        buildDetectionEvent({
+          detection_type: DetectionType.USER_REPORT,
+          metadata: { source: 'report_intake', reporterId: '233815839806193664', reason },
+        }),
+      ]
+    );
+    expect(getField(embed, 'Report')).toBe('Reported by <@233815839806193664>');
+    expect(getField(embed, 'Recent Detection History')).toBeUndefined();
+  });
+
+  it('keeps the latest action once and retains earlier distinct actions', () => {
+    const embed = new EmbedBuilder();
+    builder.upsertAdminActionLog(embed, AdminActionType.OPEN_CASE, 'admin-1', 1800000000);
+    expect(getField(embed, 'Action Log')).toBeUndefined();
+    builder.upsertAdminActionLog(embed, AdminActionType.OPEN_CASE, 'admin-1', 1800000000);
+    expect(getField(embed, 'Action Log')).toBeUndefined();
+    builder.upsertAdminActionLog(embed, AdminActionType.VERIFY, 'admin-2', 1800000100);
+    expect(getField(embed, 'Action Log')).toBe('• Opened case by <@admin-1> at <t:1800000000:F>');
+    expect(getField(embed, 'Latest Admin Action')).toBe(
+      'Verified by <@admin-2> at <t:1800000100:F>'
+    );
+  });
+
+  it('retains the newest complete history entries when the action log fills up', () => {
+    const embed = new EmbedBuilder();
+    for (let index = 0; index < 40; index++) {
+      builder.upsertAdminActionLog(embed, AdminActionType.OPEN_CASE, 'admin-1', 1800000000 + index);
+    }
+    const history = getField(embed, 'Action Log')!;
+    expect(history.length).toBeLessThanOrEqual(1024);
+    expect(history).toContain('<t:1800000038:F>');
+    expect(history).not.toContain('<t:1800000000:F>');
+    expect(
+      history.split('\n').every((entry) => /^• Opened case by <@admin-1> at <t:\d+:F>$/.test(entry))
+    ).toBe(true);
+    builder.upsertAdminActionLog(embed, AdminActionType.VERIFY, 'admin-2', 1800000040);
+    expect(getField(embed, 'Action Log')).toContain('<t:1800000039:F>');
+    expect(getField(embed, 'Latest Admin Action')).toBe(
+      'Verified by <@admin-2> at <t:1800000040:F>'
+    );
+  });
+
+  it('compacts successful quarantine while keeping incomplete-removal warnings', () => {
+    const restriction = {
+      status: 'quarantined',
+      mode: 'on',
+      removed_role_count: 12,
+      planned_role_count: 12,
+      skipped_role_count: 0,
+      failed_removal_count: 0,
+    };
+    const successful = builder.createSuspiciousUserEmbed(
+      buildMember(),
+      buildDetectionResult(),
+      buildVerificationEvent({ metadata: { role_quarantine: { restriction } } }),
+      []
+    );
+    expect(getField(successful, 'Role Quarantine')).toBe('Active · 12 roles removed');
+    const incomplete = builder.createSuspiciousUserEmbed(
+      buildMember(),
+      buildDetectionResult(),
+      buildVerificationEvent({
+        metadata: {
+          role_quarantine: {
+            restriction: { ...restriction, removed_role_count: 10, failed_removal_count: 2 },
+          },
+        },
+      }),
+      []
+    );
+    expect(getField(incomplete, 'Role Quarantine')).toContain('removed 10 of 12');
+    expect(getField(incomplete, 'Role Quarantine')).toContain('failed 2');
+  });
+
+  it('does not label restored quarantine as active', () => {
+    const embed = builder.createSuspiciousUserEmbed(
+      buildMember(),
+      buildDetectionResult(),
+      buildVerificationEvent({
+        status: VerificationStatus.VERIFIED,
+        metadata: {
+          role_quarantine: {
+            restriction: {
+              status: 'quarantined',
+              mode: 'on',
+              removed_role_count: 12,
+              planned_role_count: 12,
+              skipped_role_count: 0,
+              failed_removal_count: 0,
+            },
+            restore: {
+              status: 'restored',
+              restored_role_count: 12,
+              attempted_role_count: 12,
+              skipped_role_count: 0,
+              failed_restore_count: 0,
+            },
+          },
+        },
+      }),
+      []
+    );
+    expect(getField(embed, 'Role Quarantine')).not.toContain('Active');
+    expect(getField(embed, 'Role Quarantine')).toContain('removed 12 of 12');
+    expect(getField(embed, 'Role Quarantine')).toContain('Restore: restored; restored 12 of 12');
+  });
+
+  it('preserves report wording when a handled case is reopened or an observed action is undone', () => {
+    const result = buildDetectionResult({ triggerSource: DetectionType.USER_REPORT });
+    const embed = builder.createSuspiciousUserEmbed(
+      buildMember(),
+      result,
+      buildVerificationEvent({ status: VerificationStatus.VERIFIED }),
+      []
+    );
+    builder.upsertResolvedCasePresentation(
+      embed,
+      buildVerificationEvent(),
+      VerificationStatus.PENDING
+    );
+    expect(embed.data.title).toBe('Moderation Case Opened');
+    expect(embed.data.description).toBe('<@user-1> has an open case awaiting moderator review.');
+    const observed = builder.createObservedDetectionEmbed(buildMember(), result, []);
+    builder.addObservedActionTakenField(
+      observed,
+      'opened a case',
+      'admin-1',
+      1800000000,
+      AdminActionType.OPEN_CASE
+    );
+    builder.addObservedActionRevertedField(observed, 'undid the action', 'admin-1', 1800000100);
+    expect(observed.data.description).toBe(
+      '<@user-1> was reported by a user. No case was opened automatically.'
+    );
+  });
+
+  it('preserves legacy report wording when undoing an observed action', () => {
+    const embed = new EmbedBuilder().addFields(
+      { name: 'User ID', value: 'user-1' },
+      { name: 'Trigger', value: 'Flagged via user report: `scam DM`' }
+    );
+    builder.addObservedActionTakenField(
+      embed,
+      'opened a case',
+      'admin-1',
+      1800000000,
+      AdminActionType.OPEN_CASE
+    );
+    builder.addObservedActionRevertedField(embed, 'undid the action', 'admin-1', 1800000100);
+    expect(embed.data.description).toBe(
+      '<@user-1> was reported by a user. No case was opened automatically.'
+    );
+  });
+
   it('shows both classifier results when they disagree', () => {
     const embed = builder.createObservedDetectionEmbed(
       buildMember(),
@@ -407,10 +652,7 @@ describe('NotificationPresentationBuilder (unit)', () => {
       'Banned by <@admin-2> at <t:1800000100:F>\nNo further moderator action is pending.'
     );
     expect(getField(embed, 'Latest Admin Action')).toBe('Banned by <@admin-2> at <t:1800000100:F>');
-    expect(getField(embed, 'Action Log')).toBe(
-      '• Verified by <@admin-1> at <t:1800000000:F>\n' +
-        '• Banned by <@admin-2> at <t:1800000100:F>'
-    );
+    expect(getField(embed, 'Action Log')).toBe('• Verified by <@admin-1> at <t:1800000000:F>');
   });
 
   it('fronts handled status when rendering resolved case notifications', () => {
@@ -481,7 +723,7 @@ describe('NotificationPresentationBuilder (unit)', () => {
     );
 
     expect(embed.data.title).toBe('User Report Submitted');
-    expect(embed.data.description).toBe('<@user-1> has been flagged as suspicious.');
+    expect(embed.data.description).toBe('<@user-1> has an open case awaiting moderator review.');
     expect(embed.data.color).toBe(0xff0000);
     expect(getField(embed, 'Resolution')).toBeUndefined();
     expect(getField(embed, 'Latest Admin Action')).toBe('Reopened by <@admin-2>');
@@ -502,7 +744,7 @@ describe('NotificationPresentationBuilder (unit)', () => {
       []
     );
 
-    expect(reportEmbed.data.title).toBe('User Report Submitted');
+    expect(reportEmbed.data.title).toBe('Moderation Case Opened');
     expect(adminCaseEmbed.data.title).toBe('Admin Review Case Opened');
   });
 

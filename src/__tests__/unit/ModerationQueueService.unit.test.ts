@@ -1,4 +1,13 @@
-import type { Client, Message, MessageCreateOptions, MessageEditOptions } from 'discord.js';
+import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  EmbedBuilder,
+  type Client,
+  type Message,
+  type MessageCreateOptions,
+  type MessageEditOptions,
+} from 'discord.js';
 import type { IConfigService } from '../../config/ConfigService';
 import type { IDetectionEventsRepository } from '../../repositories/DetectionEventsRepository';
 import type { IModerationQueueRepository } from '../../repositories/ModerationQueueRepository';
@@ -410,6 +419,90 @@ const buildService = (
 };
 
 describe('ModerationQueueService', () => {
+  it('prioritizes case navigation and retains moderation controls below it', async () => {
+    const { service, channel } = buildService();
+    await service.upsertCaseMirror(buildVerificationEvent());
+    const payload = channel.sentMessages[0].payload as unknown as MessageCreateOptions;
+    const embed = (payload.embeds![0] as EmbedBuilder).toJSON();
+    const rows = (payload.components! as ActionRowBuilder<ButtonBuilder>[]).map((row) =>
+      row.toJSON()
+    );
+    expect(embed.url).toBe('https://discord.com/channels/guild-1/admin-channel/admin-message');
+    expect(embed.fields?.map((field) => field.name)).toEqual(['Created']);
+    expect(JSON.stringify(embed)).not.toContain('case-1');
+    expect(rows[0].components).toEqual([
+      expect.objectContaining({ label: 'View case', url: embed.url, style: ButtonStyle.Link }),
+    ]);
+    expect(rows[1].components).toEqual([
+      expect.objectContaining({
+        label: 'Support thread',
+        url: 'https://discord.com/channels/guild-1/support-thread',
+      }),
+      expect.objectContaining({
+        label: 'Evidence thread',
+        url: 'https://discord.com/channels/guild-1/evidence-thread',
+      }),
+    ]);
+    expect(rows[2].components).toEqual(
+      expect.arrayContaining([expect.objectContaining({ custom_id: 'verify_user-1' })])
+    );
+    expect(payload.allowedMentions).toEqual({ parse: [] });
+  });
+
+  it('keeps web navigation and left-member controls with ban disabled', async () => {
+    const previousUrl = process.env.DRASIL_WEB_PUBLIC_URL;
+    process.env.DRASIL_WEB_PUBLIC_URL = 'https://example.com';
+    try {
+      const server = buildServer();
+      server.settings = { ...server.settings, moderator_ban_action_enabled: false };
+      const { service, channel } = buildService({ server });
+      await service.upsertCaseMirror({
+        ...buildVerificationEvent(),
+        metadata: { membership_state: 'left_or_removed' },
+      });
+      const payload = channel.sentMessages[0].payload as unknown as MessageCreateOptions;
+      const rows = (payload.components! as ActionRowBuilder<ButtonBuilder>[]).map((row) =>
+        row.toJSON()
+      );
+      expect(rows[0].components).toEqual([expect.objectContaining({ label: 'View case' })]);
+      expect(rows[1].components).toEqual(
+        expect.arrayContaining([expect.objectContaining({ label: 'Web Case' })])
+      );
+      expect(rows[2].components).toEqual(
+        expect.arrayContaining([expect.objectContaining({ custom_id: 'close_user-1' })])
+      );
+      expect(rows[2].components).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ custom_id: 'ban_user-1' })])
+      );
+      expect(rows[2].components).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ custom_id: 'verify_user-1' })])
+      );
+    } finally {
+      if (previousUrl === undefined) delete process.env.DRASIL_WEB_PUBLIC_URL;
+      else process.env.DRASIL_WEB_PUBLIC_URL = previousUrl;
+    }
+  });
+
+  it('keeps queue controls usable when case navigation destinations are missing', async () => {
+    const { service, channel } = buildService();
+    await service.upsertCaseMirror({
+      ...buildVerificationEvent(),
+      thread_id: null,
+      private_evidence_thread_id: null,
+      notification_message_id: null,
+    });
+    const payload = channel.sentMessages[0].payload as unknown as MessageCreateOptions;
+    const embed = (payload.embeds![0] as EmbedBuilder).toJSON();
+    const rows = (payload.components! as ActionRowBuilder<ButtonBuilder>[]).map((row) =>
+      row.toJSON()
+    );
+    expect(embed.url).toBeUndefined();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].components).toEqual(
+      expect.arrayContaining([expect.objectContaining({ custom_id: 'verify_user-1' })])
+    );
+  });
+
   it('syncs pending cases and un-actioned observed alerts, then removes stale mirrors', async () => {
     const queueRepository = new FakeModerationQueueRepository();
     const stale = await queueRepository.upsert({
