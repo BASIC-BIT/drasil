@@ -3,7 +3,9 @@ import {
   ButtonBuilder,
   ButtonStyle,
   EmbedBuilder,
+  codeBlock,
   GuildMember,
+  inlineCode,
   Message,
   ThreadChannel,
 } from 'discord.js';
@@ -2000,7 +2002,16 @@ export class NotificationPresentationBuilder {
       reason = reason.match(/(?:^|\n)Reporter context: ([\s\S]*)$/)?.[1] ?? '';
     }
     const reportLine = `Reported by ${reporterId ? `<@${reporterId}>` : 'a user'}${threadId ? ` · [View report](https://discord.com/channels/${guildId}/${threadId})` : ''}`;
-    return this.truncateEmbedFieldValue([reportLine, reason].filter(Boolean).join('\n'));
+    if (!reason) return reportLine;
+    const multiline = /[\r\n]/.test(reason);
+    const escapedReason = reason.replace(/[\\`]/g, '\\$&');
+    const availableLength =
+      EMBED_FIELD_VALUE_MAX_LENGTH - reportLine.length - 1 - (multiline ? 8 : 2);
+    const excerpt =
+      escapedReason.length <= availableLength
+        ? escapedReason
+        : `${escapedReason.slice(0, availableLength - 3).replace(/\\+$/, '')}...`;
+    return `${reportLine}\n${multiline ? codeBlock(excerpt) : inlineCode(excerpt)}`;
   }
 
   private formatSignalField(detectionResult: DetectionResult): {
