@@ -221,6 +221,13 @@ describe('NotificationPresentationBuilder (unit)', () => {
   it.each([
     ['An unsolicited friend request', '`An unsolicited friend request`'],
     ['A `generic` name', '`A \\`generic\\` name`'],
+    ['A ````generic```` name', '`A \\`\\`\\`\\`generic\\`\\`\\`\\` name`'],
+    ['A `````generic````` name', '`A \\`\\`\\`\\`\\`generic\\`\\`\\`\\`\\` name`'],
+    ['A \\`generic\\` name', '`A \\\\\\`generic\\\\\\` name`'],
+    [
+      'First line\n`````second line`````',
+      '```\nFirst line\n\\`\\`\\`\\`\\`second line\\`\\`\\`\\`\\`\n```',
+    ],
     ['First line\n```second line```', '```\nFirst line\n\\`\\`\\`second line\\`\\`\\`\n```'],
     ['x'.repeat(1100), `\`${'x'.repeat(1000)}...\``],
     ['first\n' + 'x'.repeat(1100), `\`\`\`\nfirst\n${'x'.repeat(988)}...\n\`\`\``],

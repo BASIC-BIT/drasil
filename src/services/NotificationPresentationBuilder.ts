@@ -4,8 +4,6 @@ import {
   ButtonStyle,
   EmbedBuilder,
   codeBlock,
-  escapeCodeBlock,
-  escapeInlineCode,
   GuildMember,
   inlineCode,
   Message,
@@ -2006,9 +2004,7 @@ export class NotificationPresentationBuilder {
     const reportLine = `Reported by ${reporterId ? `<@${reporterId}>` : 'a user'}${threadId ? ` · [View report](https://discord.com/channels/${guildId}/${threadId})` : ''}`;
     if (!reason) return reportLine;
     const multiline = /[\r\n]/.test(reason);
-    const escapedReason = multiline
-      ? escapeCodeBlock(reason)
-      : escapeCodeBlock(escapeInlineCode(reason));
+    const escapedReason = reason.replace(/[\\`]/g, '\\$&');
     const availableLength =
       EMBED_FIELD_VALUE_MAX_LENGTH - reportLine.length - 1 - (multiline ? 8 : 2);
     const excerpt =
