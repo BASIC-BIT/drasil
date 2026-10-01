@@ -163,7 +163,7 @@ describe('NotificationPresentationBuilder (unit)', () => {
       builder.createObservedDetectionEmbed(buildMember(), detection, [anotherReport, event]),
     ]) {
       expect(getField(embed, 'Report')).toBe(
-        'Reported by <@233815839806193664> · [View report](https://discord.com/channels/guild-1/1554640900225900658)\nUnsolicited DM.\nPlease review it.'
+        'Reported by <@233815839806193664> · [View report](https://discord.com/channels/guild-1/1554640900225900658)\n```\nUnsolicited DM.\nPlease review it.\n```'
       );
       expect(getField(embed, 'Trigger')).toBeUndefined();
       expect(getField(embed, 'Reasons')).toBeUndefined();
@@ -203,7 +203,7 @@ describe('NotificationPresentationBuilder (unit)', () => {
       [buildDetectionEvent({ metadata: { reporterId: 'wrong-reporter', reason: 'Wrong reason' } })]
     );
     expect(getField(embed, 'Report')).toBe(
-      'Reported by a user\nPlease review this message.\nEvidence entries: this is reporter text.'
+      'Reported by a user\n```\nPlease review this message.\nEvidence entries: this is reporter text.\n```'
     );
     const invalidMetadata = builder.createObservedDetectionEmbed(
       buildMember(),
@@ -215,7 +215,27 @@ describe('NotificationPresentationBuilder (unit)', () => {
         }),
       ]
     );
-    expect(getField(invalidMetadata, 'Report')).toBe('Reported by a user\nReview this DM.');
+    expect(getField(invalidMetadata, 'Report')).toBe('Reported by a user\n`Review this DM.`');
+  });
+
+  it.each([
+    ['An unsolicited friend request', '`An unsolicited friend request`'],
+    ['A `generic` name', '`A \\`generic\\` name`'],
+    ['First line\n```second line```', '```\nFirst line\n\\`\\`\\`second line\\`\\`\\`\n```'],
+    ['x'.repeat(1100), `\`${'x'.repeat(1000)}...\``],
+    ['first\n' + 'x'.repeat(1100), `\`\`\`\nfirst\n${'x'.repeat(988)}...\n\`\`\``],
+  ])('quotes reporter text safely (example %#)', (reason, quotedReason) => {
+    const detection = buildDetectionResult({
+      triggerSource: DetectionType.USER_REPORT,
+      triggerContent: reason,
+    });
+    for (const embed of [
+      builder.createObservedDetectionEmbed(buildMember(), detection, []),
+      builder.createSuspiciousUserEmbed(buildMember(), detection, buildVerificationEvent(), []),
+    ]) {
+      expect(getField(embed, 'Report')).toBe(`Reported by a user\n${quotedReason}`);
+      expect(getField(embed, 'Report')!.length).toBeLessThanOrEqual(1024);
+    }
   });
 
   it('omits intake routing details when no reporter context was provided', () => {
