@@ -94,10 +94,15 @@
     "typescript-eslint": "^8.28.0"
   },
   "dependencies": {
-    "@drasil/contracts": "file:packages/contracts",
     "@arizeai/openinference-instrumentation-openai": "^4.1.4",
     "@arizeai/phoenix-otel": "^1.0.2",
+    "@drasil/contracts": "file:packages/contracts",
+    "@langfuse/otel": "^5.11.1",
+    "@langfuse/tracing": "^5.11.1",
     "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/context-async-hooks": "2.8.0",
+    "@opentelemetry/sdk-node": "0.219.0",
+    "@opentelemetry/sdk-trace-base": "2.8.0",
     "@prisma/adapter-pg": "^7.9.0",
     "@prisma/client": "^7.9.0",
     "@supabase/supabase-js": "^2.49.3",
