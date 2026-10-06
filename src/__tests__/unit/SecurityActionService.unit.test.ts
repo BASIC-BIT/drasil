@@ -1,3 +1,4 @@
+import { createTracingRecorder } from '../fakes/recordingTracing';
 import { Client, Guild, GuildMember, Message, User } from 'discord.js';
 import { SecurityActionService } from '../../services/SecurityActionService';
 import { DetectionResult } from '../../services/DetectionOrchestrator';
@@ -4179,5 +4180,92 @@ describe('SecurityActionService (unit)', () => {
       new_status: VerificationStatus.PENDING,
       notes: null,
     });
+  });
+  it('records separate successful and failed destinations after a report fan-out completes', async () => {
+    const recorder = createTracingRecorder();
+    const log = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const members = [buildMember('local', 'target'), buildMember('external', 'target')];
+      for (const member of members) {
+        await serverRepository.upsertByGuildId(member.guild.id, {
+          settings: {
+            [USER_REPORT_EXTERNAL_RESPONSE_MODE_SETTING_KEY]: 'notify_only',
+            report_ai_triage_enabled: false,
+          },
+        });
+        await serverMemberRepository.upsertMember(member.guild.id, member.id, {});
+      }
+      notificationManager.upsertObservedDetectionNotification
+        .mockResolvedValueOnce({ id: 'sent' } as Message)
+        .mockResolvedValueOnce(null);
+      const client = {
+        guilds: {
+          fetch: jest.fn(async (id: string) => ({
+            members: {
+              fetch: jest.fn().mockResolvedValue(members.find((member) => member.guild.id === id)),
+            },
+          })),
+        },
+      } as unknown as Client;
+      await expect(
+        buildService(client).handleMessageReport(
+          { id: 'target', username: 'target' } as User,
+          { id: 'reporter' } as User,
+          { messageId: 'reported', guildId: 'local', content: 'test' }
+        )
+      ).resolves.toBe(true);
+      const root = recorder.spans.find((span) => span.name === 'report-moderation');
+      expect(root).toBeDefined();
+      expect(JSON.parse(String(root?.attributes['langfuse.observation.output']))).toMatchObject({
+        actual_outcome: 'fan_out_complete',
+      });
+      const destinations = recorder.spans.filter((span) => span.name === 'report-destination');
+      expect(destinations).toHaveLength(2);
+      expect(
+        destinations.every((span) => span.parentSpanContext?.spanId === root?.spanContext().spanId)
+      ).toBe(true);
+      const outputs = recorder.spans
+        .map((span) => span.attributes['langfuse.observation.output'])
+        .filter(Boolean)
+        .map((value) => JSON.parse(String(value)));
+      expect(outputs).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ actual_outcome: 'observed_alert' }),
+          expect.objectContaining({ actual_outcome: 'delivery_failed' }),
+        ])
+      );
+      expect(notificationManager.upsertObservedDetectionNotification).toHaveBeenCalledTimes(2);
+    } finally {
+      log.mockRestore();
+      await recorder.shutdown();
+    }
+  });
+  it('reuses confirmed intake detections under the same session without making new generations', async () => {
+    const recorder = createTracingRecorder();
+    try {
+      const member = buildMember('intake-guild', 'intake-target');
+      await serverRepository.upsertByGuildId(member.guild.id, {
+        settings: { report_ai_triage_enabled: false },
+      });
+      const service = buildService();
+      for (let i = 0; i < 2; i++)
+        await service.handleConfirmedReportIntake(member, { id: 'reporter' } as User, {
+          reason: 'test',
+          intakeId: 'intake-trace',
+        });
+      const roots = recorder.spans.filter((span) => span.name === 'report-moderation');
+      expect(roots).toHaveLength(2);
+      expect(roots[0].spanContext().traceId).not.toBe(roots[1].spanContext().traceId);
+      expect(
+        roots.every((span) => span.attributes['session.id'] === 'development:intake:intake-trace')
+      ).toBe(true);
+      expect(roots[1].attributes['langfuse.observation.metadata.detection_reused']).toBe('true');
+      expect(recorder.spans.filter((span) => span.name === 'persist-result')).toHaveLength(1);
+      expect(
+        recorder.spans.some((span) => span.attributes['langfuse.observation.type'] === 'generation')
+      ).toBe(false);
+    } finally {
+      await recorder.shutdown();
+    }
   });
 });

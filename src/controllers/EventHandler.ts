@@ -1,3 +1,5 @@
+import { withObservation, recordWorkflowOutcome } from '../observability/langfuse';
+import { hashIdentifier } from '../observability/hash';
 import {
   AuditLogEvent,
   ActionRowBuilder,
@@ -475,92 +477,118 @@ export class EventHandler implements IEventHandler {
         return;
       }
 
-      const recentMessages = await this.getRecentUserMessages(serverId, userId);
-      const gptMessageCheckCount = this.getGptMessageCheckCount(serverConfig.settings);
-      const forceGpt =
-        gptMessageCheckCount !== null && recentMessages.length < gptMessageCheckCount;
-      const actionThreshold =
-        serverConfig.settings.min_confidence_threshold ??
-        globalConfig.getSettings().defaultServerSettings.minConfidenceThreshold;
-      const watchlistMatchOpensCase =
-        responseSettings.mode === 'restrict' && 100 >= actionThreshold;
+      const member = message.member;
+      return await withObservation(
+        'message-moderation',
+        'chain',
+        async (): Promise<void> => {
+          const recentMessages = await withObservation('collect-context', 'retriever', () =>
+            this.getRecentUserMessages(serverId, userId)
+          );
+          const gptMessageCheckCount = this.getGptMessageCheckCount(serverConfig.settings);
+          const forceGpt =
+            gptMessageCheckCount !== null && recentMessages.length < gptMessageCheckCount;
+          const actionThreshold =
+            serverConfig.settings.min_confidence_threshold ??
+            globalConfig.getSettings().defaultServerSettings.minConfidenceThreshold;
+          const watchlistMatchOpensCase =
+            responseSettings.mode === 'restrict' && 100 >= actionThreshold;
 
-      // Get user profile data for detection context
-      const profileData = this.extractUserProfileData(message.member, {
-        recentMessages,
-        channelContext: this.getCachedChannelContext(message),
-      });
+          // Get user profile data for detection context
+          const profileData = this.extractUserProfileData(member, {
+            recentMessages,
+            channelContext: this.getCachedChannelContext(message),
+          });
 
-      // Use the detection orchestrator unless a high-confidence watchlist entry matched.
-      const detectionResult = watchlistMatch
-        ? this.createWatchlistDetectionResult(
-            content,
-            watchlistMatch,
-            messageDeletionSettings.sourceMessageDeletionEnabled &&
-              !hasExemptPermissions &&
-              watchlistMatchOpensCase
-          )
-        : forceGpt
-          ? await this.detectionOrchestrator.detectMessage(serverId, userId, content, profileData, {
-              forceGpt: true,
-            })
-          : await this.detectionOrchestrator.detectMessage(serverId, userId, content, profileData);
+          // Use the detection orchestrator unless a high-confidence watchlist entry matched.
+          const detectionResult = watchlistMatch
+            ? this.createWatchlistDetectionResult(
+                content,
+                watchlistMatch,
+                messageDeletionSettings.sourceMessageDeletionEnabled &&
+                  !hasExemptPermissions &&
+                  watchlistMatchOpensCase
+              )
+            : forceGpt
+              ? await this.detectionOrchestrator.detectMessage(
+                  serverId,
+                  userId,
+                  content,
+                  profileData,
+                  {
+                    forceGpt: true,
+                  }
+                )
+              : await this.detectionOrchestrator.detectMessage(
+                  serverId,
+                  userId,
+                  content,
+                  profileData
+                );
 
-      if (forceGpt && !watchlistMatch) {
-        this.captureForcedGptMessageAnalytics(
-          message.member,
-          detectionResult,
-          responseSettings,
-          recentMessages.length,
-          gptMessageCheckCount
-        );
-      }
+          if (forceGpt && !watchlistMatch) {
+            this.captureForcedGptMessageAnalytics(
+              member,
+              detectionResult,
+              responseSettings,
+              recentMessages.length,
+              gptMessageCheckCount
+            );
+          }
 
-      // Source deletion never applies to staff/admin posters; the general exemption
-      // setting only controls ordinary automatic detections.
-      if (watchlistMatch && hasExemptPermissions) {
-        const staffDetectionResult = {
-          ...detectionResult,
-          reasons: [
-            ...detectionResult.reasons,
-            'Poster has moderation or administration permissions; automatic deletion and restriction skipped.',
-          ],
-          messageAction: detectionResult.messageAction
-            ? { ...detectionResult.messageAction, kind: 'review_only' as const }
-            : undefined,
-        };
-        const setupSafety = await this.evaluateAutomaticDetectionSetupSafety(message.member.guild);
-        if (!setupSafety.ready) {
-          await this.securityActionService.recordSuspiciousMessage(
-            message.member,
-            staffDetectionResult,
+          // Source deletion never applies to staff/admin posters; the general exemption
+          // setting only controls ordinary automatic detections.
+          if (watchlistMatch && hasExemptPermissions) {
+            const staffDetectionResult = {
+              ...detectionResult,
+              reasons: [
+                ...detectionResult.reasons,
+                'Poster has moderation or administration permissions; automatic deletion and restriction skipped.',
+              ],
+              messageAction: detectionResult.messageAction
+                ? { ...detectionResult.messageAction, kind: 'review_only' as const }
+                : undefined,
+            };
+            const setupSafety = await this.evaluateAutomaticDetectionSetupSafety(member.guild);
+            if (!setupSafety.ready) {
+              await this.securityActionService.recordSuspiciousMessage(
+                member,
+                staffDetectionResult,
+                message
+              );
+              if (setupSafety.config && setupSafety.report) {
+                void this.maybeSendDetectionSetupWarning(
+                  member.guild,
+                  setupSafety.config,
+                  setupSafety.report
+                ).catch((error) => {
+                  console.warn(`Failed to process setup warning for guild ${serverId}:`, error);
+                });
+              }
+              recordWorkflowOutcome({
+                output: { verdict: 'SUSPICIOUS', actual_outcome: 'record_only' },
+                metadata: { setup_ready: false },
+              });
+              return;
+            }
+            await this.securityActionService.observeSuspiciousMessage(
+              member,
+              staffDetectionResult,
+              message
+            );
+            return;
+          }
+
+          await this.handleAutomaticDetection(
+            member,
+            detectionResult,
+            responseSettings,
+            actionThreshold,
             message
           );
-          if (setupSafety.config && setupSafety.report) {
-            void this.maybeSendDetectionSetupWarning(
-              message.member.guild,
-              setupSafety.config,
-              setupSafety.report
-            ).catch((error) => {
-              console.warn(`Failed to process setup warning for guild ${serverId}:`, error);
-            });
-          }
-          return;
-        }
-        await this.securityActionService.observeSuspiciousMessage(
-          message.member,
-          staffDetectionResult,
-          message
-        );
-        return;
-      }
-
-      await this.handleAutomaticDetection(
-        message.member,
-        detectionResult,
-        responseSettings,
-        actionThreshold,
-        message
+        },
+        { metadata: { guild_hash: hashIdentifier(serverId), user_hash: hashIdentifier(userId) } },
+        undefined
       );
     } catch (error) {
       console.error('Error detecting spam:', error);
@@ -706,6 +734,13 @@ export class EventHandler implements IEventHandler {
       console.log(
         `Detection confidence ${confidencePercent.toFixed(2)}% is below observed notification threshold ${responseSettings.observedMinConfidenceThreshold}% for guild ${member.guild.id}; recording only.`
       );
+      recordWorkflowOutcome({
+        output: {
+          verdict: detectionResult.label,
+          actual_outcome: 'record_only',
+          detection_event_id: detectionResult.detectionEventId,
+        },
+      });
       return;
     }
 
@@ -726,6 +761,15 @@ export class EventHandler implements IEventHandler {
         );
       }
     }
+
+    recordWorkflowOutcome({
+      output: {
+        verdict: detectionResult.label,
+        actual_outcome: notification ? 'observed_alert' : 'delivery_failed',
+        detection_event_id: detectionResult.detectionEventId,
+      },
+      ...(notification ? {} : { level: 'ERROR' as const, statusMessage: 'delivery_failed' }),
+    });
   }
 
   private async handleAutomaticDetection(
@@ -735,58 +779,63 @@ export class EventHandler implements IEventHandler {
     actionThreshold: number,
     sourceMessage?: Message
   ): Promise<void> {
-    if (detectionResult.label !== 'SUSPICIOUS') {
-      return;
-    }
+    return withObservation('apply-outcome', 'tool', async (): Promise<void> => {
+      if (detectionResult.label !== 'SUSPICIOUS') {
+        recordWorkflowOutcome({
+          output: { verdict: detectionResult.label, actual_outcome: 'no_action' },
+        });
+        return;
+      }
 
-    const confidencePercent = detectionResult.confidence * 100;
-    let effectiveResponseSettings = responseSettings;
-    if (responseSettings.mode === 'notify_only' || responseSettings.mode === 'restrict') {
-      const setupSafety = await this.evaluateAutomaticDetectionSetupSafety(member.guild);
-      if (!setupSafety.ready) {
-        effectiveResponseSettings = { ...responseSettings, mode: 'record_only' };
-        if (setupSafety.config && setupSafety.report) {
-          void this.maybeSendDetectionSetupWarning(
-            member.guild,
-            setupSafety.config,
-            setupSafety.report
-          ).catch((error) => {
-            console.warn(`Failed to process setup warning for guild ${member.guild.id}:`, error);
-          });
+      const confidencePercent = detectionResult.confidence * 100;
+      let effectiveResponseSettings = responseSettings;
+      if (responseSettings.mode === 'notify_only' || responseSettings.mode === 'restrict') {
+        const setupSafety = await this.evaluateAutomaticDetectionSetupSafety(member.guild);
+        if (!setupSafety.ready) {
+          effectiveResponseSettings = { ...responseSettings, mode: 'record_only' };
+          if (setupSafety.config && setupSafety.report) {
+            void this.maybeSendDetectionSetupWarning(
+              member.guild,
+              setupSafety.config,
+              setupSafety.report
+            ).catch((error) => {
+              console.warn(`Failed to process setup warning for guild ${member.guild.id}:`, error);
+            });
+          }
         }
       }
-    }
 
-    const routesWithoutCaseHandling =
-      effectiveResponseSettings.mode === 'record_only' ||
-      effectiveResponseSettings.mode === 'notify_only' ||
-      confidencePercent < actionThreshold;
-    if (sourceMessage && !detectionResult.detectionEventId && routesWithoutCaseHandling) {
-      detectionResult.detectionEventId = await this.securityActionService.recordSuspiciousMessage(
-        member,
-        detectionResult,
-        sourceMessage
-      );
-    }
-
-    switch (effectiveResponseSettings.mode) {
-      case 'record_only':
-        console.log(
-          `Recorded suspicious detection for ${member.user.tag}; response mode is record_only.`
-        );
-        return;
-
-      case 'notify_only':
-        await this.notifyObservedDetectionIfEligible(
+      const routesWithoutCaseHandling =
+        effectiveResponseSettings.mode === 'record_only' ||
+        effectiveResponseSettings.mode === 'notify_only' ||
+        confidencePercent < actionThreshold;
+      if (sourceMessage && !detectionResult.detectionEventId && routesWithoutCaseHandling) {
+        detectionResult.detectionEventId = await this.securityActionService.recordSuspiciousMessage(
           member,
           detectionResult,
-          effectiveResponseSettings,
           sourceMessage
         );
-        return;
+      }
 
-      case 'restrict':
-        if (confidencePercent < actionThreshold) {
+      switch (effectiveResponseSettings.mode) {
+        case 'record_only':
+          recordWorkflowOutcome({
+            output: {
+              verdict: detectionResult.label,
+              actual_outcome: 'record_only',
+              detection_event_id: detectionResult.detectionEventId,
+            },
+            metadata: {
+              requested_mode: responseSettings.mode,
+              effective_mode: effectiveResponseSettings.mode,
+            },
+          });
+          console.log(
+            `Recorded suspicious detection for ${member.user.tag}; response mode is record_only.`
+          );
+          return;
+
+        case 'notify_only':
           await this.notifyObservedDetectionIfEligible(
             member,
             detectionResult,
@@ -794,21 +843,50 @@ export class EventHandler implements IEventHandler {
             sourceMessage
           );
           return;
-        }
-        if (sourceMessage) {
-          await this.securityActionService.handleSuspiciousMessage(
-            member,
-            detectionResult,
-            sourceMessage
-          );
-        } else {
-          await this.securityActionService.handleSuspiciousJoin(member, detectionResult);
-        }
-        return;
 
-      case 'off':
-        return;
-    }
+        case 'restrict':
+          if (confidencePercent < actionThreshold) {
+            await this.notifyObservedDetectionIfEligible(
+              member,
+              detectionResult,
+              effectiveResponseSettings,
+              sourceMessage
+            );
+            return;
+          }
+          if (sourceMessage) {
+            const handled = await this.securityActionService.handleSuspiciousMessage(
+              member,
+              detectionResult,
+              sourceMessage
+            );
+            if (handled === false)
+              recordWorkflowOutcome({
+                output: { verdict: detectionResult.label, actual_outcome: 'action_failed' },
+                level: 'ERROR',
+                statusMessage: 'action_failed',
+              });
+          } else {
+            const handled = await this.securityActionService.handleSuspiciousJoin(
+              member,
+              detectionResult
+            );
+            if (handled === false)
+              recordWorkflowOutcome({
+                output: { verdict: detectionResult.label, actual_outcome: 'action_failed' },
+                level: 'ERROR',
+                statusMessage: 'action_failed',
+              });
+          }
+          return;
+
+        case 'off':
+          recordWorkflowOutcome({
+            output: { verdict: detectionResult.label, actual_outcome: 'no_action' },
+          });
+          return;
+      }
+    });
   }
 
   private evaluateAutomaticDetectionSetupSafety(
@@ -879,17 +957,35 @@ export class EventHandler implements IEventHandler {
       return;
     }
 
-    // Extract profile data
-    const profileData = this.extractUserProfileData(member);
+    return withObservation(
+      'join-moderation',
+      'chain',
+      async (): Promise<void> => {
+        // Extract profile data
+        const profileData = this.extractUserProfileData(member);
 
-    // Run detection on new join
-    const detectionResult = await this.detectionOrchestrator.detectNewJoin(
-      member.guild.id, // Pass serverId
-      member.id, // Pass userId
-      profileData
+        // Run detection on new join
+        const detectionResult = await this.detectionOrchestrator.detectNewJoin(
+          member.guild.id, // Pass serverId
+          member.id, // Pass userId
+          profileData
+        );
+
+        await this.handleAutomaticDetection(
+          member,
+          detectionResult,
+          responseSettings,
+          actionThreshold
+        );
+      },
+      {
+        metadata: {
+          guild_hash: hashIdentifier(member.guild.id),
+          user_hash: hashIdentifier(member.id),
+        },
+      },
+      undefined
     );
-
-    await this.handleAutomaticDetection(member, detectionResult, responseSettings, actionThreshold);
   }
 
   private async handleGuildMemberAdd(member: GuildMember): Promise<void> {

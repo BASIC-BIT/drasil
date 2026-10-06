@@ -1,3 +1,9 @@
+import {
+  withObservation,
+  recordObservation,
+  recordWorkflowOutcome,
+} from '../observability/langfuse';
+import { hashIdentifier } from '../observability/hash';
 import { injectable, inject, optional } from 'inversify';
 import { createHash } from 'crypto';
 import {
@@ -1051,53 +1057,70 @@ export class SecurityActionService implements ISecurityActionService {
     verificationEvent: VerificationEvent,
     detectionResult: DetectionResult
   ): Promise<VerificationEvent> {
-    try {
-      const [profileAssets, detectionEvents, recentMessages] = await Promise.all([
-        this.buildProfileAssetSnapshot(member),
-        this.detectionEventsRepository.findByServerAndUser(member.guild.id, member.id),
-        this.loadRecentMessageContext(member.guild.id, member.id),
-      ]);
-      const profileImageDescription = await this.describeProfileImages(member, profileAssets);
-      const metadata = {
-        ...this.metadataToRecord(verificationEvent.metadata),
-        profile_assets: profileAssets,
-        ...(profileImageDescription
-          ? {
-              profile_image_description:
-                this.serializeProfileImageDescription(profileImageDescription),
-            }
-          : {}),
-        evidence_bundle: {
-          posted_at: new Date().toISOString(),
-          recent_message_count: recentMessages.length,
-          detection_history_count: detectionEvents.length,
-        },
-      } as unknown as VerificationEvent['metadata'];
-      const updatedEvent = await this.verificationEventRepository.update(verificationEvent.id, {
-        metadata,
-      });
-      const bundle = this.formatCaseEvidenceBundle(
-        member,
-        verificationEvent,
-        detectionResult,
-        profileAssets,
-        profileImageDescription,
-        detectionEvents,
-        recentMessages
-      );
-      await thread.send({
-        content: bundle,
-        allowedMentions: { parse: [], users: [], roles: [], repliedUser: false },
-      });
+    return withObservation(
+      'case-evidence',
+      'chain',
+      async (): Promise<VerificationEvent> => {
+        try {
+          const [profileAssets, detectionEvents, recentMessages] = await Promise.all([
+            this.buildProfileAssetSnapshot(member),
+            this.detectionEventsRepository.findByServerAndUser(member.guild.id, member.id),
+            this.loadRecentMessageContext(member.guild.id, member.id),
+          ]);
+          const profileImageDescription = await this.describeProfileImages(member, profileAssets);
+          const metadata = {
+            ...this.metadataToRecord(verificationEvent.metadata),
+            profile_assets: profileAssets,
+            ...(profileImageDescription
+              ? {
+                  profile_image_description:
+                    this.serializeProfileImageDescription(profileImageDescription),
+                }
+              : {}),
+            evidence_bundle: {
+              posted_at: new Date().toISOString(),
+              recent_message_count: recentMessages.length,
+              detection_history_count: detectionEvents.length,
+            },
+          } as unknown as VerificationEvent['metadata'];
+          const updatedEvent = await this.verificationEventRepository.update(verificationEvent.id, {
+            metadata,
+          });
+          const bundle = this.formatCaseEvidenceBundle(
+            member,
+            verificationEvent,
+            detectionResult,
+            profileAssets,
+            profileImageDescription,
+            detectionEvents,
+            recentMessages
+          );
+          await thread.send({
+            content: bundle,
+            allowedMentions: { parse: [], users: [], roles: [], repliedUser: false },
+          });
 
-      return updatedEvent ?? { ...verificationEvent, metadata };
-    } catch (error) {
-      console.warn(
-        `Failed to post evidence bundle for verification event ${verificationEvent.id}; continuing case flow:`,
-        error
-      );
-      return verificationEvent;
-    }
+          recordObservation('chain', {
+            output: { evidence_delivered: true },
+            metadata: { case_id: verificationEvent.id },
+          });
+          return updatedEvent ?? { ...verificationEvent, metadata };
+        } catch (error) {
+          recordObservation('chain', {
+            level: 'WARNING',
+            statusMessage: 'evidence_delivery_failed',
+            metadata: { evidence_delivered: false },
+          });
+          console.warn(
+            `Failed to post evidence bundle for verification event ${verificationEvent.id}; continuing case flow:`,
+            error
+          );
+          return verificationEvent;
+        }
+      },
+      { metadata: { case_id: verificationEvent.id } },
+      undefined
+    );
   }
 
   private async loadRecentMessageContext(
@@ -1625,14 +1648,106 @@ export class SecurityActionService implements ISecurityActionService {
     sourceMessage?: Message,
     caseRoutingAttempt = 0
   ): Promise<void> {
-    const activeVerificationEvent =
-      await this.verificationEventRepository.findActiveByUserAndServer(member.id, member.guild.id);
+    return withObservation('apply-outcome', 'tool', async (): Promise<void> => {
+      const activeVerificationEvent =
+        await this.verificationEventRepository.findActiveByUserAndServer(
+          member.id,
+          member.guild.id
+        );
 
-    if (!activeVerificationEvent) {
+      if (!activeVerificationEvent) {
+        const notificationMessage =
+          await this.notificationManager.upsertObservedDetectionNotification(
+            member,
+            detectionResult
+          );
+        if (!notificationMessage) {
+          throw new Error('Failed to send or update report observed alert');
+        }
+        await this.ensureObservedEvidenceThread(
+          member,
+          detectionResult,
+          notificationMessage,
+          sourceMessage
+        );
+        await this.runModerationQueueTask(
+          `mirror observed alert ${detectionEventId} to the live moderation queue`,
+          (moderationQueueService) =>
+            moderationQueueService.upsertObservedAlertMirrorById(detectionEventId)
+        );
+        recordWorkflowOutcome({
+          output: {
+            verdict: detectionResult.label,
+            actual_outcome: 'observed_alert',
+            detection_event_id: detectionEventId,
+          },
+        });
+        return;
+      }
+
+      const linkedDetectionEvent = await this.detectionEventsRepository.linkToVerificationEvent(
+        detectionEventId,
+        activeVerificationEvent.id
+      );
+      if (!linkedDetectionEvent) {
+        if (caseRoutingAttempt >= CASE_ROUTING_RETRY_LIMIT) {
+          throw new Error(
+            `Failed to route report detection event ${detectionEventId} after repeated case changes.`
+          );
+        }
+        await this.upsertReportObservedAlertOrActiveCase(
+          member,
+          detectionResult,
+          detectionEventId,
+          sourceMessage,
+          caseRoutingAttempt + 1
+        );
+        return;
+      }
+
+      await this.upsertNotification(member, detectionResult, activeVerificationEvent);
+      await this.runModerationQueueTask(
+        `mirror case ${activeVerificationEvent.id} to the live moderation queue`,
+        (moderationQueueService) => moderationQueueService.upsertCaseMirror(activeVerificationEvent)
+      );
+
+      recordWorkflowOutcome({
+        output: {
+          verdict: detectionResult.label,
+          actual_outcome: 'case_updated',
+          detection_event_id: detectionEventId,
+          case_id: activeVerificationEvent.id,
+        },
+        metadata: { case_id: activeVerificationEvent.id },
+      });
+    });
+  }
+
+  public async observeSuspiciousMessage(
+    member: GuildMember,
+    detectionResult: DetectionResult,
+    sourceMessage?: Message
+  ): Promise<boolean> {
+    return withObservation('apply-outcome', 'tool', async (): Promise<boolean> => {
+      await this.ensureEntitiesExist(
+        member.guild.id,
+        member.id,
+        member.user.username,
+        member.joinedAt?.toISOString()
+      );
+      const detectionEventId = await this.ensureDetectionEventId(
+        member,
+        detectionResult,
+        sourceMessage
+      );
       const notificationMessage =
-        await this.notificationManager.upsertObservedDetectionNotification(member, detectionResult);
+        await this.notificationManager.upsertObservedDetectionNotification(
+          member,
+          detectionResult,
+          sourceMessage
+        );
       if (!notificationMessage) {
-        throw new Error('Failed to send or update report observed alert');
+        throw new Error('Failed to send or update observed suspicious message notification');
       }
       await this.ensureObservedEvidenceThread(
         member,
@@ -1645,72 +1760,15 @@ export class SecurityActionService implements ISecurityActionService {
         (moderationQueueService) =>
           moderationQueueService.upsertObservedAlertMirrorById(detectionEventId)
       );
-      return;
-    }
-
-    const linkedDetectionEvent = await this.detectionEventsRepository.linkToVerificationEvent(
-      detectionEventId,
-      activeVerificationEvent.id
-    );
-    if (!linkedDetectionEvent) {
-      if (caseRoutingAttempt >= CASE_ROUTING_RETRY_LIMIT) {
-        throw new Error(
-          `Failed to route report detection event ${detectionEventId} after repeated case changes.`
-        );
-      }
-      await this.upsertReportObservedAlertOrActiveCase(
-        member,
-        detectionResult,
-        detectionEventId,
-        sourceMessage,
-        caseRoutingAttempt + 1
-      );
-      return;
-    }
-
-    await this.upsertNotification(member, detectionResult, activeVerificationEvent);
-    await this.runModerationQueueTask(
-      `mirror case ${activeVerificationEvent.id} to the live moderation queue`,
-      (moderationQueueService) => moderationQueueService.upsertCaseMirror(activeVerificationEvent)
-    );
-  }
-
-  public async observeSuspiciousMessage(
-    member: GuildMember,
-    detectionResult: DetectionResult,
-    sourceMessage?: Message
-  ): Promise<boolean> {
-    await this.ensureEntitiesExist(
-      member.guild.id,
-      member.id,
-      member.user.username,
-      member.joinedAt?.toISOString()
-    );
-    const detectionEventId = await this.ensureDetectionEventId(
-      member,
-      detectionResult,
-      sourceMessage
-    );
-    const notificationMessage = await this.notificationManager.upsertObservedDetectionNotification(
-      member,
-      detectionResult,
-      sourceMessage
-    );
-    if (!notificationMessage) {
-      throw new Error('Failed to send or update observed suspicious message notification');
-    }
-    await this.ensureObservedEvidenceThread(
-      member,
-      detectionResult,
-      notificationMessage,
-      sourceMessage
-    );
-    await this.runModerationQueueTask(
-      `mirror observed alert ${detectionEventId} to the live moderation queue`,
-      (moderationQueueService) =>
-        moderationQueueService.upsertObservedAlertMirrorById(detectionEventId)
-    );
-    return true;
+      recordWorkflowOutcome({
+        output: {
+          verdict: detectionResult.label,
+          actual_outcome: 'observed_alert',
+          detection_event_id: detectionEventId,
+        },
+      });
+      return true;
+    });
   }
 
   public async recordSuspiciousMessage(
@@ -1773,34 +1831,36 @@ export class SecurityActionService implements ISecurityActionService {
     detectionResult: DetectionResult,
     detectionEventId: string
   ): Promise<void> {
-    const server = await this.serverRepository.findByGuildId(member.guild.id);
-    const intakeSettings = getReportIntakeSettings(server?.settings);
-    const detectionSettings = getDetectionResponseSettings(server?.settings ?? {});
-    const reportAiSettings = getReportAiSettings(server?.settings);
-    const route = this.resolveConfirmedReportIntakeRoute(
-      intakeSettings.confirmedResponseMode,
-      reportAiSettings,
-      detectionSettings,
-      detectionResult.reportAiAnalysis
-    );
+    return withObservation('apply-outcome', 'tool', async (): Promise<void> => {
+      const server = await this.serverRepository.findByGuildId(member.guild.id);
+      const intakeSettings = getReportIntakeSettings(server?.settings);
+      const detectionSettings = getDetectionResponseSettings(server?.settings ?? {});
+      const reportAiSettings = getReportAiSettings(server?.settings);
+      const route = this.resolveConfirmedReportIntakeRoute(
+        intakeSettings.confirmedResponseMode,
+        reportAiSettings,
+        detectionSettings,
+        detectionResult.reportAiAnalysis
+      );
 
-    if (route === 'observed_alert') {
-      await this.upsertReportObservedAlertOrActiveCase(member, detectionResult, detectionEventId);
-      return;
-    }
+      if (route === 'observed_alert') {
+        await this.upsertReportObservedAlertOrActiveCase(member, detectionResult, detectionEventId);
+        return;
+      }
 
-    if (route === 'kick') {
-      await this.autoKickSuspiciousMember(member, detectionResult, undefined, 'report_intake');
-      return;
-    }
+      if (route === 'kick') {
+        await this.autoKickSuspiciousMember(member, detectionResult, undefined, 'report_intake');
+        return;
+      }
 
-    const handled = await this.handleSuspiciousMember(member, detectionResult, {
-      entitiesAlreadyEnsured: true,
-      useReportReviewThread: false,
+      const handled = await this.handleSuspiciousMember(member, detectionResult, {
+        entitiesAlreadyEnsured: true,
+        useReportReviewThread: false,
+      });
+      if (!handled) {
+        throw new Error(`Failed to route confirmed report intake as ${route}`);
+      }
     });
-    if (!handled) {
-      throw new Error(`Failed to route confirmed report intake as ${route}`);
-    }
   }
 
   private resolveConfirmedReportIntakeRoute(
@@ -2337,63 +2397,75 @@ export class SecurityActionService implements ISecurityActionService {
     sourceMessage: Message | undefined,
     source: 'message' | 'join' | 'report_intake'
   ): Promise<boolean> {
-    const actor = this.client.user;
-    if (!actor) {
-      throw new Error('Cannot auto-kick without an authenticated bot user.');
-    }
+    return withObservation('apply-outcome', 'tool', async (): Promise<boolean> => {
+      const actor = this.client.user;
+      if (!actor) {
+        throw new Error('Cannot auto-kick without an authenticated bot user.');
+      }
 
-    await this.ensureEntitiesExist(
-      member.guild.id,
-      member.id,
-      member.user.username,
-      member.joinedAt?.toISOString()
-    );
+      await this.ensureEntitiesExist(
+        member.guild.id,
+        member.id,
+        member.user.username,
+        member.joinedAt?.toISOString()
+      );
 
-    const detectionEventId = await this.ensureDetectionEventId(
-      member,
-      detectionResult,
-      sourceMessage
-    );
-    const activeVerificationEvent =
-      await this.verificationEventRepository.findActiveByUserAndServer(member.id, member.guild.id);
-    const kicked = await this.userModerationService.kickUser(
-      member,
-      AUTO_KICK_DEFAULT_REASON,
-      actor,
-      detectionEventId
-    );
-    this.requireModerationSuccess(kicked, 'kick', member);
+      const detectionEventId = await this.ensureDetectionEventId(
+        member,
+        detectionResult,
+        sourceMessage
+      );
+      const activeVerificationEvent =
+        await this.verificationEventRepository.findActiveByUserAndServer(
+          member.id,
+          member.guild.id
+        );
+      const kicked = await this.userModerationService.kickUser(
+        member,
+        AUTO_KICK_DEFAULT_REASON,
+        actor,
+        detectionEventId
+      );
+      this.requireModerationSuccess(kicked, 'kick', member);
 
-    if (!activeVerificationEvent) {
-      await this.adminActionService.recordAction({
-        server_id: member.guild.id,
-        user_id: member.id,
-        admin_id: actor.id,
-        verification_event_id: null,
-        detection_event_id: detectionEventId,
-        action_type: AdminActionType.KICK,
-        previous_status: null,
-        new_status: VerificationStatus.KICKED,
-        notes: AUTO_KICK_DEFAULT_REASON,
-        metadata: {
-          source: 'auto_kick_policy',
-          kick_policy_source: source,
-          confidence: detectionResult.confidence,
+      if (!activeVerificationEvent) {
+        await this.adminActionService.recordAction({
+          server_id: member.guild.id,
+          user_id: member.id,
+          admin_id: actor.id,
+          verification_event_id: null,
+          detection_event_id: detectionEventId,
+          action_type: AdminActionType.KICK,
+          previous_status: null,
+          new_status: VerificationStatus.KICKED,
+          notes: AUTO_KICK_DEFAULT_REASON,
+          metadata: {
+            source: 'auto_kick_policy',
+            kick_policy_source: source,
+            confidence: detectionResult.confidence,
+          },
+        });
+      }
+
+      this.captureMemberAnalytics(
+        member,
+        'auto kick completed',
+        {
+          source,
+          confidence_bucket: getConfidenceBucket(detectionResult.confidence),
+        },
+        { detectionEventId }
+      );
+
+      recordWorkflowOutcome({
+        output: {
+          verdict: detectionResult.label,
+          actual_outcome: 'kicked',
+          detection_event_id: detectionEventId,
         },
       });
-    }
-
-    this.captureMemberAnalytics(
-      member,
-      'auto kick completed',
-      {
-        source,
-        confidence_bucket: getConfidenceBucket(detectionResult.confidence),
-      },
-      { detectionEventId }
-    );
-
-    return true;
+      return true;
+    });
   }
 
   private async handleSuspiciousMember(
@@ -2401,200 +2473,234 @@ export class SecurityActionService implements ISecurityActionService {
     detectionResult: DetectionResult,
     options: SuspiciousMemberOptions = {}
   ): Promise<boolean> {
-    const {
-      sourceMessage,
-      useReportReviewThread,
-      entitiesAlreadyEnsured = false,
-      moderator,
-      notificationSourceDetectionEvent,
-      automaticCaptchaForNewCase = false,
-      caseRoutingAttempt = 0,
-    } = options;
-    const shouldUseReviewThread = useReportReviewThread ?? this.shouldUseReportReviewThread();
+    return withObservation('apply-outcome', 'tool', async (): Promise<boolean> => {
+      const {
+        sourceMessage,
+        useReportReviewThread,
+        entitiesAlreadyEnsured = false,
+        moderator,
+        notificationSourceDetectionEvent,
+        automaticCaptchaForNewCase = false,
+        caseRoutingAttempt = 0,
+      } = options;
+      const shouldUseReviewThread = useReportReviewThread ?? this.shouldUseReportReviewThread();
 
-    if (!entitiesAlreadyEnsured) {
-      // Create durable case state before Discord side effects so moderators see partial failures.
-      await this.ensureEntitiesExist(
+      if (!entitiesAlreadyEnsured) {
+        // Create durable case state before Discord side effects so moderators see partial failures.
+        await this.ensureEntitiesExist(
+          member.guild.id,
+          member.id,
+          member.user.username,
+          member.joinedAt?.toISOString()
+        );
+      }
+
+      const detectionEventId = await this.ensureDetectionEventId(
+        member,
+        detectionResult,
+        sourceMessage
+      );
+
+      const activeVerificationEvent =
+        await this.verificationEventRepository.findActiveByUserAndServer(
+          member.id,
+          member.guild.id
+        );
+
+      if (activeVerificationEvent) {
+        console.log(
+          `Active verification ${activeVerificationEvent.id} found for user ${member.user.tag}. Updating notification.`
+        );
+        const linkedDetectionEvent = await this.detectionEventsRepository.linkToVerificationEvent(
+          detectionEventId,
+          activeVerificationEvent.id
+        );
+        if (!linkedDetectionEvent) {
+          return this.retrySuspiciousMemberRouting(
+            member,
+            detectionResult,
+            detectionEventId,
+            activeVerificationEvent.id,
+            options,
+            caseRoutingAttempt
+          );
+        }
+        let notificationVerificationEvent = await this.refreshVerificationUserSnapshot(
+          activeVerificationEvent,
+          member
+        );
+        notificationVerificationEvent = await this.adoptObservedNotificationForCase(
+          notificationVerificationEvent,
+          notificationSourceDetectionEvent
+        );
+        const serverMember = await this.serverMemberRepository.findByServerAndUser(
+          member.guild.id,
+          member.id
+        );
+        if (serverMember?.case_role_active !== true) {
+          notificationVerificationEvent = await this.tryApplyCaseRole(
+            member,
+            notificationVerificationEvent,
+            moderator
+          );
+        }
+        if (
+          !shouldUseReviewThread &&
+          (!notificationVerificationEvent.thread_id ||
+            this.hasReportReviewThread(notificationVerificationEvent))
+        ) {
+          notificationVerificationEvent = await this.tryCreateCaseThread(
+            member,
+            notificationVerificationEvent,
+            detectionResult,
+            false,
+            sourceMessage
+          );
+        }
+        notificationVerificationEvent = await this.upsertNotificationAndEnsurePrivateEvidenceThread(
+          member,
+          detectionResult,
+          notificationVerificationEvent,
+          sourceMessage
+        );
+        await this.maybeDeleteSourceMessage(
+          detectionResult,
+          notificationVerificationEvent,
+          sourceMessage
+        );
+        if (!shouldUseReviewThread) {
+          this.scheduleDelayedThreadRepair(
+            member,
+            notificationVerificationEvent,
+            detectionResult,
+            sourceMessage
+          );
+        }
+        this.captureDetectionCaseAnalytics(
+          member,
+          'verification case updated',
+          detectionResult,
+          notificationVerificationEvent,
+          {
+            restrict_user: true,
+            report_review_thread: shouldUseReviewThread,
+            active_case_existed: true,
+          }
+        );
+        await this.runModerationQueueTask(
+          `mirror case ${notificationVerificationEvent.id} to the live moderation queue`,
+          (moderationQueueService) =>
+            moderationQueueService.upsertCaseMirror(notificationVerificationEvent)
+        );
+        recordWorkflowOutcome({
+          output: {
+            verdict: detectionResult.label,
+            actual_outcome: 'case_updated',
+            case_id: notificationVerificationEvent.id,
+            detection_event_id: detectionEventId,
+            incomplete_actions: getVerificationActionFailures(
+              notificationVerificationEvent.metadata
+            ).map((failure) => failure.action),
+          },
+          metadata: { case_id: notificationVerificationEvent.id },
+        });
+        return true;
+      }
+
+      console.log(
+        `No active verification found for user ${member.user.tag}. Creating new verification event.`
+      );
+
+      let newVerificationEvent = await this.verificationEventRepository.createFromDetection(
+        detectionEventId,
         member.guild.id,
         member.id,
-        member.user.username,
-        member.joinedAt?.toISOString()
-      );
-    }
-
-    const detectionEventId = await this.ensureDetectionEventId(
-      member,
-      detectionResult,
-      sourceMessage
-    );
-
-    const activeVerificationEvent =
-      await this.verificationEventRepository.findActiveByUserAndServer(member.id, member.guild.id);
-
-    if (activeVerificationEvent) {
-      console.log(
-        `Active verification ${activeVerificationEvent.id} found for user ${member.user.tag}. Updating notification.`
+        VerificationStatus.PENDING
       );
       const linkedDetectionEvent = await this.detectionEventsRepository.linkToVerificationEvent(
         detectionEventId,
-        activeVerificationEvent.id
+        newVerificationEvent.id
       );
       if (!linkedDetectionEvent) {
         return this.retrySuspiciousMemberRouting(
           member,
           detectionResult,
           detectionEventId,
-          activeVerificationEvent.id,
+          newVerificationEvent.id,
           options,
           caseRoutingAttempt
         );
       }
-      let notificationVerificationEvent = await this.refreshVerificationUserSnapshot(
-        activeVerificationEvent,
+      recordWorkflowOutcome({
+        metadata: { case_id: newVerificationEvent.id, detection_event_id: detectionEventId },
+      });
+      newVerificationEvent = await this.refreshVerificationUserSnapshot(
+        newVerificationEvent,
         member
       );
-      notificationVerificationEvent = await this.adoptObservedNotificationForCase(
-        notificationVerificationEvent,
+      newVerificationEvent = await this.adoptObservedNotificationForCase(
+        newVerificationEvent,
         notificationSourceDetectionEvent
       );
-      const serverMember = await this.serverMemberRepository.findByServerAndUser(
-        member.guild.id,
-        member.id
+
+      newVerificationEvent = await this.tryApplyCaseRole(member, newVerificationEvent, moderator);
+
+      newVerificationEvent = await this.tryCreateCaseThread(
+        member,
+        newVerificationEvent,
+        detectionResult,
+        shouldUseReviewThread,
+        sourceMessage
       );
-      if (serverMember?.case_role_active !== true) {
-        notificationVerificationEvent = await this.tryApplyCaseRole(
-          member,
-          notificationVerificationEvent,
-          moderator
-        );
-      }
-      if (
-        !shouldUseReviewThread &&
-        (!notificationVerificationEvent.thread_id ||
-          this.hasReportReviewThread(notificationVerificationEvent))
-      ) {
-        notificationVerificationEvent = await this.tryCreateCaseThread(
-          member,
-          notificationVerificationEvent,
-          detectionResult,
-          false,
-          sourceMessage
-        );
-      }
-      notificationVerificationEvent = await this.upsertNotificationAndEnsurePrivateEvidenceThread(
+
+      newVerificationEvent = await this.upsertNotificationAndEnsurePrivateEvidenceThread(
         member,
         detectionResult,
-        notificationVerificationEvent,
+        newVerificationEvent,
         sourceMessage
       );
-      await this.maybeDeleteSourceMessage(
-        detectionResult,
-        notificationVerificationEvent,
-        sourceMessage
-      );
+      await this.maybeDeleteSourceMessage(detectionResult, newVerificationEvent, sourceMessage);
       if (!shouldUseReviewThread) {
         this.scheduleDelayedThreadRepair(
           member,
-          notificationVerificationEvent,
+          newVerificationEvent,
           detectionResult,
           sourceMessage
         );
       }
       this.captureDetectionCaseAnalytics(
         member,
-        'verification case updated',
+        'verification case opened',
         detectionResult,
-        notificationVerificationEvent,
+        newVerificationEvent,
         {
           restrict_user: true,
           report_review_thread: shouldUseReviewThread,
-          active_case_existed: true,
+          active_case_existed: false,
         }
       );
       await this.runModerationQueueTask(
-        `mirror case ${notificationVerificationEvent.id} to the live moderation queue`,
-        (moderationQueueService) =>
-          moderationQueueService.upsertCaseMirror(notificationVerificationEvent)
+        `mirror case ${newVerificationEvent.id} to the live moderation queue`,
+        (moderationQueueService) => moderationQueueService.upsertCaseMirror(newVerificationEvent)
       );
-      return true;
-    }
 
-    console.log(
-      `No active verification found for user ${member.user.tag}. Creating new verification event.`
-    );
-
-    let newVerificationEvent = await this.verificationEventRepository.createFromDetection(
-      detectionEventId,
-      member.guild.id,
-      member.id,
-      VerificationStatus.PENDING
-    );
-    const linkedDetectionEvent = await this.detectionEventsRepository.linkToVerificationEvent(
-      detectionEventId,
-      newVerificationEvent.id
-    );
-    if (!linkedDetectionEvent) {
-      return this.retrySuspiciousMemberRouting(
-        member,
-        detectionResult,
-        detectionEventId,
-        newVerificationEvent.id,
-        options,
-        caseRoutingAttempt
-      );
-    }
-    newVerificationEvent = await this.refreshVerificationUserSnapshot(newVerificationEvent, member);
-    newVerificationEvent = await this.adoptObservedNotificationForCase(
-      newVerificationEvent,
-      notificationSourceDetectionEvent
-    );
-
-    newVerificationEvent = await this.tryApplyCaseRole(member, newVerificationEvent, moderator);
-
-    newVerificationEvent = await this.tryCreateCaseThread(
-      member,
-      newVerificationEvent,
-      detectionResult,
-      shouldUseReviewThread,
-      sourceMessage
-    );
-
-    newVerificationEvent = await this.upsertNotificationAndEnsurePrivateEvidenceThread(
-      member,
-      detectionResult,
-      newVerificationEvent,
-      sourceMessage
-    );
-    await this.maybeDeleteSourceMessage(detectionResult, newVerificationEvent, sourceMessage);
-    if (!shouldUseReviewThread) {
-      this.scheduleDelayedThreadRepair(
-        member,
-        newVerificationEvent,
-        detectionResult,
-        sourceMessage
-      );
-    }
-    this.captureDetectionCaseAnalytics(
-      member,
-      'verification case opened',
-      detectionResult,
-      newVerificationEvent,
-      {
-        restrict_user: true,
-        report_review_thread: shouldUseReviewThread,
-        active_case_existed: false,
+      if (automaticCaptchaForNewCase) {
+        await this.maybeRequestAutomaticCaptcha(newVerificationEvent);
       }
-    );
-    await this.runModerationQueueTask(
-      `mirror case ${newVerificationEvent.id} to the live moderation queue`,
-      (moderationQueueService) => moderationQueueService.upsertCaseMirror(newVerificationEvent)
-    );
-
-    if (automaticCaptchaForNewCase) {
-      await this.maybeRequestAutomaticCaptcha(newVerificationEvent);
-    }
-
-    return true;
+      recordWorkflowOutcome({
+        output: {
+          verdict: detectionResult.label,
+          actual_outcome: 'case_opened',
+          case_id: newVerificationEvent.id,
+          detection_event_id: detectionEventId,
+          incomplete_actions: getVerificationActionFailures(newVerificationEvent.metadata).map(
+            (failure) => failure.action
+          ),
+        },
+        metadata: { case_id: newVerificationEvent.id },
+      });
+      return true;
+    });
   }
 
   private async retrySuspiciousMemberRouting(
@@ -3221,35 +3327,52 @@ export class SecurityActionService implements ISecurityActionService {
     reporter: User,
     reason?: string
   ): Promise<boolean> {
-    try {
-      await this.ensureEntitiesExist(
-        member.guild.id,
-        member.id,
-        member.user.username,
-        member.joinedAt?.toISOString()
-      );
+    return withObservation(
+      'report-moderation',
+      'chain',
+      async (): Promise<boolean> => {
+        try {
+          await this.ensureEntitiesExist(
+            member.guild.id,
+            member.id,
+            member.user.username,
+            member.joinedAt?.toISOString()
+          );
 
-      const { detectionEvent, detectionResult } =
-        await this.reportDetectionBuilder.createUserReportDetection(member, reporter, reason);
+          const { detectionEvent, detectionResult } =
+            await this.reportDetectionBuilder.createUserReportDetection(member, reporter, reason);
 
-      await this.upsertReportObservedAlertOrActiveCase(member, detectionResult, detectionEvent.id);
-      this.captureMemberAnalytics(
-        member,
-        'user report submitted',
-        {
-          report_type: 'user_report',
-          has_reason: Boolean(reason?.trim()),
-        },
-        {
-          reporterId: reporter.id,
-          detectionEventId: detectionEvent.id,
+          await this.upsertReportObservedAlertOrActiveCase(
+            member,
+            detectionResult,
+            detectionEvent.id
+          );
+          this.captureMemberAnalytics(
+            member,
+            'user report submitted',
+            {
+              report_type: 'user_report',
+              has_reason: Boolean(reason?.trim()),
+            },
+            {
+              reporterId: reporter.id,
+              detectionEventId: detectionEvent.id,
+            }
+          );
+          return true;
+        } catch (error) {
+          console.error(`Failed to handle user report for ${member.user.tag}:`, error);
+          throw error;
         }
-      );
-      return true;
-    } catch (error) {
-      console.error(`Failed to handle user report for ${member.user.tag}:`, error);
-      throw error;
-    }
+      },
+      {
+        metadata: {
+          guild_hash: hashIdentifier(member.guild.id),
+          user_hash: hashIdentifier(member.id),
+        },
+      },
+      undefined
+    );
   }
 
   public async handleConfirmedReportIntake(
@@ -3257,61 +3380,85 @@ export class SecurityActionService implements ISecurityActionService {
     reporter: User,
     report: ConfirmedReportIntakeContext
   ): Promise<boolean> {
-    try {
-      await this.ensureEntitiesExist(
-        member.guild.id,
-        member.id,
-        member.user.username,
-        member.joinedAt?.toISOString()
-      );
+    return withObservation(
+      'report-moderation',
+      'chain',
+      async (): Promise<boolean> => {
+        try {
+          await this.ensureEntitiesExist(
+            member.guild.id,
+            member.id,
+            member.user.username,
+            member.joinedAt?.toISOString()
+          );
 
-      const existingDetectionEvent = report.intakeId
-        ? await this.detectionEventsRepository.findByReportIntakeId(report.intakeId)
-        : null;
-      if (
-        existingDetectionEvent &&
-        existingDetectionEvent.server_id === member.guild.id &&
-        existingDetectionEvent.user_id === member.id
-      ) {
-        const detectionResult =
-          this.reportDetectionBuilder.createUserReportDetectionResult(existingDetectionEvent);
-        await this.routeConfirmedReportIntake(member, detectionResult, existingDetectionEvent.id);
-        return true;
-      }
-
-      const { detectionEvent, detectionResult } =
-        await this.reportDetectionBuilder.createUserReportDetection(
-          member,
-          reporter,
-          report.reason,
-          {
-            attachments: report.attachments,
-            metadata: {
-              source: 'report_intake',
-              ...(report.intakeId ? { reportIntakeId: report.intakeId } : {}),
-            },
+          const existingDetectionEvent = report.intakeId
+            ? await this.detectionEventsRepository.findByReportIntakeId(report.intakeId)
+            : null;
+          if (
+            existingDetectionEvent &&
+            existingDetectionEvent.server_id === member.guild.id &&
+            existingDetectionEvent.user_id === member.id
+          ) {
+            const detectionResult =
+              this.reportDetectionBuilder.createUserReportDetectionResult(existingDetectionEvent);
+            recordObservation('chain', {
+              metadata: { detection_reused: true, detection_event_id: existingDetectionEvent.id },
+            });
+            await this.routeConfirmedReportIntake(
+              member,
+              detectionResult,
+              existingDetectionEvent.id
+            );
+            return true;
           }
-        );
 
-      await this.routeConfirmedReportIntake(member, detectionResult, detectionEvent.id);
-      this.captureMemberAnalytics(
-        member,
-        'report intake submitted',
-        {
-          report_type: 'report_intake',
-          has_reason: Boolean(report.reason?.trim()),
-          has_attachments: Boolean(report.attachments?.length),
-        },
-        {
-          reporterId: reporter.id,
-          detectionEventId: detectionEvent.id,
+          const { detectionEvent, detectionResult } =
+            await this.reportDetectionBuilder.createUserReportDetection(
+              member,
+              reporter,
+              report.reason,
+              {
+                attachments: report.attachments,
+                metadata: {
+                  source: 'report_intake',
+                  ...(report.intakeId ? { reportIntakeId: report.intakeId } : {}),
+                },
+              }
+            );
+
+          await this.routeConfirmedReportIntake(member, detectionResult, detectionEvent.id);
+          this.captureMemberAnalytics(
+            member,
+            'report intake submitted',
+            {
+              report_type: 'report_intake',
+              has_reason: Boolean(report.reason?.trim()),
+              has_attachments: Boolean(report.attachments?.length),
+            },
+            {
+              reporterId: reporter.id,
+              detectionEventId: detectionEvent.id,
+            }
+          );
+          return true;
+        } catch (error) {
+          console.error(`Failed to handle confirmed report intake for ${member.user.tag}:`, error);
+          throw error;
         }
-      );
-      return true;
-    } catch (error) {
-      console.error(`Failed to handle confirmed report intake for ${member.user.tag}:`, error);
-      throw error;
-    }
+      },
+      {
+        metadata: {
+          guild_hash: hashIdentifier(member.guild.id),
+          user_hash: hashIdentifier(member.id),
+        },
+      },
+      report.intakeId
+        ? {
+            sessionId: `${process.env.LANGFUSE_TRACING_ENVIRONMENT ?? 'development'}:intake:${report.intakeId}`,
+          }
+        : undefined
+    );
   }
 
   public async handleMessageReport(
@@ -3319,27 +3466,46 @@ export class SecurityActionService implements ISecurityActionService {
     reporter: User | APIUser,
     report: MessageReportContext
   ): Promise<boolean> {
-    try {
-      await this.userRepository.getOrCreateUser(targetUser.id, targetUser.username);
+    return withObservation(
+      'report-moderation',
+      'chain',
+      async (): Promise<boolean> => {
+        try {
+          await this.userRepository.getOrCreateUser(targetUser.id, targetUser.username);
 
-      const globalReport = await this.reportDetectionBuilder.createGlobalMessageReportDetection(
-        targetUser,
-        reporter,
-        report
-      );
+          const globalReport = await this.reportDetectionBuilder.createGlobalMessageReportDetection(
+            targetUser,
+            reporter,
+            report
+          );
 
-      await this.processMessageReportForManagedServers(
-        targetUser,
-        reporter,
-        report,
-        globalReport.id
-      );
+          await this.processMessageReportForManagedServers(
+            targetUser,
+            reporter,
+            report,
+            globalReport.id
+          );
 
-      return true;
-    } catch (error) {
-      console.error(`Failed to handle message report for ${targetUser.id}:`, error);
-      throw error;
-    }
+          recordObservation('chain', {
+            output: {
+              actual_outcome: 'fan_out_complete',
+              global_detection_event_id: globalReport.id,
+            },
+          });
+          return true;
+        } catch (error) {
+          console.error(`Failed to handle message report for ${targetUser.id}:`, error);
+          throw error;
+        }
+      },
+      {
+        metadata: {
+          guild_hash: report.guildId ? hashIdentifier(report.guildId) : undefined,
+          user_hash: hashIdentifier(targetUser.id),
+        },
+      },
+      undefined
+    );
   }
 
   private async processMessageReportForManagedServers(
@@ -3407,49 +3573,73 @@ export class SecurityActionService implements ISecurityActionService {
     globalReportId: string,
     isLocalReport: boolean
   ): Promise<void> {
-    const member = await this.fetchManagedReportMember(serverId, targetUser.id);
-    if (!member) {
-      return;
-    }
-
-    const serverDetectionEvent =
-      await this.reportDetectionBuilder.createManagedMessageReportDetection(
-        member,
-        reporter,
-        report,
-        globalReportId,
-        isLocalReport
-      );
-    const detectionResult = this.reportDetectionBuilder.createManagedMessageReportDetectionResult(
-      serverDetectionEvent,
-      reporter,
-      report,
-      isLocalReport
-    );
-
-    try {
-      await this.upsertReportObservedAlertOrActiveCase(
-        member,
-        detectionResult,
-        serverDetectionEvent.id
-      );
-      this.captureMemberAnalytics(
-        member,
-        'user report submitted',
-        {
-          report_type: isLocalReport ? 'message_report' : 'external_message_report',
-          has_reason: Boolean(report.reason?.trim()),
-          has_message_content: Boolean(report.content?.trim()),
-        },
-        {
-          reporterId: reporter.id,
-          sourceGuildId: report.guildId === member.guild.id ? report.guildId : undefined,
-          detectionEventId: serverDetectionEvent.id,
+    return withObservation(
+      'report-destination',
+      'chain',
+      async (): Promise<void> => {
+        const member = await this.fetchManagedReportMember(serverId, targetUser.id);
+        if (!member) {
+          recordObservation('chain', { output: { actual_outcome: 'member_unavailable' } });
+          return;
         }
-      );
-    } catch (error) {
-      console.error(`Failed to process message report fan-out for guild ${serverId}:`, error);
-    }
+
+        const serverDetectionEvent =
+          await this.reportDetectionBuilder.createManagedMessageReportDetection(
+            member,
+            reporter,
+            report,
+            globalReportId,
+            isLocalReport
+          );
+        const detectionResult =
+          this.reportDetectionBuilder.createManagedMessageReportDetectionResult(
+            serverDetectionEvent,
+            reporter,
+            report,
+            isLocalReport
+          );
+
+        try {
+          await this.upsertReportObservedAlertOrActiveCase(
+            member,
+            detectionResult,
+            serverDetectionEvent.id
+          );
+          this.captureMemberAnalytics(
+            member,
+            'user report submitted',
+            {
+              report_type: isLocalReport ? 'message_report' : 'external_message_report',
+              has_reason: Boolean(report.reason?.trim()),
+              has_message_content: Boolean(report.content?.trim()),
+            },
+            {
+              reporterId: reporter.id,
+              sourceGuildId: report.guildId === member.guild.id ? report.guildId : undefined,
+              detectionEventId: serverDetectionEvent.id,
+            }
+          );
+        } catch (error) {
+          recordWorkflowOutcome({
+            output: {
+              actual_outcome: 'delivery_failed',
+              detection_event_id: serverDetectionEvent.id,
+            },
+            level: 'ERROR',
+            statusMessage: 'delivery_failed',
+          });
+          console.error(`Failed to process message report fan-out for guild ${serverId}:`, error);
+        }
+      },
+      {
+        metadata: {
+          guild_hash: hashIdentifier(serverId),
+          user_hash: hashIdentifier(targetUser.id),
+          is_local_report: isLocalReport,
+        },
+      },
+      undefined
+    );
   }
 
   private async fetchManagedReportMember(

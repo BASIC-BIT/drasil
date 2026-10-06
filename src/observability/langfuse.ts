@@ -1,3 +1,4 @@
+import { performance } from 'node:perf_hooks';
 import { context, createContextKey, trace, type Span } from '@opentelemetry/api';
 import { NodeSDK } from '@opentelemetry/sdk-node';
 import { LangfuseSpanProcessor } from '@langfuse/otel';
@@ -83,7 +84,10 @@ export async function withObservation<T>(
   let activeContext = context.active();
   try {
     // TypeScript overload narrows the options; all native types are supported at runtime.
-    observation = startObservation(name, attributes, { asType: kind as 'span' });
+    observation = startObservation(name, attributes, {
+      asType: kind as 'span',
+      startTime: new Date(performance.timeOrigin + performance.now()),
+    });
     observation.otelSpan.setAttribute('drasil.observation', true);
     activeContext = trace.setSpan(activeContext, observation.otelSpan);
     if (kind === 'chain' && !activeContext.getValue(WORKFLOW_ROOT))
@@ -122,7 +126,7 @@ export async function withObservation<T>(
     throw error;
   } finally {
     try {
-      observation.end();
+      observation.end(performance.timeOrigin + performance.now());
     } catch {
       /* Work already completed. */
     }
@@ -143,5 +147,22 @@ export function recordObservation(
     }
   } catch {
     /* Observability must not change moderation. */
+  }
+}
+
+/** Update the workflow result after the operation actually completes. */
+export function recordWorkflowOutcome(attributes: LangfuseObservationAttributes): void {
+  recordObservation('span', attributes);
+  try {
+    const root = context.active().getValue(WORKFLOW_ROOT) as Span | undefined;
+    root?.setAttributes(createObservationAttributes('chain', attributes));
+    if (attributes.output !== undefined)
+      root?.setAttribute('langfuse.trace.output', JSON.stringify(attributes.output));
+    if (attributes.metadata)
+      for (const [key, value] of Object.entries(attributes.metadata))
+        if (typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number')
+          root?.setAttribute('langfuse.trace.metadata.' + key, value);
+  } catch {
+    /* Preserve application results. */
   }
 }

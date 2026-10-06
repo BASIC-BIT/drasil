@@ -1,3 +1,5 @@
+import { withObservation, recordObservation } from '../observability/langfuse';
+import { hashIdentifier } from '../observability/hash';
 /**
  * DetectionOrchestrator: Orchestrates spam detection using both heuristic and GPT-based methods
  * - Calls HeuristicService first for quick, low-cost checks
@@ -200,183 +202,213 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
     profileData?: UserProfileData, // Make optional to match caller
     options: DetectionMessageOptions = {}
   ): Promise<DetectionResult> {
-    try {
-      // Add outer try block
-      // Ensure server and user exist before proceeding
-      await this.ensureEntitiesExist(serverId, userId, profileData?.username); // Use optional chaining
+    return withObservation(
+      'automatic-detection',
+      'chain',
+      async (): Promise<DetectionResult> => {
+        try {
+          // Add outer try block
+          // Ensure server and user exist before proceeding
+          await this.ensureEntitiesExist(serverId, userId, profileData?.username); // Use optional chaining
 
-      const allServerEvents = await this.detectionEventsRepository.findByServerAndUser(
-        serverId,
-        userId
-      );
-      const countedEvents = allServerEvents.filter(
-        (event) => !isDetectionEventExcludedFromAccounting(event)
-      );
-      const falsePositiveEvents = allServerEvents.filter((event) =>
-        isDetectionEventMarkedFalsePositive(event)
-      );
-      const recentSuspiciousEvents = countedEvents.filter((event) =>
-        meetsConfidenceLevel(event.confidence, 'High')
-      );
+          const allServerEvents = await withObservation('collect-context', 'retriever', () =>
+            this.detectionEventsRepository.findByServerAndUser(serverId, userId)
+          );
+          const countedEvents = allServerEvents.filter(
+            (event) => !isDetectionEventExcludedFromAccounting(event)
+          );
+          const falsePositiveEvents = allServerEvents.filter((event) =>
+            isDetectionEventMarkedFalsePositive(event)
+          );
+          const recentSuspiciousEvents = countedEvents.filter((event) =>
+            meetsConfidenceLevel(event.confidence, 'High')
+          );
 
-      if (profileData) {
-        profileData.pastDetectionCount = countedEvents.length;
-        profileData.pastFalsePositiveDetectionCount = falsePositiveEvents.length;
-        profileData.recentHighConfidenceDetectionCount = recentSuspiciousEvents.length;
-      }
+          if (profileData) {
+            profileData.pastDetectionCount = countedEvents.length;
+            profileData.pastFalsePositiveDetectionCount = falsePositiveEvents.length;
+            profileData.recentHighConfidenceDetectionCount = recentSuspiciousEvents.length;
+          }
 
-      // Calculate initial suspicion score based on heuristics
-      let suspicionScore = 0;
-      let reasons: string[] = [];
+          // Calculate initial suspicion score based on heuristics
+          let suspicionScore = 0;
+          let reasons: string[] = [];
 
-      // If user has recent suspicious events, increase initial suspicion
-      if (recentSuspiciousEvents.length > 0) {
-        suspicionScore += 0.4; // Start with 40% suspicion
-        reasons.push('Recent suspicious activity');
-      }
+          // If user has recent suspicious events, increase initial suspicion
+          if (recentSuspiciousEvents.length > 0) {
+            suspicionScore += 0.4; // Start with 40% suspicion
+            reasons.push('Recent suspicious activity');
+          }
 
-      // Run heuristic checks on the message content
-      const heuristicResult = this.heuristicService.analyzeMessage(userId, content, serverId);
+          // Run heuristic checks on the message content
+          const heuristicResult = this.heuristicService.analyzeMessage(userId, content, serverId);
 
-      if (heuristicResult.result === 'SUSPICIOUS') {
-        suspicionScore += 0.5;
-        reasons = [...reasons, ...heuristicResult.reasons];
-      }
+          if (heuristicResult.result === 'SUSPICIOUS') {
+            suspicionScore += 0.5;
+            reasons = [...reasons, ...heuristicResult.reasons];
+          }
 
-      // Check if user is new (if profile data available)
-      // Check if profileData exists before accessing properties
-      const isNewAccount = profileData?.accountCreatedAt
-        ? this.isNewAccount(profileData.accountCreatedAt)
-        : false;
+          // Check if user is new (if profile data available)
+          // Check if profileData exists before accessing properties
+          const isNewAccount = profileData?.accountCreatedAt
+            ? this.isNewAccount(profileData.accountCreatedAt)
+            : false;
 
-      const isNewServerMember = profileData?.joinedServerAt
-        ? this.isNewServerMember(profileData.joinedServerAt)
-        : false;
+          const isNewServerMember = profileData?.joinedServerAt
+            ? this.isNewServerMember(profileData.joinedServerAt)
+            : false;
 
-      if (isNewAccount) {
-        suspicionScore += 0.2;
-        reasons.push('New Discord account');
-      }
+          if (isNewAccount) {
+            suspicionScore += 0.2;
+            reasons.push('New Discord account');
+          }
 
-      if (isNewServerMember) {
-        suspicionScore += 0.1;
-        reasons.push('Recently joined server');
-      }
+          if (isNewServerMember) {
+            suspicionScore += 0.1;
+            reasons.push('Recently joined server');
+          }
 
-      // TODO: We update this inline here but don't update the database? Is this a problem?
-      if (profileData) {
-        profileData.recentMessages = [...profileData.recentMessages, content];
-      }
+          // TODO: We update this inline here but don't update the database? Is this a problem?
+          if (profileData) {
+            profileData.recentMessages = [...profileData.recentMessages, content];
+          }
 
-      const gptTriggerReasons: DetectionGptTriggerReason[] = [];
-      if (options.forceGpt === true) {
-        gptTriggerReasons.push('first_recent_messages');
-      }
-      if (isNewAccount) {
-        gptTriggerReasons.push('new_account');
-      }
-      if (isNewServerMember) {
-        gptTriggerReasons.push('new_server_member');
-      }
-      if (suspicionScore >= this.BORDERLINE_LOWER && suspicionScore <= this.BORDERLINE_UPPER) {
-        gptTriggerReasons.push('borderline_score');
-      }
+          const gptTriggerReasons: DetectionGptTriggerReason[] = [];
+          if (options.forceGpt === true) {
+            gptTriggerReasons.push('first_recent_messages');
+          }
+          if (isNewAccount) {
+            gptTriggerReasons.push('new_account');
+          }
+          if (isNewServerMember) {
+            gptTriggerReasons.push('new_server_member');
+          }
+          if (suspicionScore >= this.BORDERLINE_LOWER && suspicionScore <= this.BORDERLINE_UPPER) {
+            gptTriggerReasons.push('borderline_score');
+          }
 
-      if (options.forceGpt === true && profileData === undefined) {
-        console.warn('forceGpt requested without profileData; skipping GPT analysis.');
-      }
+          if (options.forceGpt === true && profileData === undefined) {
+            console.warn('forceGpt requested without profileData; skipping GPT analysis.');
+          }
 
-      // Determine if we should use GPT
-      // Use GPT if explicitly requested by the caller, if the user is new, or if the
-      // suspicion score is borderline (not clearly OK or clearly SUSPICIOUS).
-      const shouldUseGPT = gptTriggerReasons.length > 0 && profileData !== undefined;
+          // Determine if we should use GPT
+          // Use GPT if explicitly requested by the caller, if the user is new, or if the
+          // suspicion score is borderline (not clearly OK or clearly SUSPICIOUS).
+          const shouldUseGPT = gptTriggerReasons.length > 0 && profileData !== undefined;
 
-      let result: DetectionResult;
-      let gptAnalysis: GPTProfileAnalysis | undefined;
-      let jevAnalysis: JevProfileAnalysis | undefined;
+          let result: DetectionResult;
+          let gptAnalysis: GPTProfileAnalysis | undefined;
+          let jevAnalysis: JevProfileAnalysis | undefined;
 
-      if (shouldUseGPT) {
-        [gptAnalysis, jevAnalysis] = await Promise.all([
-          this.gptService.analyzeProfile(profileData),
-          this.jevService?.analyzeProfile(profileData),
-        ]);
+          if (shouldUseGPT) {
+            [gptAnalysis, jevAnalysis] = await Promise.all([
+              this.gptService.analyzeProfile(profileData),
+              this.jevService?.analyzeProfile(profileData),
+            ]);
 
-        if (gptAnalysis.result === 'SUSPICIOUS') {
-          suspicionScore = Math.max(suspicionScore, gptAnalysis.confidence);
-          reasons = [...reasons, ...gptAnalysis.reasons];
-        } else if (!gptAnalysis.isFallback) {
-          suspicionScore = Math.max(0, suspicionScore - 0.3);
-          reasons.push('GPT analysis indicates user is likely legitimate');
-        } else {
-          reasons = [...reasons, ...gptAnalysis.reasons];
+            if (gptAnalysis.result === 'SUSPICIOUS') {
+              suspicionScore = Math.max(suspicionScore, gptAnalysis.confidence);
+              reasons = [...reasons, ...gptAnalysis.reasons];
+            } else if (!gptAnalysis.isFallback) {
+              suspicionScore = Math.max(0, suspicionScore - 0.3);
+              reasons.push('GPT analysis indicates user is likely legitimate');
+            } else {
+              reasons = [...reasons, ...gptAnalysis.reasons];
+            }
+
+            const jevFlagged = jevAnalysis?.result === 'SUSPICIOUS';
+            if (jevFlagged) {
+              reasons.push('Suspicious profile or message context');
+            }
+
+            result = {
+              label:
+                suspicionScore >= 0.5 || gptAnalysis.result === 'SUSPICIOUS' || jevFlagged
+                  ? 'SUSPICIOUS'
+                  : 'OK',
+              confidence: Math.max(
+                suspicionScore >= 0.5 ? this.toConfidence(suspicionScore) : 0,
+                gptAnalysis.result === 'SUSPICIOUS' && suspicionScore < 0.5
+                  ? gptAnalysis.confidence
+                  : 0,
+                jevFlagged ? (jevAnalysis?.suspiciousProbability ?? 0) : 0
+              ),
+              reasons: reasons,
+              triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+              triggerContent: content,
+              profileData: profileData,
+              gptAnalysis,
+              jevAnalysis,
+              gptTriggerReasons,
+            };
+          } else {
+            result = {
+              label: suspicionScore >= 0.5 ? 'SUSPICIOUS' : 'OK',
+              confidence: this.toConfidence(suspicionScore),
+              reasons: reasons,
+              triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+              triggerContent: content,
+            };
+          }
+
+          // Only persist detection events for suspicious results.
+          // (OK results would otherwise bloat the DB and inflate "flagged X times" counts.)
+          if (result.label === 'SUSPICIOUS') {
+            const createdEvent = await withObservation('persist-result', 'span', () =>
+              this.detectionEventsRepository.create({
+                server_id: serverId,
+                user_id: userId,
+                detection_type: result.triggerSource,
+                confidence: result.confidence,
+                reasons: result.reasons,
+                detected_at: new Date(),
+                // message_id and channel_id are not needed here; context is available later via event payload
+                metadata: withDetectionTestingMetadata({
+                  content: content,
+                  ...(gptAnalysis ? { gpt: this.createGptMetadata(gptAnalysis) } : {}),
+                  ...(jevAnalysis ? { jev: this.createJevMetadata(jevAnalysis) } : {}),
+                }),
+              })
+            );
+
+            result.detectionEventId = createdEvent.id;
+            this.captureSuspiciousDetection(serverId, userId, result, gptAnalysis, profileData);
+          }
+          await withObservation('combine-verdicts', 'span', async (): Promise<void> => {
+            recordObservation('span', {
+              output: {
+                verdict: result.label,
+                confidence: result.confidence,
+                heuristic_score: suspicionScore,
+                gpt_verdict: gptAnalysis?.result,
+                jev_verdict: jevAnalysis?.result,
+                gpt_reason_codes: gptAnalysis?.reasonCodes,
+                jev_reason_codes: jevAnalysis?.reasonCodes,
+              },
+            });
+          });
+          recordObservation('chain', {
+            output: {
+              verdict: result.label,
+              confidence: result.confidence,
+              detection_event_id: result.detectionEventId,
+            },
+            metadata: { model_eligible: shouldUseGPT },
+          });
+          return result;
+        } catch (error) {
+          // Add outer catch block
+          console.error(
+            `[DEBUG DetectionOrchestrator] detectMessage - ERROR for user ${userId}:`,
+            error
+          );
+          // Rethrow or handle appropriately - rethrowing ensures the caller knows about the failure
+          throw error;
         }
-
-        const jevFlagged = jevAnalysis?.result === 'SUSPICIOUS';
-        if (jevFlagged) {
-          reasons.push('Suspicious profile or message context');
-        }
-
-        result = {
-          label:
-            suspicionScore >= 0.5 || gptAnalysis.result === 'SUSPICIOUS' || jevFlagged
-              ? 'SUSPICIOUS'
-              : 'OK',
-          confidence: Math.max(
-            suspicionScore >= 0.5 ? this.toConfidence(suspicionScore) : 0,
-            gptAnalysis.result === 'SUSPICIOUS' && suspicionScore < 0.5
-              ? gptAnalysis.confidence
-              : 0,
-            jevFlagged ? (jevAnalysis?.suspiciousProbability ?? 0) : 0
-          ),
-          reasons: reasons,
-          triggerSource: DetectionType.SUSPICIOUS_CONTENT,
-          triggerContent: content,
-          profileData: profileData,
-          gptAnalysis,
-          jevAnalysis,
-          gptTriggerReasons,
-        };
-      } else {
-        result = {
-          label: suspicionScore >= 0.5 ? 'SUSPICIOUS' : 'OK',
-          confidence: this.toConfidence(suspicionScore),
-          reasons: reasons,
-          triggerSource: DetectionType.SUSPICIOUS_CONTENT,
-          triggerContent: content,
-        };
-      }
-
-      // Only persist detection events for suspicious results.
-      // (OK results would otherwise bloat the DB and inflate "flagged X times" counts.)
-      if (result.label === 'SUSPICIOUS') {
-        const createdEvent = await this.detectionEventsRepository.create({
-          server_id: serverId,
-          user_id: userId,
-          detection_type: result.triggerSource,
-          confidence: result.confidence,
-          reasons: result.reasons,
-          detected_at: new Date(),
-          // message_id and channel_id are not needed here; context is available later via event payload
-          metadata: withDetectionTestingMetadata({
-            content: content,
-            ...(gptAnalysis ? { gpt: this.createGptMetadata(gptAnalysis) } : {}),
-            ...(jevAnalysis ? { jev: this.createJevMetadata(jevAnalysis) } : {}),
-          }),
-        });
-
-        result.detectionEventId = createdEvent.id;
-        this.captureSuspiciousDetection(serverId, userId, result, gptAnalysis, profileData);
-      }
-      return result;
-    } catch (error) {
-      // Add outer catch block
-      console.error(
-        `[DEBUG DetectionOrchestrator] detectMessage - ERROR for user ${userId}:`,
-        error
-      );
-      // Rethrow or handle appropriately - rethrowing ensures the caller knows about the failure
-      throw error;
-    }
+      },
+      { metadata: { guild_hash: hashIdentifier(serverId), user_hash: hashIdentifier(userId) } },
+      undefined
+    );
   }
 
   /**
@@ -392,100 +424,136 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
     userId: string, // Added userId
     profileData: UserProfileData
   ): Promise<DetectionResult> {
-    try {
-      // Add outer try block
-      // Ensure server and user exist before proceeding
-      await this.ensureEntitiesExist(serverId, userId, profileData.username); // Use params
+    return withObservation(
+      'automatic-detection',
+      'chain',
+      async (): Promise<DetectionResult> => {
+        try {
+          // Add outer try block
+          // Ensure server and user exist before proceeding
+          await this.ensureEntitiesExist(serverId, userId, profileData.username); // Use params
 
-      const allServerEvents = await this.detectionEventsRepository.findByServerAndUser(
-        serverId,
-        userId
-      );
-      const countedEvents = allServerEvents.filter(
-        (event) => !isDetectionEventExcludedFromAccounting(event)
-      );
-      const falsePositiveEvents = allServerEvents.filter((event) =>
-        isDetectionEventMarkedFalsePositive(event)
-      );
-      const recentSuspiciousEvents = countedEvents.filter((event) =>
-        meetsConfidenceLevel(event.confidence, 'High')
-      );
-      profileData.pastDetectionCount = countedEvents.length;
-      profileData.pastFalsePositiveDetectionCount = falsePositiveEvents.length;
-      profileData.recentHighConfidenceDetectionCount = recentSuspiciousEvents.length;
+          const allServerEvents = await withObservation('collect-context', 'retriever', () =>
+            this.detectionEventsRepository.findByServerAndUser(serverId, userId)
+          );
+          const countedEvents = allServerEvents.filter(
+            (event) => !isDetectionEventExcludedFromAccounting(event)
+          );
+          const falsePositiveEvents = allServerEvents.filter((event) =>
+            isDetectionEventMarkedFalsePositive(event)
+          );
+          const recentSuspiciousEvents = countedEvents.filter((event) =>
+            meetsConfidenceLevel(event.confidence, 'High')
+          );
+          profileData.pastDetectionCount = countedEvents.length;
+          profileData.pastFalsePositiveDetectionCount = falsePositiveEvents.length;
+          profileData.recentHighConfidenceDetectionCount = recentSuspiciousEvents.length;
 
-      // Use the analyzeProfile method from the interface
-      const [gptAnalysis, jevAnalysis] = await Promise.all([
-        this.gptService.analyzeProfile(profileData),
-        this.jevService?.analyzeProfile(profileData),
-      ]);
+          // Use the analyzeProfile method from the interface
+          const [gptAnalysis, jevAnalysis] = await Promise.all([
+            this.gptService.analyzeProfile(profileData),
+            this.jevService?.analyzeProfile(profileData),
+          ]);
 
-      // Calculate suspicion score
-      let suspicionScore = 0;
-      let reasons: string[] = [...gptAnalysis.reasons];
+          // Calculate suspicion score
+          let suspicionScore = 0;
+          let reasons: string[] = [...gptAnalysis.reasons];
 
-      // Check if account is new
-      const isNewAccount = this.isNewAccount(profileData.accountCreatedAt);
-      if (isNewAccount) {
-        suspicionScore += 0.4;
-        reasons.push('New Discord account');
-      }
+          // Check if account is new
+          const isNewAccount = this.isNewAccount(profileData.accountCreatedAt);
+          if (isNewAccount) {
+            suspicionScore += 0.4;
+            reasons.push('New Discord account');
+          }
 
-      // Use the GPT analysis result
-      if (gptAnalysis.result === 'SUSPICIOUS') {
-        suspicionScore += 0.7;
-      }
-      const jevFlagged = jevAnalysis?.result === 'SUSPICIOUS';
-      if (jevFlagged) {
-        reasons.push('Suspicious profile or message context');
-      }
+          // Use the GPT analysis result
+          if (gptAnalysis.result === 'SUSPICIOUS') {
+            suspicionScore += 0.7;
+          }
+          const jevFlagged = jevAnalysis?.result === 'SUSPICIOUS';
+          if (jevFlagged) {
+            reasons.push('Suspicious profile or message context');
+          }
 
-      // Assign initial result to a variable
-      const initialResult: DetectionResult = {
-        label: suspicionScore >= 0.5 || jevFlagged ? 'SUSPICIOUS' : 'OK',
-        confidence: Math.max(
-          suspicionScore >= 0.5 ? this.toConfidence(suspicionScore) : 0,
-          jevFlagged ? (jevAnalysis.suspiciousProbability ?? 0) : 0
-        ),
-        reasons: reasons,
-        triggerSource: DetectionType.NEW_ACCOUNT,
-        triggerContent: 'Server Join',
-        profileData: profileData,
-        gptAnalysis,
-        jevAnalysis,
-      };
+          // Assign initial result to a variable
+          const initialResult: DetectionResult = {
+            label: suspicionScore >= 0.5 || jevFlagged ? 'SUSPICIOUS' : 'OK',
+            confidence: Math.max(
+              suspicionScore >= 0.5 ? this.toConfidence(suspicionScore) : 0,
+              jevFlagged ? (jevAnalysis.suspiciousProbability ?? 0) : 0
+            ),
+            reasons: reasons,
+            triggerSource: DetectionType.NEW_ACCOUNT,
+            triggerContent: 'Server Join',
+            profileData: profileData,
+            gptAnalysis,
+            jevAnalysis,
+          };
 
-      // Only persist detection events for suspicious results.
-      if (initialResult.label === 'SUSPICIOUS') {
-        const createdEvent = await this.detectionEventsRepository.create({
-          server_id: serverId,
-          user_id: userId,
-          detection_type: initialResult.triggerSource,
-          confidence: initialResult.confidence,
-          reasons: initialResult.reasons,
-          detected_at: new Date(),
-          // No message_id or channel_id for join events
-          metadata: withDetectionTestingMetadata({
-            join: true,
-            gpt: this.createGptMetadata(gptAnalysis),
-            ...(jevAnalysis ? { jev: this.createJevMetadata(jevAnalysis) } : {}),
-          }),
-        });
+          // Only persist detection events for suspicious results.
+          if (initialResult.label === 'SUSPICIOUS') {
+            const createdEvent = await withObservation('persist-result', 'span', () =>
+              this.detectionEventsRepository.create({
+                server_id: serverId,
+                user_id: userId,
+                detection_type: initialResult.triggerSource,
+                confidence: initialResult.confidence,
+                reasons: initialResult.reasons,
+                detected_at: new Date(),
+                // No message_id or channel_id for join events
+                metadata: withDetectionTestingMetadata({
+                  join: true,
+                  gpt: this.createGptMetadata(gptAnalysis),
+                  ...(jevAnalysis ? { jev: this.createJevMetadata(jevAnalysis) } : {}),
+                }),
+              })
+            );
 
-        initialResult.detectionEventId = createdEvent.id;
-        this.captureSuspiciousDetection(serverId, userId, initialResult, gptAnalysis, profileData);
-      }
+            initialResult.detectionEventId = createdEvent.id;
+            this.captureSuspiciousDetection(
+              serverId,
+              userId,
+              initialResult,
+              gptAnalysis,
+              profileData
+            );
+          }
 
-      return initialResult;
-    } catch (error) {
-      // Add outer catch block
-      console.error(
-        `[DEBUG DetectionOrchestrator] detectNewJoin - ERROR for user ${userId}:`,
-        error
-      );
-      // Rethrow or handle appropriately
-      throw error;
-    }
+          await withObservation('combine-verdicts', 'span', async (): Promise<void> => {
+            recordObservation('span', {
+              output: {
+                verdict: initialResult.label,
+                confidence: initialResult.confidence,
+                heuristic_score: suspicionScore,
+                gpt_verdict: gptAnalysis.result,
+                jev_verdict: jevAnalysis?.result,
+                gpt_reason_codes: gptAnalysis.reasonCodes,
+                jev_reason_codes: jevAnalysis?.reasonCodes,
+              },
+            });
+          });
+          recordObservation('chain', {
+            output: {
+              verdict: initialResult.label,
+              confidence: initialResult.confidence,
+              detection_event_id: initialResult.detectionEventId,
+            },
+            metadata: { model_eligible: true },
+          });
+          return initialResult;
+        } catch (error) {
+          // Add outer catch block
+          console.error(
+            `[DEBUG DetectionOrchestrator] detectNewJoin - ERROR for user ${userId}:`,
+            error
+          );
+          // Rethrow or handle appropriately
+          throw error;
+        }
+      },
+      { metadata: { guild_hash: hashIdentifier(serverId), user_hash: hashIdentifier(userId) } },
+      undefined
+    );
   }
 
   /**
