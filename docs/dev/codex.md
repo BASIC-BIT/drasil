@@ -52,8 +52,8 @@ entries until Drasil has an explicit repo-scoped MCP server to launch. Generic C
 as Playwright, GitHub, Context7, or Node REPL may still be available from global config or
 plugins; verify the active tool surface before relying on one.
 
-PostHog and Phoenix docs in `docs/dev/` describe Drasil runtime integrations, not MCP access.
-Do not add PostHog or Phoenix MCP entries unless a Drasil-specific endpoint and authentication
+PostHog and Langfuse docs in `docs/dev/` describe Drasil runtime integrations, not MCP access.
+Do not add PostHog or Langfuse MCP entries unless a Drasil-specific endpoint and authentication
 path are explicitly chosen.
 
 Run `npm run agent:check` after changing `.opencode`, `.codex`, or this document.

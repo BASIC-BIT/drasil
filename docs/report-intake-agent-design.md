@@ -340,7 +340,7 @@ Trace fields:
 - confirmation status
 - final status
 - policy cap result
-- Phoenix/OpenTelemetry trace IDs when available
+- Langfuse/OpenTelemetry trace IDs when available
 
 Application logs must not include raw report text, raw message content, or image
 contents by default.
