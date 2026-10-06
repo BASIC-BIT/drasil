@@ -57,7 +57,8 @@
     "db:seed": "prisma db seed",
     "db:reset:local": "npx supabase db reset --local && node scripts/create-prisma-user.js && prisma migrate reset && npm run db:seed",
     "db:check:rls": "node scripts/check-public-rls.js",
-    "intel:upload": "node scripts/upload-intel-case.js"
+    "intel:upload": "node scripts/upload-intel-case.js",
+    "trace:smoke": "node -r ts-node/register src/scripts/langfuseSmoke.ts"
   },
   "keywords": [
     "discord",

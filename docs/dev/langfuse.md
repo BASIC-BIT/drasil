@@ -42,6 +42,6 @@ A Jev missing-key skip incurs no request and explicitly records zero cost. A dis
 
 ## Verification and rollback
 
-Run the synthetic smoke command described here when it is available. Inspect delivered traces for environment/release/session labels, sibling overlap and parent links, content, usage buckets, failure categories, and model pricing. Save synthetic IDs and sanitized results only. A successful API call alone does not prove Cloud ingestion or correct costs.
+`npm run trace:smoke` uses the existing OpenAI and TypeSafe keys with synthetic profile/report/verification evidence. It prints configuration presence and trace IDs only, includes a Jev missing-key skip, and flushes on exit. Its tool observation is an explicitly synthetic no-op; no Discord client, database or moderation action is involved. Provider fallbacks cause a failed command. Set `LANGFUSE_RELEASE` to the tested commit SHA before running. Inspect delivered traces for environment/release/session labels, sibling overlap and parent links, content, usage buckets, failure categories, and model pricing. Save synthetic IDs and sanitized results only. A successful API call alone does not prove Cloud ingestion or correct costs.
 
 To disable tracing, set `langfuse_tracing_enabled=false` and deploy the updated task configuration. Local execution uses `LANGFUSE_TRACING_ENABLED=false`. Model classification continues through the existing moderation pipeline.
