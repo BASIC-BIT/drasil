@@ -1,4 +1,5 @@
 import { createTracingRecorder } from '../fakes/recordingTracing';
+import { withObservation } from '../../observability/langfuse';
 import { Client, Guild, GuildMember, Message, User } from 'discord.js';
 import { SecurityActionService } from '../../services/SecurityActionService';
 import { DetectionResult } from '../../services/DetectionOrchestrator';
@@ -4265,6 +4266,59 @@ describe('SecurityActionService (unit)', () => {
         recorder.spans.some((span) => span.attributes['langfuse.observation.type'] === 'generation')
       ).toBe(false);
     } finally {
+      await recorder.shutdown();
+    }
+  });
+  it('starts delayed repair in a fresh case session after the original workflow ends', async () => {
+    const recorder = createTracingRecorder();
+    const previousEnvironment = process.env.LANGFUSE_TRACING_ENVIRONMENT;
+    process.env.LANGFUSE_TRACING_ENVIRONMENT = 'development';
+    const realSetTimeout = setTimeout;
+    const timerSpy = jest
+      .spyOn(global, 'setTimeout')
+      .mockImplementation((callback, delay, ...args) =>
+        realSetTimeout(callback, delay === 70_000 ? 5 : delay, ...args)
+      );
+    const log = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const member = buildMember('synthetic-guild', 'synthetic-user');
+      const message = buildMessage(member.guild.id, 'synthetic-channel');
+      threadManager.createVerificationThread.mockRejectedValueOnce(new Error('Missing Access'));
+      // Initial evidence thread fails; delayed repair creates and delivers it later.
+      threadManager.createPrivateEvidenceThread.mockRejectedValueOnce(new Error('Unavailable'));
+      const service = buildService();
+      await withObservation('initial-detection', 'chain', () =>
+        service.handleSuspiciousMessage(
+          member,
+          {
+            label: 'SUSPICIOUS',
+            confidence: 0.9,
+            reasons: ['Synthetic evidence'],
+            triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+            triggerContent: message.content,
+          },
+          message
+        )
+      );
+      const original = recorder.spans.find((span) => span.name === 'initial-detection');
+      const cases = await verificationEventRepository.findByUserAndServer(
+        member.id,
+        member.guild.id
+      );
+      expect(cases).toHaveLength(1);
+      await new Promise<void>((resolve) => realSetTimeout(resolve, 30));
+      const evidence = recorder.spans.find((span) => span.name === 'case-evidence');
+      expect(evidence).toBeDefined();
+      expect(evidence?.spanContext().traceId).not.toBe(original?.spanContext().traceId);
+      const repair = recorder.spans.find((span) => span.name === 'case-repair');
+      expect(repair?.attributes['session.id']).toBe(`development:case:${cases[0].id}`);
+      expect(evidence?.parentSpanContext?.spanId).toBe(repair?.spanContext().spanId);
+      expect(threadManager.repairVerificationThread).toHaveBeenCalledTimes(1);
+    } finally {
+      log.mockRestore();
+      timerSpy.mockRestore();
+      if (previousEnvironment === undefined) delete process.env.LANGFUSE_TRACING_ENVIRONMENT;
+      else process.env.LANGFUSE_TRACING_ENVIRONMENT = previousEnvironment;
       await recorder.shutdown();
     }
   });

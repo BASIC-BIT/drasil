@@ -21,10 +21,21 @@ describe('GPTService (unit)', () => {
 
   function buildOpenAiMock(outputParsed: unknown, usage?: Record<string, number>) {
     const parse = jest.fn().mockResolvedValue({
-      output_parsed: outputParsed,
+      output:
+        outputParsed === null
+          ? []
+          : [
+              {
+                type: 'message',
+                role: 'assistant',
+                content: [
+                  { type: 'output_text', text: JSON.stringify(outputParsed), annotations: [] },
+                ],
+              },
+            ],
       usage,
     });
-    const openai = { responses: { parse } } as unknown as OpenAI;
+    const openai = { responses: { create: parse } } as unknown as OpenAI;
     return { openai, parse };
   }
 
@@ -119,7 +130,7 @@ describe('GPTService (unit)', () => {
 
   it('defaults to OK when OpenAI call throws', async () => {
     const parse = jest.fn().mockRejectedValue(new Error('boom'));
-    const openai = { responses: { parse } } as unknown as OpenAI;
+    const openai = { responses: { create: parse } } as unknown as OpenAI;
     const service = new GPTService(openai);
 
     const result = await service.analyzeProfile(makeProfile());
@@ -138,7 +149,7 @@ describe('GPTService (unit)', () => {
 
     expect(result.result).toBe('OK');
     expect(result.confidence).toBe(0.1);
-    expect(result.summary).toBe('Risk analysis returned incomplete output; review manually.');
+    expect(result.summary).toBe('Risk analysis failed; review manually.');
     expect(result.isFallback).toBe(true);
   });
 
@@ -150,7 +161,7 @@ describe('GPTService (unit)', () => {
 
     expect(result.result).toBe('OK');
     expect(result.confidence).toBe(0.1);
-    expect(result.summary).toBe('Risk analysis returned incomplete output; review manually.');
+    expect(result.summary).toBe('Risk analysis failed; review manually.');
     expect(result.reasonCodes).toEqual(['ai_analysis_unavailable']);
     expect(result.isFallback).toBe(true);
   });
@@ -447,7 +458,7 @@ describe('GPTService (unit)', () => {
         expect.objectContaining({
           result: 'needs_review',
           confidence: 0.1,
-          summary: 'Thread analysis returned incomplete output; review manually.',
+          summary: 'Thread analysis failed; review manually.',
           reasonCodes: ['ai_analysis_unavailable'],
           recommendedAction: 'manual_review',
           isFallback: true,
@@ -699,7 +710,7 @@ describe('GPT generation observations', () => {
       });
       await run(
         new GPTService({
-          responses: { parse },
+          responses: { create: parse },
           apiKey: 'synthetic-runtime-secret',
         } as unknown as OpenAI)
       );
@@ -724,12 +735,12 @@ describe('GPT generation observations', () => {
   );
   it('marks fallback OK as failed analysis and retains reported usage', async () => {
     const parse = jest.fn().mockResolvedValue({
-      output_parsed: null,
+      output: [],
       model: 'returned-model',
       usage: { input_tokens: 3, output_tokens: 2, total_tokens: 5 },
     });
     const result = await new GPTService({
-      responses: { parse },
+      responses: { create: parse },
     } as unknown as OpenAI).analyzeProfile(profile);
     expect(result.result).toBe('OK');
     expect(result.isFallback).toBe(true);
@@ -749,7 +760,9 @@ describe('GPT generation observations', () => {
     const parse = jest
       .fn()
       .mockRejectedValue(Object.assign(new Error('synthetic-runtime-secret'), { status: 429 }));
-    await new GPTService({ responses: { parse } } as unknown as OpenAI).analyzeProfile(profile);
+    await new GPTService({ responses: { create: parse } } as unknown as OpenAI).analyzeProfile(
+      profile
+    );
     expect(recorder.spans).toHaveLength(1);
     expect(recorder.spans[0].attributes['langfuse.observation.metadata.http_status']).toBe('429');
     expect(recorder.spans[0].attributes['langfuse.observation.usage_details']).toBeUndefined();
@@ -757,10 +770,87 @@ describe('GPT generation observations', () => {
   });
   it('omits a generation when no image is available', async () => {
     const parse = jest.fn();
-    await new GPTService({ responses: { parse } } as unknown as OpenAI).describeProfileImages({
+    await new GPTService({
+      responses: { create: parse },
+    } as unknown as OpenAI).describeProfileImages({
       username: 'synthetic',
     });
     expect(recorder.spans).toHaveLength(0);
     expect(parse).not.toHaveBeenCalled();
+  });
+  it('retains usage and output when the real SDK structured parser rejects', async () => {
+    const output = [
+      {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: '{invalid-json', annotations: [] }],
+      },
+    ];
+    const http = jest.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: 'synthetic-response',
+          object: 'response',
+          status: 'completed',
+          model: 'returned-model',
+          output,
+          usage: { input_tokens: 100, output_tokens: 7, total_tokens: 107 },
+          service_tier: 'default',
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    );
+    const client = new OpenAI({ apiKey: 'synthetic-runtime-secret', fetch: http });
+    const log = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const result = await new GPTService(client).analyzeProfile(profile);
+      expect(result.isFallback).toBe(true);
+      expect(http).toHaveBeenCalledTimes(1);
+      const span = recorder.spans[0];
+      expect(JSON.parse(String(span.attributes['langfuse.observation.usage_details']))).toEqual({
+        input: 100,
+        output: 7,
+        total: 107,
+      });
+      expect(JSON.parse(String(span.attributes['langfuse.observation.output']))).toEqual(output);
+      expect(span.attributes['langfuse.observation.metadata.usage_status']).toBe('reported');
+      expect(span.attributes['langfuse.observation.metadata.request_outcome']).toBe(
+        'invalid_response'
+      );
+      expect(JSON.stringify({ attributes: span.attributes, events: span.events })).not.toContain(
+        'synthetic-runtime-secret'
+      );
+    } finally {
+      log.mockRestore();
+    }
+  });
+  it('sanitizes recoverable server context errors in attributes and events', async () => {
+    const parse = jest.fn().mockResolvedValue({
+      output: [
+        {
+          type: 'message',
+          role: 'assistant',
+          content: [
+            { type: 'output_text', text: JSON.stringify(cases[0].parsed), annotations: [] },
+          ],
+        },
+      ],
+    });
+    const configService = {
+      getServerConfig: jest.fn().mockRejectedValue(new Error('synthetic-runtime-secret')),
+    } as unknown as ConstructorParameters<typeof GPTService>[1];
+    const result = await new GPTService(
+      { responses: { create: parse } } as unknown as OpenAI,
+      configService
+    ).analyzeProfile({ ...profile, serverId: 'synthetic-server' });
+    expect(result.isFallback).toBe(false);
+    expect(parse).toHaveBeenCalledTimes(1);
+    const span = recorder.spans[0];
+    expect(JSON.stringify({ attributes: span.attributes, events: span.events })).not.toContain(
+      'synthetic-runtime-secret'
+    );
+    expect(span.attributes['langfuse.observation.metadata.server_context_load_failed']).toBe(
+      'true'
+    );
   });
 });

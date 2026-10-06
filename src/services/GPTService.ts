@@ -7,6 +7,7 @@ import { injectable, inject } from 'inversify';
 import OpenAI from 'openai';
 import type { ParsedResponse } from 'openai/resources/responses/responses';
 import { zodTextFormat } from 'openai/helpers/zod';
+import { parseResponse as parseOpenAIResponse } from 'openai/lib/ResponsesParser';
 import { z } from 'zod';
 import { getFormattedExamples } from '../config/gpt-config';
 import type { IConfigService } from '../config/ConfigService';
@@ -666,8 +667,9 @@ export class GPTService implements IGPTService {
       input: request,
       metadata: { request_sent: true, request_outcome: 'pending', cost_source: 'unknown' },
     });
+    let reportedUsage = false;
     try {
-      const response: ParsedResponse<unknown> = await this.openai.responses.parse(request);
+      const response = await this.openai.responses.create(request);
       const usage = response.usage as
         | {
             input_tokens?: number;
@@ -695,17 +697,24 @@ export class GPTService implements IGPTService {
           total: usage.input_tokens + usage.output_tokens,
         };
       }
+      reportedUsage = Boolean(usageDetails);
       recordObservation('generation', {
         model: response.model || request.model,
-        output: rawOutput ?? response.output_parsed,
+        output: rawOutput,
         usageDetails,
         metadata: {
-          request_outcome: response.output_parsed ? 'success' : 'invalid_response',
           usage_status: usageDetails ? 'reported' : 'unknown',
           ...(serviceTier ? { service_tier: serviceTier } : {}),
         },
       });
-      return response;
+      // Use the same SDK parser after preserving the provider's billable response.
+      const parsedResponse = parseOpenAIResponse<typeof request, unknown>(response, request);
+      recordObservation('generation', {
+        metadata: {
+          request_outcome: parsedResponse.output_parsed ? 'success' : 'invalid_response',
+        },
+      });
+      return parsedResponse;
     } catch (error) {
       const status =
         error && typeof error === 'object' && 'status' in error && typeof error.status === 'number'
@@ -726,7 +735,7 @@ export class GPTService implements IGPTService {
         metadata: {
           error_category: category,
           request_outcome: category,
-          usage_status: 'unknown',
+          usage_status: reportedUsage ? 'reported' : 'unknown',
           ...(status !== undefined ? { http_status: status } : {}),
         },
       });
@@ -916,11 +925,9 @@ export class GPTService implements IGPTService {
         '--- End moderator-provided server context ---',
       ].join('\n');
     } catch (error) {
-      const span = trace.getActiveSpan();
-      if (span) {
-        span.recordException(error instanceof Error ? error : new Error(String(error)));
-        span.setAttribute('drasil.gpt.server_context_load_failed', true);
-      }
+      recordObservation('generation', {
+        metadata: { server_context_load_failed: true },
+      });
 
       if (this.isDebugGptEnabled()) {
         console.warn(

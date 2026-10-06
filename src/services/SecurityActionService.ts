@@ -1,3 +1,4 @@
+import { context, ROOT_CONTEXT } from '@opentelemetry/api';
 import {
   withObservation,
   recordObservation,
@@ -1535,13 +1536,24 @@ export class SecurityActionService implements ISecurityActionService {
 
     this.scheduledThreadRepairEventIds.add(verificationEvent.id);
     const timer = setTimeout(() => {
-      void this.runDelayedThreadRepair(
-        member,
-        verificationEvent.id,
-        detectionResult,
-        sourceMessage
-      ).finally(() => {
-        this.scheduledThreadRepairEventIds.delete(verificationEvent.id);
+      context.with(ROOT_CONTEXT, () => {
+        void withObservation(
+          'case-repair',
+          'chain',
+          () =>
+            this.runDelayedThreadRepair(
+              member,
+              verificationEvent.id,
+              detectionResult,
+              sourceMessage
+            ),
+          { metadata: { case_id: verificationEvent.id } },
+          {
+            sessionId: `${process.env.LANGFUSE_TRACING_ENVIRONMENT ?? 'development'}:case:${verificationEvent.id}`,
+          }
+        ).finally(() => {
+          this.scheduledThreadRepairEventIds.delete(verificationEvent.id);
+        });
       });
     }, DELAYED_THREAD_REPAIR_DELAY_MS);
     (timer as { unref?: () => void }).unref?.();

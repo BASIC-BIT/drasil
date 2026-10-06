@@ -296,6 +296,7 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
           // suspicion score is borderline (not clearly OK or clearly SUSPICIOUS).
           const shouldUseGPT = gptTriggerReasons.length > 0 && profileData !== undefined;
 
+          const heuristicScore = suspicionScore;
           let result: DetectionResult;
           let gptAnalysis: GPTProfileAnalysis | undefined;
           let jevAnalysis: JevProfileAnalysis | undefined;
@@ -379,7 +380,7 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
               output: {
                 verdict: result.label,
                 confidence: result.confidence,
-                heuristic_score: suspicionScore,
+                heuristic_score: heuristicScore,
                 gpt_verdict: gptAnalysis?.result,
                 jev_verdict: jevAnalysis?.result,
                 gpt_reason_codes: gptAnalysis?.reasonCodes,
@@ -466,6 +467,7 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
             reasons.push('New Discord account');
           }
 
+          const heuristicScore = suspicionScore;
           // Use the GPT analysis result
           if (gptAnalysis.result === 'SUSPICIOUS') {
             suspicionScore += 0.7;
@@ -524,7 +526,7 @@ export class DetectionOrchestrator implements IDetectionOrchestrator {
               output: {
                 verdict: initialResult.label,
                 confidence: initialResult.confidence,
-                heuristic_score: suspicionScore,
+                heuristic_score: heuristicScore,
                 gpt_verdict: gptAnalysis.result,
                 jev_verdict: jevAnalysis?.result,
                 gpt_reason_codes: gptAnalysis.reasonCodes,

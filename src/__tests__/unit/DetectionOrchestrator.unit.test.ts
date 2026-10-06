@@ -948,4 +948,38 @@ describe('DetectionOrchestrator (unit)', () => {
       }
     }
   );
+  it.each(['message', 'join'] as const)(
+    'keeps heuristic contribution separate from the %s model score',
+    async (operation) => {
+      const recorder = createTracingRecorder();
+      try {
+        heuristicService.analyzeMessage.mockReturnValue({ result: 'OK', reasons: [] });
+        gptService.analyzeProfile.mockResolvedValue(
+          makeGptAnalysis({ result: 'SUSPICIOUS', confidence: 0.95 })
+        );
+        const orchestrator = new DetectionOrchestrator(
+          heuristicService,
+          gptService,
+          detectionEventsRepository,
+          userRepository,
+          serverRepository
+        );
+        const profile: UserProfileData = {
+          username: 'synthetic',
+          accountCreatedAt: new Date('2020-01-01'),
+          joinedServerAt: new Date('2020-01-01'),
+          recentMessages: [],
+        };
+        if (operation === 'message')
+          await orchestrator.detectMessage(serverId, userId, 'hello', profile, { forceGpt: true });
+        else await orchestrator.detectNewJoin(serverId, userId, profile);
+        const combined = recorder.spans.find((span) => span.name === 'combine-verdicts');
+        expect(
+          JSON.parse(String(combined?.attributes['langfuse.observation.output']))
+        ).toMatchObject({ heuristic_score: 0 });
+      } finally {
+        await recorder.shutdown();
+      }
+    }
+  );
 });
