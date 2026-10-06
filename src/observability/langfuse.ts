@@ -41,7 +41,8 @@ export function initLangfuseTracing(): boolean {
       baseUrl,
       environment,
       release: process.env.LANGFUSE_RELEASE,
-      shouldExportSpan: ({ otelSpan }) => otelSpan.attributes['drasil.observation'] === true,
+      shouldExportSpan: ({ otelSpan }): boolean =>
+        otelSpan.attributes['drasil.observation'] === true,
     });
     const nextSdk = new NodeSDK({ spanProcessors: [processor] });
     nextSdk.start();
@@ -99,13 +100,13 @@ export async function withObservation<T>(
     try {
       context.with(activeContext, () => {
         try {
-          propagateAttributes({ ...traceContext, asBaggage: false }, runOnce);
+          void propagateAttributes({ ...traceContext, asBaggage: false }, runOnce);
         } catch {
-          runOnce();
+          void runOnce();
         }
       });
     } catch {
-      runOnce();
+      void runOnce();
     }
     return await runOnce();
   } catch (error) {
