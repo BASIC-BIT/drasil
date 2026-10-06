@@ -1,3 +1,8 @@
+import {
+  withObservation,
+  recordObservation,
+  recordWorkflowOutcome,
+} from '../observability/langfuse';
 import { createHash } from 'crypto';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, GuildMember, Message } from 'discord.js';
 import { injectable, inject, optional } from 'inversify';
@@ -359,6 +364,9 @@ export class ReportIntakeService implements IReportIntakeService {
   }): Promise<boolean> {
     const intake = await this.reportIntakeRepository.findById(input.intakeId);
     if (!intake || intake.status !== ReportIntakeStatus.COLLECTING_EVIDENCE) {
+      recordWorkflowOutcome({
+        output: { actual_outcome: 'intake_unavailable', persistence_completed: false },
+      });
       return false;
     }
 
@@ -372,22 +380,48 @@ export class ReportIntakeService implements IReportIntakeService {
         ? await this.sendCandidateConfirmationPrompt(intake, input.message, candidateSuggestions)
         : {};
 
-    await this.reportIntakeRepository.update(intake.id, {
-      status: this.resolveNextStatus(intake.status, candidateSuggestions.length),
-      summary: aiSummary ?? intake.summary,
-      metadata: {
-        ...metadata,
-        ...(aiSummary ? { summary_source: 'ai_report_intake_extraction' } : {}),
-        candidate_suggestions: candidateSuggestions,
-        report_intake_agent: {
-          extraction: input.extraction,
-          evidence_count: input.evidenceCount,
-          image_count: input.imageCount,
-          candidate_count: candidateSuggestions.length,
-          analyzed_at: new Date().toISOString(),
-        },
-        ...promptMetadata,
+    recordWorkflowOutcome({
+      output: {
+        actual_outcome: promptMetadata.last_confirmation_prompt_token
+          ? 'confirmation_sent'
+          : candidateSuggestions.length
+            ? 'confirmation_suppressed'
+            : 'no_candidates',
+        confirmation_sent: Boolean(promptMetadata.last_confirmation_prompt_token),
+        persistence_completed: false,
       },
+    });
+    const persisted = await withObservation('persist-result', 'span', () =>
+      this.reportIntakeRepository.update(intake.id, {
+        status: this.resolveNextStatus(intake.status, candidateSuggestions.length),
+        summary: aiSummary ?? intake.summary,
+        metadata: {
+          ...metadata,
+          ...(aiSummary ? { summary_source: 'ai_report_intake_extraction' } : {}),
+          candidate_suggestions: candidateSuggestions,
+          report_intake_agent: {
+            extraction: input.extraction,
+            evidence_count: input.evidenceCount,
+            image_count: input.imageCount,
+            candidate_count: candidateSuggestions.length,
+            analyzed_at: new Date().toISOString(),
+          },
+          ...promptMetadata,
+        },
+      })
+    );
+    recordWorkflowOutcome({
+      output: {
+        actual_outcome: persisted
+          ? candidateSuggestions.length
+            ? 'candidates_suggested'
+            : 'no_candidates'
+          : 'persistence_failed',
+        confirmation_sent: Boolean(promptMetadata.last_confirmation_prompt_token),
+        persistence_completed: Boolean(persisted),
+        candidate_count: candidateSuggestions.length,
+      },
+      ...(persisted ? {} : { level: 'ERROR' as const, statusMessage: 'persistence_failed' }),
     });
 
     return candidateSuggestions.length > 0;
@@ -628,56 +662,76 @@ export class ReportIntakeService implements IReportIntakeService {
     message: Message,
     candidates: Awaited<ReturnType<IReportCandidateService['resolvePlatformBackedCandidates']>>
   ): Promise<Record<string, unknown>> {
-    const visibleCandidates = candidates
-      .filter((candidate) => candidate.discordUserId !== intake.reporter_id)
-      .slice(0, REPORT_INTAKE_MAX_CONFIRMATION_BUTTONS);
-    const candidateIds = visibleCandidates.map((candidate) => candidate.discordUserId);
-    if (candidateIds.length === 0) {
-      return {};
-    }
+    return withObservation(
+      'send-confirmation',
+      'tool',
+      async (): Promise<Record<string, unknown>> => {
+        const visibleCandidates = candidates
+          .filter((candidate) => candidate.discordUserId !== intake.reporter_id)
+          .slice(0, REPORT_INTAKE_MAX_CONFIRMATION_BUTTONS);
+        const candidateIds = visibleCandidates.map((candidate) => candidate.discordUserId);
+        if (candidateIds.length === 0) {
+          recordObservation('tool', {
+            output: { confirmation_sent: false, reason: 'no_visible_candidates' },
+          });
+          return {};
+        }
 
-    const metadata = toRecord(intake.metadata);
-    if (sameStringArray(metadata.last_confirmation_prompt_candidate_ids, candidateIds)) {
-      return {};
-    }
+        const metadata = toRecord(intake.metadata);
+        if (sameStringArray(metadata.last_confirmation_prompt_candidate_ids, candidateIds)) {
+          recordObservation('tool', {
+            output: { confirmation_sent: false, reason: 'unchanged_candidates' },
+          });
+          return {};
+        }
 
-    if (!hasMessageSend(message.channel)) {
-      return {};
-    }
+        if (!hasMessageSend(message.channel)) {
+          recordObservation('tool', {
+            output: { confirmation_sent: false, reason: 'channel_unavailable' },
+            level: 'WARNING',
+            statusMessage: 'channel_unavailable',
+          });
+          return {};
+        }
 
-    const confirmButtons = visibleCandidates.map((candidate) =>
-      new ButtonBuilder()
-        .setCustomId(
-          `${REPORT_INTAKE_CONFIRM_CUSTOM_ID_PREFIX}:${intake.id}:${candidate.discordUserId}`
-        )
-        .setLabel(this.buildCandidateButtonLabel(candidate))
-        .setStyle(ButtonStyle.Primary)
+        const confirmButtons = visibleCandidates.map((candidate) =>
+          new ButtonBuilder()
+            .setCustomId(
+              `${REPORT_INTAKE_CONFIRM_CUSTOM_ID_PREFIX}:${intake.id}:${candidate.discordUserId}`
+            )
+            .setLabel(this.buildCandidateButtonLabel(candidate))
+            .setStyle(ButtonStyle.Primary)
+        );
+        const promptToken = this.createPromptToken(candidateIds);
+        const rejectButton = new ButtonBuilder()
+          .setCustomId(`${REPORT_INTAKE_REJECT_CUSTOM_ID_PREFIX}:${intake.id}:${promptToken}`)
+          .setLabel(visibleCandidates.length === 1 ? 'No, not this person' : 'No, none of these')
+          .setStyle(ButtonStyle.Secondary);
+        const components = [
+          new ActionRowBuilder<ButtonBuilder>().addComponents(confirmButtons),
+          new ActionRowBuilder<ButtonBuilder>().addComponents(rejectButton),
+        ];
+
+        await message.channel.send({
+          content: this.buildCandidateConfirmationMessage(visibleCandidates, candidates.length),
+          components,
+          allowedMentions: { parse: [] },
+        });
+
+        recordObservation('tool', {
+          output: { confirmation_sent: true, visible_candidate_count: candidateIds.length },
+        });
+        return {
+          last_confirmation_prompt_candidate_ids: candidateIds,
+          last_confirmation_prompt_token: promptToken,
+          last_confirmation_prompt_at: new Date().toISOString(),
+          confirmation_prompt_candidate_ids_by_token: {
+            ...toRecord(metadata.confirmation_prompt_candidate_ids_by_token),
+            [promptToken]: candidateIds,
+          },
+        };
+      }
     );
-    const promptToken = this.createPromptToken(candidateIds);
-    const rejectButton = new ButtonBuilder()
-      .setCustomId(`${REPORT_INTAKE_REJECT_CUSTOM_ID_PREFIX}:${intake.id}:${promptToken}`)
-      .setLabel(visibleCandidates.length === 1 ? 'No, not this person' : 'No, none of these')
-      .setStyle(ButtonStyle.Secondary);
-    const components = [
-      new ActionRowBuilder<ButtonBuilder>().addComponents(confirmButtons),
-      new ActionRowBuilder<ButtonBuilder>().addComponents(rejectButton),
-    ];
-
-    await message.channel.send({
-      content: this.buildCandidateConfirmationMessage(visibleCandidates, candidates.length),
-      components,
-      allowedMentions: { parse: [] },
-    });
-
-    return {
-      last_confirmation_prompt_candidate_ids: candidateIds,
-      last_confirmation_prompt_token: promptToken,
-      last_confirmation_prompt_at: new Date().toISOString(),
-      confirmation_prompt_candidate_ids_by_token: {
-        ...toRecord(metadata.confirmation_prompt_candidate_ids_by_token),
-        [promptToken]: candidateIds,
-      },
-    };
   }
 
   private buildCandidateConfirmationMessage(
