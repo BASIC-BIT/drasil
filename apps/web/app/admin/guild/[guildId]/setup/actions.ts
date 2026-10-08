@@ -220,6 +220,21 @@ export async function queueReportInstructionsRepair(
   guildId: string,
   formData: FormData
 ): Promise<void> {
+  return queueReportInstructions(guildId, formData, false);
+}
+
+export async function queueReportInstructionsRepost(
+  guildId: string,
+  formData: FormData
+): Promise<void> {
+  return queueReportInstructions(guildId, formData, true);
+}
+
+async function queueReportInstructions(
+  guildId: string,
+  formData: FormData,
+  repost: boolean
+): Promise<void> {
   const [session, token] = await Promise.all([getCurrentAdminSession(), getCurrentDiscordToken()]);
   if (!session || !token) {
     redirect(`/api/auth/discord?returnTo=/admin/guild/${guildId}/setup`);
@@ -238,6 +253,8 @@ export async function queueReportInstructionsRepair(
     actorId: session.userId,
     channelId,
     guildId,
+    repost,
+    expectedMessageId: readOptionalFormString(formData, 'reportInstructionsMessageId'),
   });
 
   revalidatePath(`/admin/guild/${guildId}/setup`);

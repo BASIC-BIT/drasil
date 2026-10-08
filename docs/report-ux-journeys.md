@@ -41,6 +41,27 @@ Good for privacy and low clutter. Reports start as triage alerts instead of crea
 
 ### Guild Report Instructions Button
 
+Administrators can use `/setupreportbutton channel:<channel> repost:true` or **Repost report
+button** in web setup after adding channel instructions. Ordinary setup and repair still edit the
+existing panel. Repost sends a replacement, saves its ID, and then removes the previous Drasil
+panel. If cleanup fails, retry finishes cleanup before publishing again.
+
+```mermaid
+flowchart LR
+  Discord[Discord administrator] --> Slash[setupreportbutton]
+  Direct[Direct web setup link] --> Auth[Discord sign-in and administrator check]
+  Auth --> Setup[Web setup]
+  Slash --> Repair[Default repair: edit existing panel]
+  Setup --> Repair
+  Slash --> Repost[Explicit repost]
+  Setup --> Repost
+  Repost --> Send[Send below newer instructions]
+  Send --> Save[Save replacement ID]
+  Save --> Delete[Remove old Drasil panel]
+  Delete --> Button[Existing Report a user button]
+  Button --> Intake[Private report intake thread]
+```
+
 1. Reporter clicks the report instructions button in a configured report channel.
 2. Drasil opens a private report intake thread and adds the reporter.
 3. Drasil adds configured case responders when responder routing is enabled.

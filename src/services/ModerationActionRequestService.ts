@@ -2318,7 +2318,16 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       'Report instructions channel'
     );
     const manager = new ReportInstructionsManager(this.client, this.configService);
-    const result = await manager.upsertReportInstructionsMessage(request.server_id, targetChannel);
+    const repost = this.readMetadataBoolean(request.metadata, 'repost') === true;
+    const result = await manager.upsertReportInstructionsMessage(request.server_id, targetChannel, {
+      repost,
+      ...(repost
+        ? {
+            expectedMessageId:
+              this.readMetadataString(request.metadata, 'expected_message_id') ?? null,
+          }
+        : {}),
+    });
 
     await this.repository.complete(request.id, {
       action: result.action,
