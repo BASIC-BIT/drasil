@@ -175,6 +175,20 @@ resource "aws_secretsmanager_secret" "typesafe_api_key" {
   kms_key_id              = aws_kms_key.prod.arn
 }
 
+resource "aws_secretsmanager_secret" "langfuse_public_key" {
+  name = "${local.secrets_prefix}/LANGFUSE_PUBLIC_KEY"
+  #checkov:skip=CKV2_AWS_57:Automatic rotation requires dedicated rotation Lambda + runbook and is deferred intentionally.
+  recovery_window_in_days = 7
+  kms_key_id              = aws_kms_key.prod.arn
+}
+
+resource "aws_secretsmanager_secret" "langfuse_secret_key" {
+  name = "${local.secrets_prefix}/LANGFUSE_SECRET_KEY"
+  #checkov:skip=CKV2_AWS_57:Automatic rotation requires dedicated rotation Lambda + runbook and is deferred intentionally.
+  recovery_window_in_days = 7
+  kms_key_id              = aws_kms_key.prod.arn
+}
+
 resource "aws_secretsmanager_secret" "database_url" {
   name = "${local.secrets_prefix}/DATABASE_URL"
   #checkov:skip=CKV2_AWS_57:Automatic rotation requires dedicated rotation Lambda + runbook and is deferred intentionally.
@@ -236,6 +250,8 @@ data "aws_iam_policy_document" "ecs_task_execution_secrets" {
       aws_secretsmanager_secret.discord_token.arn,
       aws_secretsmanager_secret.openai_api_key.arn,
       aws_secretsmanager_secret.typesafe_api_key.arn,
+      aws_secretsmanager_secret.langfuse_public_key.arn,
+      aws_secretsmanager_secret.langfuse_secret_key.arn,
       aws_secretsmanager_secret.database_url.arn,
       aws_secretsmanager_secret.observability_hash_key.arn,
       aws_secretsmanager_secret.posthog_project_api_key.arn
@@ -304,6 +320,18 @@ resource "aws_ecs_task_definition" "bot" {
       essential = true
       environment = [
         {
+          name  = "LANGFUSE_TRACING_ENABLED"
+          value = tostring(var.langfuse_tracing_enabled)
+        },
+        {
+          name  = "LANGFUSE_BASE_URL"
+          value = var.langfuse_base_url
+        },
+        {
+          name  = "LANGFUSE_TRACING_ENVIRONMENT"
+          value = "production"
+        },
+        {
           name  = "NODE_ENV"
           value = "production"
         },
@@ -328,7 +356,7 @@ resource "aws_ecs_task_definition" "bot" {
           value = tostring(var.posthog_debug)
         }
       ]
-      secrets = [
+      secrets = concat([
         {
           name      = "DISCORD_TOKEN"
           valueFrom = aws_secretsmanager_secret.discord_token.arn
@@ -353,7 +381,16 @@ resource "aws_ecs_task_definition" "bot" {
           name      = "POSTHOG_PROJECT_API_KEY"
           valueFrom = aws_secretsmanager_secret.posthog_project_api_key.arn
         }
-      ]
+        ], var.langfuse_tracing_enabled ? [
+        {
+          name      = "LANGFUSE_PUBLIC_KEY"
+          valueFrom = aws_secretsmanager_secret.langfuse_public_key.arn
+        },
+        {
+          name      = "LANGFUSE_SECRET_KEY"
+          valueFrom = aws_secretsmanager_secret.langfuse_secret_key.arn
+        }
+      ] : [])
       logConfiguration = {
         logDriver = "awslogs"
         options = {

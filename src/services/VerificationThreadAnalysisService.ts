@@ -1,3 +1,9 @@
+import {
+  withObservation,
+  recordObservation,
+  recordWorkflowOutcome,
+} from '../observability/langfuse';
+import { hashIdentifier } from '../observability/hash';
 import { injectable, inject, optional } from 'inversify';
 import type { Message, ThreadChannel } from 'discord.js';
 import { randomUUID } from 'node:crypto';
@@ -248,111 +254,180 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
       return;
     }
 
-    const threadMessages = await this.fetchThreadMessages(message.channel as ThreadChannel);
-    const responses = threadMessages.filter(
-      (entry) => entry.author.id === verificationEvent.user_id
-    );
-    if (responses.length === 0) {
-      return;
-    }
-
-    const detectionEvent = verificationEvent.detection_event_id
-      ? await this.detectionEventsRepository.findById(verificationEvent.detection_event_id)
-      : null;
-    const analysisData: VerificationThreadAnalysisData = {
-      serverId: verificationEvent.server_id,
-      userId: verificationEvent.user_id,
-      username: message.author.username,
-      messages: threadMessages.map((entry) =>
-        this.formatThreadMessage(entry, verificationEvent.user_id)
-      ),
-      detectionReasons: detectionEvent?.reasons,
-      detectionType: detectionEvent?.detection_type,
-      flaggedMessage: await this.getFlaggedMessage(message, detectionEvent),
-      staffNotes: await this.getStaffNotes(message, verificationEvent),
-      profileImageDescription: this.getProfileImageDescription(verificationEvent.metadata),
-    };
-    const [gptAnalysis, jevAnalysis] = await Promise.all([
-      this.gptService.analyzeVerificationThreadResponses(analysisData),
-      this.jevService?.analyzeVerificationReplies(analysisData),
-    ]);
-    const jevFlagged = jevAnalysis?.result === 'SUSPICIOUS';
-    const rawAnalysis: VerificationThreadAnalysisResult = jevAnalysis
-      ? {
-          ...gptAnalysis,
-          gptResult: gptAnalysis.isFallback ? undefined : gptAnalysis.result,
-          gptSummary: gptAnalysis.isFallback ? undefined : gptAnalysis.summary,
-          jevAnalysis,
-          result: jevFlagged ? 'likely_suspicious' : gptAnalysis.result,
-          confidence: jevFlagged
-            ? Math.max(
-                gptAnalysis.result === 'likely_suspicious' ? gptAnalysis.confidence : 0,
-                jevAnalysis.suspiciousProbability ?? 0
-              )
-            : gptAnalysis.confidence,
-          reasonCodes: jevFlagged
-            ? [
-                ...new Set([
-                  ...(gptAnalysis.isFallback ? [] : gptAnalysis.reasonCodes),
-                  ...jevAnalysis.reasonCodes,
-                ]),
-              ]
-            : gptAnalysis.reasonCodes,
-          recommendedAction: jevFlagged ? 'restrict' : gptAnalysis.recommendedAction,
-          summary:
-            jevFlagged && gptAnalysis.result !== 'likely_suspicious'
-              ? 'Verification replies need moderator review.'
-              : gptAnalysis.summary,
-          isFallback: gptAnalysis.isFallback && jevAnalysis.result === 'UNAVAILABLE',
+    const caseEvent = verificationEvent;
+    return withObservation(
+      'verification-review',
+      'chain',
+      async (): Promise<void> => {
+        const threadMessages = await withObservation('collect-context', 'retriever', () =>
+          this.fetchThreadMessages(message.channel as ThreadChannel)
+        );
+        const responses = threadMessages.filter((entry) => entry.author.id === caseEvent.user_id);
+        if (responses.length === 0) {
+          recordWorkflowOutcome({ output: { actual_outcome: 'no_responses' } });
+          return;
         }
-      : gptAnalysis;
-    const analysis = this.capRecommendedAction(rawAnalysis, settings);
 
-    const nextAnalyzedMessageIds = [...metadata.analyzedMessageIds, message.id].slice(
-      -settings.messageLimit
-    );
-    const notified = await this.notificationManager.updateVerificationThreadAnalysis(
-      verificationEvent,
-      analysis,
-      responses.length
-    );
-    if (!notified) {
-      console.warn(
-        `[VerificationThreadAnalysis] Failed to update notification for verification event ${verificationEvent.id}`
-      );
-      return;
-    }
-
-    try {
-      await this.verificationEventRepository.update(verificationEvent.id, {
-        metadata: {
-          ...(this.asObject(verificationEvent.metadata) ?? {}),
-          thread_analysis: {
-            analyzedMessageIds: nextAnalyzedMessageIds,
-            latestAnalysis: {
-              ...(analysis.gptResult ? { gptResult: analysis.gptResult } : {}),
-              ...(analysis.gptSummary ? { gptSummary: analysis.gptSummary } : {}),
-              ...(analysis.jevAnalysis ? { jevAnalysis: { ...analysis.jevAnalysis } } : {}),
-              result: analysis.result,
-              confidence: analysis.confidence,
-              summary: analysis.summary,
-              reasonCodes: analysis.reasonCodes,
-              legitimacySignals: analysis.legitimacySignals,
-              suspicionSignals: analysis.suspicionSignals,
-              recommendedNextQuestion: analysis.recommendedNextQuestion,
-              recommendedAction: analysis.recommendedAction,
-              isFallback: analysis.isFallback,
-              analyzedMessageCount: responses.length,
-            },
+        const detectionEvent = caseEvent.detection_event_id
+          ? await this.detectionEventsRepository.findById(caseEvent.detection_event_id)
+          : null;
+        const analysisData: VerificationThreadAnalysisData = {
+          serverId: caseEvent.server_id,
+          userId: caseEvent.user_id,
+          username: message.author.username,
+          messages: threadMessages.map((entry) =>
+            this.formatThreadMessage(entry, caseEvent.user_id)
+          ),
+          detectionReasons: detectionEvent?.reasons,
+          detectionType: detectionEvent?.detection_type,
+          flaggedMessage: await this.getFlaggedMessage(message, detectionEvent),
+          staffNotes: await this.getStaffNotes(message, verificationEvent),
+          profileImageDescription: this.getProfileImageDescription(caseEvent.metadata),
+        };
+        const [gptAnalysis, jevAnalysis] = await Promise.all([
+          this.gptService.analyzeVerificationThreadResponses(analysisData),
+          this.jevService?.analyzeVerificationReplies(analysisData),
+        ]);
+        const analysis = await withObservation(
+          'combine-verdicts',
+          'span',
+          async (): Promise<VerificationThreadAnalysisResult> => {
+            const jevFlagged = jevAnalysis?.result === 'SUSPICIOUS';
+            const rawAnalysis: VerificationThreadAnalysisResult = jevAnalysis
+              ? {
+                  ...gptAnalysis,
+                  gptResult: gptAnalysis.isFallback ? undefined : gptAnalysis.result,
+                  gptSummary: gptAnalysis.isFallback ? undefined : gptAnalysis.summary,
+                  jevAnalysis,
+                  result: jevFlagged ? 'likely_suspicious' : gptAnalysis.result,
+                  confidence: jevFlagged
+                    ? Math.max(
+                        gptAnalysis.result === 'likely_suspicious' ? gptAnalysis.confidence : 0,
+                        jevAnalysis.suspiciousProbability ?? 0
+                      )
+                    : gptAnalysis.confidence,
+                  reasonCodes: jevFlagged
+                    ? [
+                        ...new Set([
+                          ...(gptAnalysis.isFallback ? [] : gptAnalysis.reasonCodes),
+                          ...jevAnalysis.reasonCodes,
+                        ]),
+                      ]
+                    : gptAnalysis.reasonCodes,
+                  recommendedAction: jevFlagged ? 'restrict' : gptAnalysis.recommendedAction,
+                  summary:
+                    jevFlagged && gptAnalysis.result !== 'likely_suspicious'
+                      ? 'Verification replies need moderator review.'
+                      : gptAnalysis.summary,
+                  isFallback: gptAnalysis.isFallback && jevAnalysis.result === 'UNAVAILABLE',
+                }
+              : gptAnalysis;
+            const capped = this.capRecommendedAction(rawAnalysis, settings);
+            recordObservation('span', {
+              output: {
+                verdict: capped.result,
+                gpt_verdict: gptAnalysis.result,
+                jev_verdict: jevAnalysis?.result,
+                requested_action: rawAnalysis.recommendedAction,
+                recommended_action: capped.recommendedAction,
+                reason_codes: capped.reasonCodes,
+              },
+            });
+            return capped;
           },
+          undefined,
+          undefined
+        );
+        const nextAnalyzedMessageIds = [...metadata.analyzedMessageIds, message.id].slice(
+          -settings.messageLimit
+        );
+        const notified = await withObservation('apply-outcome', 'tool', () =>
+          this.notificationManager.updateVerificationThreadAnalysis(
+            caseEvent,
+            analysis,
+            responses.length
+          )
+        );
+        if (!notified) {
+          recordWorkflowOutcome({
+            output: {
+              verdict: analysis.result,
+              recommended_action: analysis.recommendedAction,
+              actual_outcome: 'delivery_failed',
+              case_id: caseEvent.id,
+            },
+            level: 'ERROR',
+            statusMessage: 'delivery_failed',
+          });
+          console.warn(
+            `[VerificationThreadAnalysis] Failed to update notification for verification event ${caseEvent.id}`
+          );
+          return;
+        }
+
+        try {
+          const persisted = await withObservation('persist-result', 'span', () =>
+            this.verificationEventRepository.update(caseEvent.id, {
+              metadata: {
+                ...(this.asObject(caseEvent.metadata) ?? {}),
+                thread_analysis: {
+                  analyzedMessageIds: nextAnalyzedMessageIds,
+                  latestAnalysis: {
+                    ...(analysis.gptResult ? { gptResult: analysis.gptResult } : {}),
+                    ...(analysis.gptSummary ? { gptSummary: analysis.gptSummary } : {}),
+                    ...(analysis.jevAnalysis ? { jevAnalysis: { ...analysis.jevAnalysis } } : {}),
+                    result: analysis.result,
+                    confidence: analysis.confidence,
+                    summary: analysis.summary,
+                    reasonCodes: analysis.reasonCodes,
+                    legitimacySignals: analysis.legitimacySignals,
+                    suspicionSignals: analysis.suspicionSignals,
+                    recommendedNextQuestion: analysis.recommendedNextQuestion,
+                    recommendedAction: analysis.recommendedAction,
+                    isFallback: analysis.isFallback,
+                    analyzedMessageCount: responses.length,
+                  },
+                },
+              },
+            })
+          );
+          recordWorkflowOutcome({
+            output: {
+              verdict: analysis.result,
+              recommended_action: analysis.recommendedAction,
+              actual_outcome: persisted ? 'notified_and_persisted' : 'notified_persistence_failed',
+              case_id: caseEvent.id,
+            },
+            ...(persisted ? {} : { level: 'ERROR' as const, statusMessage: 'persistence_failed' }),
+          });
+        } catch (error) {
+          recordWorkflowOutcome({
+            output: {
+              verdict: analysis.result,
+              recommended_action: analysis.recommendedAction,
+              actual_outcome: 'notified_persistence_failed',
+              case_id: caseEvent.id,
+            },
+            level: 'ERROR',
+            statusMessage: 'persistence_failed',
+          });
+          console.warn(
+            `[VerificationThreadAnalysis] Failed to persist metadata for verification event ${caseEvent.id}`,
+            error
+          );
+        }
+      },
+      {
+        metadata: {
+          case_id: verificationEvent.id,
+          guild_hash: hashIdentifier(verificationEvent.server_id),
+          user_hash: hashIdentifier(verificationEvent.user_id),
         },
-      });
-    } catch (error) {
-      console.warn(
-        `[VerificationThreadAnalysis] Failed to persist metadata for verification event ${verificationEvent.id}`,
-        error
-      );
-    }
+      },
+      {
+        sessionId: `${process.env.LANGFUSE_TRACING_ENVIRONMENT ?? 'development'}:case:${verificationEvent.id}`,
+      }
+    );
   }
 
   private async markSupportThreadReminderResponded(

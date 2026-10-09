@@ -130,6 +130,7 @@ jobs:
         shell: bash
         env:
           IMAGE: ${{ steps.resolve_image.outputs.image }}
+          IMAGE_SHA: ${{ steps.resolve_image.outputs.image_sha }}
           ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
           ECS_SERVICE: ${{ vars.ECS_SERVICE }}
         run: |
@@ -142,8 +143,11 @@ jobs:
           echo "Using task definition baseline: $BASE_TD_ARN"
           aws ecs describe-task-definition --task-definition "$BASE_TD_ARN" --query 'taskDefinition' > taskdef.json
 
-          jq --arg IMAGE "$IMAGE" '
-            .containerDefinitions |= map(if .name == "drasil" then .image = $IMAGE else . end)
+          jq --arg IMAGE "$IMAGE" --arg RELEASE "$IMAGE_SHA" '
+            .containerDefinitions |= map(if .name == "drasil" then
+              .image = $IMAGE
+              | .environment = ((.environment // []) | map(select(.name != "LANGFUSE_RELEASE")) + [{name: "LANGFUSE_RELEASE", value: $RELEASE}])
+            else . end)
             | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)
           ' taskdef.json > taskdef.new.json
 
