@@ -100,7 +100,7 @@ describe('CommandHandler report commands (unit)', () => {
     const guild = {
       id: 'guild-1',
       members: {
-        fetch: jest.fn(),
+        fetch: jest.fn().mockResolvedValue({ find: () => undefined }),
       },
     } as any;
 
@@ -134,7 +134,7 @@ describe('CommandHandler report commands (unit)', () => {
     const guild = {
       id: 'guild-1',
       members: {
-        fetch: jest.fn(),
+        fetch: jest.fn().mockResolvedValue({ find: () => undefined }),
       },
     } as any;
 
@@ -213,7 +213,7 @@ describe('CommandHandler report commands (unit)', () => {
     const guild = {
       id: 'guild-1',
       members: {
-        fetch: jest.fn(),
+        fetch: jest.fn().mockResolvedValue({ find: () => undefined }),
       },
     } as any;
 
@@ -344,6 +344,9 @@ describe('CommandHandler report commands (unit)', () => {
   it('updates the existing report instructions message instead of sending a duplicate', async () => {
     const existingMessage = {
       id: 'message-1',
+      author: { id: 'client-1' },
+      components: [{ components: [{ customId: 'report_user_initiate' }] }],
+      embeds: [{ title: 'Report a User' }],
       edit: jest.fn().mockResolvedValue(undefined),
     };
     const targetChannel = {
@@ -380,6 +383,7 @@ describe('CommandHandler report commands (unit)', () => {
       guild,
       options: {
         getChannel: jest.fn().mockReturnValue(targetChannel),
+        getBoolean: jest.fn().mockReturnValue(false),
       },
       reply: jest.fn().mockResolvedValue(undefined),
       deferReply: jest.fn().mockResolvedValue(undefined),
@@ -414,12 +418,40 @@ describe('CommandHandler report commands (unit)', () => {
     });
   });
 
+  it('passes /setupreportbutton repost:true to the shared manager', async () => {
+    const upsert = jest
+      .spyOn(ReportInstructionsManager.prototype, 'upsertReportInstructionsMessage')
+      .mockResolvedValue({ action: 'reposted', messageId: 'replacement' });
+    const { handler } = buildHandler();
+    const channel = {
+      id: 'channel-1',
+      type: ChannelType.GuildText,
+      toString: () => '<#channel-1>',
+    };
+    const interaction = {
+      commandName: 'setupreportbutton',
+      user: { id: 'admin' },
+      guild: {
+        id: 'guild-1',
+        members: { fetch: jest.fn().mockResolvedValue({ permissions: { has: () => true } }) },
+      },
+      options: { getChannel: () => channel, getBoolean: () => true },
+      deferReply: jest.fn(),
+      editReply: jest.fn(),
+    };
+    await handler.handleSlashCommand(interaction as any);
+    expect(upsert).toHaveBeenCalledWith('guild-1', channel, { repost: true });
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: 'Report instructions reposted successfully in <#channel-1>.',
+    });
+  });
+
   it('recreates report instructions when the stored message no longer exists', async () => {
     const targetChannel = {
       id: 'channel-1',
       type: ChannelType.GuildText,
       messages: {
-        fetch: jest.fn().mockRejectedValue(new Error('missing')),
+        fetch: jest.fn().mockRejectedValue({ code: 10008 }),
       },
       send: jest.fn().mockResolvedValue({ id: 'message-2' }),
       toString: () => '<#channel-1>',
@@ -449,6 +481,7 @@ describe('CommandHandler report commands (unit)', () => {
       guild,
       options: {
         getChannel: jest.fn().mockReturnValue(targetChannel),
+        getBoolean: jest.fn().mockReturnValue(false),
       },
       reply: jest.fn().mockResolvedValue(undefined),
       deferReply: jest.fn().mockResolvedValue(undefined),
@@ -474,6 +507,7 @@ describe('CommandHandler report commands (unit)', () => {
     const existingMessage = {
       id: 'message-1',
       author: { id: 'client-1' },
+      components: [{ components: [{ customId: 'report_user_initiate' }] }],
       embeds: [{ title: 'Report a User' }],
       edit: jest.fn().mockResolvedValue(undefined),
     };
@@ -506,6 +540,7 @@ describe('CommandHandler report commands (unit)', () => {
       guild,
       options: {
         getChannel: jest.fn().mockReturnValue(targetChannel),
+        getBoolean: jest.fn().mockReturnValue(false),
       },
       reply: jest.fn().mockResolvedValue(undefined),
       deferReply: jest.fn().mockResolvedValue(undefined),
@@ -531,6 +566,9 @@ describe('CommandHandler report commands (unit)', () => {
 
   it('deletes old report instructions when moving them to a new channel', async () => {
     const oldMessage = {
+      author: { id: 'client-1' },
+      components: [{ components: [{ customId: 'report_user_initiate' }] }],
+      embeds: [{ title: 'Report a User' }],
       delete: jest.fn().mockResolvedValue(undefined),
     };
     const oldChannel = {
@@ -542,7 +580,7 @@ describe('CommandHandler report commands (unit)', () => {
       id: 'new-channel-1',
       type: ChannelType.GuildText,
       messages: {
-        fetch: jest.fn(),
+        fetch: jest.fn().mockResolvedValue({ find: () => undefined }),
       },
       send: jest.fn().mockResolvedValue({ id: 'new-message-1' }),
       toString: () => '<#new-channel-1>',
@@ -578,6 +616,7 @@ describe('CommandHandler report commands (unit)', () => {
       guild,
       options: {
         getChannel: jest.fn().mockReturnValue(targetChannel),
+        getBoolean: jest.fn().mockReturnValue(false),
       },
       reply: jest.fn().mockResolvedValue(undefined),
       deferReply: jest.fn().mockResolvedValue(undefined),
@@ -612,14 +651,19 @@ describe('CommandHandler report commands (unit)', () => {
   });
 
   it('preserves old report instructions when publishing the replacement fails', async () => {
-    const oldMessage = { delete: jest.fn().mockResolvedValue(undefined) };
+    const oldMessage = {
+      author: { id: 'bot-1' },
+      embeds: [{ title: 'Report a User' }],
+      components: [{ components: [{ customId: 'report_user_initiate' }] }],
+      delete: jest.fn().mockResolvedValue(undefined),
+    };
     const client = {
+      user: { id: 'bot-1' },
       channels: {
         fetch: jest.fn().mockResolvedValue({
           messages: { fetch: jest.fn().mockResolvedValue(oldMessage) },
         }),
       },
-      user: { id: 'bot-1' },
     } as any;
     const configService = {
       getServerConfig: jest.fn().mockResolvedValue({
@@ -675,8 +719,14 @@ describe('CommandHandler report commands (unit)', () => {
   });
 
   it('preserves old report instructions when clearing settings fails', async () => {
-    const oldMessage = { delete: jest.fn().mockResolvedValue(undefined) };
+    const oldMessage = {
+      author: { id: 'bot-1' },
+      embeds: [{ title: 'Report a User' }],
+      components: [{ components: [{ customId: 'report_user_initiate' }] }],
+      delete: jest.fn().mockResolvedValue(undefined),
+    };
     const client = {
+      user: { id: 'bot-1' },
       channels: {
         fetch: jest.fn().mockResolvedValue({
           messages: { fetch: jest.fn().mockResolvedValue(oldMessage) },
@@ -709,6 +759,7 @@ describe('CommandHandler report commands (unit)', () => {
 
   it('retains durable cleanup metadata when report-message deletion fails transiently', async () => {
     const client = {
+      user: { id: 'bot-1' },
       channels: {
         fetch: jest.fn().mockRejectedValue(new Error('Discord unavailable')),
       },
@@ -737,8 +788,14 @@ describe('CommandHandler report commands (unit)', () => {
   });
 
   it('retries durable report-message cleanup after the active routing metadata was cleared', async () => {
-    const oldMessage = { delete: jest.fn().mockResolvedValue(undefined) };
+    const oldMessage = {
+      author: { id: 'bot-1' },
+      embeds: [{ title: 'Report a User' }],
+      components: [{ components: [{ customId: 'report_user_initiate' }] }],
+      delete: jest.fn().mockResolvedValue(undefined),
+    };
     const client = {
+      user: { id: 'bot-1' },
       channels: {
         fetch: jest.fn().mockResolvedValue({
           messages: { fetch: jest.fn().mockResolvedValue(oldMessage) },
@@ -777,14 +834,19 @@ describe('CommandHandler report commands (unit)', () => {
     const firstSendRelease = new Promise<void>((resolve) => {
       releaseFirstSend = resolve;
     });
-    const oldMessage = { delete: jest.fn().mockResolvedValue(undefined) };
+    const oldMessage = {
+      author: { id: 'bot-1' },
+      embeds: [{ title: 'Report a User' }],
+      components: [{ components: [{ customId: 'report_user_initiate' }] }],
+      delete: jest.fn().mockResolvedValue(undefined),
+    };
     const client = {
+      user: { id: 'bot-1' },
       channels: {
         fetch: jest.fn().mockResolvedValue({
           messages: { fetch: jest.fn().mockResolvedValue(oldMessage) },
         }),
       },
-      user: { id: 'bot-1' },
     } as any;
     let settings: Record<string, string | null> = {};
     const configService = {

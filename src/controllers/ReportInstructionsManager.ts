@@ -9,6 +9,7 @@ import {
 } from 'discord.js';
 import { IConfigService } from '../config/ConfigService';
 import type { ServerSettings } from '../repositories/types';
+import { createHash } from 'node:crypto';
 
 const REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY = 'report_instructions_channel_id';
 const REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY = 'report_instructions_message_id';
@@ -17,10 +18,22 @@ const REPORT_INSTRUCTIONS_CLEANUP_MESSAGE_ID_SETTING_KEY = 'report_instructions_
 const DISCORD_UNKNOWN_CHANNEL_ERROR_CODE = 10003;
 const DISCORD_UNKNOWN_MESSAGE_ERROR_CODE = 10008;
 const REPORT_INSTRUCTIONS_CLEANUP_PENDING_ERROR =
-  'Report instructions were disabled, but the previous message could not be removed. Retry setup to finish cleanup.';
+  'Report panel settings were saved, but previous panel cleanup needs attention. Retry setup to finish cleanup.';
 const REPORT_INSTRUCTIONS_ROLLBACK_PENDING_ERROR =
-  'Report instructions were published but could not be tracked or removed. Retry setup to recover the message.';
+  'A report panel was published, but saving or rolling it back could not be confirmed. Existing panels were retained. Retry setup to recover the message.';
 const reportInstructionsExecutionChains = new Map<string, Promise<unknown>>();
+// ponytail: one bot process owns Discord writes; use a distributed lock before scaling writers.
+const pendingReportInstructionsPublications = new Map<string, Partial<ServerSettings>>();
+
+export interface ReportInstructionsOptions {
+  readonly repost?: boolean;
+  readonly expectedMessageId?: string | null;
+}
+
+interface ReportInstructionsResult {
+  action: 'sent' | 'updated' | 'recreated' | 'reposted';
+  messageId: string;
+}
 
 export class ReportInstructionsRollbackRequiredError extends Error {
   public constructor() {
@@ -54,33 +67,99 @@ export class ReportInstructionsManager {
 
   public async upsertReportInstructionsMessage(
     guildId: string,
-    targetChannel: TextChannel
-  ): Promise<{ action: 'sent' | 'updated' | 'recreated'; messageId: string }> {
+    targetChannel: TextChannel,
+    options: ReportInstructionsOptions = {}
+  ): Promise<ReportInstructionsResult> {
+    // Capture the panel the administrator saw before entering the serialization queue.
+    // Concurrent reposts of that panel reuse the first replacement.
+    if (options.repost && options.expectedMessageId === undefined) {
+      const config = await this.configService.getServerConfig(guildId, {
+        failOnReadError: true,
+        forceRefresh: true,
+      });
+      options = {
+        ...options,
+        expectedMessageId: config.settings[REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY] ?? null,
+      };
+    }
     return runSerializedReportInstructions(guildId, () =>
-      this.upsertReportInstructionsMessageExclusive(guildId, targetChannel)
+      this.upsertReportInstructionsMessageExclusive(guildId, targetChannel, options)
     );
   }
 
   private async upsertReportInstructionsMessageExclusive(
     guildId: string,
-    targetChannel: TextChannel
-  ): Promise<{ action: 'sent' | 'updated' | 'recreated'; messageId: string }> {
+    targetChannel: TextChannel,
+    options: ReportInstructionsOptions
+  ): Promise<ReportInstructionsResult> {
     const messagePayload = this.buildReportInstructionsMessagePayload();
-    const serverConfig = await this.configService.getServerConfig(guildId);
+    await this.recoverPendingPublication(guildId);
+    const serverConfig = await this.configService.getServerConfig(guildId, {
+      failOnReadError: true,
+      forceRefresh: true,
+    });
+    const hadPendingCleanup = Boolean(
+      serverConfig.settings[REPORT_INSTRUCTIONS_CLEANUP_MESSAGE_ID_SETTING_KEY]
+    );
     await this.retryPendingReportInstructionsCleanup(guildId, serverConfig.settings);
-    const existingChannelId = serverConfig.settings[REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY];
-    const existingMessageId = serverConfig.settings[REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY];
+    let existingChannelId = serverConfig.settings[REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY];
+    let existingMessageId = serverConfig.settings[REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY];
+    if (
+      options.repost &&
+      existingChannelId !== targetChannel.id &&
+      (existingMessageId ?? null) !== options.expectedMessageId
+    ) {
+      throw new Error(
+        'The report panel changed since this request. Refresh setup before reposting.'
+      );
+    }
     let messageId: string;
     let createdMessage: Message | null = null;
-    let action: 'sent' | 'updated' | 'recreated' = 'sent';
+    let action: ReportInstructionsResult['action'] = 'sent';
     const movedChannels = existingChannelId !== targetChannel.id;
+    const repost =
+      options.repost &&
+      !hadPendingCleanup &&
+      (existingMessageId ?? null) === options.expectedMessageId;
 
-    if (existingChannelId === targetChannel.id && existingMessageId) {
+    if (repost && !existingMessageId) {
+      const recoveredMessage = await this.findExistingReportInstructionsMessage(targetChannel);
+      if (recoveredMessage) {
+        existingChannelId = targetChannel.id;
+        existingMessageId = recoveredMessage.id;
+      }
+    }
+
+    if (repost) {
+      const nonce = createHash('sha256')
+        .update(`${guildId}:${targetChannel.id}:${options.expectedMessageId ?? 'none'}`)
+        .digest('hex')
+        .slice(0, 25);
+      const sentMessage =
+        (await (existingChannelId === targetChannel.id && existingMessageId
+          ? this.findRepostReplacement(targetChannel, existingMessageId)
+          : Promise.resolve(null))) ??
+        (await targetChannel.send({
+          ...messagePayload,
+          // Discord deduplicates recent sends after an ambiguous network failure.
+          nonce,
+          enforceNonce: true,
+        }));
+      createdMessage = sentMessage;
+      messageId = sentMessage.id;
+      action = 'reposted';
+    } else if (existingChannelId === targetChannel.id && existingMessageId) {
       const existingMessage = await targetChannel.messages
         .fetch(existingMessageId)
-        .catch(() => null);
+        .catch((error: unknown) => {
+          if (this.isUnknownDiscordResource(error, DISCORD_UNKNOWN_MESSAGE_ERROR_CODE)) {
+            return null;
+          }
+          throw error;
+        });
 
       if (existingMessage) {
+        this.assertBotOwnedMessage(existingMessage);
         await existingMessage.edit(messagePayload);
         messageId = existingMessage.id;
         action = 'updated';
@@ -107,23 +186,50 @@ export class ReportInstructionsManager {
       [REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY]: targetChannel.id,
       [REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY]: messageId,
     };
-    if (movedChannels && existingChannelId && existingMessageId) {
+    const supersededMessage =
+      (movedChannels || repost) &&
+      existingChannelId &&
+      existingMessageId &&
+      existingMessageId !== messageId;
+    if (supersededMessage) {
       settingsPatch[REPORT_INSTRUCTIONS_CLEANUP_CHANNEL_ID_SETTING_KEY] = existingChannelId;
       settingsPatch[REPORT_INSTRUCTIONS_CLEANUP_MESSAGE_ID_SETTING_KEY] = existingMessageId;
     }
     try {
       await this.configService.updateServerSettings(guildId, settingsPatch);
     } catch (error) {
-      if (
-        createdMessage &&
-        !(await this.deleteUntrackedReportInstructionsMessage(createdMessage))
-      ) {
-        throw new ReportInstructionsRollbackRequiredError();
+      if (createdMessage) {
+        // A write may have committed despite its response failing. Never delete a panel
+        // until a fresh read proves it is not the saved active panel.
+        let savedSettings: ServerSettings;
+        try {
+          savedSettings = (
+            await this.configService.getServerConfig(guildId, {
+              failOnReadError: true,
+              forceRefresh: true,
+            })
+          ).settings;
+        } catch {
+          pendingReportInstructionsPublications.set(guildId, settingsPatch);
+          throw new ReportInstructionsRollbackRequiredError();
+        }
+        if (savedSettings[REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY] !== messageId) {
+          if (repost) {
+            pendingReportInstructionsPublications.set(guildId, settingsPatch);
+            throw new ReportInstructionsRollbackRequiredError();
+          }
+          if (!(await this.deleteUntrackedReportInstructionsMessage(createdMessage))) {
+            pendingReportInstructionsPublications.set(guildId, settingsPatch);
+            throw new ReportInstructionsRollbackRequiredError();
+          }
+          throw error;
+        }
+      } else {
+        throw error;
       }
-      throw error;
     }
 
-    if (movedChannels && existingChannelId && existingMessageId) {
+    if (supersededMessage && existingChannelId && existingMessageId) {
       await this.finishReportInstructionsCleanup(guildId, existingChannelId, existingMessageId);
     }
 
@@ -141,6 +247,7 @@ export class ReportInstructionsManager {
   private async clearReportInstructionsExclusive(
     guildId: string
   ): Promise<{ action: 'cleared' | 'unchanged' }> {
+    await this.recoverPendingPublication(guildId);
     const serverConfig = await this.configService.getServerConfig(guildId);
     const hadPendingCleanup = Boolean(
       serverConfig.settings[REPORT_INSTRUCTIONS_CLEANUP_CHANNEL_ID_SETTING_KEY] ||
@@ -184,17 +291,62 @@ export class ReportInstructionsManager {
       return null;
     }
 
-    const messages = await Promise.resolve(messageManager.fetch({ limit: 50 })).catch(() => null);
-    if (!messages) {
-      return null;
-    }
+    const messages = await messageManager.fetch({ limit: 50 });
+    return messages.find((message) => this.isReportInstructionsMessage(message)) ?? null;
+  }
 
-    return (
-      messages.find(
+  private async findRepostReplacement(
+    channel: TextChannel,
+    previousMessageId: string
+  ): Promise<Message | null> {
+    let before: string | undefined;
+    // Recover a send whose coordinates were never saved, including after a process restart.
+    // Stop at the panel this request supersedes rather than scanning older channel history.
+    for (;;) {
+      const messages = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
+      const replacement = messages.find(
         (message) =>
-          message.author.id === botUserId &&
-          message.embeds.some((embed) => embed.title === 'Report a User')
-      ) ?? null
+          this.isReportInstructionsMessage(message) &&
+          BigInt(message.id) > BigInt(previousMessageId)
+      );
+      if (replacement) {
+        return replacement;
+      }
+      const oldestId = messages.last()?.id;
+      if (!oldestId || messages.size < 100 || BigInt(oldestId) <= BigInt(previousMessageId)) {
+        return null;
+      }
+      before = oldestId;
+    }
+  }
+
+  private async recoverPendingPublication(guildId: string): Promise<void> {
+    const pending = pendingReportInstructionsPublications.get(guildId);
+    if (!pending) {
+      return;
+    }
+    await this.configService.updateServerSettings(guildId, pending);
+    pendingReportInstructionsPublications.delete(guildId);
+  }
+
+  private assertBotOwnedMessage(message: Message): void {
+    if (!this.isReportInstructionsMessage(message)) {
+      throw new Error('The saved message is not a Drasil report panel. No message was changed.');
+    }
+  }
+
+  private isReportInstructionsMessage(message: Message): boolean {
+    return Boolean(
+      this.client.user &&
+      message.author.id === this.client.user.id &&
+      message.embeds.some((embed) => embed.title === 'Report a User') &&
+      message.components.some(
+        (row) =>
+          'components' in row &&
+          row.components.some(
+            (component) => 'customId' in component && component.customId === 'report_user_initiate'
+          )
+      )
     );
   }
 
@@ -261,6 +413,7 @@ export class ReportInstructionsManager {
       return false;
     }
     try {
+      this.assertBotOwnedMessage(existingMessage);
       await existingMessage.delete();
       return true;
     } catch (error) {

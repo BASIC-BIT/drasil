@@ -129,6 +129,9 @@ test('guild setup exposes moderation, report, role gate, and review policy contr
   await expect(page.getByLabel('Live queue channel')).toHaveValue('queue-channel-1');
   await expect(page.getByRole('button', { name: 'Queue core setup repair' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Queue report button repair' })).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Repost report button', exact: true })
+  ).toBeVisible();
   await expect(page.getByLabel('Auto-kick threshold')).toHaveValue('95');
   await expect(page.getByLabel('Exempt moderators from automatic detection')).toBeChecked();
   await expect(page.getByLabel('Enable moderator ban actions')).toBeChecked();
@@ -153,6 +156,8 @@ test('guild setup exposes moderation, report, role gate, and review policy contr
   await page.getByRole('button', { name: 'Queue core setup repair' }).click();
   await expect(page.getByRole('heading', { name: /fixture guild/i })).toBeVisible();
   await page.getByRole('button', { name: 'Queue report button repair' }).click();
+  await expect(page.getByRole('heading', { name: /fixture guild/i })).toBeVisible();
+  await page.getByRole('button', { name: 'Repost report button', exact: true }).click();
   await expect(page.getByRole('heading', { name: /fixture guild/i })).toBeVisible();
 });
 

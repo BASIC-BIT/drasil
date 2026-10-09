@@ -1273,6 +1273,13 @@ const baseApplicationCommandBuilders = [
         .addChannelTypes(ChannelType.GuildText)
         .setRequired(true)
     )
+    .addBooleanOption((option) =>
+      option
+        .setName('repost')
+        .setDescription(
+          'Post a fresh report panel below newer instructions, then remove the old panel.'
+        )
+    )
     .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
     .setContexts(InteractionContextType.Guild)
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),

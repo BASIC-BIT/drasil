@@ -1,6 +1,7 @@
 import { ModerationActionRequestService } from '../../services/ModerationActionRequestService';
+import { ReportInstructionsManager } from '../../controllers/ReportInstructionsManager';
 import type { Prisma } from '../../db/prisma';
-import { ChannelType } from 'discord.js';
+import { ChannelType, Collection } from 'discord.js';
 import {
   AdminActionType,
   CaseAttentionState,
@@ -701,6 +702,9 @@ describe('ModerationActionRequestService', () => {
       },
     };
     const reportInstructionsMessage = {
+      author: { id: 'bot-1' },
+      embeds: [{ title: 'Report a User' }],
+      components: [{ components: [{ customId: 'report_user_initiate' }] }],
       delete: jest.fn(async () => undefined),
       id: 'report-message-1',
     };
@@ -708,8 +712,12 @@ describe('ModerationActionRequestService', () => {
       guildId: 'guild-1',
       id: 'report-channel-1',
       messages: {
-        fetch: jest.fn(async (id: string) =>
-          id === reportInstructionsMessage.id ? reportInstructionsMessage : null
+        fetch: jest.fn(async (id: string | { limit: number }) =>
+          typeof id !== 'string'
+            ? new Collection()
+            : id === reportInstructionsMessage.id
+              ? reportInstructionsMessage
+              : null
         ),
       },
       send: jest.fn(async () => reportInstructionsMessage),
@@ -3407,7 +3415,7 @@ describe('ModerationActionRequestService', () => {
       {
         id: 'setup-verification-request-1',
         error:
-          'Report instructions were published but could not be tracked or removed. Retry setup to recover the message.',
+          'A report panel was published, but saving or rolling it back could not be confirmed. Existing panels were retained. Retry setup to recover the message.',
       },
     ]);
   });
@@ -3442,6 +3450,30 @@ describe('ModerationActionRequestService', () => {
       },
     ]);
     expect(repository.failed).toEqual([]);
+  });
+
+  it('passes a web repost and its expected panel to the shared manager', async () => {
+    const upsert = jest
+      .spyOn(ReportInstructionsManager.prototype, 'upsertReportInstructionsMessage')
+      .mockResolvedValue({ action: 'reposted', messageId: 'replacement' });
+    const { repository, service } = buildService([
+      {
+        ...upsertReportInstructionsRequest,
+        metadata: { channel_id: 'report-channel-1', repost: true, expected_message_id: 'previous' },
+      },
+    ]);
+    await service.processPendingRequests();
+    expect(upsert).toHaveBeenCalledWith(
+      'guild-1',
+      expect.objectContaining({ id: 'report-channel-1' }),
+      {
+        repost: true,
+        expectedMessageId: 'previous',
+      }
+    );
+    expect(repository.completed[0]?.result).toEqual(
+      expect.objectContaining({ action: 'reposted', message_id: 'replacement' })
+    );
   });
 
   it('syncs moderation queue mirrors through the logged-in bot Discord client', async () => {
