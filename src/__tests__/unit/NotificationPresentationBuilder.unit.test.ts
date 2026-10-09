@@ -1016,14 +1016,14 @@ describe('NotificationPresentationBuilder (unit)', () => {
     {
       action: 'case_role',
       message: 'Missing Permissions',
-      title: 'Case role not applied',
-      summary: 'Check bot permissions and role hierarchy, then run case repair.',
+      title: 'Case role assignment failed',
+      summary: 'If unresolved, check bot permissions and role hierarchy, then run case repair.',
     },
     {
       action: 'restrict',
       message: 'Missing Access',
-      title: 'Case role not applied',
-      summary: 'Check bot permissions and role hierarchy, then run case repair.',
+      title: 'Case role assignment failed',
+      summary: 'If unresolved, check bot permissions and role hierarchy, then run case repair.',
     },
     {
       action: 'private_evidence_thread',
@@ -1094,7 +1094,7 @@ describe('NotificationPresentationBuilder (unit)', () => {
     const value = getField(embed, 'Moderation Action Warning');
     expect(value).not.toContain('Role quarantine');
     expect(value).not.toContain('<t:');
-    expect(value?.match(/Check bot logs/g)).toHaveLength(3);
+    expect(value?.match(/check bot logs/gi)).toHaveLength(3);
     expect(value?.length).toBeLessThan(1024);
   });
 

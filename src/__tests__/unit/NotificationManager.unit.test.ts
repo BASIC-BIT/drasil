@@ -430,8 +430,10 @@ describe('NotificationManager (unit)', () => {
       (field) => field.name === 'Moderation Action Warning'
     );
 
-    expect(warningField?.value).toContain('Case role not applied');
-    expect(warningField?.value).toContain('Check bot permissions and role hierarchy');
+    expect(warningField?.value).toContain('Case role assignment failed');
+    expect(warningField?.value).toContain(
+      'If unresolved, check bot permissions and role hierarchy'
+    );
     expect(warningField?.value).toContain('Case saved.');
   });
 

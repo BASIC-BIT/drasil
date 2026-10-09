@@ -1509,7 +1509,7 @@ export class NotificationPresentationBuilder {
         const timestamp = Math.floor(new Date(failure.at).getTime() / 1000);
         const action =
           failure.action === 'case_role' || failure.action === 'restrict'
-            ? 'Case role not applied'
+            ? 'Case role assignment failed'
             : failure.action === 'private_evidence_thread'
               ? 'Admin evidence thread unavailable'
               : failure.action === 'role_quarantine'
@@ -1521,7 +1521,7 @@ export class NotificationPresentationBuilder {
           failure.action === 'case_role' ||
           failure.action === 'restrict';
         let summary = canRepairCase
-          ? 'Check bot logs for details, then run case repair.'
+          ? 'If unresolved, check bot logs, then run case repair.'
           : 'Check bot logs for details.';
         // shortcut: recognize stored error text, add reason codes if producers change the wording.
         if (
@@ -1552,7 +1552,7 @@ export class NotificationPresentationBuilder {
           message.includes('missing thread permissions')
         ) {
           summary = canRepairCase
-            ? 'Check bot permissions and role hierarchy, then run case repair.'
+            ? 'If unresolved, check bot permissions and role hierarchy, then run case repair.'
             : 'Check bot permissions and role hierarchy.';
         }
         const when = Number.isFinite(timestamp) ? ` <t:${timestamp}:R>` : '';
