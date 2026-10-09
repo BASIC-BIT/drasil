@@ -1516,7 +1516,13 @@ export class NotificationPresentationBuilder {
                 ? 'Role quarantine incomplete'
                 : 'Case thread unavailable';
         const message = failure.message.toLowerCase();
-        let summary = 'Check bot logs for details, then run case repair.';
+        const canRepairCase =
+          failure.action === 'thread' ||
+          failure.action === 'case_role' ||
+          failure.action === 'restrict';
+        let summary = canRepairCase
+          ? 'Check bot logs for details, then run case repair.'
+          : 'Check bot logs for details.';
         // shortcut: recognize stored error text, add reason codes if producers change the wording.
         if (
           failure.action === 'thread' &&
@@ -1545,7 +1551,9 @@ export class NotificationPresentationBuilder {
           message.includes('missing access') ||
           message.includes('missing thread permissions')
         ) {
-          summary = 'Check bot permissions and role hierarchy, then run case repair.';
+          summary = canRepairCase
+            ? 'Check bot permissions and role hierarchy, then run case repair.'
+            : 'Check bot permissions and role hierarchy.';
         }
         const when = Number.isFinite(timestamp) ? ` <t:${timestamp}:R>` : '';
         return `**${action}**${when}\n${summary}`;

@@ -1029,13 +1029,13 @@ describe('NotificationPresentationBuilder (unit)', () => {
       action: 'private_evidence_thread',
       message: 'Missing thread permissions',
       title: 'Admin evidence thread unavailable',
-      summary: 'Check bot permissions and role hierarchy, then run case repair.',
+      summary: 'Check bot permissions and role hierarchy.',
     },
     {
       action: 'role_quarantine',
       message: 'Unexpected provider diagnostic. '.repeat(100),
       title: 'Role quarantine incomplete',
-      summary: 'Check bot logs for details, then run case repair.',
+      summary: 'Check bot logs for details.',
     },
     {
       action: 'thread',
