@@ -1509,20 +1509,50 @@ export class NotificationPresentationBuilder {
         const timestamp = Math.floor(new Date(failure.at).getTime() / 1000);
         const action =
           failure.action === 'case_role' || failure.action === 'restrict'
-            ? 'Apply case role'
+            ? 'Case role not applied'
             : failure.action === 'private_evidence_thread'
-              ? 'Create admin evidence thread'
+              ? 'Admin evidence thread unavailable'
               : failure.action === 'role_quarantine'
-                ? 'Role quarantine'
-                : 'Create case thread';
+                ? 'Role quarantine incomplete'
+                : 'Case thread unavailable';
+        const message = failure.message.toLowerCase();
+        let summary = 'Check bot logs for details, then run case repair.';
+        // shortcut: recognize stored error text, add reason codes if producers change the wording.
+        if (
+          failure.action === 'thread' &&
+          message.includes('pending discord membership screening/onboarding')
+        ) {
+          summary =
+            'Member must complete server screening, then run case repair. Moderator actions remain available.';
+        } else if (
+          failure.action === 'thread' &&
+          message.includes('cannot currently view parent channel')
+        ) {
+          summary =
+            'Member cannot view the case channel. Check case-role channel permissions, then run case repair.';
+        } else if (
+          failure.action === 'thread' &&
+          message.includes("not propagated the user's parent-channel access yet")
+        ) {
+          summary = 'Discord channel access may still be updating. Run case repair shortly.';
+        } else if (
+          failure.action === 'thread' &&
+          message.includes('parent-channel access could not be verified')
+        ) {
+          summary = 'Check bot and member access to the case channel, then run case repair.';
+        } else if (
+          message.includes('missing permissions') ||
+          message.includes('missing access') ||
+          message.includes('missing thread permissions')
+        ) {
+          summary = 'Check bot permissions and role hierarchy, then run case repair.';
+        }
         const when = Number.isFinite(timestamp) ? ` <t:${timestamp}:R>` : '';
-        return `Warning: ${action} failed${when}: ${failure.message}`;
+        return `**${action}**${when}\n${summary}`;
       })
-      .join('\n');
+      .join('\n\n');
 
-    return this.truncateEmbedFieldValue(
-      `${value}\nCase record was still created so moderators can review and fix permissions.`
-    );
+    return `${value}\n\nCase saved.`;
   }
 
   private formatRoleQuarantineFieldValue(metadata: unknown): string | null {
