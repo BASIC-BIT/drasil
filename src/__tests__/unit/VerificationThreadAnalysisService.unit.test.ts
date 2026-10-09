@@ -1,3 +1,4 @@
+import { createTracingRecorder } from '../fakes/recordingTracing';
 import { Collection } from 'discord.js';
 import {
   InMemoryDetectionEventsRepository,
@@ -14,6 +15,11 @@ import {
 import { CASE_ROLE_RELEASE_ATTEMPT_PREFIX } from '../../utils/caseRoleRelease';
 
 describe('VerificationThreadAnalysisService (unit)', () => {
+  let recorder: ReturnType<typeof createTracingRecorder> | undefined;
+  afterEach(async () => {
+    if (recorder) await recorder.shutdown();
+    recorder = undefined;
+  });
   const messageCreatedTimestamp = Date.parse('2026-06-03T12:00:00.000Z');
 
   const buildMessage = (overrides: Partial<any> = {}) => {
@@ -44,6 +50,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
   };
 
   it('routes a Jev-only reply flag through the configured verification action', async () => {
+    recorder = createTracingRecorder();
     const verificationRepo = new InMemoryVerificationEventRepository();
     const detectionRepo = new InMemoryDetectionEventsRepository();
     const detectionEvent = await detectionRepo.create({
@@ -212,6 +219,21 @@ describe('VerificationThreadAnalysisService (unit)', () => {
       })
     );
 
+    const root = recorder?.spans.find((span) => span.name === 'verification-review');
+    expect(root).toBeDefined();
+    expect(root?.attributes['session.id']).toBe(`development:case:${verificationEvent.id}`);
+    expect(JSON.parse(String(root?.attributes['langfuse.observation.output']))).toMatchObject({
+      verdict: 'likely_suspicious',
+      recommended_action: 'restrict',
+      actual_outcome: 'notified_and_persisted',
+    });
+    const action = recorder?.spans.find((span) => span.name === 'apply-outcome');
+    const persistence = recorder?.spans.find((span) => span.name === 'persist-result');
+    expect(action).toBeDefined();
+    expect(persistence).toBeDefined();
+    expect(root!.endTime[0] * 1e9 + root!.endTime[1]).toBeGreaterThanOrEqual(
+      persistence!.endTime[0] * 1e9 + persistence!.endTime[1]
+    );
     const storedVerificationEvent = await verificationRepo.findById(verificationEvent.id);
     await verificationRepo.update(verificationEvent.id, {
       metadata: {
@@ -1049,6 +1071,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
   });
 
   it('downgrades verification restrict recommendations when max action is hints', async () => {
+    recorder = createTracingRecorder();
     const verificationRepo = new InMemoryVerificationEventRepository();
     const detectionRepo = new InMemoryDetectionEventsRepository();
     const detectionEvent = await detectionRepo.create({
@@ -1127,6 +1150,14 @@ describe('VerificationThreadAnalysisService (unit)', () => {
           recommendedAction: 'manual_review',
         },
       },
+    });
+    const root = recorder?.spans.find((span) => span.name === 'verification-review');
+    expect(root).toBeDefined();
+    expect(JSON.parse(String(root?.attributes['langfuse.observation.output']))).toMatchObject({
+      actual_outcome: 'notified_and_persisted',
+    });
+    expect(JSON.parse(String(root?.attributes['langfuse.observation.output']))).toMatchObject({
+      recommended_action: 'manual_review',
     });
   });
 
@@ -1216,6 +1247,7 @@ describe('VerificationThreadAnalysisService (unit)', () => {
   });
 
   it('stops analyzing once the configured message limit is reached', async () => {
+    recorder = createTracingRecorder();
     const verificationRepo = new InMemoryVerificationEventRepository();
     const detectionRepo = new InMemoryDetectionEventsRepository();
     const verificationEvent = await verificationRepo.createFromDetection(
@@ -1264,9 +1296,11 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     expect(handled).toBe(true);
     expect(gptService.analyzeVerificationThreadResponses).not.toHaveBeenCalled();
     expect(notificationManager.updateVerificationThreadAnalysis).not.toHaveBeenCalled();
+    expect(recorder?.spans.some((span) => span.name === 'verification-review')).toBe(false);
   });
 
   it('does not consume an analysis slot when the notification update fails', async () => {
+    recorder = createTracingRecorder();
     const verificationRepo = new InMemoryVerificationEventRepository();
     const detectionRepo = new InMemoryDetectionEventsRepository();
     const detectionEvent = await detectionRepo.create({
@@ -1344,9 +1378,15 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     } finally {
       warnSpy.mockRestore();
     }
+    const root = recorder?.spans.find((span) => span.name === 'verification-review');
+    expect(root).toBeDefined();
+    expect(JSON.parse(String(root?.attributes['langfuse.observation.output']))).toMatchObject({
+      actual_outcome: 'delivery_failed',
+    });
   });
 
   it('warns and continues when metadata persistence fails after notification succeeds', async () => {
+    recorder = createTracingRecorder();
     const verificationEvent = {
       id: 'verification-1',
       detection_event_id: 'detection-1',
@@ -1436,5 +1476,10 @@ describe('VerificationThreadAnalysisService (unit)', () => {
     } finally {
       warnSpy.mockRestore();
     }
+    const root = recorder?.spans.find((span) => span.name === 'verification-review');
+    expect(root).toBeDefined();
+    expect(JSON.parse(String(root?.attributes['langfuse.observation.output']))).toMatchObject({
+      actual_outcome: 'notified_persistence_failed',
+    });
   });
 });

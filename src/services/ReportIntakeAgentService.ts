@@ -1,3 +1,5 @@
+import { withObservation, recordObservation } from '../observability/langfuse';
+import { hashIdentifier } from '../observability/hash';
 import { Guild, Message } from 'discord.js';
 import { injectable, inject, optional } from 'inversify';
 import { IConfigService } from '../config/ConfigService';
@@ -47,6 +49,9 @@ export class ReportIntakeAgentService implements IReportIntakeAgentService {
   }
 
   public async runAnalysisForThreadMessage(message: Message): Promise<boolean> {
+    return this.executeAnalysis(message);
+  }
+  private async executeAnalysis(message: Message, scheduledAt?: number): Promise<boolean> {
     if (!message.guild || !message.channel.isThread()) {
       return false;
     }
@@ -56,47 +61,84 @@ export class ReportIntakeAgentService implements IReportIntakeAgentService {
       return false;
     }
 
-    const evidence = await this.reportIntakeRepository.listEvidence(intake.id);
-    if (!this.hasNewEvidenceForAgent(intake, evidence.length)) {
-      return false;
-    }
+    const guild = message.guild;
+    const startedAt = Date.now();
+    return withObservation(
+      'report-intake',
+      'chain',
+      async (): Promise<boolean> => {
+        const evidence = await withObservation('load-evidence', 'retriever', async () => {
+          const loaded = await this.reportIntakeRepository.listEvidence(intake.id);
+          recordObservation('retriever', { output: { evidence_count: loaded.length } });
+          return loaded;
+        });
+        if (!this.hasNewEvidenceForAgent(intake, evidence.length)) {
+          recordObservation('chain', { output: { actual_outcome: 'no_new_evidence' } });
+          return false;
+        }
 
-    const serverConfig = await this.configService.getServerConfig(intake.server_id);
-    const intakeSettings = getReportIntakeSettings(serverConfig.settings);
-    const reportAiSettings = getReportAiSettings(serverConfig.settings);
-    if (!intakeSettings.agentEnabled || !reportAiSettings.enabled || !this.gptService) {
-      return false;
-    }
+        const serverConfig = await this.configService.getServerConfig(intake.server_id);
+        const intakeSettings = getReportIntakeSettings(serverConfig.settings);
+        const reportAiSettings = getReportAiSettings(serverConfig.settings);
+        if (!intakeSettings.agentEnabled || !reportAiSettings.enabled || !this.gptService) {
+          recordObservation('chain', { output: { actual_outcome: 'analysis_disabled' } });
+          return false;
+        }
 
-    const reporterText = reportAiSettings.analyzeText
-      ? this.buildReporterText(evidence)
-      : undefined;
-    const attachments = reportAiSettings.analyzeImages
-      ? selectEligibleReportImageAttachments(
-          this.extractScreenshotAttachments(evidence),
-          reportAiSettings
-        )
-      : [];
-    if (!reporterText && attachments.length === 0) {
-      return false;
-    }
+        const reporterText = reportAiSettings.analyzeText
+          ? this.buildReporterText(evidence)
+          : undefined;
+        const attachments = reportAiSettings.analyzeImages
+          ? selectEligibleReportImageAttachments(
+              this.extractScreenshotAttachments(evidence),
+              reportAiSettings
+            )
+          : [];
+        if (!reporterText && attachments.length === 0) {
+          recordObservation('chain', { output: { actual_outcome: 'no_eligible_content' } });
+          return false;
+        }
 
-    const extraction = await this.gptService.extractReportIntakeEvidence({
-      serverId: intake.server_id,
-      reporterId: intake.reporter_id,
-      reporterText,
-      attachments,
-    });
-    const candidates = await this.resolveCandidatesFromExtraction(message.guild, extraction);
+        const extraction = await this.gptService.extractReportIntakeEvidence({
+          serverId: intake.server_id,
+          reporterId: intake.reporter_id,
+          reporterText,
+          attachments,
+        });
+        const candidates = await withObservation('resolve-candidates', 'retriever', async () => {
+          const resolved = await this.resolveCandidatesFromExtraction(guild, extraction);
+          recordObservation('retriever', { output: { candidate_count: resolved.length } });
+          return resolved;
+        });
 
-    return this.reportIntakeService.recordAgentAnalysis({
-      intakeId: intake.id,
-      message,
-      candidates,
-      extraction,
-      evidenceCount: evidence.length,
-      imageCount: attachments.length,
-    });
+        return this.reportIntakeService.recordAgentAnalysis({
+          intakeId: intake.id,
+          message,
+          candidates,
+          extraction,
+          evidenceCount: evidence.length,
+          imageCount: attachments.length,
+        });
+      },
+      {
+        metadata: {
+          intake_id: intake.id,
+          guild_hash: hashIdentifier(intake.server_id),
+          reporter_hash: hashIdentifier(intake.reporter_id),
+          started_at: new Date(startedAt).toISOString(),
+          ...(scheduledAt === undefined
+            ? {}
+            : {
+                scheduled_at: new Date(scheduledAt).toISOString(),
+                scheduling_delay_ms: startedAt - scheduledAt,
+                scheduled_message_id: message.id,
+              }),
+        },
+      },
+      {
+        sessionId: `${process.env.LANGFUSE_TRACING_ENVIRONMENT ?? 'development'}:intake:${intake.id}`,
+      }
+    );
   }
 
   private async scheduleAnalysis(message: Message): Promise<void> {
@@ -125,9 +167,10 @@ export class ReportIntakeAgentService implements IReportIntakeAgentService {
       ? Math.max(settings.minAnalysisIntervalMs - (Date.now() - lastAnalyzedAt), 0)
       : 0;
     const delayMs = Math.max(settings.debounceMs, minIntervalDelay);
+    const scheduledAt = Date.now();
     const timer = setTimeout(() => {
       this.scheduledRuns.delete(intake.id);
-      void this.runAnalysisForThreadMessage(message).catch((error) => {
+      void this.executeAnalysis(message, scheduledAt).catch((error) => {
         console.warn(`Report intake agent analysis failed for intake ${intake.id}:`, error);
       });
     }, delayMs);

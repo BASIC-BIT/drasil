@@ -1,3 +1,4 @@
+import { createTracingRecorder } from '../fakes/recordingTracing';
 import {
   AuditLogEvent,
   Events,
@@ -4075,4 +4076,51 @@ describe('EventHandler (unit)', () => {
       setup_nudge_last_source: 'audit_log_installer',
     });
   });
+  it.each(['clean', 'setup-unsafe', 'failure'] as const)(
+    'finishes the message workflow for %s with the actual outcome',
+    async (mode) => {
+      const recorder = createTracingRecorder();
+      const errorLog = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+      try {
+        const detectMessage =
+          mode === 'failure'
+            ? jest.fn().mockRejectedValue(new Error('secret raw error'))
+            : jest.fn().mockResolvedValue({
+                label: mode === 'clean' ? 'OK' : 'SUSPICIOUS',
+                confidence: 0.99,
+                reasons: [],
+                triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+                triggerContent: 'hello',
+              });
+        const record = jest.fn().mockResolvedValue('det-traced');
+        const handler = buildHandler({
+          detectionOrchestrator: { detectMessage },
+          securityActionService: { recordSuspiciousMessage: record },
+        });
+        await (handler as any).handleMessage(buildMessage(new PermissionsBitField()));
+        const root = recorder.spans.find((span) => span.name === 'message-moderation');
+        expect(root).toBeDefined();
+        if (mode === 'failure') {
+          expect(root?.attributes['langfuse.observation.level']).toBe('ERROR');
+          expect(JSON.stringify(root?.attributes)).not.toContain('secret raw error');
+        } else {
+          expect(JSON.parse(String(root?.attributes['langfuse.observation.output']))).toMatchObject(
+            {
+              verdict: mode === 'clean' ? 'OK' : 'SUSPICIOUS',
+              actual_outcome: mode === 'clean' ? 'no_action' : 'record_only',
+            }
+          );
+          expect(record).toHaveBeenCalledTimes(mode === 'clean' ? 0 : 1);
+          const action = recorder.spans.find((span) => span.name === 'apply-outcome');
+          expect(action).toBeDefined();
+          expect(root!.endTime[0] * 1e9 + root!.endTime[1]).toBeGreaterThanOrEqual(
+            action!.endTime[0] * 1e9 + action!.endTime[1]
+          );
+        }
+      } finally {
+        errorLog.mockRestore();
+        await recorder.shutdown();
+      }
+    }
+  );
 });

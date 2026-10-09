@@ -1,3 +1,4 @@
+import { withObservation, recordObservation } from '../observability/langfuse';
 import { APIUser, GuildMember, InteractionContextType, User } from 'discord.js';
 import { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
 import { DetectionEvent, DetectionType } from '../repositories/types';
@@ -45,26 +46,29 @@ export class ReportDetectionBuilder {
         );
         return undefined;
       });
-    const detectionEvent = await this.detectionEventsRepository.create({
-      server_id: member.guild.id,
-      user_id: member.id,
-      detection_type: DetectionType.USER_REPORT,
-      confidence: 1.0,
-      reasons: [`Reported by user ${reporter.id}. ${reasonText}`],
-      detected_at: new Date(),
-      metadata: withDetectionTestingMetadata(
-        {
-          type: 'user_report',
-          reporterId: reporter.id,
-          content: reason ?? 'User report',
-          reason: reason ?? reasonText,
-          ...(attachments ? { attachments } : {}),
-          ...options.metadata,
-          ...(reportAiAnalysis ? { report_ai: reportAiAnalysis } : {}),
-        },
-        'server'
-      ),
-    });
+    const detectionEvent = await withObservation('persist-result', 'span', () =>
+      this.detectionEventsRepository.create({
+        server_id: member.guild.id,
+        user_id: member.id,
+        detection_type: DetectionType.USER_REPORT,
+        confidence: 1.0,
+        reasons: [`Reported by user ${reporter.id}. ${reasonText}`],
+        detected_at: new Date(),
+        metadata: withDetectionTestingMetadata(
+          {
+            type: 'user_report',
+            reporterId: reporter.id,
+            content: reason ?? 'User report',
+            reason: reason ?? reasonText,
+            ...(attachments ? { attachments } : {}),
+            ...options.metadata,
+            ...(reportAiAnalysis ? { report_ai: reportAiAnalysis } : {}),
+          },
+          'server'
+        ),
+      })
+    );
+    recordObservation('chain', { metadata: { detection_event_id: detectionEvent.id } });
 
     return {
       detectionEvent,
@@ -125,16 +129,21 @@ export class ReportDetectionBuilder {
       metadata.interactionContext = report.interactionContext;
     }
 
-    return this.detectionEventsRepository.create({
-      server_id: null,
-      user_id: targetUser.id,
-      detection_type: DetectionType.USER_REPORT,
-      confidence: 1.0,
-      reasons: [reason],
-      message_id: report.messageId,
-      channel_id: report.channelId,
-      metadata: withDetectionTestingMetadata(metadata, 'global'),
-    });
+    const detectionEvent = await withObservation('persist-result', 'span', () =>
+      this.detectionEventsRepository.create({
+        server_id: null,
+        user_id: targetUser.id,
+        detection_type: DetectionType.USER_REPORT,
+        confidence: 1.0,
+        reasons: [reason],
+        message_id: report.messageId,
+        channel_id: report.channelId,
+        metadata: withDetectionTestingMetadata(metadata, 'global'),
+      })
+    );
+    recordObservation('chain', { metadata: { detection_event_id: detectionEvent.id } });
+
+    return detectionEvent;
   }
 
   public async createManagedMessageReportDetection(
@@ -183,16 +192,21 @@ export class ReportDetectionBuilder {
       metadata.report_ai = reportAiAnalysis;
     }
 
-    return await this.detectionEventsRepository.create({
-      server_id: member.guild.id,
-      user_id: member.id,
-      detection_type: DetectionType.USER_REPORT,
-      confidence: 1.0,
-      reasons: [this.buildManagedMessageReportReason(reporter, report, isLocalReport)],
-      message_id: isLocalReport ? report.messageId : undefined,
-      channel_id: isLocalReport ? report.channelId : undefined,
-      metadata: withDetectionTestingMetadata(metadata, 'server'),
-    });
+    const detectionEvent = await withObservation('persist-result', 'span', () =>
+      this.detectionEventsRepository.create({
+        server_id: member.guild.id,
+        user_id: member.id,
+        detection_type: DetectionType.USER_REPORT,
+        confidence: 1.0,
+        reasons: [this.buildManagedMessageReportReason(reporter, report, isLocalReport)],
+        message_id: isLocalReport ? report.messageId : undefined,
+        channel_id: isLocalReport ? report.channelId : undefined,
+        metadata: withDetectionTestingMetadata(metadata, 'server'),
+      })
+    );
+    recordObservation('chain', { metadata: { detection_event_id: detectionEvent.id } });
+
+    return detectionEvent;
   }
 
   public createManagedMessageReportDetectionResult(
