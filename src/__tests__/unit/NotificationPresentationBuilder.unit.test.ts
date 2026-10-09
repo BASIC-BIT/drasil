@@ -994,7 +994,7 @@ describe('NotificationPresentationBuilder (unit)', () => {
         'Discord denied adding user-1 to the private verification thread because the user is still pending Discord membership screening/onboarding for this server. ' +
         'Pending members cannot be added to private threads even when the case role and parent-channel permissions look correct. ' +
         'Have the user complete server screening/onboarding, then run case repair; until then, use moderator-only case actions. Original Discord error: Missing Access',
-      title: 'Case thread unavailable',
+      title: 'Case thread setup failed',
       summary:
         'Member must complete server screening, then run case repair. Moderator actions remain available.',
     },
@@ -1002,7 +1002,7 @@ describe('NotificationPresentationBuilder (unit)', () => {
       action: 'thread',
       message:
         'Discord denied adding user-1 to the private verification thread because the user cannot currently view parent channel channel-1. Original Discord error: Missing Access',
-      title: 'Case thread unavailable',
+      title: 'Case thread setup failed',
       summary:
         'Member cannot view the case channel. Check case-role channel permissions, then run case repair.',
     },
@@ -1010,7 +1010,7 @@ describe('NotificationPresentationBuilder (unit)', () => {
       action: 'thread',
       message:
         "Discord denied adding user-1 to the private verification thread after role and channel access refreshes. This usually means Discord has not propagated the user's parent-channel access yet, not that the bot lost access. Run case repair after propagation. Original Discord error: Missing Access",
-      title: 'Case thread unavailable',
+      title: 'Case thread setup failed',
       summary: 'Discord channel access may still be updating. Run case repair shortly.',
     },
     {
@@ -1028,20 +1028,20 @@ describe('NotificationPresentationBuilder (unit)', () => {
     {
       action: 'private_evidence_thread',
       message: 'Missing thread permissions',
-      title: 'Admin evidence thread unavailable',
+      title: 'Admin evidence thread setup failed',
       summary: 'Check bot permissions and role hierarchy.',
     },
     {
       action: 'role_quarantine',
       message: 'Unexpected provider diagnostic. '.repeat(100),
-      title: 'Role quarantine incomplete',
+      title: 'Role quarantine attempt failed',
       summary: 'Check bot logs for details.',
     },
     {
       action: 'thread',
       message:
         'Parent-channel access could not be verified. Original Discord error: Missing Access',
-      title: 'Case thread unavailable',
+      title: 'Case thread setup failed',
       summary: 'Check bot and member access to the case channel, then run case repair.',
     },
   ])(
@@ -1117,7 +1117,7 @@ describe('NotificationPresentationBuilder (unit)', () => {
     );
 
     expect(getField(embed, 'Moderation Action Warning')).toContain(
-      'Admin evidence thread unavailable'
+      'Admin evidence thread setup failed'
     );
 
     builder.upsertVerificationActionFailureField(embed, buildVerificationEvent({ metadata: {} }));

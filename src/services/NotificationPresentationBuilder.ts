@@ -1511,10 +1511,10 @@ export class NotificationPresentationBuilder {
           failure.action === 'case_role' || failure.action === 'restrict'
             ? 'Case role assignment failed'
             : failure.action === 'private_evidence_thread'
-              ? 'Admin evidence thread unavailable'
+              ? 'Admin evidence thread setup failed'
               : failure.action === 'role_quarantine'
-                ? 'Role quarantine incomplete'
-                : 'Case thread unavailable';
+                ? 'Role quarantine attempt failed'
+                : 'Case thread setup failed';
         const message = failure.message.toLowerCase();
         const canRepairCase =
           failure.action === 'thread' ||
