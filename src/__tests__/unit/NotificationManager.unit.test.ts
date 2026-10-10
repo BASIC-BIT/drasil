@@ -430,9 +430,11 @@ describe('NotificationManager (unit)', () => {
       (field) => field.name === 'Moderation Action Warning'
     );
 
-    expect(warningField?.value).toContain('Apply case role failed');
-    expect(warningField?.value).toContain('Missing Permissions');
-    expect(warningField?.value).toContain('Case record was still created');
+    expect(warningField?.value).toContain('Case role assignment failed');
+    expect(warningField?.value).toContain(
+      'If unresolved, check bot permissions and role hierarchy'
+    );
+    expect(warningField?.value).toContain('Case saved.');
   });
 
   it('pings the admin notification role when configured and sending new notification', async () => {
