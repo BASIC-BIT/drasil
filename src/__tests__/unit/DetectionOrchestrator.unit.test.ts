@@ -1,3 +1,5 @@
+import { createTracingRecorder } from '../fakes/recordingTracing';
+import { withObservation } from '../../observability/langfuse';
 import { DetectionOrchestrator } from '../../services/DetectionOrchestrator';
 import { IHeuristicService } from '../../services/HeuristicService';
 import {
@@ -871,4 +873,113 @@ describe('DetectionOrchestrator (unit)', () => {
       }
     }
   });
+  it.each(['OK', 'GPT', 'Jev'] as const)(
+    'correlates concurrent %s runs and persisted results without inventing actions',
+    async (flag) => {
+      const recorder = createTracingRecorder();
+      try {
+        heuristicService.analyzeMessage.mockReturnValue({ result: 'OK', reasons: [] });
+        gptService.analyzeProfile.mockImplementation(() =>
+          withObservation('gpt.profile', 'generation', async () =>
+            makeGptAnalysis({ result: flag === 'GPT' ? 'SUSPICIOUS' : 'OK', confidence: 0.95 })
+          )
+        );
+        const jev = {
+          analyzeProfile: jest.fn(() =>
+            withObservation('jev.profile', 'generation', async () => ({
+              result: flag === 'Jev' ? 'SUSPICIOUS' : 'OK',
+              reasonCodes: [],
+              suspiciousProbability: 0.95,
+              model: 'jev-test',
+            }))
+          ),
+        } as unknown as JevService;
+        const orchestrator = new DetectionOrchestrator(
+          heuristicService,
+          gptService,
+          detectionEventsRepository,
+          userRepository,
+          serverRepository,
+          undefined,
+          jev
+        );
+        const results = await Promise.all(
+          ['first', 'second'].map((id) =>
+            orchestrator.detectMessage(
+              serverId,
+              id,
+              'hello',
+              {
+                username: id,
+                accountCreatedAt: new Date('2020-01-01'),
+                joinedServerAt: new Date('2020-01-01'),
+                recentMessages: [],
+              },
+              { forceGpt: true }
+            )
+          )
+        );
+        const roots = recorder.spans.filter((span) => span.name === 'automatic-detection');
+        expect(roots).toHaveLength(2);
+        expect(roots[0].spanContext().traceId).not.toBe(roots[1].spanContext().traceId);
+        for (const root of roots) {
+          const providers = recorder.spans.filter(
+            (span) =>
+              span.name.endsWith('.profile') &&
+              span.spanContext().traceId === root.spanContext().traceId
+          );
+          expect(providers).toHaveLength(2);
+          expect(providers[0].parentSpanContext?.spanId).toBe(root.spanContext().spanId);
+          expect(providers[1].parentSpanContext?.spanId).toBe(root.spanContext().spanId);
+          expect(JSON.parse(String(root.attributes['langfuse.observation.output']))).toMatchObject({
+            verdict: flag === 'OK' ? 'OK' : 'SUSPICIOUS',
+          });
+          expect(root.attributes['langfuse.observation.input']).toBeUndefined();
+        }
+        expect(
+          results.every((result) => Boolean(result.detectionEventId) === (flag !== 'OK'))
+        ).toBe(true);
+        expect(recorder.spans.filter((span) => span.name === 'persist-result')).toHaveLength(
+          flag === 'OK' ? 0 : 2
+        );
+        expect(recorder.spans.some((span) => span.name === 'apply-outcome')).toBe(false);
+      } finally {
+        await recorder.shutdown();
+      }
+    }
+  );
+  it.each(['message', 'join'] as const)(
+    'keeps heuristic contribution separate from the %s model score',
+    async (operation) => {
+      const recorder = createTracingRecorder();
+      try {
+        heuristicService.analyzeMessage.mockReturnValue({ result: 'OK', reasons: [] });
+        gptService.analyzeProfile.mockResolvedValue(
+          makeGptAnalysis({ result: 'SUSPICIOUS', confidence: 0.95 })
+        );
+        const orchestrator = new DetectionOrchestrator(
+          heuristicService,
+          gptService,
+          detectionEventsRepository,
+          userRepository,
+          serverRepository
+        );
+        const profile: UserProfileData = {
+          username: 'synthetic',
+          accountCreatedAt: new Date('2020-01-01'),
+          joinedServerAt: new Date('2020-01-01'),
+          recentMessages: [],
+        };
+        if (operation === 'message')
+          await orchestrator.detectMessage(serverId, userId, 'hello', profile, { forceGpt: true });
+        else await orchestrator.detectNewJoin(serverId, userId, profile);
+        const combined = recorder.spans.find((span) => span.name === 'combine-verdicts');
+        expect(
+          JSON.parse(String(combined?.attributes['langfuse.observation.output']))
+        ).toMatchObject({ heuristic_score: 0 });
+      } finally {
+        await recorder.shutdown();
+      }
+    }
+  );
 });

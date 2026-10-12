@@ -987,6 +987,117 @@ describe('NotificationPresentationBuilder (unit)', () => {
     expect(buttons[0].custom_id).toBe('reopen_user-1');
   });
 
+  it.each([
+    {
+      action: 'thread',
+      message:
+        'Discord denied adding user-1 to the private verification thread because the user is still pending Discord membership screening/onboarding for this server. ' +
+        'Pending members cannot be added to private threads even when the case role and parent-channel permissions look correct. ' +
+        'Have the user complete server screening/onboarding, then run case repair; until then, use moderator-only case actions. Original Discord error: Missing Access',
+      title: 'Case thread setup failed',
+      summary:
+        'Member must complete server screening, then run case repair. Moderator actions remain available.',
+    },
+    {
+      action: 'thread',
+      message:
+        'Discord denied adding user-1 to the private verification thread because the user cannot currently view parent channel channel-1. Original Discord error: Missing Access',
+      title: 'Case thread setup failed',
+      summary:
+        'Member cannot view the case channel. Check case-role channel permissions, then run case repair.',
+    },
+    {
+      action: 'thread',
+      message:
+        "Discord denied adding user-1 to the private verification thread after role and channel access refreshes. This usually means Discord has not propagated the user's parent-channel access yet, not that the bot lost access. Run case repair after propagation. Original Discord error: Missing Access",
+      title: 'Case thread setup failed',
+      summary: 'Discord channel access may still be updating. Run case repair shortly.',
+    },
+    {
+      action: 'case_role',
+      message: 'Missing Permissions',
+      title: 'Case role assignment failed',
+      summary: 'If unresolved, check bot permissions and role hierarchy, then run case repair.',
+    },
+    {
+      action: 'restrict',
+      message: 'Missing Access',
+      title: 'Case role assignment failed',
+      summary: 'If unresolved, check bot permissions and role hierarchy, then run case repair.',
+    },
+    {
+      action: 'private_evidence_thread',
+      message: 'Missing thread permissions',
+      title: 'Admin evidence thread setup failed',
+      summary: 'Check bot permissions and role hierarchy.',
+    },
+    {
+      action: 'role_quarantine',
+      message: 'Unexpected provider diagnostic. '.repeat(100),
+      title: 'Role quarantine attempt failed',
+      summary: 'Check bot logs for details.',
+    },
+    {
+      action: 'thread',
+      message:
+        'Parent-channel access could not be verified. Original Discord error: Missing Access',
+      title: 'Case thread setup failed',
+      summary: 'Check bot and member access to the case channel, then run case repair.',
+    },
+  ])(
+    'summarizes $action failure ($title) without exposing raw diagnostics',
+    ({ action, message, title, summary }) => {
+      const verificationEvent = buildVerificationEvent({
+        metadata: {
+          [VERIFICATION_ACTION_FAILURES_METADATA_KEY]: [
+            { action, message, at: '2026-01-01T00:00:00Z' },
+          ],
+        },
+      });
+      const originalMetadata = JSON.stringify(verificationEvent.metadata);
+      const initialEmbed = builder.createSuspiciousUserEmbed(
+        buildMember(),
+        buildDetectionResult(),
+        verificationEvent,
+        []
+      );
+      const refreshedEmbed = new EmbedBuilder();
+      builder.upsertVerificationActionFailureField(refreshedEmbed, verificationEvent);
+
+      for (const embed of [initialEmbed, refreshedEmbed]) {
+        const value = getField(embed, 'Moderation Action Warning');
+        expect(value).toBe('**' + title + '** <t:1767225600:R>\n' + summary + '\n\nCase saved.');
+        expect(value).not.toContain(message);
+        expect(value).not.toContain('Original Discord error');
+        expect(value).not.toContain('Warning:');
+      }
+      expect(JSON.stringify(verificationEvent.metadata)).toBe(originalMetadata);
+    }
+  );
+
+  it('keeps only the latest three warnings and omits invalid timestamps', () => {
+    const embed = new EmbedBuilder();
+    builder.upsertVerificationActionFailureField(
+      embed,
+      buildVerificationEvent({
+        metadata: {
+          [VERIFICATION_ACTION_FAILURES_METADATA_KEY]: [
+            { action: 'role_quarantine', message: 'old failure', at: 'invalid' },
+            { action: 'case_role', message: 'failure', at: 'invalid' },
+            { action: 'private_evidence_thread', message: 'failure', at: 'invalid' },
+            { action: 'thread', message: 'failure', at: 'invalid' },
+          ],
+        },
+      })
+    );
+
+    const value = getField(embed, 'Moderation Action Warning');
+    expect(value).not.toContain('Role quarantine');
+    expect(value).not.toContain('<t:');
+    expect(value?.match(/check bot logs/gi)).toHaveLength(3);
+    expect(value?.length).toBeLessThan(1024);
+  });
+
   it('adds and removes moderation action failure warnings', () => {
     const embed = new EmbedBuilder();
 
@@ -1006,7 +1117,7 @@ describe('NotificationPresentationBuilder (unit)', () => {
     );
 
     expect(getField(embed, 'Moderation Action Warning')).toContain(
-      'Warning: Create admin evidence thread failed'
+      'Admin evidence thread setup failed'
     );
 
     builder.upsertVerificationActionFailureField(embed, buildVerificationEvent({ metadata: {} }));

@@ -187,3 +187,19 @@ variable "error_alarm_threshold_count" {
   description = "Application error log count threshold per alarm period."
   default     = 5
 }
+
+variable "langfuse_tracing_enabled" {
+  description = "Opt in to Langfuse Cloud tracing with full model content. Populate both secrets before enabling."
+  type        = bool
+  default     = false
+}
+
+variable "langfuse_base_url" {
+  description = "Langfuse Cloud regional URL for the private Drasil project."
+  type        = string
+  default     = ""
+  validation {
+    condition     = var.langfuse_base_url == "" || contains(["https://cloud.langfuse.com", "https://us.cloud.langfuse.com", "https://jp.cloud.langfuse.com"], var.langfuse_base_url)
+    error_message = "Use a Langfuse Cloud regional HTTPS URL, or leave empty while disabled."
+  }
+}

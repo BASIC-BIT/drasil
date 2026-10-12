@@ -1,3 +1,5 @@
+import { withObservation, recordObservation } from '../observability/langfuse';
+import { hashIdentifier } from '../observability/hash';
 import { IServerRepository } from '../repositories/ServerRepository';
 import {
   getReportAiSettings,
@@ -49,23 +51,66 @@ export class ReportAiAnalyzer {
       return undefined;
     }
 
-    const [gptAnalysis, jevAnalysis] = await Promise.all([
-      this.gptService.analyzeReportEvidence({
-        serverId: data.serverId,
-        targetUserId: data.targetUserId,
-        reporterId: data.reporterId,
-        reportReason,
-        reportedMessageContent,
-        attachments: eligibleImages,
-      }),
-      reportReason || reportedMessageContent
-        ? this.jevService?.analyzeReportText(reportReason, reportedMessageContent)
-        : undefined,
-    ]);
+    const gptService = this.gptService;
+    return withObservation(
+      'report-triage',
+      'chain',
+      async (): Promise<ReportAIAnalysis> => {
+        const [gptAnalysis, jevAnalysis] = await Promise.all([
+          gptService.analyzeReportEvidence({
+            serverId: data.serverId,
+            targetUserId: data.targetUserId,
+            reporterId: data.reporterId,
+            reportReason,
+            reportedMessageContent,
+            attachments: eligibleImages,
+          }),
+          reportReason || reportedMessageContent
+            ? this.jevService?.analyzeReportText(reportReason, reportedMessageContent)
+            : undefined,
+        ]);
 
-    return this.capAction(
-      this.combineAnalysis(gptAnalysis, jevAnalysis, Boolean(reportedMessageContent?.trim())),
-      settings
+        const analysis = await withObservation(
+          'combine-verdicts',
+          'span',
+          async (): Promise<ReportAIAnalysis> => {
+            const combined = this.combineAnalysis(
+              gptAnalysis,
+              jevAnalysis,
+              Boolean(reportedMessageContent?.trim())
+            );
+            const capped = this.capAction(combined, settings);
+            recordObservation('span', {
+              output: {
+                verdict: capped.result,
+                reason_codes: capped.reasonCodes,
+                gpt_verdict: gptAnalysis.result,
+                jev_verdict: jevAnalysis?.result,
+                requested_action: combined.recommendedAction,
+                recommended_action: capped.recommendedAction,
+              },
+            });
+            return capped;
+          }
+        );
+        recordObservation('chain', {
+          output: { verdict: analysis.result, recommended_action: analysis.recommendedAction },
+        });
+        return analysis;
+      },
+      {
+        metadata: {
+          guild_hash: hashIdentifier(data.serverId),
+          user_hash: hashIdentifier(data.targetUserId),
+          jev_status:
+            reportReason || reportedMessageContent
+              ? this.jevService
+                ? 'eligible'
+                : 'disabled'
+              : 'not_applicable',
+        },
+      },
+      undefined
     );
   }
 

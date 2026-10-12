@@ -2,7 +2,7 @@ import 'reflect-metadata';
 import * as dotenv from 'dotenv';
 import { TYPES } from './di/symbols';
 import type { IBot } from './Bot';
-import { initPhoenixTracing } from './observability/phoenix';
+import { initLangfuseTracing, shutdownLangfuseTracing } from './observability/langfuse';
 import type { IProductAnalyticsService } from './services/ProductAnalyticsService';
 
 // Load environment variables
@@ -15,13 +15,7 @@ async function bootstrap(): Promise<void> {
   try {
     console.log('Starting Anti-Spam Bot...');
 
-    const tracingInitResult = initPhoenixTracing();
-    if (
-      !tracingInitResult.enabled &&
-      tracingInitResult.reason !== 'PHOENIX_TRACING_ENABLED not set'
-    ) {
-      console.warn(`[phoenix] tracing disabled: ${tracingInitResult.reason}`);
-    }
+    initLangfuseTracing();
 
     // Create and configure the container
     const { configureContainer } = await import('./di/container');
@@ -42,6 +36,7 @@ async function bootstrap(): Promise<void> {
     setupGracefulShutdown(bot, productAnalyticsService);
   } catch (error) {
     console.error('Error starting bot:', error);
+    await shutdownLangfuseTracing();
     process.exit(1);
   }
 }
@@ -89,11 +84,13 @@ async function shutdown(
     await productAnalyticsService.shutdown();
     console.log('Bot disconnected and resources released.');
 
+    await shutdownLangfuseTracing();
     // Exit with success code
     process.exit(0);
   } catch (error) {
     console.error('Error during shutdown:', error);
 
+    await shutdownLangfuseTracing();
     // Exit with error code
     process.exit(1);
   }

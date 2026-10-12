@@ -214,3 +214,7 @@ Re-run the deploy workflow and set the `ref` input to an older commit SHA. The w
 - If you prefer private subnets, add a NAT Gateway and set `assign_public_ip = false` in `infra/aws/prod/main.tf`.
 - Secrets Manager automatic rotation is intentionally not configured yet; it requires a rotation Lambda and an ops runbook.
 - CloudWatch alarms publish to SNS regardless of subscribers; add/confirm `alert_email_addresses` to receive notifications.
+
+### Langfuse tracing
+
+Tracing is disabled by default. See [the Langfuse runbook](../dev/langfuse.md) for private Cloud project selection, environment-specific keys, full-content capture, model pricing, synthetic verification, and rollback. Terraform declares secret metadata only; populate the public and secret key versions outside Terraform before enabling `langfuse_tracing_enabled`. Set `langfuse_base_url` to the project's region. Deploy rendering sets `LANGFUSE_RELEASE` to the resolved image commit SHA, including rollback and image reuse.

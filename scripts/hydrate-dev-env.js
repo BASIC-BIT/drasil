@@ -52,14 +52,28 @@ const typeSafeSecret = process.env.DRASIL_TYPESAFE_SECRET;
 const prismaPasswordSecret =
   process.env.DRASIL_PRISMA_PASSWORD_SECRET || `drasil/${environment}/PRISMA_DB_PASSWORD`;
 
+const existingEnv = fs.existsSync(envPath) ? parseDotenv(fs.readFileSync(envPath)) : {};
+const optionalLangfuse = {};
+for (const key of [
+  'LANGFUSE_PUBLIC_KEY',
+  'LANGFUSE_SECRET_KEY',
+  'LANGFUSE_BASE_URL',
+  'LANGFUSE_TRACING_ENABLED',
+  'LANGFUSE_TRACING_ENVIRONMENT',
+  'LANGFUSE_RELEASE',
+]) {
+  const secretId = process.env[`DRASIL_${key}_SECRET`];
+  const value =
+    secretId && (key === 'LANGFUSE_PUBLIC_KEY' || key === 'LANGFUSE_SECRET_KEY')
+      ? getSecret(secretId)
+      : (process.env[key] ?? existingEnv[key]);
+  if (value !== undefined) optionalLangfuse[key] = value;
+}
 const discordToken = getSecret(discordTokenSecret);
 const openAiKey = getSecret(openAiSecret);
-const existingTypeSafeKey = fs.existsSync(envPath)
-  ? parseDotenv(fs.readFileSync(envPath)).TYPESAFE_API_KEY
-  : undefined;
 const typeSafeKey = typeSafeSecret
   ? getSecret(typeSafeSecret)
-  : process.env.TYPESAFE_API_KEY || existingTypeSafeKey;
+  : process.env.TYPESAFE_API_KEY || existingEnv.TYPESAFE_API_KEY;
 const prismaPassword = getSecret(prismaPasswordSecret);
 const databaseUrl = `postgresql://prisma:${encodeUrlCredential(prismaPassword)}@${postgresHost}:${postgresPort}/${postgresDb}?schema=public`;
 const postgresDbUrl = `postgresql://${encodeUrlCredential(postgresUser)}:${encodeUrlCredential(postgresPassword)}@${postgresHost}:${postgresPort}/${postgresDb}?schema=public`;
@@ -72,6 +86,7 @@ const lines = [
   `DISCORD_TOKEN=${quoteEnvValue(discordToken)}`,
   `OPENAI_API_KEY=${quoteEnvValue(openAiKey)}`,
   ...(typeSafeKey ? [`TYPESAFE_API_KEY=${quoteEnvValue(typeSafeKey)}`] : []),
+  ...Object.entries(optionalLangfuse).map(([key, value]) => `${key}=${quoteEnvValue(value)}`),
   `PRISMA_DB_PASSWORD=${quoteEnvValue(prismaPassword)}`,
   `DATABASE_URL=${quoteEnvValue(databaseUrl)}`,
   `POSTGRES_DB_URL=${quoteEnvValue(postgresDbUrl)}`,
