@@ -44,15 +44,31 @@ describe('report panel requests', () => {
       guildId: 'guild',
       repost: true,
       expectedMessageId: 'old-panel',
+      submissionId: 'submission-1',
     };
     await queueReportInstructionsRepairRequest(input);
     await queueReportInstructionsRepairRequest(input);
     expect(mocks.queueReport.mock.calls[0][0]).toEqual(mocks.queueReport.mock.calls[1][0]);
     expect(mocks.queueReport).toHaveBeenCalledWith(
       expect.objectContaining({
-        idempotencyKey: 'web:setup:repost_report_instructions:guild:channel:old-panel',
+        idempotencyKey: 'web:setup:repost_report_instructions:guild:channel:old-panel:submission-1',
         metadata: expect.objectContaining({ repost: true, expected_message_id: 'old-panel' }),
       })
+    );
+  });
+
+  it('allows another deliberate submission after a cleanup-only request completes', async () => {
+    const input = {
+      actorId: 'admin',
+      channelId: 'channel',
+      guildId: 'guild',
+      repost: true,
+      expectedMessageId: 'replacement',
+    };
+    await queueReportInstructionsRepairRequest({ ...input, submissionId: 'cleanup' });
+    await queueReportInstructionsRepairRequest({ ...input, submissionId: 'repost-after-refresh' });
+    expect(mocks.queueReport.mock.calls[0][0].idempotencyKey).not.toBe(
+      mocks.queueReport.mock.calls[1][0].idempotencyKey
     );
   });
 });

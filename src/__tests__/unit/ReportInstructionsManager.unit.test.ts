@@ -24,7 +24,9 @@ function buildManager(guildId: string) {
   };
   const fetch = jest.fn(async (id: string | { limit: number }) => {
     if (typeof id !== 'string') {
-      return new Collection<string, Message>();
+      return id.limit === 1
+        ? new Collection([['100', oldMessage as unknown as Message]])
+        : new Collection<string, Message>();
     }
     return id === '100' ? oldMessage : newMessage;
   });
@@ -68,8 +70,146 @@ function buildManager(guildId: string) {
 }
 
 describe('ReportInstructionsManager deliberate repost', () => {
+  it('does not clear panels when the durable state cannot be read', async () => {
+    const fixture = buildManager('clear-read-failure');
+    fixture.config.getServerConfig.mockRejectedValueOnce(new Error('database unavailable'));
+    await expect(fixture.manager.clearReportInstructions('clear-read-failure')).rejects.toThrow(
+      'database unavailable'
+    );
+    expect(fixture.config.updateServerSettings).not.toHaveBeenCalled();
+    expect(fixture.oldMessage.delete).not.toHaveBeenCalled();
+    expect(fixture.config.getServerConfig).toHaveBeenCalledWith('clear-read-failure', {
+      failOnReadError: true,
+      forceRefresh: true,
+    });
+  });
+  it('adopts an untracked first panel after a restart without sending or deleting it', async () => {
+    const fixture = buildManager('restart-first-panel');
+    await fixture.save('restart-first-panel', {
+      report_instructions_channel_id: null,
+      report_instructions_message_id: null,
+      report_instructions_pending_publication: { channel_id: 'channel', after_message_id: null },
+    });
+    fixture.channel.messages.fetch.mockImplementationOnce(
+      async () => new Collection([['200', fixture.newMessage as unknown as Message]])
+    );
+    await expect(fixture.upsert(true, null)).resolves.toEqual({
+      action: 'updated',
+      messageId: '200',
+    });
+    expect(fixture.channel.send).not.toHaveBeenCalled();
+    expect(fixture.newMessage.delete).not.toHaveBeenCalled();
+    expect(fixture.settings().report_instructions_pending_publication).toBeNull();
+  });
+
+  it('starts fresh repost recovery at the latest channel message rather than the old panel', async () => {
+    const fixture = buildManager('recent-boundary');
+    fixture.newMessage.id = '9001';
+    fixture.channel.messages.fetch.mockImplementationOnce(
+      async () =>
+        new Collection([['9000', { id: '9000', author: { id: 'human' } } as unknown as Message]])
+    );
+    await fixture.upsert();
+    expect(fixture.channel.messages.fetch).toHaveBeenCalledWith({ limit: 1 });
+    expect(fixture.config.updateServerSettings).toHaveBeenNthCalledWith(1, 'recent-boundary', {
+      report_instructions_pending_publication: { channel_id: 'channel', after_message_id: '9000' },
+    });
+    expect(fixture.channel.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops at the recovery page limit without sending or deleting any panel', async () => {
+    const fixture = buildManager('recovery-budget');
+    await fixture.save('recovery-budget', {
+      report_instructions_pending_publication: { channel_id: 'channel', after_message_id: '100' },
+    });
+    let newestId = 5000;
+    fixture.channel.messages.fetch.mockImplementation(async () => {
+      const messages = new Collection<string, Message>();
+      for (let index = 0; index < 100; index++) {
+        const id = String(newestId--);
+        messages.set(id, { id, author: { id: 'human' } } as unknown as Message);
+      }
+      return messages;
+    });
+    await expect(fixture.upsert()).rejects.toThrow('recovery exceeded its history limit');
+    expect(fixture.channel.messages.fetch).toHaveBeenCalledTimes(10);
+    expect(fixture.channel.send).not.toHaveBeenCalled();
+    expect(fixture.oldMessage.delete).not.toHaveBeenCalled();
+    expect(fixture.config.updateServerSettings).not.toHaveBeenCalled();
+    expect(fixture.settings().report_instructions_pending_publication).not.toBeNull();
+  });
+  it('keeps ordinary first setup working without history permission', async () => {
+    const fixture = buildManager('ordinary-no-history');
+    await fixture.save('ordinary-no-history', {
+      report_instructions_channel_id: null,
+      report_instructions_message_id: null,
+    });
+    fixture.channel.messages.fetch.mockRejectedValueOnce(new Error('missing history permission'));
+    await expect(fixture.upsert(false)).resolves.toEqual({ action: 'sent', messageId: '200' });
+    expect(fixture.channel.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not publish if the durable intent cannot be saved', async () => {
+    const fixture = buildManager('intent-save-failure');
+    fixture.config.updateServerSettings.mockRejectedValueOnce(new Error('database unavailable'));
+    await expect(fixture.upsert()).rejects.toThrow('database unavailable');
+    expect(fixture.channel.send).not.toHaveBeenCalled();
+    expect(fixture.oldMessage.delete).not.toHaveBeenCalled();
+  });
+
+  it('recovers and removes both panels when clearing after a restart', async () => {
+    const fixture = buildManager('restart-clear');
+    await fixture.save('restart-clear', {
+      report_instructions_pending_publication: { channel_id: 'channel', after_message_id: '100' },
+    });
+    fixture.channel.messages.fetch.mockImplementationOnce(
+      async () => new Collection([['200', fixture.newMessage as unknown as Message]])
+    );
+    await expect(fixture.manager.clearReportInstructions('restart-clear')).resolves.toEqual({
+      action: 'cleared',
+    });
+    expect(fixture.oldMessage.delete).toHaveBeenCalledTimes(1);
+    expect(fixture.newMessage.delete).toHaveBeenCalledTimes(1);
+    expect(fixture.settings()).toMatchObject({
+      report_instructions_channel_id: null,
+      report_instructions_message_id: null,
+      report_instructions_pending_publication: null,
+    });
+  });
+
+  it('recovers a moved replacement using the saved target intent after a restart', async () => {
+    const fixture = buildManager('restart-moved');
+    fixture.channel.id = 'target';
+    const sourceChannel = {
+      ...fixture.channel,
+      id: 'channel',
+      messages: { fetch: jest.fn().mockResolvedValue(fixture.oldMessage) },
+    };
+    fixture.client.channels.fetch.mockImplementation(async (id: string) =>
+      id === 'target' ? fixture.channel : sourceChannel
+    );
+    await fixture.save('restart-moved', {
+      report_instructions_pending_publication: { channel_id: 'target', after_message_id: '100' },
+    });
+    fixture.channel.messages.fetch.mockImplementationOnce(
+      async () => new Collection([['200', fixture.newMessage as unknown as Message]])
+    );
+    await fixture.upsert();
+    expect(fixture.channel.send).not.toHaveBeenCalled();
+    expect(fixture.settings()).toMatchObject({
+      report_instructions_channel_id: 'target',
+      report_instructions_message_id: '200',
+      report_instructions_pending_publication: null,
+    });
+    expect(fixture.oldMessage.delete).toHaveBeenCalledTimes(1);
+    expect(fixture.newMessage.delete).not.toHaveBeenCalled();
+  });
+
   it('recovers an untracked newer panel from channel history after a restart', async () => {
     const fixture = buildManager('restart-recovery');
+    await fixture.save('restart-recovery', {
+      report_instructions_pending_publication: { channel_id: 'channel', after_message_id: '100' },
+    });
     fixture.channel.messages.fetch.mockImplementationOnce(
       async () =>
         new Collection([
@@ -77,7 +217,7 @@ describe('ReportInstructionsManager deliberate repost', () => {
           ['100', fixture.oldMessage as unknown as Message],
         ])
     );
-    await expect(fixture.upsert()).resolves.toEqual({ action: 'reposted', messageId: '200' });
+    await expect(fixture.upsert()).resolves.toEqual({ action: 'updated', messageId: '200' });
     expect(fixture.channel.send).not.toHaveBeenCalled();
     expect(fixture.settings().report_instructions_message_id).toBe('200');
     expect(fixture.oldMessage.delete).toHaveBeenCalledTimes(1);
@@ -86,6 +226,9 @@ describe('ReportInstructionsManager deliberate repost', () => {
 
   it('searches past a full page of newer unrelated messages for a replacement', async () => {
     const fixture = buildManager('paginated-recovery');
+    await fixture.save('paginated-recovery', {
+      report_instructions_pending_publication: { channel_id: 'channel', after_message_id: '100' },
+    });
     const unrelated = new Collection<string, Message>();
     for (let id = 500; id > 400; id--) {
       unrelated.set(String(id), { id: String(id), author: { id: 'human' } } as unknown as Message);
@@ -117,7 +260,9 @@ describe('ReportInstructionsManager deliberate repost', () => {
       report_instructions_channel_id: null,
       report_instructions_message_id: null,
     });
-    fixture.config.updateServerSettings.mockRejectedValueOnce(new Error('database unavailable'));
+    fixture.config.updateServerSettings
+      .mockImplementationOnce(fixture.save)
+      .mockRejectedValueOnce(new Error('database unavailable'));
     await expect(fixture.upsert(true, null)).rejects.toThrow('Retry setup to recover');
     expect(fixture.newMessage.delete).not.toHaveBeenCalled();
     await fixture.upsert(true, null);
@@ -131,16 +276,17 @@ describe('ReportInstructionsManager deliberate repost', () => {
     const payload = fixture.channel.send.mock.calls[0][0];
     expect(payload.components[0].toJSON().components[0].custom_id).toBe('report_user_initiate');
     expect(payload.enforceNonce).toBe(true);
-    expect(fixture.config.updateServerSettings).toHaveBeenNthCalledWith(1, 'repost-success', {
+    expect(fixture.config.updateServerSettings).toHaveBeenNthCalledWith(2, 'repost-success', {
+      report_instructions_pending_publication: null,
       report_instructions_channel_id: 'channel',
       report_instructions_message_id: '200',
       report_instructions_cleanup_channel_id: 'channel',
       report_instructions_cleanup_message_id: '100',
     });
     expect(fixture.channel.send.mock.invocationCallOrder[0]).toBeLessThan(
-      fixture.config.updateServerSettings.mock.invocationCallOrder[0]
+      fixture.config.updateServerSettings.mock.invocationCallOrder[1]
     );
-    expect(fixture.config.updateServerSettings.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(fixture.config.updateServerSettings.mock.invocationCallOrder[1]).toBeLessThan(
       fixture.oldMessage.delete.mock.invocationCallOrder[0]
     );
     expect(fixture.settings().report_instructions_cleanup_message_id).toBeNull();
@@ -162,14 +308,20 @@ describe('ReportInstructionsManager deliberate repost', () => {
     const fixture = buildManager('send-failure');
     fixture.channel.send.mockRejectedValueOnce(new Error('Discord unavailable'));
     await expect(fixture.upsert()).rejects.toThrow('Discord unavailable');
-    expect(fixture.config.updateServerSettings).not.toHaveBeenCalled();
+    expect(fixture.config.updateServerSettings).toHaveBeenCalledTimes(1);
+    expect(fixture.settings().report_instructions_pending_publication).toEqual({
+      channel_id: 'channel',
+      after_message_id: '100',
+    });
     expect(fixture.oldMessage.delete).not.toHaveBeenCalled();
     expect(fixture.settings().report_instructions_message_id).toBe('100');
   });
 
   it('retains the replacement when persistence fails and recovers it without another send', async () => {
     const fixture = buildManager('save-failure');
-    fixture.config.updateServerSettings.mockRejectedValueOnce(new Error('database unavailable'));
+    fixture.config.updateServerSettings
+      .mockImplementationOnce(fixture.save)
+      .mockRejectedValueOnce(new Error('database unavailable'));
     await expect(fixture.upsert()).rejects.toThrow('Retry setup to recover');
     expect(fixture.newMessage.delete).not.toHaveBeenCalled();
     expect(fixture.oldMessage.delete).not.toHaveBeenCalled();
@@ -181,10 +333,12 @@ describe('ReportInstructionsManager deliberate repost', () => {
 
   it('does not roll back a replacement whose write committed but response failed', async () => {
     const fixture = buildManager('ambiguous-save');
-    fixture.config.updateServerSettings.mockImplementationOnce(async (id, patch) => {
-      await fixture.save(id, patch);
-      throw new Error('response lost');
-    });
+    fixture.config.updateServerSettings
+      .mockImplementationOnce(fixture.save)
+      .mockImplementationOnce(async (id, patch) => {
+        await fixture.save(id, patch);
+        throw new Error('response lost');
+      });
     await expect(fixture.upsert()).resolves.toMatchObject({ messageId: '200' });
     expect(fixture.newMessage.delete).not.toHaveBeenCalled();
     expect(fixture.oldMessage.delete).toHaveBeenCalledTimes(1);
@@ -212,6 +366,7 @@ describe('ReportInstructionsManager deliberate repost', () => {
     const fixture = buildManager('cleanup-save-failure');
     fixture.config.updateServerSettings
       .mockImplementationOnce(fixture.save)
+      .mockImplementationOnce(fixture.save)
       .mockRejectedValueOnce(new Error('database unavailable'));
     await expect(fixture.upsert()).rejects.toThrow('database unavailable');
     fixture.channel.messages.fetch.mockRejectedValueOnce({ code: 10008 });
@@ -222,7 +377,9 @@ describe('ReportInstructionsManager deliberate repost', () => {
 
   it('recovers failed persistence across manager instances without duplicate sends', async () => {
     const fixture = buildManager('rollback-failure');
-    fixture.config.updateServerSettings.mockRejectedValueOnce(new Error('database unavailable'));
+    fixture.config.updateServerSettings
+      .mockImplementationOnce(fixture.save)
+      .mockRejectedValueOnce(new Error('database unavailable'));
     await expect(fixture.upsert()).rejects.toThrow('Retry setup to recover');
     const retryManager = new ReportInstructionsManager(
       fixture.client as unknown as Client,
@@ -243,7 +400,9 @@ describe('ReportInstructionsManager deliberate repost', () => {
 
   it('retains both panels when a failed write cannot be verified and recovers on retry', async () => {
     const fixture = buildManager('read-after-save-failure');
-    fixture.config.updateServerSettings.mockRejectedValueOnce(new Error('database unavailable'));
+    fixture.config.updateServerSettings
+      .mockImplementationOnce(fixture.save)
+      .mockRejectedValueOnce(new Error('database unavailable'));
     fixture.config.getServerConfig
       .mockResolvedValueOnce({ settings: fixture.settings() })
       .mockRejectedValueOnce(new Error('database unavailable'));

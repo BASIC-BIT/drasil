@@ -255,6 +255,7 @@ async function queueReportInstructions(
     guildId,
     repost,
     expectedMessageId: readOptionalFormString(formData, 'reportInstructionsMessageId'),
+    submissionId: readOptionalFormString(formData, 'reportInstructionsSubmissionId') ?? undefined,
   });
 
   revalidatePath(`/admin/guild/${guildId}/setup`);

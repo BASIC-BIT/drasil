@@ -15,6 +15,10 @@ const REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY = 'report_instructions_channel_
 const REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY = 'report_instructions_message_id';
 const REPORT_INSTRUCTIONS_CLEANUP_CHANNEL_ID_SETTING_KEY = 'report_instructions_cleanup_channel_id';
 const REPORT_INSTRUCTIONS_CLEANUP_MESSAGE_ID_SETTING_KEY = 'report_instructions_cleanup_message_id';
+const REPORT_INSTRUCTIONS_PENDING_PUBLICATION_SETTING_KEY =
+  'report_instructions_pending_publication';
+const REPORT_PANEL_RECOVERY_PAGE_LIMIT = 10;
+const REPORT_PANEL_RECOVERY_PAGE_SIZE = 100;
 const DISCORD_UNKNOWN_CHANNEL_ERROR_CODE = 10003;
 const DISCORD_UNKNOWN_MESSAGE_ERROR_CODE = 10008;
 const REPORT_INSTRUCTIONS_CLEANUP_PENDING_ERROR =
@@ -98,12 +102,11 @@ export class ReportInstructionsManager {
       failOnReadError: true,
       forceRefresh: true,
     });
-    const hadPendingCleanup = Boolean(
-      serverConfig.settings[REPORT_INSTRUCTIONS_CLEANUP_MESSAGE_ID_SETTING_KEY]
-    );
-    await this.retryPendingReportInstructionsCleanup(guildId, serverConfig.settings);
-    let existingChannelId = serverConfig.settings[REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY];
-    let existingMessageId = serverConfig.settings[REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY];
+    const settings = await this.recoverDurablePublication(guildId, serverConfig.settings);
+    const hadPendingCleanup = Boolean(settings[REPORT_INSTRUCTIONS_CLEANUP_MESSAGE_ID_SETTING_KEY]);
+    await this.retryPendingReportInstructionsCleanup(guildId, settings);
+    let existingChannelId = settings[REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY];
+    let existingMessageId = settings[REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY];
     const matchesExpectedPanel = (existingMessageId ?? null) === options.expectedMessageId;
     if (options.repost && existingChannelId !== targetChannel.id && !matchesExpectedPanel) {
       throw new Error(
@@ -128,7 +131,6 @@ export class ReportInstructionsManager {
       const sentMessage = await this.publishReportInstructionsReplacement(
         guildId,
         targetChannel,
-        existingChannelId === targetChannel.id ? existingMessageId : null,
         options.expectedMessageId
       );
       createdMessage = sentMessage;
@@ -167,6 +169,9 @@ export class ReportInstructionsManager {
       [REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY]: targetChannel.id,
       [REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY]: messageId,
     };
+    if (repost) {
+      settingsPatch[REPORT_INSTRUCTIONS_PENDING_PUBLICATION_SETTING_KEY] = null;
+    }
     const cleanupTarget =
       (movedChannels || repost) &&
       existingChannelId &&
@@ -215,15 +220,15 @@ export class ReportInstructionsManager {
   private async publishReportInstructionsReplacement(
     guildId: string,
     targetChannel: TextChannel,
-    previousMessageId: string | null | undefined,
     expectedMessageId: string | null | undefined
   ): Promise<Message> {
-    const replacement = previousMessageId
-      ? await this.findRepostReplacement(targetChannel, previousMessageId)
-      : null;
-    if (replacement) {
-      return replacement;
-    }
+    const latestMessages = await targetChannel.messages.fetch({ limit: 1 });
+    await this.configService.updateServerSettings(guildId, {
+      [REPORT_INSTRUCTIONS_PENDING_PUBLICATION_SETTING_KEY]: {
+        channel_id: targetChannel.id,
+        after_message_id: latestMessages.first()?.id ?? null,
+      },
+    });
     const nonce = createHash('sha256')
       .update(`${guildId}:${targetChannel.id}:${expectedMessageId ?? 'none'}`)
       .digest('hex')
@@ -284,17 +289,24 @@ export class ReportInstructionsManager {
     guildId: string
   ): Promise<{ action: 'cleared' | 'unchanged' }> {
     await this.recoverPendingPublication(guildId);
-    const serverConfig = await this.configService.getServerConfig(guildId);
+    const serverConfig = await this.configService.getServerConfig(guildId, {
+      failOnReadError: true,
+      forceRefresh: true,
+    });
+    const settings = await this.recoverDurablePublication(guildId, serverConfig.settings);
     const hadPendingCleanup = Boolean(
-      serverConfig.settings[REPORT_INSTRUCTIONS_CLEANUP_CHANNEL_ID_SETTING_KEY] ||
-      serverConfig.settings[REPORT_INSTRUCTIONS_CLEANUP_MESSAGE_ID_SETTING_KEY]
+      settings[REPORT_INSTRUCTIONS_CLEANUP_CHANNEL_ID_SETTING_KEY] ||
+      settings[REPORT_INSTRUCTIONS_CLEANUP_MESSAGE_ID_SETTING_KEY]
     );
-    await this.retryPendingReportInstructionsCleanup(guildId, serverConfig.settings);
-    const existingChannelId = serverConfig.settings[REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY];
-    const existingMessageId = serverConfig.settings[REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY];
+    await this.retryPendingReportInstructionsCleanup(guildId, settings);
+    const existingChannelId = settings[REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY];
+    const existingMessageId = settings[REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY];
     const hasCleanupTarget = Boolean(existingChannelId && existingMessageId);
 
     await this.configService.updateServerSettings(guildId, {
+      ...(settings[REPORT_INSTRUCTIONS_PENDING_PUBLICATION_SETTING_KEY]
+        ? { [REPORT_INSTRUCTIONS_PENDING_PUBLICATION_SETTING_KEY]: null }
+        : {}),
       [REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY]: null,
       [REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY]: null,
       [REPORT_INSTRUCTIONS_CLEANUP_CHANNEL_ID_SETTING_KEY]: hasCleanupTarget
@@ -327,33 +339,75 @@ export class ReportInstructionsManager {
       return null;
     }
 
-    const messages = await messageManager.fetch({ limit: 50 });
+    const messages = await messageManager.fetch({ limit: 50 }).catch(() => null);
+    if (!messages) return null;
     return messages.find((message) => this.isReportInstructionsMessage(message)) ?? null;
   }
 
   private async findRepostReplacement(
     channel: TextChannel,
-    previousMessageId: string
+    previousMessageId: string | null
   ): Promise<Message | null> {
     let before: string | undefined;
-    // Recover a send whose coordinates were never saved, including after a process restart.
-    // Stop at the panel this request supersedes rather than scanning older channel history.
-    for (;;) {
-      const messages = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
+    // Recover only messages posted after the saved publication intent.
+    // shortcut: scan at most 1000 newer messages, add resumable cursors for deeper recovery.
+    for (let page = 0; page < REPORT_PANEL_RECOVERY_PAGE_LIMIT; page++) {
+      const messages = await channel.messages.fetch({
+        limit: REPORT_PANEL_RECOVERY_PAGE_SIZE,
+        ...(before ? { before } : {}),
+      });
       const replacement = messages.find(
         (message) =>
           this.isReportInstructionsMessage(message) &&
-          BigInt(message.id) > BigInt(previousMessageId)
+          (!previousMessageId || BigInt(message.id) > BigInt(previousMessageId))
       );
       if (replacement) {
         return replacement;
       }
       const oldestId = messages.last()?.id;
-      if (!oldestId || messages.size < 100 || BigInt(oldestId) <= BigInt(previousMessageId)) {
+      if (
+        !oldestId ||
+        messages.size < REPORT_PANEL_RECOVERY_PAGE_SIZE ||
+        (previousMessageId && BigInt(oldestId) <= BigInt(previousMessageId))
+      ) {
         return null;
       }
       before = oldestId;
     }
+    throw new Error(
+      'Report panel recovery exceeded its history limit. Existing panels were retained. Finish recovery before reposting.'
+    );
+  }
+
+  private async recoverDurablePublication(
+    guildId: string,
+    settings: ServerSettings
+  ): Promise<ServerSettings> {
+    const pending = settings[REPORT_INSTRUCTIONS_PENDING_PUBLICATION_SETTING_KEY];
+    if (!pending) return settings;
+    const channel = await this.client.channels.fetch(pending.channel_id).catch((error: unknown) => {
+      if (this.isUnknownDiscordResource(error, DISCORD_UNKNOWN_CHANNEL_ERROR_CODE)) return null;
+      throw error;
+    });
+    if (!channel || !('messages' in channel)) return settings;
+    const message = await this.findRepostReplacement(
+      channel as TextChannel,
+      pending.after_message_id
+    );
+    if (!message) return settings;
+    const oldChannelId = settings[REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY];
+    const oldMessageId = settings[REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY];
+    const patch: Partial<ServerSettings> = {
+      [REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY]: pending.channel_id,
+      [REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY]: message.id,
+      [REPORT_INSTRUCTIONS_PENDING_PUBLICATION_SETTING_KEY]: null,
+    };
+    if (oldChannelId && oldMessageId && oldMessageId !== message.id) {
+      patch[REPORT_INSTRUCTIONS_CLEANUP_CHANNEL_ID_SETTING_KEY] = oldChannelId;
+      patch[REPORT_INSTRUCTIONS_CLEANUP_MESSAGE_ID_SETTING_KEY] = oldMessageId;
+    }
+    await this.saveReportInstructionsPublication(guildId, patch, message, true);
+    return { ...settings, ...patch };
   }
 
   private async recoverPendingPublication(guildId: string): Promise<void> {

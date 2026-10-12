@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { randomUUID } from 'node:crypto';
 import { redirect } from 'next/navigation';
 import {
   CASE_RESPONDER_DEFAULT_THREAD_MEMBER_CAP,
@@ -471,6 +472,7 @@ export default async function GuildSetupPage({ params }: PageProps) {
             name="reportInstructionsMessageId"
             value={server?.settings.report_instructions_message_id ?? ''}
           />
+          <input type="hidden" name="reportInstructionsSubmissionId" value={randomUUID()} />
           <button
             className="button secondary"
             formAction={repostReportInstructionsAction}

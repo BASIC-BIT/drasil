@@ -43,8 +43,11 @@ Good for privacy and low clutter. Reports start as triage alerts instead of crea
 
 Administrators can use `/setupreportbutton channel:<channel> repost:true` or **Repost report
 button** in web setup after adding channel instructions. Ordinary setup and repair still edit the
-existing panel. Repost sends a replacement, saves its ID, and then removes the previous Drasil
-panel. If cleanup fails, retry finishes cleanup before publishing again.
+existing panel. Repost saves a publication intent, sends a replacement, saves its ID, and then
+removes the previous Drasil panel. Retries recover that intent even after a restart or channel move.
+If cleanup fails, retry finishes cleanup before publishing again. A fresh web submission can then
+request another repost. Recovery checks at most 1,000 messages newer than the saved boundary and
+stops with an error if that limit is reached; it never sends another panel on an incomplete search.
 
 ```mermaid
 flowchart LR
@@ -55,7 +58,8 @@ flowchart LR
   Setup --> Repair
   Slash --> Repost[Explicit repost]
   Setup --> Repost
-  Repost --> Send[Send below newer instructions]
+  Repost --> Intent[Save publication intent]
+  Intent --> Send[Send below newer instructions]
   Send --> Save[Save replacement ID]
   Save --> Delete[Remove old Drasil panel]
   Delete --> Button[Existing Report a user button]

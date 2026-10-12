@@ -38,6 +38,7 @@ describe('report panel setup actions', () => {
     const data = new FormData();
     data.set('reportInstructionsChannelId', 'channel');
     data.set('reportInstructionsMessageId', 'old-panel');
+    data.set('reportInstructionsSubmissionId', 'submission-1');
     await (repost ? queueReportInstructionsRepost : queueReportInstructionsRepair)('guild', data);
     expect(mocks.queue).toHaveBeenCalledWith({
       actorId: 'admin',
@@ -45,6 +46,7 @@ describe('report panel setup actions', () => {
       guildId: 'guild',
       repost,
       expectedMessageId: 'old-panel',
+      submissionId: 'submission-1',
     });
   });
 
