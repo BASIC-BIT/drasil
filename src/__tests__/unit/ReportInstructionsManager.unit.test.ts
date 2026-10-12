@@ -4,6 +4,7 @@ import { ReportInstructionsManager } from '../../controllers/ReportInstructionsM
 import { ServerSettings } from '../../repositories/types';
 
 function buildManager(guildId: string) {
+  const canReadHistory = jest.fn().mockReturnValue(true);
   let settings: ServerSettings = {
     report_instructions_channel_id: 'channel',
     report_instructions_message_id: '100',
@@ -32,6 +33,7 @@ function buildManager(guildId: string) {
   });
   const channel = {
     id: 'channel',
+    permissionsFor: jest.fn().mockReturnValue({ has: canReadHistory }),
     messages: { fetch },
     send: jest.fn().mockResolvedValue(newMessage),
   };
@@ -57,6 +59,7 @@ function buildManager(guildId: string) {
       expectedMessageId,
     });
   return {
+    canReadHistory,
     channel,
     client,
     config,
@@ -70,6 +73,47 @@ function buildManager(guildId: string) {
 }
 
 describe('ReportInstructionsManager deliberate repost', () => {
+  it('retains recovery state when history is hidden by missing permissions', async () => {
+    const fixture = buildManager('hidden-history');
+    await fixture.save('hidden-history', {
+      report_instructions_pending_publication: { channel_id: 'channel', after_message_id: '100' },
+    });
+    fixture.canReadHistory.mockReturnValue(false);
+    await expect(fixture.upsert()).rejects.toThrow('Read Message History');
+    expect(fixture.settings().report_instructions_pending_publication).not.toBeNull();
+    expect(fixture.config.updateServerSettings).not.toHaveBeenCalled();
+    expect(fixture.channel.send).not.toHaveBeenCalled();
+    fixture.canReadHistory.mockReturnValue(true);
+    fixture.channel.messages.fetch.mockImplementationOnce(
+      async () => new Collection([['200', fixture.newMessage as unknown as Message]])
+    );
+    await fixture.upsert();
+    expect(fixture.settings().report_instructions_message_id).toBe('200');
+    expect(fixture.channel.send).not.toHaveBeenCalled();
+  });
+
+  it('does not treat empty history as absence if permission is lost during the read', async () => {
+    const fixture = buildManager('history-permission-race');
+    await fixture.save('history-permission-race', {
+      report_instructions_pending_publication: { channel_id: 'channel', after_message_id: '100' },
+    });
+    fixture.channel.messages.fetch.mockImplementationOnce(async () => {
+      fixture.canReadHistory.mockReturnValue(false);
+      return new Collection<string, Message>();
+    });
+    await expect(fixture.upsert()).rejects.toThrow('Read Message History');
+    expect(fixture.config.updateServerSettings).not.toHaveBeenCalled();
+    expect(fixture.settings().report_instructions_pending_publication).not.toBeNull();
+    expect(fixture.oldMessage.delete).not.toHaveBeenCalled();
+  });
+
+  it('does not record a new intent or send when repost history cannot be read', async () => {
+    const fixture = buildManager('repost-no-history');
+    fixture.canReadHistory.mockReturnValue(false);
+    await expect(fixture.upsert()).rejects.toThrow('Read Message History');
+    expect(fixture.config.updateServerSettings).not.toHaveBeenCalled();
+    expect(fixture.channel.send).not.toHaveBeenCalled();
+  });
   it('clears a publication intent whose destination channel no longer exists', async () => {
     const fixture = buildManager('deleted-intent-channel');
     await fixture.save('deleted-intent-channel', {
@@ -167,11 +211,12 @@ describe('ReportInstructionsManager deliberate repost', () => {
   });
   it('keeps ordinary first setup working without history permission', async () => {
     const fixture = buildManager('ordinary-no-history');
+    fixture.canReadHistory.mockReturnValue(false);
     await fixture.save('ordinary-no-history', {
       report_instructions_channel_id: null,
       report_instructions_message_id: null,
     });
-    fixture.channel.messages.fetch.mockRejectedValueOnce(new Error('missing history permission'));
+    fixture.channel.messages.fetch.mockResolvedValueOnce(new Collection<string, Message>());
     await expect(fixture.upsert(false)).resolves.toEqual({ action: 'sent', messageId: '200' });
     expect(fixture.channel.send).toHaveBeenCalledTimes(1);
   });

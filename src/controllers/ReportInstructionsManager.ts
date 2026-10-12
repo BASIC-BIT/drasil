@@ -5,6 +5,7 @@ import {
   Client,
   EmbedBuilder,
   Message,
+  PermissionFlagsBits,
   TextChannel,
 } from 'discord.js';
 import { IConfigService } from '../config/ConfigService';
@@ -222,7 +223,9 @@ export class ReportInstructionsManager {
     targetChannel: TextChannel,
     expectedMessageId: string | null | undefined
   ): Promise<Message> {
+    this.assertCanReadReportHistory(targetChannel);
     const latestMessages = await targetChannel.messages.fetch({ limit: 1 });
+    this.assertCanReadReportHistory(targetChannel);
     await this.configService.updateServerSettings(guildId, {
       [REPORT_INSTRUCTIONS_PENDING_PUBLICATION_SETTING_KEY]: {
         channel_id: targetChannel.id,
@@ -352,10 +355,12 @@ export class ReportInstructionsManager {
     // Recover only messages posted after the saved publication intent.
     // shortcut: scan at most 1000 newer messages, add resumable cursors for deeper recovery.
     for (let page = 0; page < REPORT_PANEL_RECOVERY_PAGE_LIMIT; page++) {
+      this.assertCanReadReportHistory(channel);
       const messages = await channel.messages.fetch({
         limit: REPORT_PANEL_RECOVERY_PAGE_SIZE,
         ...(before ? { before } : {}),
       });
+      this.assertCanReadReportHistory(channel);
       const replacement = messages.find(
         (message) =>
           this.isReportInstructionsMessage(message) &&
@@ -421,6 +426,20 @@ export class ReportInstructionsManager {
     }
     await this.configService.updateServerSettings(guildId, pending);
     pendingReportInstructionsPublications.delete(guildId);
+  }
+
+  private assertCanReadReportHistory(channel: TextChannel): void {
+    // Discord can return empty history when Read Message History is denied.
+    if (
+      !this.client.user ||
+      !channel
+        .permissionsFor(this.client.user)
+        ?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory])
+    ) {
+      throw new Error(
+        'Drasil needs View Channel and Read Message History to repost or recover the report panel. Existing panels were retained.'
+      );
+    }
   }
 
   private assertBotOwnedMessage(message: Message): void {

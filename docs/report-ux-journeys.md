@@ -48,6 +48,9 @@ removes the previous Drasil panel. Retries recover that intent even after a rest
 If cleanup fails, retry finishes cleanup before publishing again. A fresh web submission can then
 request another repost. Recovery checks at most 1,000 messages newer than the saved boundary and
 stops with an error if that limit is reached; it never sends another panel on an incomplete search.
+Repost and recovery require Drasil to have View Channel and Read Message History. Ordinary first
+setup retains its existing fallback without history access. Empty history without that permission
+is not evidence that a panel is missing ([Discord API](https://github.com/discord/discord-api-docs/blob/main/developers/resources/message.mdx#get-channel-messages)).
 
 ```mermaid
 flowchart LR
