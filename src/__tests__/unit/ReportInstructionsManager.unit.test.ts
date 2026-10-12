@@ -73,6 +73,33 @@ function buildManager(guildId: string) {
 }
 
 describe('ReportInstructionsManager deliberate repost', () => {
+  it('creates a fresh panel after clearing an initial repost within the nonce window', async () => {
+    const fixture = buildManager('clear-and-recreate');
+    await fixture.save('clear-and-recreate', {
+      report_instructions_channel_id: null,
+      report_instructions_message_id: null,
+    });
+    fixture.channel.messages.fetch.mockImplementation(
+      async () => new Collection<string, Message>()
+    );
+    const replacement = { ...fixture.newMessage, id: '300' };
+    const recentSends = new Map<string, typeof fixture.newMessage>();
+    fixture.channel.send.mockImplementation(async ({ nonce }: { nonce: string }) => {
+      const previous = recentSends.get(nonce);
+      if (previous) return previous;
+      const message = recentSends.size === 0 ? fixture.newMessage : replacement;
+      recentSends.set(nonce, message);
+      return message;
+    });
+    await fixture.upsert(true, null);
+    fixture.channel.messages.fetch.mockImplementationOnce(async () => fixture.newMessage);
+    await fixture.manager.clearReportInstructions('clear-and-recreate');
+    expect(fixture.newMessage.delete).toHaveBeenCalledTimes(1);
+    await expect(fixture.upsert(true, null)).resolves.toMatchObject({ messageId: '300' });
+    expect(fixture.settings().report_instructions_message_id).toBe('300');
+    expect(recentSends.size).toBe(2);
+  });
+
   it('keeps a repost-triggered move durable after finishing earlier cleanup', async () => {
     const fixture = buildManager('cleanup-then-move');
     await fixture.save('cleanup-then-move', {

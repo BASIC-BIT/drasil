@@ -1,5 +1,9 @@
 import { ChannelType, InteractionContextType, MessageFlags } from 'discord.js';
-import { ReportInstructionsManager } from '../../controllers/ReportInstructionsManager';
+import {
+  ReportInstructionsError,
+  ReportInstructionsManager,
+  ReportInstructionsRollbackRequiredError,
+} from '../../controllers/ReportInstructionsManager';
 import { USER_REPORT_REASON_REQUIRED_SETTING_KEY } from '../../utils/userReportSettings';
 import { buildHandler, restoreUserInstallReportingEnvAfterEach } from './commandHandlerTestHarness';
 
@@ -444,6 +448,42 @@ describe('CommandHandler report commands (unit)', () => {
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: 'Report instructions reposted successfully in <#channel-1>.',
     });
+  });
+
+  it.each([
+    [
+      new Error('database host=private.example ' + 'query'.repeat(1000)),
+      'Report panel setup failed. Check channel permissions and retry.',
+    ],
+    [
+      new ReportInstructionsError('Refresh setup before reposting.'),
+      'Report panel setup needs attention: Refresh setup before reposting.',
+    ],
+    [
+      new ReportInstructionsRollbackRequiredError(),
+      'Report panel setup needs attention: A report panel was published, but saving or rolling it back could not be confirmed. Existing panels were retained. Retry setup to recover the message.',
+    ],
+  ])('only exposes curated report setup errors (%s)', async (error, content) => {
+    jest
+      .spyOn(ReportInstructionsManager.prototype, 'upsertReportInstructionsMessage')
+      .mockRejectedValue(error);
+    const { handler } = buildHandler();
+    const interaction = {
+      commandName: 'setupreportbutton',
+      user: { id: 'admin' },
+      guild: {
+        id: 'guild-1',
+        members: { fetch: jest.fn().mockResolvedValue({ permissions: { has: () => true } }) },
+      },
+      options: {
+        getChannel: () => ({ id: 'channel-1', type: ChannelType.GuildText }),
+        getBoolean: () => true,
+      },
+      deferReply: jest.fn(),
+      editReply: jest.fn(),
+    };
+    await handler.handleSlashCommand(interaction as any);
+    expect(interaction.editReply).toHaveBeenCalledWith({ content, allowedMentions: { parse: [] } });
   });
 
   it('recreates report instructions when the stored message no longer exists', async () => {

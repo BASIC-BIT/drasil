@@ -17,7 +17,7 @@ import {
   USER_REPORT_REASON_MAX_LENGTH,
 } from '../utils/userReportSettings';
 import { isUserInstallReportingEnabled } from '../utils/userInstallReporting';
-import { ReportInstructionsManager } from './ReportInstructionsManager';
+import { ReportInstructionsError, ReportInstructionsManager } from './ReportInstructionsManager';
 import {
   ReportSubmissionService,
   UserReportSubmissionResult,
@@ -183,7 +183,7 @@ export class ReportCommandHandler {
       console.error('Failed to upsert report button message:', error);
       await interaction.editReply({
         content:
-          error instanceof Error
+          error instanceof ReportInstructionsError
             ? `Report panel setup needs attention: ${error.message}`
             : 'Report panel setup failed. Check channel permissions and retry.',
         allowedMentions: { parse: [] },

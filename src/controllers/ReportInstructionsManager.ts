@@ -10,7 +10,7 @@ import {
 } from 'discord.js';
 import { IConfigService } from '../config/ConfigService';
 import type { ServerSettings } from '../repositories/types';
-import { createHash } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 
 const REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY = 'report_instructions_channel_id';
 const REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY = 'report_instructions_message_id';
@@ -40,7 +40,9 @@ interface ReportInstructionsResult {
   messageId: string;
 }
 
-export class ReportInstructionsRollbackRequiredError extends Error {
+export class ReportInstructionsError extends Error {}
+
+export class ReportInstructionsRollbackRequiredError extends ReportInstructionsError {
   public constructor() {
     super(REPORT_INSTRUCTIONS_ROLLBACK_PENDING_ERROR);
     this.name = 'ReportInstructionsRollbackRequiredError';
@@ -110,7 +112,7 @@ export class ReportInstructionsManager {
     let existingMessageId = settings[REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY];
     const matchesExpectedPanel = (existingMessageId ?? null) === options.expectedMessageId;
     if (options.repost && existingChannelId !== targetChannel.id && !matchesExpectedPanel) {
-      throw new Error(
+      throw new ReportInstructionsError(
         'The report panel changed since this request. Refresh setup before reposting.'
       );
     }
@@ -243,11 +245,8 @@ export class ReportInstructionsManager {
         after_message_id: latestMessages.first()?.id ?? null,
       },
     });
-    const nonce = createHash('sha256')
-      .update(`${guildId}:${targetChannel.id}:${options.expectedMessageId ?? 'none'}`)
-      .digest('hex')
-      .slice(0, 25);
-    // Discord deduplicates recent sends after an ambiguous network failure.
+    // Deduplicate transport retries for this send, without reusing a deleted panel's nonce.
+    const nonce = randomBytes(12).toString('hex');
     return targetChannel.send({
       ...this.buildReportInstructionsMessagePayload(),
       nonce,
@@ -390,7 +389,7 @@ export class ReportInstructionsManager {
       }
       before = oldestId;
     }
-    throw new Error(
+    throw new ReportInstructionsError(
       'Report panel recovery exceeded its history limit. Existing panels were retained. Finish recovery before reposting.'
     );
   }
@@ -447,7 +446,7 @@ export class ReportInstructionsManager {
         .permissionsFor(this.client.user)
         ?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory])
     ) {
-      throw new Error(
+      throw new ReportInstructionsError(
         'Drasil needs View Channel and Read Message History to repost or recover the report panel. Existing panels were retained.'
       );
     }
@@ -455,7 +454,9 @@ export class ReportInstructionsManager {
 
   private assertBotOwnedMessage(message: Message): void {
     if (!this.isReportInstructionsMessage(message)) {
-      throw new Error('The saved message is not a Drasil report panel. No message was changed.');
+      throw new ReportInstructionsError(
+        'The saved message is not a Drasil report panel. No message was changed.'
+      );
     }
   }
 
@@ -496,7 +497,7 @@ export class ReportInstructionsManager {
     messageId: string
   ): Promise<void> {
     if (!(await this.deleteReportInstructionsMessage(channelId, messageId))) {
-      throw new Error(REPORT_INSTRUCTIONS_CLEANUP_PENDING_ERROR);
+      throw new ReportInstructionsError(REPORT_INSTRUCTIONS_CLEANUP_PENDING_ERROR);
     }
     await this.clearPendingReportInstructionsCleanup(guildId);
   }
