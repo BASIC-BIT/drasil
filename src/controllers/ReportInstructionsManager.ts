@@ -28,13 +28,13 @@ const REPORT_INSTRUCTIONS_CLEANUP_PENDING_ERROR =
   'Report panel settings were saved, but previous panel cleanup needs attention. Retry setup to finish cleanup.';
 const REPORT_INSTRUCTIONS_ROLLBACK_PENDING_ERROR =
   'A report panel was published, but saving or rolling it back could not be confirmed. Existing panels were retained. Retry setup to recover the message.';
-const reportInstructionsExecutionChains = new Map<string, Promise<unknown>>();
 // shortcut: one bot process owns Discord writes, use a distributed lock before scaling writers.
-const pendingReportInstructionsPublications = new Map<string, Partial<ServerSettings>>();
+const reportInstructionsExecutionChains = new Map<string, Promise<unknown>>();
 
 export interface ReportInstructionsOptions {
   readonly repost?: boolean;
   readonly expectedMessageId?: string | null;
+  readonly expectedChannelId?: string | null;
 }
 
 interface ReportInstructionsResult {
@@ -81,14 +81,24 @@ export class ReportInstructionsManager {
   ): Promise<ReportInstructionsResult> {
     // Capture the panel the administrator saw before entering the serialization queue.
     // Concurrent reposts of that panel reuse the first replacement.
-    if (options.repost && options.expectedMessageId === undefined) {
+    if (
+      options.repost &&
+      (options.expectedMessageId === undefined || options.expectedChannelId === undefined)
+    ) {
       const config = await this.configService.getServerConfig(guildId, {
         failOnReadError: true,
         forceRefresh: true,
       });
       options = {
         ...options,
-        expectedMessageId: config.settings[REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY] ?? null,
+        expectedMessageId:
+          options.expectedMessageId === undefined
+            ? (config.settings[REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY] ?? null)
+            : options.expectedMessageId,
+        expectedChannelId:
+          options.expectedChannelId === undefined
+            ? (config.settings[REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY] ?? null)
+            : options.expectedChannelId,
       };
     }
     return runSerializedReportInstructions(guildId, () =>
@@ -102,13 +112,14 @@ export class ReportInstructionsManager {
     options: ReportInstructionsOptions
   ): Promise<ReportInstructionsResult> {
     const messagePayload = this.buildReportInstructionsMessagePayload();
-    await this.recoverPendingPublication(guildId);
     const serverConfig = await this.configService.getServerConfig(guildId, {
       failOnReadError: true,
       forceRefresh: true,
     });
-    const settings = await this.recoverDurablePublication(guildId, serverConfig.settings);
+    this.assertExpectedReportChannel(serverConfig.settings, targetChannel.id, options);
+    let settings = await this.recoverDurablePublication(guildId, serverConfig.settings);
     const hadPendingCleanup = Boolean(settings[REPORT_INSTRUCTIONS_CLEANUP_MESSAGE_ID_SETTING_KEY]);
+    settings = await this.recoverMissingCleanupReplacement(guildId, settings);
     await this.retryPendingReportInstructionsCleanup(guildId, settings);
     let existingChannelId = settings[REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY];
     let existingMessageId = settings[REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY];
@@ -125,7 +136,10 @@ export class ReportInstructionsManager {
     const repost = options.repost && !hadPendingCleanup && matchesExpectedPanel;
 
     if (repost && !existingMessageId) {
-      const recoveredMessage = await this.findExistingReportInstructionsMessage(targetChannel);
+      const recoveredMessage = await this.findExistingReportInstructionsMessage(
+        targetChannel,
+        true
+      );
       if (recoveredMessage) {
         existingChannelId = targetChannel.id;
         existingMessageId = recoveredMessage.id;
@@ -162,7 +176,10 @@ export class ReportInstructionsManager {
         action = 'recreated';
       }
     } else {
-      const existingMessage = await this.findExistingReportInstructionsMessage(targetChannel);
+      const existingMessage = await this.findExistingReportInstructionsMessage(
+        targetChannel,
+        options.repost === true
+      );
       if (existingMessage) {
         await existingMessage.edit(messagePayload);
         messageId = existingMessage.id;
@@ -291,14 +308,12 @@ export class ReportInstructionsManager {
           })
         ).settings;
       } catch {
-        pendingReportInstructionsPublications.set(guildId, settingsPatch);
         throw new ReportInstructionsRollbackRequiredError();
       }
       if (savedSettings[REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY] === createdMessage.id) {
         return;
       }
       if (repost || !(await this.deleteUntrackedReportInstructionsMessage(createdMessage))) {
-        pendingReportInstructionsPublications.set(guildId, settingsPatch);
         throw new ReportInstructionsRollbackRequiredError();
       }
       await this.configService.updateServerSettings(guildId, {
@@ -319,7 +334,6 @@ export class ReportInstructionsManager {
   private async clearReportInstructionsExclusive(
     guildId: string
   ): Promise<{ action: 'cleared' | 'unchanged' }> {
-    await this.recoverPendingPublication(guildId);
     const serverConfig = await this.configService.getServerConfig(guildId, {
       failOnReadError: true,
       forceRefresh: true,
@@ -357,8 +371,10 @@ export class ReportInstructionsManager {
   }
 
   private async findExistingReportInstructionsMessage(
-    targetChannel: TextChannel
+    targetChannel: TextChannel,
+    failOnReadError = false
   ): Promise<Message | null> {
+    if (failOnReadError) this.assertCanReadReportHistory(targetChannel);
     const botUserId = this.client.user?.id;
     if (!botUserId) {
       return null;
@@ -370,7 +386,11 @@ export class ReportInstructionsManager {
       return null;
     }
 
-    const messages = await messageManager.fetch({ limit: 50 }).catch(() => null);
+    const messages = await messageManager.fetch({ limit: 50 }).catch((error: unknown) => {
+      if (failOnReadError) throw error;
+      return null;
+    });
+    if (failOnReadError) this.assertCanReadReportHistory(targetChannel);
     if (!messages) return null;
     return messages.find((message) => this.isReportInstructionsMessage(message)) ?? null;
   }
@@ -447,13 +467,73 @@ export class ReportInstructionsManager {
     return { ...settings, ...patch };
   }
 
-  private async recoverPendingPublication(guildId: string): Promise<void> {
-    const pending = pendingReportInstructionsPublications.get(guildId);
-    if (!pending) {
-      return;
+  private assertExpectedReportChannel(
+    settings: ServerSettings,
+    targetChannelId: string,
+    options: ReportInstructionsOptions
+  ): void {
+    const isCleanupRetry =
+      settings[REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY] === targetChannelId &&
+      settings[REPORT_INSTRUCTIONS_CLEANUP_CHANNEL_ID_SETTING_KEY] === options.expectedChannelId &&
+      settings[REPORT_INSTRUCTIONS_CLEANUP_MESSAGE_ID_SETTING_KEY] === options.expectedMessageId;
+    if (
+      options.repost &&
+      (settings[REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY] ?? null) !==
+        options.expectedChannelId &&
+      !isCleanupRetry
+    ) {
+      throw new ReportInstructionsError(
+        'The report channel changed since this request. Refresh setup before reposting.'
+      );
     }
-    await this.configService.updateServerSettings(guildId, pending);
-    pendingReportInstructionsPublications.delete(guildId);
+  }
+
+  private async fetchTrackedReportInstructionsMessage(
+    channelId: string | null | undefined,
+    messageId: string | null | undefined
+  ): Promise<Message | null> {
+    if (!channelId || !messageId) return null;
+    const channel = await this.client.channels.fetch(channelId).catch((error: unknown) => {
+      if (this.isUnknownDiscordResource(error, DISCORD_UNKNOWN_CHANNEL_ERROR_CODE)) return null;
+      throw error;
+    });
+    return channel && 'messages' in channel
+      ? this.fetchReportInstructionsMessage(channel as TextChannel, messageId)
+      : null;
+  }
+
+  private async recoverMissingCleanupReplacement(
+    guildId: string,
+    settings: ServerSettings
+  ): Promise<ServerSettings> {
+    if (
+      settings[REPORT_INSTRUCTIONS_CLEANUP_MESSAGE_ID_SETTING_KEY] &&
+      settings[REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY] &&
+      !(await this.fetchTrackedReportInstructionsMessage(
+        settings[REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY],
+        settings[REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY]
+      ))
+    ) {
+      const previousChannelId = settings[REPORT_INSTRUCTIONS_CLEANUP_CHANNEL_ID_SETTING_KEY];
+      const previousMessageId = settings[REPORT_INSTRUCTIONS_CLEANUP_MESSAGE_ID_SETTING_KEY];
+      const previous = await this.fetchTrackedReportInstructionsMessage(
+        previousChannelId,
+        previousMessageId
+      );
+      const patch: Partial<ServerSettings> = {
+        [REPORT_INSTRUCTIONS_CLEANUP_CHANNEL_ID_SETTING_KEY]: null,
+        [REPORT_INSTRUCTIONS_CLEANUP_MESSAGE_ID_SETTING_KEY]: null,
+        ...(previous
+          ? {
+              [REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY]: previousChannelId,
+              [REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY]: previous.id,
+            }
+          : {}),
+      };
+      await this.configService.updateServerSettings(guildId, patch);
+      return { ...settings, ...patch };
+    }
+    return settings;
   }
 
   private assertCanReadReportHistory(channel: TextChannel): void {

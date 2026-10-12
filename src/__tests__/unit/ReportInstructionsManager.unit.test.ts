@@ -4,6 +4,7 @@ import { ReportInstructionsManager } from '../../controllers/ReportInstructionsM
 import { ServerSettings } from '../../repositories/types';
 
 function buildManager(guildId: string) {
+  let published = false;
   const canReadHistory = jest.fn().mockReturnValue(true);
   let settings: ServerSettings = {
     report_instructions_channel_id: 'channel',
@@ -21,13 +22,17 @@ function buildManager(guildId: string) {
     ...oldMessage,
     id: '200',
     edit: jest.fn().mockResolvedValue(undefined),
-    delete: jest.fn().mockResolvedValue(undefined),
+    delete: jest.fn(async () => {
+      published = false;
+    }),
   };
   const fetch = jest.fn(async (id: string | { limit: number }) => {
     if (typeof id !== 'string') {
       return id.limit === 1
         ? new Collection([['100', oldMessage as unknown as Message]])
-        : new Collection<string, Message>();
+        : id.limit === 100 && published
+          ? new Collection([['200', newMessage as unknown as Message]])
+          : new Collection<string, Message>();
     }
     return id === '100' ? oldMessage : newMessage;
   });
@@ -35,7 +40,10 @@ function buildManager(guildId: string) {
     id: 'channel',
     permissionsFor: jest.fn().mockReturnValue({ has: canReadHistory }),
     messages: { fetch },
-    send: jest.fn().mockResolvedValue(newMessage),
+    send: jest.fn().mockImplementation(async () => {
+      published = true;
+      return newMessage;
+    }),
   };
   const client = {
     user: { id: 'bot' },
@@ -57,6 +65,7 @@ function buildManager(guildId: string) {
     manager.upsertReportInstructionsMessage(guildId, channel as unknown as TextChannel, {
       repost,
       expectedMessageId,
+      expectedChannelId: settings.report_instructions_channel_id ?? null,
     });
   return {
     canReadHistory,
@@ -73,6 +82,121 @@ function buildManager(guildId: string) {
 }
 
 describe('ReportInstructionsManager deliberate repost', () => {
+  it('recreates a panel after confirming both pending cleanup messages are missing', async () => {
+    const fixture = buildManager('both-cleanup-panels-missing');
+    await fixture.save('both-cleanup-panels-missing', {
+      report_instructions_message_id: '200',
+      report_instructions_cleanup_channel_id: 'channel',
+      report_instructions_cleanup_message_id: '100',
+    });
+    fixture.channel.messages.fetch.mockImplementation(async (value) => {
+      if (typeof value === 'string') throw { code: 10008 };
+      return new Collection<string, Message>();
+    });
+    fixture.channel.send.mockResolvedValue({ ...fixture.newMessage, id: '300' });
+    await expect(fixture.upsert(true, '200')).resolves.toMatchObject({ messageId: '300' });
+    expect(fixture.oldMessage.delete).not.toHaveBeenCalled();
+    expect(fixture.settings().report_instructions_cleanup_message_id).toBeNull();
+  });
+
+  it('retains pending cleanup when a replacement existence check fails transiently', async () => {
+    const fixture = buildManager('cleanup-existence-read-failure');
+    await fixture.save('cleanup-existence-read-failure', {
+      report_instructions_message_id: '200',
+      report_instructions_cleanup_channel_id: 'channel',
+      report_instructions_cleanup_message_id: '100',
+    });
+    fixture.channel.messages.fetch.mockRejectedValueOnce(new Error('Discord unavailable'));
+    await expect(fixture.upsert()).rejects.toThrow('Discord unavailable');
+    expect(fixture.oldMessage.delete).not.toHaveBeenCalled();
+    expect(fixture.channel.send).not.toHaveBeenCalled();
+    expect(fixture.config.updateServerSettings).not.toHaveBeenCalled();
+  });
+  it('finishes an interrupted clear before ordinary setup sends a new panel', async () => {
+    const fixture = buildManager('repair-after-interrupted-clear');
+    fixture.oldMessage.delete.mockRejectedValueOnce(new Error('delete failed'));
+    await expect(
+      fixture.manager.clearReportInstructions('repair-after-interrupted-clear')
+    ).rejects.toThrow('cleanup needs attention');
+    await fixture.upsert(false);
+    expect(fixture.oldMessage.delete).toHaveBeenCalledTimes(2);
+    expect(fixture.channel.send).toHaveBeenCalledTimes(1);
+    expect(fixture.settings().report_instructions_cleanup_message_id).toBeNull();
+    expect(fixture.settings().report_instructions_message_id).toBe('200');
+  });
+  it('rejects a stale page after only the configured channel changes', async () => {
+    const fixture = buildManager('stale-channel-only');
+    await fixture.save('stale-channel-only', { report_instructions_channel_id: 'new-channel' });
+    await expect(
+      fixture.manager.upsertReportInstructionsMessage(
+        'stale-channel-only',
+        fixture.channel as unknown as TextChannel,
+        {
+          repost: true,
+          expectedMessageId: '100',
+          expectedChannelId: 'channel',
+        }
+      )
+    ).rejects.toThrow('report channel changed');
+    expect(fixture.channel.send).not.toHaveBeenCalled();
+    expect(fixture.config.updateServerSettings).not.toHaveBeenCalled();
+    expect(fixture.settings().report_instructions_channel_id).toBe('new-channel');
+  });
+
+  it('allows an intentional move selected on the original form', async () => {
+    const fixture = buildManager('intentional-channel-move');
+    fixture.channel.id = 'target';
+    fixture.client.channels.fetch.mockResolvedValue({
+      messages: { fetch: jest.fn().mockResolvedValue(fixture.oldMessage) },
+    });
+    await fixture.upsert();
+    expect(fixture.settings().report_instructions_channel_id).toBe('target');
+    expect(fixture.oldMessage.delete).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the working old panel when an uncommitted replacement disappears before retry', async () => {
+    const fixture = buildManager('deleted-uncommitted-replacement');
+    fixture.config.updateServerSettings
+      .mockImplementationOnce(fixture.save)
+      .mockRejectedValueOnce(new Error('write failed'));
+    await expect(fixture.upsert()).rejects.toThrow('Retry setup to recover');
+    await fixture.newMessage.delete();
+    fixture.channel.send.mockRejectedValueOnce(new Error('retry send failed'));
+    await expect(fixture.upsert()).rejects.toThrow('retry send failed');
+    expect(fixture.oldMessage.delete).not.toHaveBeenCalled();
+    expect(fixture.settings().report_instructions_message_id).toBe('100');
+  });
+
+  it('retains the old panel when a committed replacement disappears before pending cleanup', async () => {
+    const fixture = buildManager('deleted-committed-replacement');
+    fixture.config.updateServerSettings
+      .mockImplementationOnce(fixture.save)
+      .mockImplementationOnce(async (id, patch) => {
+        await fixture.save(id, patch);
+        throw new Error('write response lost');
+      });
+    fixture.config.getServerConfig
+      .mockResolvedValueOnce({ settings: fixture.settings() })
+      .mockRejectedValueOnce(new Error('read failed'));
+    await expect(fixture.upsert()).rejects.toThrow('Retry setup to recover');
+    await fixture.newMessage.delete();
+    fixture.channel.messages.fetch.mockRejectedValueOnce({ code: 10008 });
+    await expect(fixture.upsert()).resolves.toMatchObject({ action: 'updated', messageId: '100' });
+    expect(fixture.oldMessage.delete).not.toHaveBeenCalled();
+    expect(fixture.channel.send).toHaveBeenCalledTimes(1);
+    expect(fixture.settings().report_instructions_cleanup_message_id).toBeNull();
+    expect(fixture.settings().report_instructions_message_id).toBe('100');
+  });
+
+  it('does not publish after an untracked-panel lookup fails transiently', async () => {
+    const fixture = buildManager('untracked-lookup-failed');
+    await fixture.save('untracked-lookup-failed', { report_instructions_message_id: null });
+    fixture.channel.messages.fetch.mockRejectedValueOnce(new Error('history unavailable'));
+    await expect(fixture.upsert(true, null)).rejects.toThrow('history unavailable');
+    expect(fixture.channel.send).not.toHaveBeenCalled();
+    expect(fixture.config.updateServerSettings).not.toHaveBeenCalled();
+  });
+
   it('creates a fresh panel after clearing an initial repost within the nonce window', async () => {
     const fixture = buildManager('clear-and-recreate');
     await fixture.save('clear-and-recreate', {
@@ -123,7 +247,11 @@ describe('ReportInstructionsManager deliberate repost', () => {
     fixture.channel.id = 'target';
     fixture.channel.send.mockResolvedValue(replacement);
     fixture.channel.messages.fetch.mockImplementation(async (id) =>
-      typeof id === 'string' ? replacement : new Collection<string, Message>()
+      typeof id === 'string'
+        ? replacement
+        : id.limit === 100 && fixture.channel.send.mock.calls.length > 0
+          ? new Collection([['300', replacement as unknown as Message]])
+          : new Collection<string, Message>()
     );
     fixture.client.channels.fetch.mockImplementation(async (id: string) =>
       id === 'channel' ? source : fixture.channel
@@ -511,7 +639,9 @@ describe('ReportInstructionsManager deliberate repost', () => {
       .mockImplementationOnce(fixture.save)
       .mockRejectedValueOnce(new Error('database unavailable'));
     await expect(fixture.upsert()).rejects.toThrow('database unavailable');
-    fixture.channel.messages.fetch.mockRejectedValueOnce({ code: 10008 });
+    fixture.channel.messages.fetch
+      .mockResolvedValueOnce(fixture.newMessage)
+      .mockRejectedValueOnce({ code: 10008 });
     await fixture.upsert(true, '200');
     expect(fixture.channel.send).toHaveBeenCalledTimes(1);
     expect(fixture.newMessage.delete).not.toHaveBeenCalled();

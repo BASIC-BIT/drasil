@@ -13,6 +13,7 @@ export async function queueReportInstructionsRepairRequest(input: {
   readonly guildId: string;
   readonly repost?: boolean;
   readonly expectedMessageId?: string | null;
+  readonly expectedChannelId?: string | null;
   readonly submissionId?: string;
 }): Promise<ModerationActionRequestQueueStatus> {
   if (isWebE2eFixtureMode()) {
@@ -31,7 +32,11 @@ export async function queueReportInstructionsRepairRequest(input: {
       requested_surface: 'web',
       setup_action: 'upsert_report_instructions',
       ...(input.repost
-        ? { repost: true, expected_message_id: input.expectedMessageId ?? null }
+        ? {
+            repost: true,
+            expected_message_id: input.expectedMessageId ?? null,
+            expected_channel_id: input.expectedChannelId ?? null,
+          }
         : {}),
     },
     serverId: input.guildId,

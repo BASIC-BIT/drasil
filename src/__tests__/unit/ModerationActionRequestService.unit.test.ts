@@ -3462,7 +3462,12 @@ describe('ModerationActionRequestService', () => {
     const { guild, repository, service } = buildService([
       {
         ...upsertReportInstructionsRequest,
-        metadata: { channel_id: 'report-channel-1', repost: true, expected_message_id: 'previous' },
+        metadata: {
+          channel_id: 'report-channel-1',
+          repost: true,
+          expected_message_id: 'previous',
+          expected_channel_id: 'original-channel',
+        },
       },
     ]);
     await service.processPendingRequests();
@@ -3476,6 +3481,7 @@ describe('ModerationActionRequestService', () => {
       {
         repost: true,
         expectedMessageId: 'previous',
+        expectedChannelId: 'original-channel',
       }
     );
     expect(repository.completed[0]?.result).toEqual(

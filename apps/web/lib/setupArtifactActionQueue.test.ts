@@ -44,6 +44,7 @@ describe('report panel requests', () => {
       guildId: 'guild',
       repost: true,
       expectedMessageId: 'old-panel',
+      expectedChannelId: 'original-channel',
       submissionId: 'submission-1',
     };
     await queueReportInstructionsRepairRequest(input);
@@ -52,7 +53,11 @@ describe('report panel requests', () => {
     expect(mocks.queueReport).toHaveBeenCalledWith(
       expect.objectContaining({
         idempotencyKey: 'web:setup:repost_report_instructions:guild:channel:old-panel:submission-1',
-        metadata: expect.objectContaining({ repost: true, expected_message_id: 'old-panel' }),
+        metadata: expect.objectContaining({
+          repost: true,
+          expected_message_id: 'old-panel',
+          expected_channel_id: 'original-channel',
+        }),
       })
     );
   });

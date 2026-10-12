@@ -255,6 +255,7 @@ async function queueReportInstructions(
     guildId,
     repost,
     expectedMessageId: readOptionalFormString(formData, 'reportInstructionsMessageId'),
+    expectedChannelId: readOptionalFormString(formData, 'reportInstructionsExpectedChannelId'),
     submissionId: readOptionalFormString(formData, 'reportInstructionsSubmissionId') ?? undefined,
   });
 

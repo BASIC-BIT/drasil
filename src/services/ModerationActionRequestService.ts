@@ -2335,6 +2335,8 @@ export class ModerationActionRequestService implements IModerationActionRequestS
         ? {
             expectedMessageId:
               this.readMetadataString(request.metadata, 'expected_message_id') ?? null,
+            expectedChannelId:
+              this.readMetadataString(request.metadata, 'expected_channel_id') ?? null,
           }
         : {}),
     });

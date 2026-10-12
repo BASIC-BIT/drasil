@@ -473,6 +473,11 @@ export default async function GuildSetupPage({ params }: PageProps) {
             value={server?.settings.report_instructions_message_id ?? ''}
           />
           <input type="hidden" name="reportInstructionsSubmissionId" value={randomUUID()} />
+          <input
+            type="hidden"
+            name="reportInstructionsExpectedChannelId"
+            value={server?.settings.report_instructions_channel_id ?? ''}
+          />
           <button
             className="button secondary"
             formAction={repostReportInstructionsAction}

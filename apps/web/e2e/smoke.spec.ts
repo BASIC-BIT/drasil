@@ -129,6 +129,11 @@ test('guild setup exposes moderation, report, role gate, and review policy contr
   await expect(page.getByLabel('Live queue channel')).toHaveValue('queue-channel-1');
   await expect(page.getByRole('button', { name: 'Queue core setup repair' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Queue report button repair' })).toBeVisible();
+  const expectedReportChannel = page.locator('input[name="reportInstructionsExpectedChannelId"]');
+  await expect(expectedReportChannel).toHaveValue('report-channel-1');
+  await page.getByLabel('Report instructions channel').selectOption('admin-channel-1');
+  await expect(expectedReportChannel).toHaveValue('report-channel-1');
+  await page.getByLabel('Report instructions channel').selectOption('report-channel-1');
   await expect(
     page.getByRole('button', { name: 'Repost report button', exact: true })
   ).toBeVisible();
