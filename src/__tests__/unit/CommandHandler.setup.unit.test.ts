@@ -1397,7 +1397,13 @@ describe('CommandHandler setup commands (unit)', () => {
       },
     });
     expect(reportChannel.send).toHaveBeenCalledTimes(1);
-    expect(configService.updateServerSettings).not.toHaveBeenCalled();
+    expect(configService.updateServerSettings).toHaveBeenCalledTimes(1);
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      report_instructions_pending_publication: {
+        channel_id: 'report-channel-1',
+        after_message_id: null,
+      },
+    });
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining(
         'Core setup was saved, but report instructions were not updated'

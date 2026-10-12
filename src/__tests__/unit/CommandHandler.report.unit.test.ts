@@ -537,6 +537,7 @@ describe('CommandHandler report commands (unit)', () => {
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       report_instructions_channel_id: 'channel-1',
       report_instructions_message_id: 'message-2',
+      report_instructions_pending_publication: null,
     });
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: 'Report instructions recreated successfully in <#channel-1>.',
@@ -672,20 +673,21 @@ describe('CommandHandler report commands (unit)', () => {
       embeds: expect.any(Array),
       components: expect.any(Array),
     });
-    expect(configService.updateServerSettings).toHaveBeenNthCalledWith(1, 'guild-1', {
+    expect(configService.updateServerSettings).toHaveBeenNthCalledWith(2, 'guild-1', {
       report_instructions_channel_id: 'new-channel-1',
       report_instructions_message_id: 'new-message-1',
       report_instructions_cleanup_channel_id: 'old-channel-1',
       report_instructions_cleanup_message_id: 'old-message-1',
+      report_instructions_pending_publication: null,
     });
-    expect(configService.updateServerSettings).toHaveBeenNthCalledWith(2, 'guild-1', {
+    expect(configService.updateServerSettings).toHaveBeenNthCalledWith(3, 'guild-1', {
       report_instructions_cleanup_channel_id: null,
       report_instructions_cleanup_message_id: null,
     });
     expect(targetChannel.send.mock.invocationCallOrder[0]).toBeLessThan(
-      updateServerSettings.mock.invocationCallOrder[0]
+      updateServerSettings.mock.invocationCallOrder[1]
     );
-    expect(updateServerSettings.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(updateServerSettings.mock.invocationCallOrder[1]).toBeLessThan(
       oldMessage.delete.mock.invocationCallOrder[0]
     );
   });
@@ -727,7 +729,13 @@ describe('CommandHandler report commands (unit)', () => {
       )
     ).rejects.toThrow('missing permission');
 
-    expect(configService.updateServerSettings).not.toHaveBeenCalled();
+    expect(configService.updateServerSettings).toHaveBeenCalledTimes(1);
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      report_instructions_pending_publication: {
+        channel_id: 'new-channel-1',
+        after_message_id: null,
+      },
+    });
     expect(client.channels.fetch).not.toHaveBeenCalled();
     expect(oldMessage.delete).not.toHaveBeenCalled();
   });
@@ -740,7 +748,10 @@ describe('CommandHandler report commands (unit)', () => {
     const client = { channels: { fetch: jest.fn() }, user: { id: 'bot-1' } } as any;
     const configService = {
       getServerConfig: jest.fn().mockResolvedValue({ settings: {} }),
-      updateServerSettings: jest.fn().mockRejectedValue(new Error('database unavailable')),
+      updateServerSettings: jest
+        .fn()
+        .mockResolvedValueOnce({})
+        .mockRejectedValue(new Error('database unavailable')),
     } as any;
     const targetChannel = {
       id: 'new-channel-1',

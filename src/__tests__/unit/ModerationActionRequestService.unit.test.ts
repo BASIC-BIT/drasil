@@ -3405,7 +3405,9 @@ describe('ModerationActionRequestService', () => {
     const { configService, reportInstructionsMessage, repository, service } = buildService([
       completeSetupVerificationRequest,
     ]);
-    configService.updateServerSettings.mockRejectedValueOnce(new Error('database unavailable'));
+    configService.updateServerSettings
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('database unavailable'));
     reportInstructionsMessage.delete.mockRejectedValueOnce(new Error('Discord unavailable'));
 
     await expect(service.processPendingRequests()).resolves.toBe(1);
@@ -3436,6 +3438,7 @@ describe('ModerationActionRequestService', () => {
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       report_instructions_channel_id: 'report-channel-1',
       report_instructions_message_id: 'report-message-1',
+      report_instructions_pending_publication: null,
     });
     expect(repository.completed).toEqual([
       {

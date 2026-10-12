@@ -180,7 +180,7 @@ export class ReportInstructionsManager {
       [REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY]: targetChannel.id,
       [REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY]: messageId,
     };
-    if (options.repost) {
+    if (createdMessage || options.repost) {
       settingsPatch[REPORT_INSTRUCTIONS_PENDING_PUBLICATION_SETTING_KEY] = null;
     }
     const cleanupTarget =
@@ -233,18 +233,25 @@ export class ReportInstructionsManager {
     targetChannel: TextChannel,
     options: ReportInstructionsOptions
   ): Promise<Message> {
-    if (!options.repost) {
-      return targetChannel.send(this.buildReportInstructionsMessagePayload());
+    let afterMessageId: string | null = null;
+    try {
+      this.assertCanReadReportHistory(targetChannel);
+      const latestMessages = await targetChannel.messages.fetch({ limit: 1 });
+      this.assertCanReadReportHistory(targetChannel);
+      afterMessageId = latestMessages.first()?.id ?? null;
+    } catch (error) {
+      if (options.repost) throw error;
+      // Ordinary first setup can publish without history, but uncertain sends require recovery access.
     }
-    this.assertCanReadReportHistory(targetChannel);
-    const latestMessages = await targetChannel.messages.fetch({ limit: 1 });
-    this.assertCanReadReportHistory(targetChannel);
     await this.configService.updateServerSettings(guildId, {
       [REPORT_INSTRUCTIONS_PENDING_PUBLICATION_SETTING_KEY]: {
         channel_id: targetChannel.id,
-        after_message_id: latestMessages.first()?.id ?? null,
+        after_message_id: afterMessageId,
       },
     });
+    if (!options.repost) {
+      return targetChannel.send(this.buildReportInstructionsMessagePayload());
+    }
     // Deduplicate transport retries for this send, without reusing a deleted panel's nonce.
     const nonce = randomBytes(12).toString('hex');
     return targetChannel.send({
@@ -276,10 +283,6 @@ export class ReportInstructionsManager {
           })
         ).settings;
       } catch {
-        // Ordinary setup has no durable intent; retain its existing rollback behavior.
-        if (!repost && (await this.deleteUntrackedReportInstructionsMessage(createdMessage))) {
-          throw error;
-        }
         pendingReportInstructionsPublications.set(guildId, settingsPatch);
         throw new ReportInstructionsRollbackRequiredError();
       }
@@ -290,6 +293,9 @@ export class ReportInstructionsManager {
         pendingReportInstructionsPublications.set(guildId, settingsPatch);
         throw new ReportInstructionsRollbackRequiredError();
       }
+      await this.configService.updateServerSettings(guildId, {
+        [REPORT_INSTRUCTIONS_PENDING_PUBLICATION_SETTING_KEY]: null,
+      });
       throw error;
     }
   }

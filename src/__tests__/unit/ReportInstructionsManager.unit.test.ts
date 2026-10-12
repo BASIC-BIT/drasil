@@ -556,28 +556,70 @@ describe('ReportInstructionsManager deliberate repost', () => {
     expect(fixture.oldMessage.delete).toHaveBeenCalledTimes(1);
   });
 
-  it('rolls back an ordinary first panel when saving and verifying its ID both fail', async () => {
-    const fixture = buildManager('ordinary-save-and-read-failure');
-    await fixture.save('ordinary-save-and-read-failure', {
-      report_instructions_channel_id: null,
-      report_instructions_message_id: null,
-    });
+  it.each([
+    ['first', false],
+    ['first', true],
+    ['move', false],
+    ['move', true],
+  ] as const)(
+    'recovers an ordinary %s panel after a restart when its save outcome is unknown (committed: %s)',
+    async (kind, committed) => {
+      const guildId = `ordinary-unknown-${kind}-${committed}`;
+      const fixture = buildManager(guildId);
+      if (kind === 'first') {
+        await fixture.save(guildId, {
+          report_instructions_channel_id: null,
+          report_instructions_message_id: null,
+        });
+      } else {
+        const source = { messages: { fetch: jest.fn().mockResolvedValue(fixture.oldMessage) } };
+        fixture.channel.id = 'target';
+        fixture.client.channels.fetch.mockImplementation(async (id: string) =>
+          id === 'channel' ? source : fixture.channel
+        );
+      }
+      fixture.config.updateServerSettings
+        .mockImplementationOnce(fixture.save)
+        .mockImplementationOnce(async (id, patch) => {
+          if (committed) await fixture.save(id, patch);
+          throw new Error('write response lost');
+        });
+      fixture.config.getServerConfig
+        .mockResolvedValueOnce({ settings: { ...fixture.settings() } })
+        .mockRejectedValueOnce(new Error('read failed'));
+      await expect(fixture.upsert(false)).rejects.toThrow('Retry setup to recover');
+      expect(fixture.newMessage.delete).not.toHaveBeenCalled();
+      expect(fixture.oldMessage.delete).not.toHaveBeenCalled();
+      fixture.channel.messages.fetch.mockImplementation(async (value) =>
+        typeof value === 'string'
+          ? fixture.newMessage
+          : new Collection([['200', fixture.newMessage as unknown as Message]])
+      );
+      await jest.isolateModulesAsync(async () => {
+        const { ReportInstructionsManager: RestartedManager } =
+          await import('../../controllers/ReportInstructionsManager');
+        const restartedManager = new RestartedManager(
+          fixture.client as unknown as Client,
+          fixture.config as unknown as IConfigService
+        );
+        await expect(restartedManager.clearReportInstructions(guildId)).resolves.toEqual({
+          action: 'cleared',
+        });
+      });
+      expect(fixture.channel.send).toHaveBeenCalledTimes(1);
+      expect(fixture.newMessage.delete).toHaveBeenCalledTimes(1);
+      expect(fixture.oldMessage.delete).toHaveBeenCalledTimes(kind === 'move' ? 1 : 0);
+      expect(fixture.settings().report_instructions_message_id).toBeNull();
+      expect(fixture.settings().report_instructions_pending_publication).toBeNull();
+    }
+  );
+
+  it('does not send an ordinary panel when its durable intent cannot be saved', async () => {
+    const fixture = buildManager('ordinary-intent-failure');
+    await fixture.save('ordinary-intent-failure', { report_instructions_message_id: null });
     fixture.config.updateServerSettings.mockRejectedValueOnce(new Error('write failed'));
-    fixture.config.getServerConfig
-      .mockResolvedValueOnce({ settings: fixture.settings() })
-      .mockRejectedValueOnce(new Error('read failed'));
     await expect(fixture.upsert(false)).rejects.toThrow('write failed');
-    expect(fixture.newMessage.delete).toHaveBeenCalledTimes(1);
-    expect(fixture.oldMessage.delete).not.toHaveBeenCalled();
-    expect(fixture.config.updateServerSettings).toHaveBeenCalledTimes(1);
-    const restartedManager = new ReportInstructionsManager(
-      fixture.client as unknown as Client,
-      fixture.config as unknown as IConfigService
-    );
-    await expect(
-      restartedManager.clearReportInstructions('ordinary-save-and-read-failure')
-    ).resolves.toEqual({ action: 'unchanged' });
-    expect(fixture.settings().report_instructions_message_id).toBeNull();
+    expect(fixture.channel.send).not.toHaveBeenCalled();
   });
 
   it('serializes concurrent repost requests and makes stale retries reuse the replacement', async () => {

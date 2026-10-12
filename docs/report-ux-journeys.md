@@ -43,13 +43,16 @@ Good for privacy and low clutter. Reports start as triage alerts instead of crea
 
 Administrators can use `/setupreportbutton channel:<channel> repost:true` or **Repost report
 button** in web setup after adding channel instructions. Ordinary setup and repair still edit the
-existing panel. Repost saves a publication intent, sends a replacement, saves its ID, and then
-removes the previous Drasil panel. Retries recover that intent even after a restart or channel move.
+existing panel. Every new publication saves an intent before sending, including ordinary first
+setup, recreation, and channel moves. Repost sends a replacement, saves its ID, and then removes
+the previous Drasil panel. An unconfirmed save retains working panels and recovery state. Retries
+recover the intent even after a restart or channel move.
 If cleanup fails, retry finishes cleanup before publishing again. A fresh web submission can then
 request another repost. Recovery checks at most 1,000 messages newer than the saved boundary and
 stops with an error if that limit is reached; it never sends another panel on an incomplete search.
 Repost and recovery require Drasil to have View Channel and Read Message History. Ordinary first
-setup retains its existing fallback without history access. Empty history without that permission
+setup can publish without history access; an uncertain send or save then requires history access
+to recover. Empty history without that permission
 is not evidence that a panel is missing ([Discord API](https://github.com/discord/discord-api-docs/blob/main/developers/resources/message.mdx#get-channel-messages)).
 
 ```mermaid
@@ -57,8 +60,12 @@ flowchart LR
   Discord[Discord administrator] --> Slash[setupreportbutton]
   Direct[Direct web setup link] --> Auth[Discord sign-in and administrator check]
   Auth --> Setup[Web setup]
-  Slash --> Repair[Default repair: edit existing panel]
+  Slash --> Repair[Default repair]
   Setup --> Repair
+  Repair --> Exists{Panel exists?}
+  Exists -->|Yes| Edit[Edit existing panel]
+  Edit --> Button
+  Exists -->|No| Intent
   Slash --> Repost[Explicit repost]
   Setup --> Repost
   Repost --> Intent[Save publication intent]
