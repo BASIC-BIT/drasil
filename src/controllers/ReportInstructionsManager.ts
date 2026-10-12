@@ -276,6 +276,10 @@ export class ReportInstructionsManager {
           })
         ).settings;
       } catch {
+        // Ordinary setup has no durable intent; retain its existing rollback behavior.
+        if (!repost && (await this.deleteUntrackedReportInstructionsMessage(createdMessage))) {
+          throw error;
+        }
         pendingReportInstructionsPublications.set(guildId, settingsPatch);
         throw new ReportInstructionsRollbackRequiredError();
       }
