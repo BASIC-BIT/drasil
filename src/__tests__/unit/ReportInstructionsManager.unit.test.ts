@@ -70,6 +70,33 @@ function buildManager(guildId: string) {
 }
 
 describe('ReportInstructionsManager deliberate repost', () => {
+  it('clears a publication intent whose destination channel no longer exists', async () => {
+    const fixture = buildManager('deleted-intent-channel');
+    await fixture.save('deleted-intent-channel', {
+      report_instructions_pending_publication: { channel_id: 'deleted', after_message_id: '100' },
+    });
+    fixture.client.channels.fetch.mockRejectedValueOnce({ code: 10003 });
+    await fixture.upsert(false);
+    expect(fixture.settings().report_instructions_pending_publication).toBeNull();
+    expect(fixture.channel.send).not.toHaveBeenCalled();
+    expect(fixture.oldMessage.delete).not.toHaveBeenCalled();
+  });
+  it('clears a failed-send intent after ordinary repair proves no replacement exists', async () => {
+    const fixture = buildManager('failed-send-repair');
+    fixture.channel.send.mockRejectedValueOnce(new Error('Discord unavailable'));
+    await expect(fixture.upsert()).rejects.toThrow('Discord unavailable');
+    expect(fixture.settings().report_instructions_pending_publication).not.toBeNull();
+    await fixture.upsert(false);
+    expect(fixture.settings().report_instructions_pending_publication).toBeNull();
+    fixture.channel.messages.fetch.mockClear();
+    await fixture.manager.clearReportInstructions('failed-send-repair');
+    expect(fixture.channel.messages.fetch).toHaveBeenCalledWith('100');
+    expect(fixture.channel.messages.fetch).not.toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 100 })
+    );
+    expect(fixture.oldMessage.delete).toHaveBeenCalledTimes(1);
+    expect(fixture.channel.send).toHaveBeenCalledTimes(1);
+  });
   it('does not clear panels when the durable state cannot be read', async () => {
     const fixture = buildManager('clear-read-failure');
     fixture.config.getServerConfig.mockRejectedValueOnce(new Error('database unavailable'));

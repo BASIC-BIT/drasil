@@ -389,12 +389,16 @@ export class ReportInstructionsManager {
       if (this.isUnknownDiscordResource(error, DISCORD_UNKNOWN_CHANNEL_ERROR_CODE)) return null;
       throw error;
     });
-    if (!channel || !('messages' in channel)) return settings;
-    const message = await this.findRepostReplacement(
-      channel as TextChannel,
-      pending.after_message_id
-    );
-    if (!message) return settings;
+    const message =
+      channel && 'messages' in channel
+        ? await this.findRepostReplacement(channel as TextChannel, pending.after_message_id)
+        : null;
+    if (!message) {
+      await this.configService.updateServerSettings(guildId, {
+        [REPORT_INSTRUCTIONS_PENDING_PUBLICATION_SETTING_KEY]: null,
+      });
+      return { ...settings, [REPORT_INSTRUCTIONS_PENDING_PUBLICATION_SETTING_KEY]: null };
+    }
     const oldChannelId = settings[REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY];
     const oldMessageId = settings[REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY];
     const patch: Partial<ServerSettings> = {
