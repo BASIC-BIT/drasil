@@ -22,7 +22,7 @@ const REPORT_INSTRUCTIONS_CLEANUP_PENDING_ERROR =
 const REPORT_INSTRUCTIONS_ROLLBACK_PENDING_ERROR =
   'A report panel was published, but saving or rolling it back could not be confirmed. Existing panels were retained. Retry setup to recover the message.';
 const reportInstructionsExecutionChains = new Map<string, Promise<unknown>>();
-// ponytail: one bot process owns Discord writes; use a distributed lock before scaling writers.
+// shortcut: one bot process owns Discord writes, use a distributed lock before scaling writers.
 const pendingReportInstructionsPublications = new Map<string, Partial<ServerSettings>>();
 
 export interface ReportInstructionsOptions {
@@ -104,11 +104,8 @@ export class ReportInstructionsManager {
     await this.retryPendingReportInstructionsCleanup(guildId, serverConfig.settings);
     let existingChannelId = serverConfig.settings[REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY];
     let existingMessageId = serverConfig.settings[REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY];
-    if (
-      options.repost &&
-      existingChannelId !== targetChannel.id &&
-      (existingMessageId ?? null) !== options.expectedMessageId
-    ) {
+    const matchesExpectedPanel = (existingMessageId ?? null) === options.expectedMessageId;
+    if (options.repost && existingChannelId !== targetChannel.id && !matchesExpectedPanel) {
       throw new Error(
         'The report panel changed since this request. Refresh setup before reposting.'
       );
@@ -117,10 +114,7 @@ export class ReportInstructionsManager {
     let createdMessage: Message | null = null;
     let action: ReportInstructionsResult['action'] = 'sent';
     const movedChannels = existingChannelId !== targetChannel.id;
-    const repost =
-      options.repost &&
-      !hadPendingCleanup &&
-      (existingMessageId ?? null) === options.expectedMessageId;
+    const repost = options.repost && !hadPendingCleanup && matchesExpectedPanel;
 
     if (repost && !existingMessageId) {
       const recoveredMessage = await this.findExistingReportInstructionsMessage(targetChannel);
@@ -131,35 +125,22 @@ export class ReportInstructionsManager {
     }
 
     if (repost) {
-      const nonce = createHash('sha256')
-        .update(`${guildId}:${targetChannel.id}:${options.expectedMessageId ?? 'none'}`)
-        .digest('hex')
-        .slice(0, 25);
-      const sentMessage =
-        (await (existingChannelId === targetChannel.id && existingMessageId
-          ? this.findRepostReplacement(targetChannel, existingMessageId)
-          : Promise.resolve(null))) ??
-        (await targetChannel.send({
-          ...messagePayload,
-          // Discord deduplicates recent sends after an ambiguous network failure.
-          nonce,
-          enforceNonce: true,
-        }));
+      const sentMessage = await this.publishReportInstructionsReplacement(
+        guildId,
+        targetChannel,
+        existingChannelId === targetChannel.id ? existingMessageId : null,
+        options.expectedMessageId
+      );
       createdMessage = sentMessage;
       messageId = sentMessage.id;
       action = 'reposted';
     } else if (existingChannelId === targetChannel.id && existingMessageId) {
-      const existingMessage = await targetChannel.messages
-        .fetch(existingMessageId)
-        .catch((error: unknown) => {
-          if (this.isUnknownDiscordResource(error, DISCORD_UNKNOWN_MESSAGE_ERROR_CODE)) {
-            return null;
-          }
-          throw error;
-        });
+      const existingMessage = await this.fetchReportInstructionsMessage(
+        targetChannel,
+        existingMessageId
+      );
 
       if (existingMessage) {
-        this.assertBotOwnedMessage(existingMessage);
         await existingMessage.edit(messagePayload);
         messageId = existingMessage.id;
         action = 'updated';
@@ -186,54 +167,109 @@ export class ReportInstructionsManager {
       [REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY]: targetChannel.id,
       [REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY]: messageId,
     };
-    const supersededMessage =
+    const cleanupTarget =
       (movedChannels || repost) &&
       existingChannelId &&
       existingMessageId &&
-      existingMessageId !== messageId;
-    if (supersededMessage) {
-      settingsPatch[REPORT_INSTRUCTIONS_CLEANUP_CHANNEL_ID_SETTING_KEY] = existingChannelId;
-      settingsPatch[REPORT_INSTRUCTIONS_CLEANUP_MESSAGE_ID_SETTING_KEY] = existingMessageId;
+      existingMessageId !== messageId
+        ? { channelId: existingChannelId, messageId: existingMessageId }
+        : null;
+    if (cleanupTarget) {
+      settingsPatch[REPORT_INSTRUCTIONS_CLEANUP_CHANNEL_ID_SETTING_KEY] = cleanupTarget.channelId;
+      settingsPatch[REPORT_INSTRUCTIONS_CLEANUP_MESSAGE_ID_SETTING_KEY] = cleanupTarget.messageId;
     }
-    try {
-      await this.configService.updateServerSettings(guildId, settingsPatch);
-    } catch (error) {
-      if (createdMessage) {
-        // A write may have committed despite its response failing. Never delete a panel
-        // until a fresh read proves it is not the saved active panel.
-        let savedSettings: ServerSettings;
-        try {
-          savedSettings = (
-            await this.configService.getServerConfig(guildId, {
-              failOnReadError: true,
-              forceRefresh: true,
-            })
-          ).settings;
-        } catch {
-          pendingReportInstructionsPublications.set(guildId, settingsPatch);
-          throw new ReportInstructionsRollbackRequiredError();
-        }
-        if (savedSettings[REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY] !== messageId) {
-          if (repost) {
-            pendingReportInstructionsPublications.set(guildId, settingsPatch);
-            throw new ReportInstructionsRollbackRequiredError();
-          }
-          if (!(await this.deleteUntrackedReportInstructionsMessage(createdMessage))) {
-            pendingReportInstructionsPublications.set(guildId, settingsPatch);
-            throw new ReportInstructionsRollbackRequiredError();
-          }
-          throw error;
-        }
-      } else {
-        throw error;
-      }
-    }
+    await this.saveReportInstructionsPublication(
+      guildId,
+      settingsPatch,
+      createdMessage,
+      repost === true
+    );
 
-    if (supersededMessage && existingChannelId && existingMessageId) {
-      await this.finishReportInstructionsCleanup(guildId, existingChannelId, existingMessageId);
+    if (cleanupTarget) {
+      await this.finishReportInstructionsCleanup(
+        guildId,
+        cleanupTarget.channelId,
+        cleanupTarget.messageId
+      );
     }
 
     return { action, messageId };
+  }
+
+  private async fetchReportInstructionsMessage(
+    channel: TextChannel,
+    messageId: string
+  ): Promise<Message | null> {
+    try {
+      const message = await channel.messages.fetch(messageId);
+      this.assertBotOwnedMessage(message);
+      return message;
+    } catch (error) {
+      if (this.isUnknownDiscordResource(error, DISCORD_UNKNOWN_MESSAGE_ERROR_CODE)) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  private async publishReportInstructionsReplacement(
+    guildId: string,
+    targetChannel: TextChannel,
+    previousMessageId: string | null | undefined,
+    expectedMessageId: string | null | undefined
+  ): Promise<Message> {
+    const replacement = previousMessageId
+      ? await this.findRepostReplacement(targetChannel, previousMessageId)
+      : null;
+    if (replacement) {
+      return replacement;
+    }
+    const nonce = createHash('sha256')
+      .update(`${guildId}:${targetChannel.id}:${expectedMessageId ?? 'none'}`)
+      .digest('hex')
+      .slice(0, 25);
+    // Discord deduplicates recent sends after an ambiguous network failure.
+    return targetChannel.send({
+      ...this.buildReportInstructionsMessagePayload(),
+      nonce,
+      enforceNonce: true,
+    });
+  }
+
+  private async saveReportInstructionsPublication(
+    guildId: string,
+    settingsPatch: Partial<ServerSettings>,
+    createdMessage: Message | null,
+    repost: boolean
+  ): Promise<void> {
+    try {
+      await this.configService.updateServerSettings(guildId, settingsPatch);
+    } catch (error) {
+      if (!createdMessage) {
+        throw error;
+      }
+      // A committed write can lose its response; confirm the saved panel before rollback.
+      let savedSettings: ServerSettings;
+      try {
+        savedSettings = (
+          await this.configService.getServerConfig(guildId, {
+            failOnReadError: true,
+            forceRefresh: true,
+          })
+        ).settings;
+      } catch {
+        pendingReportInstructionsPublications.set(guildId, settingsPatch);
+        throw new ReportInstructionsRollbackRequiredError();
+      }
+      if (savedSettings[REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY] === createdMessage.id) {
+        return;
+      }
+      if (repost || !(await this.deleteUntrackedReportInstructionsMessage(createdMessage))) {
+        pendingReportInstructionsPublications.set(guildId, settingsPatch);
+        throw new ReportInstructionsRollbackRequiredError();
+      }
+      throw error;
+    }
   }
 
   public async clearReportInstructions(
