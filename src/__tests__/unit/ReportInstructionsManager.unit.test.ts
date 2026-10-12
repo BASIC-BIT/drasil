@@ -73,6 +73,49 @@ function buildManager(guildId: string) {
 }
 
 describe('ReportInstructionsManager deliberate repost', () => {
+  it('keeps a repost-triggered move durable after finishing earlier cleanup', async () => {
+    const fixture = buildManager('cleanup-then-move');
+    await fixture.save('cleanup-then-move', {
+      report_instructions_message_id: '200',
+      report_instructions_cleanup_channel_id: 'channel',
+      report_instructions_cleanup_message_id: '100',
+    });
+    const replacement = {
+      ...fixture.newMessage,
+      id: '300',
+      delete: jest.fn().mockResolvedValue(undefined),
+    };
+    const source = {
+      ...fixture.channel,
+      messages: {
+        fetch: jest.fn(async (id: string) =>
+          id === '100' ? fixture.oldMessage : fixture.newMessage
+        ),
+      },
+    };
+    fixture.channel.id = 'target';
+    fixture.channel.send.mockResolvedValue(replacement);
+    fixture.channel.messages.fetch.mockImplementation(async (id) =>
+      typeof id === 'string' ? replacement : new Collection<string, Message>()
+    );
+    fixture.client.channels.fetch.mockImplementation(async (id: string) =>
+      id === 'channel' ? source : fixture.channel
+    );
+    fixture.config.updateServerSettings
+      .mockImplementationOnce(fixture.save)
+      .mockImplementationOnce(fixture.save)
+      .mockRejectedValueOnce(new Error('database unavailable'));
+    await expect(fixture.upsert(true, '200')).rejects.toThrow('Retry setup to recover');
+    expect(replacement.delete).not.toHaveBeenCalled();
+    expect(fixture.settings().report_instructions_pending_publication).toEqual({
+      channel_id: 'target',
+      after_message_id: null,
+    });
+    await fixture.upsert(true, '200');
+    expect(fixture.channel.send).toHaveBeenCalledTimes(1);
+    expect(fixture.settings().report_instructions_message_id).toBe('300');
+    expect(fixture.newMessage.delete).toHaveBeenCalledTimes(1);
+  });
   it('retains recovery state when history is hidden by missing permissions', async () => {
     const fixture = buildManager('hidden-history');
     await fixture.save('hidden-history', {

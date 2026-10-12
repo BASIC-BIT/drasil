@@ -129,10 +129,10 @@ export class ReportInstructionsManager {
     }
 
     if (repost) {
-      const sentMessage = await this.publishReportInstructionsReplacement(
+      const sentMessage = await this.publishReportInstructionsMessage(
         guildId,
         targetChannel,
-        options.expectedMessageId
+        options
       );
       createdMessage = sentMessage;
       messageId = sentMessage.id;
@@ -148,7 +148,11 @@ export class ReportInstructionsManager {
         messageId = existingMessage.id;
         action = 'updated';
       } else {
-        const sentMessage = await targetChannel.send(messagePayload);
+        const sentMessage = await this.publishReportInstructionsMessage(
+          guildId,
+          targetChannel,
+          options
+        );
         createdMessage = sentMessage;
         messageId = sentMessage.id;
         action = 'recreated';
@@ -160,7 +164,11 @@ export class ReportInstructionsManager {
         messageId = existingMessage.id;
         action = 'updated';
       } else {
-        const sentMessage = await targetChannel.send(messagePayload);
+        const sentMessage = await this.publishReportInstructionsMessage(
+          guildId,
+          targetChannel,
+          options
+        );
         createdMessage = sentMessage;
         messageId = sentMessage.id;
       }
@@ -170,7 +178,7 @@ export class ReportInstructionsManager {
       [REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY]: targetChannel.id,
       [REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY]: messageId,
     };
-    if (repost) {
+    if (options.repost) {
       settingsPatch[REPORT_INSTRUCTIONS_PENDING_PUBLICATION_SETTING_KEY] = null;
     }
     const cleanupTarget =
@@ -188,7 +196,7 @@ export class ReportInstructionsManager {
       guildId,
       settingsPatch,
       createdMessage,
-      repost === true
+      options.repost === true
     );
 
     if (cleanupTarget) {
@@ -218,11 +226,14 @@ export class ReportInstructionsManager {
     }
   }
 
-  private async publishReportInstructionsReplacement(
+  private async publishReportInstructionsMessage(
     guildId: string,
     targetChannel: TextChannel,
-    expectedMessageId: string | null | undefined
+    options: ReportInstructionsOptions
   ): Promise<Message> {
+    if (!options.repost) {
+      return targetChannel.send(this.buildReportInstructionsMessagePayload());
+    }
     this.assertCanReadReportHistory(targetChannel);
     const latestMessages = await targetChannel.messages.fetch({ limit: 1 });
     this.assertCanReadReportHistory(targetChannel);
@@ -233,7 +244,7 @@ export class ReportInstructionsManager {
       },
     });
     const nonce = createHash('sha256')
-      .update(`${guildId}:${targetChannel.id}:${expectedMessageId ?? 'none'}`)
+      .update(`${guildId}:${targetChannel.id}:${options.expectedMessageId ?? 'none'}`)
       .digest('hex')
       .slice(0, 25);
     // Discord deduplicates recent sends after an ambiguous network failure.
