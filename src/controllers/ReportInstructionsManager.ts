@@ -14,6 +14,7 @@ import { randomBytes } from 'node:crypto';
 
 const REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY = 'report_instructions_channel_id';
 const REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY = 'report_instructions_message_id';
+const REPORT_INSTRUCTIONS_MESSAGE_CHANNEL_ID_SETTING_KEY = 'report_instructions_message_channel_id';
 const REPORT_INSTRUCTIONS_CLEANUP_CHANNEL_ID_SETTING_KEY = 'report_instructions_cleanup_channel_id';
 const REPORT_INSTRUCTIONS_CLEANUP_MESSAGE_ID_SETTING_KEY = 'report_instructions_cleanup_message_id';
 const REPORT_INSTRUCTIONS_PENDING_PUBLICATION_SETTING_KEY =
@@ -117,18 +118,22 @@ export class ReportInstructionsManager {
       forceRefresh: true,
     });
     this.assertExpectedReportChannel(serverConfig.settings, targetChannel.id, options);
+    const matchedOriginalPanel =
+      (serverConfig.settings[REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY] ?? null) ===
+      options.expectedMessageId;
     let settings = await this.recoverDurablePublication(guildId, serverConfig.settings);
     const hadPendingCleanup = Boolean(settings[REPORT_INSTRUCTIONS_CLEANUP_MESSAGE_ID_SETTING_KEY]);
     settings = await this.recoverMissingCleanupReplacement(guildId, settings);
     await this.retryPendingReportInstructionsCleanup(guildId, settings);
-    let existingChannelId = settings[REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY];
+    let existingChannelId = this.reportMessageChannelId(settings);
     let existingMessageId = settings[REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY];
     const matchesExpectedPanel = (existingMessageId ?? null) === options.expectedMessageId;
-    if (options.repost && existingChannelId !== targetChannel.id && !matchesExpectedPanel) {
-      throw new ReportInstructionsError(
-        'The report panel changed since this request. Refresh setup before reposting.'
-      );
-    }
+    this.assertExpectedPanelForMove(
+      matchedOriginalPanel,
+      existingChannelId,
+      targetChannel.id,
+      options
+    );
     let messageId: string;
     let createdMessage: Message | null = null;
     let action: ReportInstructionsResult['action'] = 'sent';
@@ -197,6 +202,7 @@ export class ReportInstructionsManager {
 
     const settingsPatch: Partial<ServerSettings> = {
       [REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY]: targetChannel.id,
+      [REPORT_INSTRUCTIONS_MESSAGE_CHANNEL_ID_SETTING_KEY]: targetChannel.id,
       [REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY]: messageId,
     };
     if (createdMessage || options.repost) {
@@ -344,7 +350,7 @@ export class ReportInstructionsManager {
       settings[REPORT_INSTRUCTIONS_CLEANUP_MESSAGE_ID_SETTING_KEY]
     );
     await this.retryPendingReportInstructionsCleanup(guildId, settings);
-    const existingChannelId = settings[REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY];
+    const existingChannelId = this.reportMessageChannelId(settings);
     const existingMessageId = settings[REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY];
     const hasCleanupTarget = Boolean(existingChannelId && existingMessageId);
 
@@ -353,6 +359,7 @@ export class ReportInstructionsManager {
         ? { [REPORT_INSTRUCTIONS_PENDING_PUBLICATION_SETTING_KEY]: null }
         : {}),
       [REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY]: null,
+      [REPORT_INSTRUCTIONS_MESSAGE_CHANNEL_ID_SETTING_KEY]: null,
       [REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY]: null,
       [REPORT_INSTRUCTIONS_CLEANUP_CHANNEL_ID_SETTING_KEY]: hasCleanupTarget
         ? existingChannelId
@@ -372,9 +379,9 @@ export class ReportInstructionsManager {
 
   private async findExistingReportInstructionsMessage(
     targetChannel: TextChannel,
-    failOnReadError = false
+    repost = false
   ): Promise<Message | null> {
-    if (failOnReadError) this.assertCanReadReportHistory(targetChannel);
+    if (repost) return this.findRepostReplacement(targetChannel, null);
     const botUserId = this.client.user?.id;
     if (!botUserId) {
       return null;
@@ -386,11 +393,7 @@ export class ReportInstructionsManager {
       return null;
     }
 
-    const messages = await messageManager.fetch({ limit: 50 }).catch((error: unknown) => {
-      if (failOnReadError) throw error;
-      return null;
-    });
-    if (failOnReadError) this.assertCanReadReportHistory(targetChannel);
+    const messages = await messageManager.fetch({ limit: 50 }).catch(() => null);
     if (!messages) return null;
     return messages.find((message) => this.isReportInstructionsMessage(message)) ?? null;
   }
@@ -452,10 +455,10 @@ export class ReportInstructionsManager {
       });
       return { ...settings, [REPORT_INSTRUCTIONS_PENDING_PUBLICATION_SETTING_KEY]: null };
     }
-    const oldChannelId = settings[REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY];
+    const oldChannelId = this.reportMessageChannelId(settings);
     const oldMessageId = settings[REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY];
     const patch: Partial<ServerSettings> = {
-      [REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY]: pending.channel_id,
+      [REPORT_INSTRUCTIONS_MESSAGE_CHANNEL_ID_SETTING_KEY]: pending.channel_id,
       [REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY]: message.id,
       [REPORT_INSTRUCTIONS_PENDING_PUBLICATION_SETTING_KEY]: null,
     };
@@ -488,6 +491,20 @@ export class ReportInstructionsManager {
     }
   }
 
+  private assertExpectedPanelForMove(
+    matchedOriginalPanel: boolean,
+    currentMessageChannelId: string | null,
+    targetChannelId: string,
+    options: ReportInstructionsOptions
+  ): void {
+    // Recovery may change the active ID, so validate against the state this request originally saw.
+    if (options.repost && currentMessageChannelId !== targetChannelId && !matchedOriginalPanel) {
+      throw new ReportInstructionsError(
+        'The report panel changed since this request. Refresh setup before reposting.'
+      );
+    }
+  }
+
   private async fetchTrackedReportInstructionsMessage(
     channelId: string | null | undefined,
     messageId: string | null | undefined
@@ -510,7 +527,7 @@ export class ReportInstructionsManager {
       settings[REPORT_INSTRUCTIONS_CLEANUP_MESSAGE_ID_SETTING_KEY] &&
       settings[REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY] &&
       !(await this.fetchTrackedReportInstructionsMessage(
-        settings[REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY],
+        this.reportMessageChannelId(settings),
         settings[REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY]
       ))
     ) {
@@ -525,7 +542,7 @@ export class ReportInstructionsManager {
         [REPORT_INSTRUCTIONS_CLEANUP_MESSAGE_ID_SETTING_KEY]: null,
         ...(previous
           ? {
-              [REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY]: previousChannelId,
+              [REPORT_INSTRUCTIONS_MESSAGE_CHANNEL_ID_SETTING_KEY]: previousChannelId,
               [REPORT_INSTRUCTIONS_MESSAGE_ID_SETTING_KEY]: previous.id,
             }
           : {}),
@@ -548,6 +565,15 @@ export class ReportInstructionsManager {
         'Drasil needs View Channel and Read Message History to inspect, repair, repost, or recover an existing report panel. Existing panels were retained.'
       );
     }
+  }
+
+  private reportMessageChannelId(settings: ServerSettings): string | null {
+    // Existing panels used the configured channel as their parent before this field was introduced.
+    return (
+      settings[REPORT_INSTRUCTIONS_MESSAGE_CHANNEL_ID_SETTING_KEY] ??
+      settings[REPORT_INSTRUCTIONS_CHANNEL_ID_SETTING_KEY] ??
+      null
+    );
   }
 
   private assertBotOwnedMessage(message: Message): void {

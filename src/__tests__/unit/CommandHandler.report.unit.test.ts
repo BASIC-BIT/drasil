@@ -418,6 +418,7 @@ describe('CommandHandler report commands (unit)', () => {
     expect(targetChannel.send).not.toHaveBeenCalled();
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       report_instructions_channel_id: 'channel-1',
+      report_instructions_message_channel_id: 'channel-1',
       report_instructions_message_id: 'message-1',
     });
     expect(interaction.editReply).toHaveBeenCalledWith({
@@ -539,6 +540,7 @@ describe('CommandHandler report commands (unit)', () => {
     });
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       report_instructions_channel_id: 'channel-1',
+      report_instructions_message_channel_id: 'channel-1',
       report_instructions_message_id: 'message-2',
       report_instructions_pending_publication: null,
     });
@@ -601,6 +603,7 @@ describe('CommandHandler report commands (unit)', () => {
     expect(targetChannel.send).not.toHaveBeenCalled();
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       report_instructions_channel_id: 'channel-1',
+      report_instructions_message_channel_id: 'channel-1',
       report_instructions_message_id: 'message-1',
     });
     expect(interaction.editReply).toHaveBeenCalledWith({
@@ -681,6 +684,7 @@ describe('CommandHandler report commands (unit)', () => {
     });
     expect(configService.updateServerSettings).toHaveBeenNthCalledWith(2, 'guild-1', {
       report_instructions_channel_id: 'new-channel-1',
+      report_instructions_message_channel_id: 'new-channel-1',
       report_instructions_message_id: 'new-message-1',
       report_instructions_cleanup_channel_id: 'old-channel-1',
       report_instructions_cleanup_message_id: 'old-message-1',
@@ -806,6 +810,7 @@ describe('CommandHandler report commands (unit)', () => {
 
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       report_instructions_channel_id: null,
+      report_instructions_message_channel_id: null,
       report_instructions_message_id: null,
       report_instructions_cleanup_channel_id: 'old-channel-1',
       report_instructions_cleanup_message_id: 'old-message-1',
@@ -838,6 +843,7 @@ describe('CommandHandler report commands (unit)', () => {
     expect(configService.updateServerSettings).toHaveBeenCalledTimes(1);
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       report_instructions_channel_id: null,
+      report_instructions_message_channel_id: null,
       report_instructions_message_id: null,
       report_instructions_cleanup_channel_id: 'old-channel-1',
       report_instructions_cleanup_message_id: 'old-message-1',

@@ -47,13 +47,18 @@ existing panel. Every new publication saves an intent before sending, including 
 setup, recreation, and channel moves. Repost sends a replacement, saves its ID, and then removes
 the previous Drasil panel. An unconfirmed save retains working panels and recovery state. Retries
 recover the intent even after a restart or channel move.
+The configured destination and the tracked message's actual channel are stored separately.
+Saving a new destination preserves the existing message's parent; publication recovery updates
+the tracked message without overwriting that newer destination.
 Repost requests include the panel and channel the administrator saw. A stale channel selection
 requires a refresh, while an intentional channel move from the current form is allowed. Repost
 stops if its untracked-panel lookup fails. If a saved replacement disappears before pending cleanup,
 Drasil verifies and re-adopts the earlier working panel instead of deleting it. A later deliberate
 repost can then replace that panel normally.
 If cleanup fails, retry finishes cleanup before publishing again. A fresh web submission can then
-request another repost. Recovery checks at most 1,000 messages newer than the saved boundary and
+request another repost. Untracked-panel lookup paginates up to 1,000 messages before publishing;
+it stops without sending if the search budget cannot establish absence. Publication recovery checks
+at most 1,000 messages newer than the saved boundary and
 stops with an error if that limit is reached; it never sends another panel on an incomplete search.
 Tracked-panel repair, repost, and recovery require Drasil to have View Channel and Read Message
 History so it can verify the bot author, report embed, and button before changing a message. Setup

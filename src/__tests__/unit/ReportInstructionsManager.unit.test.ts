@@ -89,6 +89,82 @@ function buildManager(guildId: string) {
 }
 
 describe('ReportInstructionsManager deliberate repost', () => {
+  it('finds and removes an untracked panel beyond the first page before reposting', async () => {
+    const fixture = buildManager('deep-untracked-panel');
+    await fixture.save('deep-untracked-panel', { report_instructions_message_id: null });
+    fixture.newMessage.id = '900';
+    const unrelated = new Collection<string, Message>();
+    for (let id = 500; id > 400; id--) {
+      unrelated.set(String(id), { id: String(id), author: { id: 'human' } } as unknown as Message);
+    }
+    fixture.channel.messages.fetch
+      .mockResolvedValueOnce(unrelated)
+      .mockResolvedValueOnce(new Collection([['100', fixture.oldMessage as unknown as Message]]))
+      .mockResolvedValueOnce(unrelated);
+    await fixture.upsert(true, null);
+    expect(fixture.channel.messages.fetch).toHaveBeenCalledWith({ limit: 100, before: '401' });
+    expect(fixture.channel.send).toHaveBeenCalledTimes(1);
+    expect(fixture.oldMessage.delete).toHaveBeenCalledTimes(1);
+    expect(fixture.settings().report_instructions_message_id).toBe('900');
+  });
+
+  it('fails closed when an untracked-panel search exhausts its history budget', async () => {
+    const fixture = buildManager('untracked-search-budget');
+    await fixture.save('untracked-search-budget', { report_instructions_message_id: null });
+    const unrelated = new Collection<string, Message>();
+    for (let id = 5000; id > 4900; id--) {
+      unrelated.set(String(id), { id: String(id), author: { id: 'human' } } as unknown as Message);
+    }
+    fixture.channel.messages.fetch.mockResolvedValue(unrelated);
+    await expect(fixture.upsert(true, null)).rejects.toThrow('history limit');
+    expect(fixture.channel.send).not.toHaveBeenCalled();
+    expect(fixture.config.updateServerSettings).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    'preserves a fresh C selection while recovering a publication in B (send fails: %s)',
+    async (sendFails) => {
+      const guildId = `new-selection-during-recovery-${sendFails}`;
+      const fixture = buildManager(guildId);
+      fixture.channel.id = 'C';
+      const channelA = { messages: { fetch: jest.fn().mockResolvedValue(fixture.oldMessage) } };
+      const channelB = {
+        permissionsFor: fixture.channel.permissionsFor,
+        messages: {
+          fetch: jest.fn(async (input: MessageFetchInput) =>
+            typeof normalizeFetchInput(input) === 'string'
+              ? fixture.newMessage
+              : new Collection([['200', fixture.newMessage as unknown as Message]])
+          ),
+        },
+      };
+      fixture.client.channels.fetch.mockImplementation(async (id: string) =>
+        id === 'channel' ? channelA : id === 'B' ? channelB : fixture.channel
+      );
+      await fixture.save(guildId, {
+        report_instructions_channel_id: 'C',
+        report_instructions_message_channel_id: 'channel',
+        report_instructions_pending_publication: { channel_id: 'B', after_message_id: '100' },
+      });
+      const returnedConfig = { settings: { ...fixture.settings() } };
+      fixture.config.getServerConfig.mockResolvedValue(returnedConfig);
+      fixture.config.updateServerSettings.mockImplementation(async (id, patch) => {
+        Object.assign(returnedConfig.settings, patch);
+        return fixture.save(id, patch);
+      });
+      fixture.channel.messages.fetch.mockResolvedValue(new Collection<string, Message>());
+      fixture.channel.send.mockResolvedValue({ ...fixture.newMessage, id: '300' });
+      if (sendFails) fixture.channel.send.mockRejectedValueOnce(new Error('C send failed'));
+      const result = fixture.upsert(true, '100');
+      if (sendFails) await expect(result).rejects.toThrow('C send failed');
+      else await expect(result).resolves.toMatchObject({ messageId: '300' });
+      expect(fixture.settings().report_instructions_channel_id).toBe('C');
+      expect(fixture.settings().report_instructions_message_channel_id).toBe(sendFails ? 'B' : 'C');
+      expect(fixture.settings().report_instructions_message_id).toBe(sendFails ? '200' : '300');
+      expect(fixture.oldMessage.delete).toHaveBeenCalledTimes(1);
+      expect(fixture.newMessage.delete).toHaveBeenCalledTimes(sendFails ? 0 : 1);
+    }
+  );
   it('uses fresh ownership evidence instead of a cached report payload before deletion', async () => {
     const fixture = buildManager('stale-cached-payload');
     const changedMessage = { ...fixture.oldMessage, embeds: [{ title: 'Other instructions' }] };
@@ -592,6 +668,7 @@ describe('ReportInstructionsManager deliberate repost', () => {
     expect(fixture.config.updateServerSettings).toHaveBeenNthCalledWith(2, 'repost-success', {
       report_instructions_pending_publication: null,
       report_instructions_channel_id: 'channel',
+      report_instructions_message_channel_id: 'channel',
       report_instructions_message_id: '200',
       report_instructions_cleanup_channel_id: 'channel',
       report_instructions_cleanup_message_id: '100',

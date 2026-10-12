@@ -82,6 +82,7 @@ export interface ServerSettings {
   manual_intake_role_id?: string | null;
   manual_intake_grace_period_seconds?: number;
   report_instructions_channel_id?: string | null;
+  report_instructions_message_channel_id?: string | null;
   report_instructions_message_id?: string | null;
   report_instructions_cleanup_channel_id?: string | null;
   report_instructions_cleanup_message_id?: string | null;

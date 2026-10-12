@@ -310,7 +310,12 @@ export class PostgresSetupDataAdapter implements SetupDataAdapter {
           admin_channel_id = excluded.admin_channel_id,
           verification_channel_id = excluded.verification_channel_id,
           admin_notification_role_id = excluded.admin_notification_role_id,
-          settings = coalesce(servers.settings, '{}'::jsonb) || excluded.settings,
+          settings = coalesce(servers.settings, '{}'::jsonb)
+            || jsonb_build_object('report_instructions_message_channel_id', coalesce(
+              nullif(servers.settings->'report_instructions_message_channel_id', 'null'::jsonb),
+              servers.settings->'report_instructions_channel_id',
+              'null'::jsonb
+            )) || excluded.settings,
           updated_by = excluded.updated_by,
           updated_at = now()
         returning *`,

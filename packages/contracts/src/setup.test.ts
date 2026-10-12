@@ -38,9 +38,20 @@ import {
   MESSAGE_DELETION_CUSTOM_WATCHLIST_TERM_MAX_LENGTH,
   MESSAGE_DELETION_DEFAULT_WATCHLIST_ENTRIES,
   setupDashboardSchema,
+  serverSettingsSchema,
 } from './setup';
 
 describe('setup contracts', () => {
+  it('retains the selected report destination and actual message parent separately', () => {
+    const parsed = serverSettingsSchema.parse({
+      report_instructions_channel_id: 'C',
+      report_instructions_message_channel_id: 'B',
+      report_instructions_message_id: '200',
+    });
+    expect(parsed.report_instructions_channel_id).toBe('C');
+    expect(parsed.report_instructions_message_channel_id).toBe('B');
+    expect(parsed.report_instructions_message_id).toBe('200');
+  });
   it('accepts dashboard payloads with nullable server config', () => {
     const parsed = setupDashboardSchema.parse({
       guildId: '123',
