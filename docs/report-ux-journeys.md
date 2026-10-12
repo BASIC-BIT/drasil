@@ -50,10 +50,13 @@ recover the intent even after a restart or channel move.
 If cleanup fails, retry finishes cleanup before publishing again. A fresh web submission can then
 request another repost. Recovery checks at most 1,000 messages newer than the saved boundary and
 stops with an error if that limit is reached; it never sends another panel on an incomplete search.
-Repost and recovery require Drasil to have View Channel and Read Message History. Ordinary first
+Tracked-panel repair, repost, and recovery require Drasil to have View Channel and Read Message
+History so it can verify the bot author, report embed, and button before changing a message. Setup
+diagnostics warn when Read Message History is missing. Ordinary first
 setup can publish without history access; an uncertain send or save then requires history access
 to recover. Empty history without that permission
 is not evidence that a panel is missing ([Discord API](https://github.com/discord/discord-api-docs/blob/main/developers/resources/message.mdx#get-channel-messages)).
+Fetching a tracked panel by ID also requires history access ([Discord API](https://docs.discord.com/developers/resources/message#get-channel-message)).
 
 ```mermaid
 flowchart LR

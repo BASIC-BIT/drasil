@@ -666,4 +666,18 @@ describe('ReportInstructionsManager deliberate repost', () => {
     await expect(fixture.upsert(false)).rejects.toThrow('Discord unavailable');
     expect(fixture.channel.send).not.toHaveBeenCalled();
   });
+
+  it.each([50001, 50013])(
+    'explains missing history access on tracked-panel repair (%s)',
+    async (code) => {
+      const fixture = buildManager(`tracked-panel-no-history-${code}`);
+      fixture.canReadHistory.mockReturnValue(false);
+      fixture.channel.messages.fetch.mockRejectedValueOnce({ code });
+      await expect(fixture.upsert(false)).rejects.toThrow('Read Message History');
+      expect(fixture.oldMessage.edit).not.toHaveBeenCalled();
+      expect(fixture.oldMessage.delete).not.toHaveBeenCalled();
+      expect(fixture.channel.send).not.toHaveBeenCalled();
+      expect(fixture.config.updateServerSettings).not.toHaveBeenCalled();
+    }
+  );
 });

@@ -530,6 +530,42 @@ describe('SetupDiagnosticsService (unit)', () => {
     ).toBe('warning');
   });
 
+  it.each(['configured', 'candidate'])(
+    'warns that report panel repair needs history access in %s setup',
+    async (mode) => {
+      const { guild } = buildConfiguredGuild({
+        channelHas: (permission) => permission !== PermissionFlagsBits.ReadMessageHistory,
+      });
+      const configService = {
+        getServerConfig: jest.fn().mockResolvedValue({
+          guild_id: 'guild-1',
+          case_role_id: 'role-1',
+          admin_channel_id: 'admin-channel-1',
+          verification_channel_id: 'verification-channel-1',
+          settings: { report_instructions_channel_id: 'report-channel-1' },
+        }),
+      } as any;
+      const service = new SetupDiagnosticsService(configService);
+      const report =
+        mode === 'configured'
+          ? await service.validateGuildSetup(guild)
+          : await service.validateSetupCandidate(guild, {
+              caseRoleId: 'role-1',
+              adminChannelId: 'admin-channel-1',
+              verificationChannelId: 'verification-channel-1',
+              reportInstructionsChannelId: 'report-channel-1',
+            });
+      expect(
+        report.issues.find(
+          (issue) => issue.code === 'report-instructions-channel-read-message-history'
+        )
+      ).toMatchObject({
+        severity: 'warning',
+        message: expect.stringContaining('required for tracked-panel repair, repost, and recovery'),
+      });
+    }
+  );
+
   it('reports optional observed notification delivery failures as warnings', async () => {
     const { guild } = buildConfiguredGuild({
       channelHas: (permission) => permission !== PermissionFlagsBits.SendMessages,

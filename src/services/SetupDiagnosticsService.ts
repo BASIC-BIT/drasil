@@ -68,6 +68,16 @@ const ADMIN_CHANNEL_PERMISSIONS: readonly PermissionRequirement[] = [
   },
 ];
 
+const REPORT_INSTRUCTIONS_CHANNEL_PERMISSIONS: readonly PermissionRequirement[] = [
+  ...ADMIN_CHANNEL_PERMISSIONS,
+  {
+    permission: PermissionFlagsBits.ReadMessageHistory,
+    label: 'Read Message History (required for tracked-panel repair, repost, and recovery)',
+    severity: 'warning',
+    codeSuffix: 'read-message-history',
+  },
+];
+
 const VERIFICATION_CHANNEL_PERMISSIONS: readonly PermissionRequirement[] = [
   ...ADMIN_CHANNEL_PERMISSIONS,
   {
@@ -187,7 +197,7 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
         serverConfig.settings.report_instructions_channel_id,
         'report-instructions-channel',
         'Report instructions channel',
-        ADMIN_CHANNEL_PERMISSIONS,
+        REPORT_INSTRUCTIONS_CHANNEL_PERMISSIONS,
         reportIssues
       );
       issues.push(...reportIssues.map((issue) => ({ ...issue, severity: 'warning' as const })));
@@ -249,7 +259,7 @@ export class SetupDiagnosticsService implements ISetupDiagnosticsService {
         candidate.reportInstructionsChannelId,
         'report-instructions-channel',
         'Report instructions channel',
-        ADMIN_CHANNEL_PERMISSIONS,
+        REPORT_INSTRUCTIONS_CHANNEL_PERMISSIONS,
         reportIssues
       );
       issues.push(...reportIssues.map((issue) => ({ ...issue, severity: 'warning' as const })));

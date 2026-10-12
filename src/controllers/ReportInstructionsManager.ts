@@ -22,6 +22,8 @@ const REPORT_PANEL_RECOVERY_PAGE_LIMIT = 10;
 const REPORT_PANEL_RECOVERY_PAGE_SIZE = 100;
 const DISCORD_UNKNOWN_CHANNEL_ERROR_CODE = 10003;
 const DISCORD_UNKNOWN_MESSAGE_ERROR_CODE = 10008;
+const DISCORD_MISSING_ACCESS_ERROR_CODE = 50001;
+const DISCORD_MISSING_PERMISSIONS_ERROR_CODE = 50013;
 const REPORT_INSTRUCTIONS_CLEANUP_PENDING_ERROR =
   'Report panel settings were saved, but previous panel cleanup needs attention. Retry setup to finish cleanup.';
 const REPORT_INSTRUCTIONS_ROLLBACK_PENDING_ERROR =
@@ -223,6 +225,12 @@ export class ReportInstructionsManager {
     } catch (error) {
       if (this.isUnknownDiscordResource(error, DISCORD_UNKNOWN_MESSAGE_ERROR_CODE)) {
         return null;
+      }
+      if (
+        this.isUnknownDiscordResource(error, DISCORD_MISSING_ACCESS_ERROR_CODE) ||
+        this.isUnknownDiscordResource(error, DISCORD_MISSING_PERMISSIONS_ERROR_CODE)
+      ) {
+        this.assertCanReadReportHistory(channel);
       }
       throw error;
     }
@@ -457,7 +465,7 @@ export class ReportInstructionsManager {
         ?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory])
     ) {
       throw new ReportInstructionsError(
-        'Drasil needs View Channel and Read Message History to repost or recover the report panel. Existing panels were retained.'
+        'Drasil needs View Channel and Read Message History to inspect, repair, repost, or recover an existing report panel. Existing panels were retained.'
       );
     }
   }
