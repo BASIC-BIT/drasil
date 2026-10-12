@@ -397,7 +397,10 @@ describe('CommandHandler report commands (unit)', () => {
     await handler.handleSlashCommand(interaction);
 
     expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
-    expect(targetChannel.messages.fetch).toHaveBeenCalledWith('message-1');
+    expect(targetChannel.messages.fetch).toHaveBeenCalledWith({
+      message: 'message-1',
+      force: true,
+    });
     expect(existingMessage.edit).toHaveBeenCalledWith({
       embeds: expect.any(Array),
       components: expect.any(Array),
@@ -667,7 +670,10 @@ describe('CommandHandler report commands (unit)', () => {
     await handler.handleSlashCommand(interaction);
 
     expect(client.channels.fetch).toHaveBeenCalledWith('old-channel-1');
-    expect(oldChannel.messages.fetch).toHaveBeenCalledWith('old-message-1');
+    expect(oldChannel.messages.fetch).toHaveBeenCalledWith({
+      message: 'old-message-1',
+      force: true,
+    });
     expect(oldMessage.delete).toHaveBeenCalledTimes(1);
     expect(targetChannel.send).toHaveBeenCalledWith({
       embeds: expect.any(Array),

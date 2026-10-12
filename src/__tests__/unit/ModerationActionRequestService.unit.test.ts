@@ -712,12 +712,16 @@ describe('ModerationActionRequestService', () => {
       guildId: 'guild-1',
       id: 'report-channel-1',
       messages: {
-        fetch: jest.fn(async (id: string | { limit: number }) =>
-          typeof id !== 'string'
-            ? new Collection()
-            : id === reportInstructionsMessage.id
-              ? reportInstructionsMessage
-              : null
+        fetch: jest.fn(
+          async (input: string | { limit: number } | { message: string; force: boolean }) => {
+            const id =
+              typeof input === 'string' ? input : 'message' in input ? input.message : input;
+            return typeof id !== 'string'
+              ? new Collection()
+              : id === reportInstructionsMessage.id
+                ? reportInstructionsMessage
+                : null;
+          }
         ),
       },
       send: jest.fn(async () => reportInstructionsMessage),

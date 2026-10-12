@@ -236,7 +236,7 @@ export class ReportInstructionsManager {
     messageId: string
   ): Promise<Message | null> {
     try {
-      const message = await channel.messages.fetch(messageId);
+      const message = await channel.messages.fetch({ message: messageId, force: true });
       this.assertBotOwnedMessage(message);
       return message;
     } catch (error) {
@@ -627,7 +627,7 @@ export class ReportInstructionsManager {
 
     let existingMessage;
     try {
-      existingMessage = await existingChannel.messages.fetch(messageId);
+      existingMessage = await existingChannel.messages.fetch({ message: messageId, force: true });
     } catch (error) {
       if (this.isUnknownDiscordResource(error, DISCORD_UNKNOWN_MESSAGE_ERROR_CODE)) {
         return true;

@@ -3,6 +3,12 @@ import { IConfigService } from '../../config/ConfigService';
 import { ReportInstructionsManager } from '../../controllers/ReportInstructionsManager';
 import { ServerSettings } from '../../repositories/types';
 
+type MessageFetchInput = string | { limit: number } | { message: string; force: boolean };
+
+function normalizeFetchInput(input: MessageFetchInput): string | { limit: number } {
+  return typeof input === 'string' ? input : 'message' in input ? input.message : input;
+}
+
 function buildManager(guildId: string) {
   let published = false;
   const canReadHistory = jest.fn().mockReturnValue(true);
@@ -26,7 +32,8 @@ function buildManager(guildId: string) {
       published = false;
     }),
   };
-  const fetch = jest.fn(async (id: string | { limit: number }) => {
+  const fetch = jest.fn(async (input: MessageFetchInput) => {
+    const id = normalizeFetchInput(input);
     if (typeof id !== 'string') {
       return id.limit === 1
         ? new Collection([['100', oldMessage as unknown as Message]])
@@ -82,6 +89,41 @@ function buildManager(guildId: string) {
 }
 
 describe('ReportInstructionsManager deliberate repost', () => {
+  it('uses fresh ownership evidence instead of a cached report payload before deletion', async () => {
+    const fixture = buildManager('stale-cached-payload');
+    const changedMessage = { ...fixture.oldMessage, embeds: [{ title: 'Other instructions' }] };
+    fixture.channel.messages.fetch.mockImplementation(async (input) =>
+      typeof input !== 'string' && 'force' in input && input.force
+        ? changedMessage
+        : fixture.oldMessage
+    );
+    await expect(fixture.manager.clearReportInstructions('stale-cached-payload')).rejects.toThrow(
+      'cleanup needs attention'
+    );
+    expect(fixture.oldMessage.delete).not.toHaveBeenCalled();
+    expect(fixture.settings().report_instructions_cleanup_message_id).toBe('100');
+  });
+  it('bypasses a stale cached replacement before deciding whether to delete the last working panel', async () => {
+    const fixture = buildManager('stale-cached-replacement');
+    await fixture.save('stale-cached-replacement', {
+      report_instructions_message_id: '200',
+      report_instructions_cleanup_channel_id: 'channel',
+      report_instructions_cleanup_message_id: '100',
+    });
+    fixture.channel.messages.fetch.mockImplementation(async (input) => {
+      const id = normalizeFetchInput(input);
+      if (id === '200' && typeof input !== 'string' && 'force' in input && input.force) {
+        throw { code: 10008 };
+      }
+      if (id === '200') return fixture.newMessage;
+      if (id === '100') return fixture.oldMessage;
+      return new Collection<string, Message>();
+    });
+    await expect(fixture.upsert(true, '200')).resolves.toMatchObject({ messageId: '100' });
+    expect(fixture.oldMessage.delete).not.toHaveBeenCalled();
+    expect(fixture.channel.send).not.toHaveBeenCalled();
+    expect(fixture.settings().report_instructions_message_id).toBe('100');
+  });
   it('recreates a panel after confirming both pending cleanup messages are missing', async () => {
     const fixture = buildManager('both-cleanup-panels-missing');
     await fixture.save('both-cleanup-panels-missing', {
@@ -90,7 +132,7 @@ describe('ReportInstructionsManager deliberate repost', () => {
       report_instructions_cleanup_message_id: '100',
     });
     fixture.channel.messages.fetch.mockImplementation(async (value) => {
-      if (typeof value === 'string') throw { code: 10008 };
+      if (typeof normalizeFetchInput(value) === 'string') throw { code: 10008 };
       return new Collection<string, Message>();
     });
     fixture.channel.send.mockResolvedValue({ ...fixture.newMessage, id: '300' });
@@ -239,20 +281,21 @@ describe('ReportInstructionsManager deliberate repost', () => {
     const source = {
       ...fixture.channel,
       messages: {
-        fetch: jest.fn(async (id: string) =>
-          id === '100' ? fixture.oldMessage : fixture.newMessage
+        fetch: jest.fn(async (input: MessageFetchInput) =>
+          normalizeFetchInput(input) === '100' ? fixture.oldMessage : fixture.newMessage
         ),
       },
     };
     fixture.channel.id = 'target';
     fixture.channel.send.mockResolvedValue(replacement);
-    fixture.channel.messages.fetch.mockImplementation(async (id) =>
-      typeof id === 'string'
+    fixture.channel.messages.fetch.mockImplementation(async (input) => {
+      const id = normalizeFetchInput(input);
+      return typeof id === 'string'
         ? replacement
         : id.limit === 100 && fixture.channel.send.mock.calls.length > 0
           ? new Collection([['300', replacement as unknown as Message]])
-          : new Collection<string, Message>()
-    );
+          : new Collection<string, Message>();
+    });
     fixture.client.channels.fetch.mockImplementation(async (id: string) =>
       id === 'channel' ? source : fixture.channel
     );
@@ -332,7 +375,7 @@ describe('ReportInstructionsManager deliberate repost', () => {
     expect(fixture.settings().report_instructions_pending_publication).toBeNull();
     fixture.channel.messages.fetch.mockClear();
     await fixture.manager.clearReportInstructions('failed-send-repair');
-    expect(fixture.channel.messages.fetch).toHaveBeenCalledWith('100');
+    expect(fixture.channel.messages.fetch).toHaveBeenCalledWith({ message: '100', force: true });
     expect(fixture.channel.messages.fetch).not.toHaveBeenCalledWith(
       expect.objectContaining({ limit: 100 })
     );
@@ -721,7 +764,7 @@ describe('ReportInstructionsManager deliberate repost', () => {
       expect(fixture.newMessage.delete).not.toHaveBeenCalled();
       expect(fixture.oldMessage.delete).not.toHaveBeenCalled();
       fixture.channel.messages.fetch.mockImplementation(async (value) =>
-        typeof value === 'string'
+        typeof normalizeFetchInput(value) === 'string'
           ? fixture.newMessage
           : new Collection([['200', fixture.newMessage as unknown as Message]])
       );
