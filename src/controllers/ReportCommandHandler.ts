@@ -1,3 +1,4 @@
+import { formatInlineIdentifier } from '../utils/discordUserIdentity';
 import {
   ActionRowBuilder,
   ChatInputCommandInteraction,
@@ -202,10 +203,16 @@ export class ReportCommandHandler {
   ): Promise<void> {
     switch (result.status) {
       case 'submitted':
-        await interaction.editReply({
-          content: `Thank you for your report regarding <@${result.targetUserId}>. It has been submitted for review.`,
-          allowedMentions: { parse: [] },
-        });
+        try {
+          await interaction.editReply({
+            content: result.targetUsername
+              ? `Report submitted for @${formatInlineIdentifier(result.targetUsername)}.`
+              : `Report submitted for user ${formatInlineIdentifier(result.targetUserId)}.`,
+            allowedMentions: { parse: [] },
+          });
+        } catch (error) {
+          console.warn('Report submitted but its receipt could not be delivered:', error);
+        }
         return;
       case 'self_report':
         await interaction.editReply({ content: 'You cannot report yourself.' });
@@ -219,7 +226,8 @@ export class ReportCommandHandler {
       case 'failed':
         console.error(`${messages.failureLogPrefix}:`, result.error);
         await interaction.editReply({
-          content: 'An error occurred while submitting your report. Please try again later.',
+          content:
+            "Drasil couldn't finish submitting this report. Please ask a moderator to review it.",
         });
     }
   }

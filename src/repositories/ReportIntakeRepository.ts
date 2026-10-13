@@ -30,9 +30,14 @@ export interface IReportIntakeRepository {
   findOpenByReporterAndServer(serverId: string, reporterId: string): Promise<ReportIntake | null>;
   confirmTargetIfUnset(
     id: string,
-    data: { targetUserId: string; metadata: Record<string, unknown> }
+    data: {
+      targetUserId: string;
+      expectedMetadata: ReportIntake['metadata'];
+      metadata: Record<string, unknown>;
+    }
   ): Promise<ReportIntake | null>;
   update(id: string, data: ReportIntakeUpdate): Promise<ReportIntake | null>;
+  updateIfCurrent(intake: ReportIntake, data: ReportIntakeUpdate): Promise<ReportIntake | null>;
   addEvidence(data: ReportIntakeEvidenceCreate): Promise<ReportIntakeEvidence>;
   listEvidence(intakeId: string): Promise<ReportIntakeEvidence[]>;
 }
@@ -164,16 +169,53 @@ export class ReportIntakeRepository implements IReportIntakeRepository {
     }
   }
 
-  async confirmTargetIfUnset(
-    id: string,
-    data: { targetUserId: string; metadata: Record<string, unknown> }
+  async updateIfCurrent(
+    intake: ReportIntake,
+    data: ReportIntakeUpdate
   ): Promise<ReportIntake | null> {
     try {
-      const updated = await this.prisma.report_intakes.updateMany({
+      const updated = await this.prisma.report_intakes.updateManyAndReturn({
+        where: {
+          id: intake.id,
+          status: intake.status,
+          confirmed_target_user_id: intake.confirmed_target_user_id,
+          metadata: { equals: intake.metadata ?? Prisma.AnyNull },
+        },
+        data: {
+          status: data.status,
+          summary: data.summary,
+          confirmed_target_user_id: data.confirmedTargetUserId,
+          closed_at: data.closedAt,
+          metadata:
+            data.metadata === undefined
+              ? undefined
+              : data.metadata === null
+                ? Prisma.JsonNull
+                : (data.metadata as Prisma.InputJsonValue),
+          updated_at: new Date(),
+        },
+      });
+      return (updated[0] as ReportIntake | undefined) ?? null;
+    } catch (error) {
+      this.handleError(error, 'updateReportIntakeIfCurrent');
+    }
+  }
+
+  async confirmTargetIfUnset(
+    id: string,
+    data: {
+      targetUserId: string;
+      expectedMetadata: ReportIntake['metadata'];
+      metadata: Record<string, unknown>;
+    }
+  ): Promise<ReportIntake | null> {
+    try {
+      const updated = await this.prisma.report_intakes.updateManyAndReturn({
         where: {
           id,
-          status: ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION as report_intake_status,
+          status: ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION,
           confirmed_target_user_id: null,
+          metadata: { equals: data.expectedMetadata ?? Prisma.AnyNull },
         },
         data: {
           confirmed_target_user_id: data.targetUserId,
@@ -181,11 +223,7 @@ export class ReportIntakeRepository implements IReportIntakeRepository {
           updated_at: new Date(),
         },
       });
-      if (updated.count === 0) {
-        return null;
-      }
-
-      return this.findById(id);
+      return (updated[0] as ReportIntake | undefined) ?? null;
     } catch (error) {
       this.handleError(error, 'confirmReportIntakeTargetIfUnset');
     }

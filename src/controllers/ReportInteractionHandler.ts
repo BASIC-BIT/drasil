@@ -4,6 +4,7 @@ import {
   ButtonInteraction,
   ButtonStyle,
   ChannelType,
+  ComponentType,
   Client,
   Guild,
   GuildMember,
@@ -18,16 +19,17 @@ import { IConfigService } from '../config/ConfigService';
 import { DiscordUserResolver } from '../services/DiscordUserResolver';
 import {
   IReportIntakeService,
+  getReportConfirmationUnavailableMessage,
+  getReportConfirmationMessageIds,
   REPORT_INTAKE_CONFIRM_CUSTOM_ID_PREFIX,
   REPORT_INTAKE_REJECT_CUSTOM_ID_PREFIX,
-  REPORT_INTAKE_SUBMITTED_CLOSEOUT_MESSAGE,
 } from '../services/ReportIntakeService';
 import { NotificationPresentationBuilder } from '../services/NotificationPresentationBuilder';
 import { type MessageReportAttachment } from '../services/SecurityActionService';
 import { ReportSubmissionService } from '../services/ReportSubmissionService';
 import { IThreadManager } from '../services/ThreadManager';
-import { ReportIntake } from '../repositories/types';
-import { formatDiscordUserIdentity } from '../utils/discordUserIdentity';
+import { ReportIntake, ReportIntakeStatus } from '../repositories/types';
+import { formatInlineIdentifier } from '../utils/discordUserIdentity';
 import {
   REPORT_MESSAGE_REASON_FIELD_ID,
   USER_REPORT_MESSAGE_CONTENT_MAX_LENGTH,
@@ -191,7 +193,9 @@ export class ReportInteractionHandler {
     }
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-    let targetConfirmed = false;
+    let selectionAccepted = false;
+    let submissionSucceeded = false;
+    let statusRecorded = false;
 
     try {
       if (!this.reportIntakeService) {
@@ -209,15 +213,9 @@ export class ReportInteractionHandler {
         return;
       }
 
-      const guildId = interaction.guildId;
-      if (!guildId) {
-        await interaction.editReply({
-          content: 'Report confirmations can only be used in a server.',
-        });
-        return;
-      }
-
-      const guild = await this.client.guilds.fetch(guildId);
+      const context = await this.resolveReportConfirmationContext(interaction, intakeId);
+      if (!context) return;
+      const guild = context.guild;
       const targetMember = await guild.members.fetch(targetUserId).catch(() => null);
       if (!targetMember) {
         await interaction.editReply({
@@ -230,17 +228,14 @@ export class ReportInteractionHandler {
         intakeId,
         targetUserId,
         confirmedById: interaction.user.id,
-        confirmedByStaff: await canModerateReportIntake(
-          guild,
-          interaction.user.id,
-          this.configService
-        ),
+        confirmedByStaff: context.canModerate,
+        promptMessageId: interaction.message.id,
       });
       if (!confirmation.confirmed || !confirmation.reason) {
         await interaction.editReply({ content: confirmation.message });
         return;
       }
-      targetConfirmed = true;
+      selectionAccepted = true;
 
       const reporter = await this.resolveReportIntakeReporter(
         confirmation.reporterId,
@@ -259,30 +254,62 @@ export class ReportInteractionHandler {
       if (submission.status === 'failed') {
         throw submission.error;
       }
-      await this.reportIntakeService.markSubmitted({
-        intakeId,
-        targetUserId,
-        submittedById: interaction.user.id,
-      });
-
-      const targetLabel = this.formatReportTargetLabel(targetMember);
-      await interaction.editReply({ content: `Submitted report for ${targetLabel}.` });
-
+      submissionSucceeded = true;
+      statusRecorded = await this.reportIntakeService
+        .markSubmitted({
+          intakeId,
+          targetUserId,
+          submittedById: interaction.user.id,
+        })
+        .catch((error: unknown) => {
+          console.warn(`Failed to record submitted report ${intakeId}:`, error);
+          return false;
+        });
+      const acknowledgement = statusRecorded
+        ? 'Report submitted.'
+        : "Report submitted. Drasil couldn't record its final status. Please ask a moderator to review this thread.";
+      await interaction
+        .editReply({ content: acknowledgement })
+        .catch((error: unknown) => console.warn('Failed to deliver report receipt:', error));
       const threadChannel = this.getThreadChannel(interaction.channel);
       if (threadChannel) {
-        await threadChannel.send({
-          content: `${REPORT_INTAKE_SUBMITTED_CLOSEOUT_MESSAGE}\nTarget: ${targetLabel}`,
-          allowedMentions: { parse: [] },
-        });
-        await this.archiveReportIntakeThread(threadChannel, 'Report intake submitted');
+        const receipt = `Report submitted for ${this.formatReportTargetLabel(targetMember)}.`;
+        await threadChannel
+          .send({
+            content: statusRecorded
+              ? receipt
+              : `${receipt}\nDrasil couldn't record its final status. Please ask a moderator to review this thread.`,
+            allowedMentions: { parse: [] },
+          })
+          .catch((error: unknown) =>
+            console.warn('Failed to post submitted report receipt:', error)
+          );
       }
+      await this.threadManager
+        .retireReportConfirmationPrompts(
+          context.intake,
+          getReportConfirmationMessageIds(context.intake, interaction.message.id)
+        )
+        .catch((error: unknown) =>
+          console.warn('Failed to retire submitted report confirmations:', error)
+        );
+      if (statusRecorded && threadChannel)
+        await this.archiveReportIntakeThread(threadChannel, 'Report intake submitted');
     } catch (error) {
-      console.error('Error confirming report intake target:', error);
-      await interaction.editReply({
-        content: targetConfirmed
-          ? 'The report target was confirmed, but Drasil could not finish submitting it automatically. A moderator can review the intake thread.'
-          : 'An error occurred while submitting this report. Please try again later.',
-      });
+      console.error(
+        'Error confirming report intake target:',
+        { selectionAccepted, submissionSucceeded, statusRecorded },
+        error
+      );
+      await interaction
+        .editReply({
+          content: submissionSucceeded
+            ? "Report submitted. Drasil couldn't record its final status. Please ask a moderator to review this thread."
+            : "Drasil couldn't finish submitting this report. Please ask a moderator to review this thread.",
+        })
+        .catch((replyError: unknown) =>
+          console.warn('Failed to deliver report outcome:', replyError)
+        );
     }
   }
 
@@ -304,34 +331,32 @@ export class ReportInteractionHandler {
         return;
       }
 
-      const guildId = interaction.guildId;
-      if (!guildId) {
-        await interaction.editReply({ content: 'Report answers can only be used in a server.' });
-        return;
-      }
-
-      const guild = await this.client.guilds.fetch(guildId);
+      const context = await this.resolveReportConfirmationContext(interaction, intakeId);
+      if (!context) return;
 
       const result = await this.reportIntakeService.rejectCandidates({
         intakeId,
         rejectedById: interaction.user.id,
         promptToken,
-        rejectedByStaff: await canModerateReportIntake(
-          guild,
-          interaction.user.id,
-          this.configService
-        ),
+        rejectedByStaff: context.canModerate,
+        promptMessageId: interaction.message.id,
       });
-      await interaction.editReply({ content: result.message });
+      await interaction.editReply({ content: result.message }).catch((error: unknown) => {
+        console.warn('Failed to deliver report selection result:', error);
+      });
 
       if (result.rejected) {
         const threadChannel = this.getThreadChannel(interaction.channel);
         if (threadChannel) {
-          await threadChannel.send({
-            content:
-              'I will not submit that target. Please add more context, a Discord ID, a message link, or another screenshot if you want me to keep looking.',
-            allowedMentions: { parse: [] },
-          });
+          await threadChannel
+            .send({
+              content:
+                'No report submitted. Add a username, user ID, message link, or another screenshot.',
+              allowedMentions: { parse: [] },
+            })
+            .catch((error: unknown) => {
+              console.warn('Failed to deliver saved report rejection follow-up:', error);
+            });
         }
       }
     } catch (error) {
@@ -443,14 +468,11 @@ export class ReportInteractionHandler {
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
+    let reportSubmitted = false;
     try {
-      const targetUser = await this.client.users.fetch(targetUserId).catch(
-        () =>
-          ({
-            id: targetUserId,
-            username: targetUserId,
-          }) as User
-      );
+      const fetchedTargetUser = await this.client.users.fetch(targetUserId).catch(() => null);
+      const targetUser =
+        fetchedTargetUser ?? ({ id: targetUserId, username: targetUserId } as User);
       const message = await this.fetchReportMessage(channelId, messageId);
       const contextNumber = Number(contextRaw);
       const interactionContext =
@@ -477,15 +499,24 @@ export class ReportInteractionHandler {
         throw submission.error;
       }
 
+      reportSubmitted = true;
       await interaction.editReply({
-        content: `Thank you for your report regarding <@${targetUserId}>. It has been submitted for review.`,
+        content: fetchedTargetUser?.username
+          ? `Report submitted for @${formatInlineIdentifier(fetchedTargetUser.username)}.`
+          : `Report submitted for user ${formatInlineIdentifier(targetUserId)}.`,
         allowedMentions: { parse: [] },
       });
     } catch (error) {
       console.error(`Failed to handle message report modal for ${targetUserId}:`, error);
-      await interaction.editReply({
-        content: 'An error occurred while submitting your report. Please try again later.',
-      });
+      await interaction
+        .editReply({
+          content: reportSubmitted
+            ? 'Report submitted.'
+            : "Drasil couldn't finish submitting this report. Please ask a moderator to review it.",
+        })
+        .catch((replyError: unknown) =>
+          console.warn('Failed to deliver direct report outcome:', replyError)
+        );
     }
   }
 
@@ -498,6 +529,7 @@ export class ReportInteractionHandler {
       return;
     }
 
+    let reportSubmitted = false;
     try {
       const targetUserInputString = interaction.fields.getTextInputValue(
         REPORT_USER_TARGET_FIELD_ID
@@ -583,28 +615,124 @@ export class ReportInteractionHandler {
         throw submission.error;
       }
 
+      reportSubmitted = true;
       await interaction.editReply({
-        content: `Thank you for your report regarding <@${targetUserId}>. It has been submitted for review.`,
+        content: submission.targetUsername
+          ? `Report submitted for @${formatInlineIdentifier(submission.targetUsername)}.`
+          : `Report submitted for user ${formatInlineIdentifier(targetUserId)}.`,
         allowedMentions: { parse: [] },
       });
     } catch (error) {
       console.error('[ReportInteractionHandler] Error handling report modal submission:', error);
       if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({
-          content: 'An error occurred while submitting your report. Please try again later.',
-          flags: MessageFlags.Ephemeral,
-        });
+        await interaction
+          .reply({
+            content: reportSubmitted
+              ? 'Report submitted.'
+              : "Drasil couldn't finish submitting this report. Please ask a moderator to review it.",
+            flags: MessageFlags.Ephemeral,
+          })
+          .catch((replyError: unknown) =>
+            console.warn('Failed to deliver direct report outcome:', replyError)
+          );
       } else if (interaction.deferred) {
-        await interaction.editReply({
-          content: 'An error occurred while submitting your report. Please try again later.',
-        });
+        await interaction
+          .editReply({
+            content: reportSubmitted
+              ? 'Report submitted.'
+              : "Drasil couldn't finish submitting this report. Please ask a moderator to review it.",
+          })
+          .catch((replyError: unknown) =>
+            console.warn('Failed to deliver direct report outcome:', replyError)
+          );
       } else {
-        await interaction.followUp({
-          content: 'An error occurred while submitting your report. Please try again later.',
-          flags: MessageFlags.Ephemeral,
-        });
+        await interaction
+          .followUp({
+            content: reportSubmitted
+              ? 'Report submitted.'
+              : "Drasil couldn't finish submitting this report. Please ask a moderator to review it.",
+            flags: MessageFlags.Ephemeral,
+          })
+          .catch((replyError: unknown) =>
+            console.warn('Failed to deliver direct report outcome:', replyError)
+          );
       }
     }
+  }
+
+  private async resolveReportConfirmationContext(
+    interaction: ButtonInteraction,
+    intakeId: string
+  ): Promise<{ intake: ReportIntake; guild: Guild; canModerate: boolean } | null> {
+    const intake = await this.reportIntakeService?.findIntakeById(intakeId);
+    if (!intake || !interaction.guildId || intake.server_id !== interaction.guildId) {
+      await interaction.editReply({ content: 'This report could not be found.' });
+      return null;
+    }
+    if (
+      !this.client.user ||
+      interaction.message.author.id !== this.client.user.id ||
+      interaction.channelId !== intake.thread_id ||
+      interaction.channel?.id !== intake.thread_id ||
+      !this.getThreadChannel(interaction.channel)
+    ) {
+      await interaction.editReply({
+        content: 'This confirmation does not match the report thread.',
+      });
+      return null;
+    }
+    const guild =
+      (interaction.guild as Guild | null) ?? (await this.client.guilds.fetch(interaction.guildId));
+    const canModerate =
+      intake.reporter_id === interaction.user.id
+        ? false
+        : await canModerateReportIntake(guild, interaction.user.id, this.configService);
+    if (intake.reporter_id !== interaction.user.id && !canModerate) {
+      await interaction.editReply({
+        content: 'Only the reporter or a moderator can change this selection.',
+      });
+      return null;
+    }
+    const stateUnavailable = getReportConfirmationUnavailableMessage(intake);
+    const enabledControl = interaction.message.components.some(
+      (row) =>
+        row.type === ComponentType.ActionRow &&
+        row.components.some(
+          (button) =>
+            button.type === ComponentType.Button &&
+            'customId' in button &&
+            button.customId === interaction.customId &&
+            !button.disabled
+        )
+    );
+    if (!stateUnavailable && !enabledControl) {
+      await interaction.editReply({
+        content: 'Use the latest confirmation message in this thread.',
+      });
+      return null;
+    }
+    const metadata = intake.metadata;
+    const currentId =
+      metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+        ? metadata.last_confirmation_prompt_message_id
+        : null;
+    const stalePrompt = typeof currentId === 'string' && currentId !== interaction.message.id;
+    const unavailable =
+      stateUnavailable ??
+      (stalePrompt ? 'Use the latest confirmation message in this thread.' : null);
+    if (unavailable) {
+      const ids = stalePrompt
+        ? [interaction.message.id]
+        : getReportConfirmationMessageIds(intake, interaction.message.id);
+      await this.threadManager
+        .retireReportConfirmationPrompts(intake, ids)
+        .catch((error: unknown) =>
+          console.warn('Failed to retire stale report confirmation:', error)
+        );
+      await interaction.editReply({ content: unavailable });
+      return null;
+    }
+    return { intake, guild, canModerate };
   }
 
   private async resolveReportIntakeAdminContext(
@@ -707,20 +835,30 @@ export class ReportInteractionHandler {
     interaction: ButtonInteraction,
     intake: ReportIntake
   ): Promise<void> {
+    const unselected =
+      !intake.confirmed_target_user_id &&
+      (intake.status === ReportIntakeStatus.COLLECTING_EVIDENCE ||
+        intake.status === ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION);
+    const consequence = unselected
+      ? 'No report has been submitted.'
+      : intake.status === ReportIntakeStatus.SUBMITTED
+        ? 'The submitted report will remain recorded.'
+        : intake.confirmed_target_user_id
+          ? 'The selected person and saved evidence will remain recorded.'
+          : 'Saved evidence will remain recorded.';
     await this.respondToReportIntakeAdminInteraction(
       interaction,
       {
-        content:
-          'Close this report intake thread? The reporter will see the closeout message and the thread will be archived.',
+        content: `Close this report thread? ${consequence}`,
         components: [
           new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder()
               .setCustomId(buildReportIntakeAdminConfirmCloseCustomId(intake.id))
-              .setLabel('Confirm Close Report')
+              .setLabel('Close report')
               .setStyle(ButtonStyle.Danger),
             new ButtonBuilder()
               .setCustomId(buildReportIntakeAdminCancelCustomId(intake.id))
-              .setLabel('Cancel')
+              .setLabel('Keep open')
               .setStyle(ButtonStyle.Secondary)
           ),
         ],
@@ -780,12 +918,6 @@ export class ReportInteractionHandler {
       return false;
     }
 
-    await this.respondToReportIntakeAdminInteraction(
-      interaction,
-      { content: 'Report intake closed.', components: [] },
-      'update'
-    );
-
     await context.thread
       .send({
         content: result.message,
@@ -798,10 +930,18 @@ export class ReportInteractionHandler {
         );
       });
 
-    if (result.shouldArchiveThread) {
-      await this.archiveReportIntakeThread(context.thread, 'Report intake closed');
-    }
-
+    const archived = result.shouldArchiveThread
+      ? await this.archiveReportIntakeThread(context.thread, 'Report intake closed')
+      : false;
+    const acknowledgement =
+      result.shouldArchiveThread && !archived
+        ? `${result.message}\nDrasil couldn't archive this thread.`
+        : result.message;
+    await this.respondToReportIntakeAdminInteraction(
+      interaction,
+      { content: acknowledgement, components: [] },
+      'update'
+    ).catch((error: unknown) => console.warn('Failed to deliver report closeout:', error));
     return true;
   }
 
@@ -912,14 +1052,13 @@ export class ReportInteractionHandler {
   private buildExistingReportIntakeMessage(guildId: string, threadId: string | null): string {
     // Threads opened before the Close Report button shipped do not have one, so always offer the
     // text fallback as well.
-    const cancelHint =
-      'If it was opened by mistake, use the Close Report button there or send `close report` in the thread.';
+    const cancelHint = 'To cancel, choose Close Report or send `close report` in that thread.';
 
     if (threadId) {
-      return `You already have an open report thread: https://discord.com/channels/${guildId}/${threadId}\nPlease continue there. ${cancelHint}`;
+      return `Continue your report here: https://discord.com/channels/${guildId}/${threadId}\n${cancelHint}`;
     }
 
-    return `You already have an open report intake. Please continue in the existing report thread. ${cancelHint}`;
+    return `Continue in your existing report thread. ${cancelHint}`;
   }
 
   private async deleteFailedReportIntakeThread(thread: ThreadChannel): Promise<void> {
@@ -931,15 +1070,17 @@ export class ReportInteractionHandler {
   }
 
   private async archiveReportIntakeThread(
-    thread: Pick<ThreadChannel, 'id'> & Partial<Pick<ThreadChannel, 'archived' | 'setArchived'>>,
+    thread: ReportIntakeThreadChannel,
     reason: string
-  ): Promise<void> {
+  ): Promise<boolean> {
+    if (thread.archived) return true;
+    if (typeof thread.setArchived !== 'function') return false;
     try {
-      if (!thread.archived && typeof thread.setArchived === 'function') {
-        await thread.setArchived(true, reason);
-      }
+      await thread.setArchived(true, reason);
+      return true;
     } catch (error) {
       console.warn(`Failed to archive report intake thread ${thread.id}:`, error);
+      return false;
     }
   }
 
@@ -1003,7 +1144,9 @@ export class ReportInteractionHandler {
   }
 
   private formatReportTargetLabel(member: GuildMember): string {
-    return formatDiscordUserIdentity(member);
+    return member.user.username?.trim()
+      ? `@${formatInlineIdentifier(member.user.username)}`
+      : `user ${formatInlineIdentifier(member.id)}`;
   }
 
   private async fetchReportMessage(

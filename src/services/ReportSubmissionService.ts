@@ -11,7 +11,7 @@ import {
 } from './SecurityActionService';
 
 export type UserReportSubmissionResult =
-  | { status: 'submitted'; targetUserId: string }
+  | { status: 'submitted'; targetUserId: string; targetUsername?: string }
   | { status: 'self_report' }
   | { status: 'reason_required' }
   | { status: 'member_not_found'; label: string }
@@ -82,7 +82,11 @@ export class ReportSubmissionService {
       } else {
         await this.securityActionService.handleUserReport(member, reporter, reason);
       }
-      return { status: 'submitted', targetUserId: member.id };
+      return {
+        status: 'submitted',
+        targetUserId: member.id,
+        ...(member.user?.username ? { targetUsername: member.user.username } : {}),
+      };
     } catch (error) {
       return { status: 'failed', error };
     }

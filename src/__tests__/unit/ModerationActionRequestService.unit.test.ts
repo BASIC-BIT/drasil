@@ -824,7 +824,7 @@ describe('ModerationActionRequestService', () => {
     const reportIntakeService = {
       closeIntakeForThread: jest.fn(async () => ({
         closed: true,
-        message: 'Report intake closed. No report has been filed.',
+        message: 'Report cancelled. No report was submitted.',
         shouldArchiveThread: true,
       })),
       findIntakeById: jest.fn(async () => ({
@@ -1386,7 +1386,7 @@ describe('ModerationActionRequestService', () => {
     });
     expect(reportIntakeThread.send).toHaveBeenCalledWith({
       allowedMentions: { parse: [] },
-      content: 'Report intake closed. No report has been filed.',
+      content: 'Report cancelled. No report was submitted.',
     });
     expect(reportIntakeThread.setArchived).toHaveBeenCalledWith(true, 'Report intake closed');
     expect(repository.completed).toEqual([
@@ -1403,6 +1403,33 @@ describe('ModerationActionRequestService', () => {
       },
     ]);
     expect(repository.failed).toEqual([]);
+  });
+
+  it('records the actual failed archive without failing the saved report closeout', async () => {
+    const { reportIntakeThread, repository, service } = buildService([closeReportIntakeRequest]);
+    reportIntakeThread.setArchived.mockRejectedValueOnce(new Error('archive denied'));
+    await service.processPendingRequests();
+    expect(repository.completed).toContainEqual(
+      expect.objectContaining({
+        result: expect.objectContaining({
+          closed: true,
+          thread_archived: false,
+          message:
+            "Report cancelled. No report was submitted.\nDrasil couldn't archive this thread.",
+        }),
+      })
+    );
+    expect(repository.failed).toEqual([]);
+  });
+
+  it('recognizes an already archived report thread', async () => {
+    const { reportIntakeThread, repository, service } = buildService([closeReportIntakeRequest]);
+    reportIntakeThread.archived = true;
+    await service.processPendingRequests();
+    expect(reportIntakeThread.setArchived).not.toHaveBeenCalled();
+    expect(repository.completed).toContainEqual(
+      expect.objectContaining({ result: expect.objectContaining({ thread_archived: true }) })
+    );
   });
 
   it('fails invalid manual-flag requests without calling moderation side effects', async () => {

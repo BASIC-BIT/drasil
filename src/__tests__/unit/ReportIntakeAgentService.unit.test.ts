@@ -1,3 +1,4 @@
+import type { IThreadManager } from '../../services/ThreadManager';
 import { createTracingRecorder } from '../fakes/recordingTracing';
 import { withObservation } from '../../observability/langfuse';
 import { GuildMember, Message, User } from 'discord.js';
@@ -42,6 +43,8 @@ const buildCandidate = (discordUserId = 'user-1'): ReportCandidate => ({
   confirmationRequired: false,
 });
 
+const buildPrompt = (id = 'prompt-1') => ({ id, edit: jest.fn().mockResolvedValue(undefined) });
+
 const buildMessage = (overrides: Record<string, unknown> = {}): Message =>
   ({
     id: 'message-1',
@@ -51,7 +54,7 @@ const buildMessage = (overrides: Record<string, unknown> = {}): Message =>
     channel: {
       id: 'thread-1',
       isThread: jest.fn().mockReturnValue(true),
-      send: jest.fn().mockResolvedValue(undefined),
+      send: jest.fn().mockResolvedValue(buildPrompt()),
     },
     author: { id: 'reporter-1', bot: false },
     attachments: {
@@ -118,7 +121,10 @@ describe('ReportIntakeAgentService', () => {
       userRepository,
       serverMemberRepository,
       configService,
-      candidateService
+      candidateService,
+      {
+        retireReportConfirmationPrompts: jest.fn().mockResolvedValue(undefined),
+      } as unknown as IThreadManager
     );
     const agentService = new ReportIntakeAgentService(
       reportIntakeRepository,
@@ -169,7 +175,7 @@ describe('ReportIntakeAgentService', () => {
     });
     expect((message.channel as any).send).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: expect.stringContaining('Are you trying to report this person?'),
+        content: expect.stringContaining('Report this person?'),
       })
     );
   });
@@ -341,7 +347,7 @@ describe('ReportIntakeAgentService', () => {
           channel: {
             id: `thread-${id}`,
             isThread: () => true,
-            send: jest.fn().mockResolvedValue(undefined),
+            send: jest.fn().mockResolvedValue(buildPrompt()),
           },
         })
       );

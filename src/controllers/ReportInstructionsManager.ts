@@ -700,14 +700,10 @@ export class ReportInstructionsManager {
       .setColor(0x0099ff)
       .setTitle('Report a User')
       .setDescription(
-        'If you see a user violating server rules or engaging in suspicious activity, ' +
-          'use the button below to open a private report thread and add context. ' +
-          'You can also use `/report user:<user>`, right-click a user and choose ' +
-          '`Apps` -> `Report User`, or right-click a message and choose ' +
-          '`Apps` -> `Report Message` so Drasil can include message evidence. ' +
-          'Your report will be reviewed by the moderation team.'
-      )
-      .setFooter({ text: 'Your reports help keep the community safe!' });
+        'Report a rule violation or suspicious activity. Open a private thread to explain what happened and add evidence.\n\n' +
+          'Report a message: right-click it, then choose `Apps > Report Message`.\n' +
+          'Report a person: use `/report` or `Apps > Report User`.'
+      );
 
     // Create the button
     const reportButton = new ButtonBuilder()

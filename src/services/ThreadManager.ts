@@ -11,11 +11,12 @@ import {
   ThreadChannel,
   ThreadAutoArchiveDuration,
   ChannelType,
+  ComponentType,
   PermissionFlagsBits,
 } from 'discord.js';
 import { IConfigService } from '../config/ConfigService';
 import { TYPES } from '../di/symbols';
-import { VerificationStatus, VerificationEvent } from '../repositories/types';
+import { VerificationStatus, VerificationEvent, ReportIntake } from '../repositories/types';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import { IUserRepository } from '../repositories/UserRepository';
 import { IServerRepository } from '../repositories/ServerRepository';
@@ -33,6 +34,10 @@ import {
   buildReportIntakeAdminActionsCustomId,
   buildReportIntakeThreadCloseCustomId,
 } from '../utils/reportIntakeAdminActions';
+import {
+  REPORT_INTAKE_CONFIRM_CUSTOM_ID_PREFIX,
+  REPORT_INTAKE_REJECT_CUSTOM_ID_PREFIX,
+} from './ReportIntakeService';
 import { getDiscordErrorCode } from '../utils/discordErrors';
 
 export const VERIFICATION_THREAD_TYPE_METADATA_KEY = 'thread_type';
@@ -81,6 +86,11 @@ interface UserSnapshotMetadata {
  * Interface for NotificationManager service
  */
 export interface IThreadManager {
+  retireReportConfirmationPrompts(
+    intake: ReportIntake,
+    messageIds: readonly string[]
+  ): Promise<void>;
+
   /**
    * Creates a thread for a suspicious user in the verification channel
    * @param member The suspicious guild member
@@ -178,6 +188,60 @@ export class ThreadManager implements IThreadManager {
   private serverRepository: IServerRepository;
   private serverMemberRepository: IServerMemberRepository;
   private readonly presentationBuilder = new NotificationPresentationBuilder();
+
+  async retireReportConfirmationPrompts(
+    intake: ReportIntake,
+    messageIds: readonly string[]
+  ): Promise<void> {
+    if (!intake.thread_id || !this.client.user || messageIds.length === 0) return;
+    const thread = await this.client.channels.fetch(intake.thread_id).catch(() => null);
+    if (
+      !thread?.isThread() ||
+      thread.id !== intake.thread_id ||
+      thread.guildId !== intake.server_id
+    )
+      return;
+    const botId = this.client.user.id;
+    for (const messageId of new Set(messageIds)) {
+      try {
+        const message = await thread.messages.fetch({ message: messageId, force: true });
+        if (
+          message.id !== messageId ||
+          message.author.id !== botId ||
+          message.guildId !== intake.server_id ||
+          message.channelId !== intake.thread_id ||
+          message.components.length === 0
+        )
+          continue;
+        const onlyThisPrompt = message.components.every(
+          (row) =>
+            row.type === ComponentType.ActionRow &&
+            row.components.length > 0 &&
+            row.components.every((button) => {
+              if (
+                button.type !== ComponentType.Button ||
+                !('customId' in button) ||
+                !button.customId
+              )
+                return false;
+              const parts = button.customId.split(':');
+              return (
+                parts.length === 3 &&
+                parts[1] === intake.id &&
+                Boolean(parts[2]) &&
+                [
+                  REPORT_INTAKE_CONFIRM_CUSTOM_ID_PREFIX,
+                  REPORT_INTAKE_REJECT_CUSTOM_ID_PREFIX,
+                ].includes(parts[0])
+              );
+            })
+        );
+        if (onlyThisPrompt) await message.edit({ components: [] });
+      } catch (error) {
+        console.warn(`Failed to retire report confirmation ${messageId}:`, error);
+      }
+    }
+  }
 
   constructor(
     @inject(TYPES.DiscordClient) client: Client,
@@ -401,20 +465,10 @@ export class ThreadManager implements IThreadManager {
     };
   }
 
-  private buildReportIntakeThreadMessage(reporter: GuildMember): string {
-    return enforceDiscordMessageLimit(
-      [
-        `Thanks <@${reporter.id}>. Add what happened here.`,
-        '',
-        'Useful context includes:',
-        '- who or what you are reporting',
-        '- message links, screenshots, usernames, user IDs, or mentions',
-        '- what happened and why it looked suspicious',
-        '',
-        'Drasil will suggest possible report targets and ask for confirmation before submitting anything.',
-        '',
-        'If this was opened by mistake, use the Close Report button on this message.',
-      ].join('\n')
+  private buildReportIntakeThreadMessage(): string {
+    return (
+      'Describe what happened and who you want to report. Add a message link, screenshot, @mention, username, or user ID.\n\n' +
+      "You'll confirm the person before submitting. To cancel, choose Close Report."
     );
   }
 
@@ -1283,7 +1337,7 @@ export class ThreadManager implements IThreadManager {
         : [];
 
       await thread.send({
-        content: this.buildReportIntakeThreadMessage(reporter),
+        content: this.buildReportIntakeThreadMessage(),
         ...(components.length ? { components } : {}),
         allowedMentions: {
           parse: [],

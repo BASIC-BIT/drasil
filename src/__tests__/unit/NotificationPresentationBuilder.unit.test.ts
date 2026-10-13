@@ -115,6 +115,17 @@ const getField = (embed: EmbedBuilder, name: string): string | undefined =>
   embed.data.fields?.find((field) => field.name === name)?.value;
 
 describe('NotificationPresentationBuilder (unit)', () => {
+  it('describes the report-opened notice as a historical event', () => {
+    const embed = new NotificationPresentationBuilder()
+      .createReportIntakeStartedEmbed(buildMember(), {
+        id: 'thread-1',
+        url: 'https://discord.com/channels/guild-1/thread-1',
+      } as ThreadChannel)
+      .toJSON();
+    expect(embed.description).toBe(
+      '<@user-1> opened a private report thread. No report was submitted when the thread opened.'
+    );
+  });
   const builder = new NotificationPresentationBuilder();
   const originalDrasilWebPublicUrl = process.env.DRASIL_WEB_PUBLIC_URL;
   const originalNextPublicAppUrl = process.env.NEXT_PUBLIC_APP_URL;

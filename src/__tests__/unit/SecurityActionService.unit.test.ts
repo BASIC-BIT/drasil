@@ -115,6 +115,7 @@ describe('SecurityActionService (unit)', () => {
       restoreObservedDetectionActions: jest.fn().mockResolvedValue(true),
     };
     threadManager = {
+      retireReportConfirmationPrompts: jest.fn().mockResolvedValue(undefined),
       retractCaptchaChallenge: jest.fn().mockResolvedValue(true),
       sendCaptchaChallenge: jest.fn().mockResolvedValue('captcha-message-1'),
       sendCaptchaStatus: jest.fn().mockResolvedValue(true),
@@ -1952,6 +1953,7 @@ describe('SecurityActionService (unit)', () => {
       consoleError.mockRestore();
     }
 
+    expect(await detectionEventsRepository.findByServerAndUser(guildId, userId)).toHaveLength(1);
     expect(threadManager.createReportReviewThread).not.toHaveBeenCalled();
     expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
   });
@@ -3458,6 +3460,18 @@ describe('SecurityActionService (unit)', () => {
       reportIntakeRepository
     );
 
+    const readIntake = reportIntakeRepository.findById.bind(reportIntakeRepository);
+    jest.spyOn(reportIntakeRepository, 'findById').mockImplementationOnce(async (id) => {
+      const snapshot = await readIntake(id);
+      await reportIntakeRepository.update(id, {
+        metadata: {
+          ...(snapshot?.metadata as Record<string, unknown>),
+          thread_closed_by: 'concurrent-worker',
+        },
+      });
+      return snapshot;
+    });
+
     const undoneAction = await service.undoObservedDetectionAction(
       guildId,
       userId,
@@ -3470,6 +3484,7 @@ describe('SecurityActionService (unit)', () => {
     expect(stored?.status).toBe(ReportIntakeStatus.SUBMITTED);
     expect(stored?.closed_at).toBeNull();
     expect(stored?.metadata).toMatchObject({
+      thread_closed_by: 'concurrent-worker',
       observed_action_reopened_by: moderator.id,
       observed_action_reopen_reason: 'observed_dismiss_undo',
     });
@@ -3478,7 +3493,7 @@ describe('SecurityActionService (unit)', () => {
     expect(metadata.observed_action_close_reason).toBeUndefined();
     expect(reportThread.setArchived).toHaveBeenCalledWith(false, 'Report intake reopened');
     expect(reportThread.send).toHaveBeenCalledWith({
-      content: 'Report reopened. Moderators restored this intake for review.',
+      content: 'Report reopened for moderator review.',
       allowedMentions: { parse: [] },
     });
   });
@@ -3961,17 +3976,29 @@ describe('SecurityActionService (unit)', () => {
       metadata: { reportIntakeId: intake.id },
     });
 
+    const readIntake = reportIntakeRepository.findById.bind(reportIntakeRepository);
+    jest.spyOn(reportIntakeRepository, 'findById').mockImplementationOnce(async (id) => {
+      const snapshot = await readIntake(id);
+      await reportIntakeRepository.update(id, {
+        metadata: {
+          ...(snapshot?.metadata as Record<string, unknown>),
+          submitted_by: 'concurrent-worker',
+        },
+      });
+      return snapshot;
+    });
+
     await service.banObservedDetection(member, detectionEvent.id, moderator, 'Confirmed scam');
 
     const stored = await reportIntakeRepository.findById(intake.id);
     expect(stored?.status).toBe(ReportIntakeStatus.ACTIONED);
     expect(stored?.metadata).toMatchObject({
+      submitted_by: 'concurrent-worker',
       observed_action_closed_by: moderator.id,
       observed_action_close_reason: 'observed_ban',
     });
     expect(reportThread.send).toHaveBeenCalledWith({
-      content:
-        'Report reviewed. Moderators have completed this intake, so this thread is now closed.',
+      content: 'Moderators have reviewed this report.',
       allowedMentions: { parse: [] },
     });
     expect(reportThread.setArchived).toHaveBeenCalledWith(true, 'Report intake reviewed');

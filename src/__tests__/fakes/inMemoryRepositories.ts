@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'util';
 import type { IAdminActionRepository } from '../../repositories/AdminActionRepository';
 import type { IDetectionEventsRepository } from '../../repositories/DetectionEventsRepository';
 import type { IServerMemberRepository } from '../../repositories/ServerMemberRepository';
@@ -1549,15 +1550,35 @@ export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
     return { ...updated };
   }
 
+  async updateIfCurrent(
+    intake: ReportIntake,
+    data: ReportIntakeUpdate
+  ): Promise<ReportIntake | null> {
+    const current = this.intakes.find((item) => item.id === intake.id);
+    if (
+      !current ||
+      current.status !== intake.status ||
+      current.confirmed_target_user_id !== intake.confirmed_target_user_id ||
+      !isDeepStrictEqual(current.metadata, intake.metadata)
+    )
+      return null;
+    return this.update(intake.id, data);
+  }
+
   async confirmTargetIfUnset(
     id: string,
-    data: { targetUserId: string; metadata: Record<string, unknown> }
+    data: {
+      targetUserId: string;
+      expectedMetadata: ReportIntake['metadata'];
+      metadata: Record<string, unknown>;
+    }
   ): Promise<ReportIntake | null> {
     const index = this.intakes.findIndex(
       (item) =>
         item.id === id &&
         item.status === ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION &&
-        item.confirmed_target_user_id === null
+        item.confirmed_target_user_id === null &&
+        isDeepStrictEqual(item.metadata, data.expectedMetadata)
     );
     if (index === -1) {
       return null;

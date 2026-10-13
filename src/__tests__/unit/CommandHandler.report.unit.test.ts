@@ -1,4 +1,10 @@
-import { ChannelType, InteractionContextType, MessageFlags } from 'discord.js';
+import {
+  ChannelType,
+  ChatInputCommandInteraction,
+  UserContextMenuCommandInteraction,
+  InteractionContextType,
+  MessageFlags,
+} from 'discord.js';
 import {
   ReportInstructionsError,
   ReportInstructionsManager,
@@ -9,6 +15,94 @@ import { buildHandler, restoreUserInstallReportingEnvAfterEach } from './command
 
 describe('CommandHandler report commands (unit)', () => {
   restoreUserInstallReportingEnvAfterEach();
+
+  it.each(
+    ['slash', 'user context'].flatMap((route) =>
+      ['receipt', 'routing'].map((failure) => [route, failure])
+    )
+  )('preserves direct %s outcome when %s fails after saving evidence', async (route, failure) => {
+    const saved: string[] = [];
+    const handleUserReport = jest.fn(async () => {
+      saved.push('detection');
+      if (failure === 'routing') throw new Error('delivery failed after saving detection');
+    });
+    const { handler } = buildHandler({ handleUserReport });
+    const targetUser = { id: 'user-2', username: 'target' };
+    const interaction = {
+      commandName: route === 'slash' ? 'report' : 'Report User',
+      user: { id: 'reporter-1' },
+      targetUser,
+      guild: { id: 'guild-1', members: { fetch: jest.fn().mockResolvedValue({ id: 'user-2' }) } },
+      options: {
+        getUser: jest.fn().mockReturnValue(targetUser),
+        getString: jest.fn().mockReturnValue('reported'),
+      },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+    };
+    if (failure === 'receipt')
+      interaction.editReply.mockRejectedValueOnce(new Error('receipt failed'));
+    if (route === 'slash')
+      await handler.handleSlashCommand(interaction as unknown as ChatInputCommandInteraction);
+    else
+      await handler.handleUserContextMenuCommand(
+        interaction as unknown as UserContextMenuCommandInteraction
+      );
+    expect(handleUserReport).toHaveBeenCalledTimes(1);
+    expect(saved).toEqual(['detection']);
+    if (failure === 'routing')
+      expect(interaction.editReply).toHaveBeenCalledWith({
+        content:
+          "Drasil couldn't finish submitting this report. Please ask a moderator to review it.",
+      });
+    else
+      expect(
+        [...interaction.editReply.mock.calls, ...interaction.reply.mock.calls].some(([payload]) =>
+          /error occurred|couldn't finish submitting|try again/i.test(payload.content)
+        )
+      ).toBe(false);
+  });
+
+  it.each(
+    ['slash', 'user context'].flatMap((route) =>
+      [true, false].map((hasUsername) => [route, hasUsername])
+    )
+  )(
+    'direct %s receipt uses the resolved username when available: %s',
+    async (route, hasUsername) => {
+      const { handler } = buildHandler({ handleUserReport: jest.fn().mockResolvedValue(true) });
+      const targetUser = { id: 'user-2', username: 'picker-label' };
+      const targetMember = { id: 'user-2', user: { username: hasUsername ? 'tar`get' : '' } };
+      const fetch = jest.fn().mockResolvedValue(targetMember);
+      const interaction = {
+        commandName: route === 'slash' ? 'report' : 'Report User',
+        user: { id: 'reporter-1' },
+        targetUser,
+        guild: { id: 'guild-1', members: { fetch } },
+        options: {
+          getUser: jest.fn().mockReturnValue(targetUser),
+          getString: jest.fn().mockReturnValue('reported'),
+        },
+        deferReply: jest.fn().mockResolvedValue(undefined),
+        editReply: jest.fn().mockResolvedValue(undefined),
+        reply: jest.fn().mockResolvedValue(undefined),
+      };
+      if (route === 'slash')
+        await handler.handleSlashCommand(interaction as unknown as ChatInputCommandInteraction);
+      else
+        await handler.handleUserContextMenuCommand(
+          interaction as unknown as UserContextMenuCommandInteraction
+        );
+      expect(interaction.editReply).toHaveBeenCalledWith({
+        content: hasUsername
+          ? "Report submitted for @`tar'get`."
+          : 'Report submitted for user `user-2`.',
+        allowedMentions: { parse: [] },
+      });
+      expect(fetch).toHaveBeenCalledTimes(1);
+    }
+  );
 
   it('handles /report with Discord user picker target', async () => {
     const handleUserReport = jest.fn().mockResolvedValue(true);
@@ -45,7 +139,7 @@ describe('CommandHandler report commands (unit)', () => {
     );
     expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
     expect(interaction.editReply).toHaveBeenCalledWith({
-      content: 'Thank you for your report regarding <@user-2>. It has been submitted for review.',
+      content: 'Report submitted for user `user-2`.',
       allowedMentions: { parse: [] },
     });
   });
@@ -86,7 +180,7 @@ describe('CommandHandler report commands (unit)', () => {
       undefined
     );
     expect(interaction.editReply).toHaveBeenCalledWith({
-      content: 'Thank you for your report regarding <@user-2>. It has been submitted for review.',
+      content: 'Report submitted for user `user-2`.',
       allowedMentions: { parse: [] },
     });
     consoleError.mockRestore();
@@ -200,7 +294,7 @@ describe('CommandHandler report commands (unit)', () => {
     );
     expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
     expect(interaction.editReply).toHaveBeenCalledWith({
-      content: 'Thank you for your report regarding <@user-2>. It has been submitted for review.',
+      content: 'Report submitted for user `user-2`.',
       allowedMentions: { parse: [] },
     });
   });
@@ -408,7 +502,9 @@ describe('CommandHandler report commands (unit)', () => {
     const messagePayload = (existingMessage.edit as jest.Mock).mock.calls[0][0] as any;
     const embedJson = messagePayload.embeds[0].toJSON();
     expect(embedJson.title).toBe('Report a User');
-    expect(embedJson.description).toContain('open a private report thread');
+    expect(embedJson.description).toContain(
+      'Open a private thread to explain what happened and add evidence.'
+    );
     expect(embedJson.description).not.toContain('picker');
     const buttonJson = messagePayload.components[0].toJSON().components[0];
     expect(buttonJson).toMatchObject({

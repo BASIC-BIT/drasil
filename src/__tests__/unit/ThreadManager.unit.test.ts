@@ -1,4 +1,4 @@
-import { ChannelType, Guild, GuildMember, ThreadChannel, User } from 'discord.js';
+import { ChannelType, Client, Guild, GuildMember, ThreadChannel, User } from 'discord.js';
 import {
   CASE_STAFF_ROUTING_METADATA_KEY,
   REPORT_REVIEW_THREAD_TYPE,
@@ -13,7 +13,12 @@ import {
   InMemoryUserRepository,
   InMemoryVerificationEventRepository,
 } from '../fakes/inMemoryRepositories';
-import { DetectionType, VerificationEvent, VerificationStatus } from '../../repositories/types';
+import {
+  DetectionType,
+  ReportIntake,
+  VerificationEvent,
+  VerificationStatus,
+} from '../../repositories/types';
 import {
   DISCORD_MESSAGE_CONTENT_MAX_LENGTH,
   DEFAULT_VERIFICATION_PROMPT_TEMPLATE,
@@ -135,6 +140,63 @@ describe('ThreadManager (unit)', () => {
     userRepository = new InMemoryUserRepository();
     serverRepository = new InMemoryServerRepository();
     serverMemberRepository = new InMemoryServerMemberRepository();
+  });
+
+  it.each([
+    'valid',
+    'foreign author',
+    'foreign guild',
+    'foreign thread',
+    'mixed controls',
+    'foreign intake',
+  ])('retires only scoped bot confirmation controls: %s', async (variant) => {
+    const edit = jest.fn().mockResolvedValue(undefined);
+    const message = {
+      id: 'prompt-1',
+      guildId: variant === 'foreign guild' ? 'other-guild' : 'guild-1',
+      channelId: variant === 'foreign thread' ? 'other-thread' : 'thread-1',
+      author: { id: variant === 'foreign author' ? 'other-bot' : 'bot-1' },
+      components: [
+        {
+          type: 1,
+          components: [
+            {
+              type: 2,
+              customId: `report_intake_confirm:${variant === 'foreign intake' ? 'other-intake' : 'intake-1'}:user-1`,
+            },
+            ...(variant === 'mixed controls' ? [{ type: 2, customId: 'unrelated_action' }] : []),
+          ],
+        },
+      ],
+      edit,
+    };
+    const fetch = jest.fn().mockResolvedValue(message);
+    const client = {
+      user: { id: 'bot-1' },
+      channels: {
+        fetch: jest.fn().mockResolvedValue({
+          id: 'thread-1',
+          guildId: 'guild-1',
+          isThread: () => true,
+          messages: { fetch },
+        }),
+      },
+    };
+    const manager = new ThreadManager(
+      client as unknown as Client,
+      configService,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      serverMemberRepository
+    );
+    await manager.retireReportConfirmationPrompts(
+      { id: 'intake-1', thread_id: 'thread-1', server_id: 'guild-1' } as ReportIntake,
+      ['prompt-1']
+    );
+    expect(fetch).toHaveBeenCalledWith({ message: 'prompt-1', force: true });
+    if (variant === 'valid') expect(edit).toHaveBeenCalledWith({ components: [] });
+    else expect(edit).not.toHaveBeenCalled();
   });
 
   it('unarchives a case thread before sending a CAPTCHA status', async () => {
@@ -984,7 +1046,7 @@ describe('ThreadManager (unit)', () => {
     expect(activated).toBe(true);
     expect(thread.members.add).toHaveBeenCalledWith('reporter-1');
     expect(thread.send).toHaveBeenCalledWith({
-      content: expect.stringContaining('Add what happened here.'),
+      content: expect.stringContaining('Describe what happened and who you want to report.'),
       components: expect.any(Array),
       allowedMentions: {
         parse: [],

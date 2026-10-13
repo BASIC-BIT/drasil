@@ -1,3 +1,4 @@
+import { getReportConfirmationMessageIds } from './ReportIntakeService';
 import { context, ROOT_CONTEXT } from '@opentelemetry/api';
 import {
   withObservation,
@@ -91,6 +92,7 @@ import { IModerationQueueService } from './ModerationQueueService';
 import type { IMessageDeletionService } from './MessageDeletionService';
 import { IReportIntakeRepository } from '../repositories/ReportIntakeRepository';
 
+const REPORT_INTAKE_STATE_WRITE_ATTEMPTS = 2;
 const DELAYED_THREAD_REPAIR_DELAY_MS = 70_000;
 const PROFILE_IMAGE_HASH_MAX_BYTES = 3 * 1024 * 1024;
 const PROFILE_IMAGE_HASH_TIMEOUT_MS = 5000;
@@ -2150,33 +2152,48 @@ export class SecurityActionService implements ISecurityActionService {
     }
 
     try {
-      const intake = await this.reportIntakeRepository.findById(reportIntakeId);
-      if (!intake) {
+      for (let attempt = 0; attempt < REPORT_INTAKE_STATE_WRITE_ATTEMPTS; attempt++) {
+        const intake = await this.reportIntakeRepository.findById(reportIntakeId);
+        if (!intake) {
+          return;
+        }
+
+        const now = new Date();
+        const nextStatus = this.shouldPreserveReportIntakeStatus(intake.status)
+          ? intake.status
+          : status;
+        const updated = await this.reportIntakeRepository.updateIfCurrent(intake, {
+          status: nextStatus,
+          closedAt: intake.closed_at ?? now,
+          metadata: {
+            ...this.metadataToRecord(intake.metadata),
+            observed_action_closed_by: moderator.id,
+            observed_action_closed_at: now.toISOString(),
+            observed_action_close_reason: reason,
+          },
+        });
+
+        if (!updated) continue;
+
+        await this.moderationQueueService?.deleteReportThreadAttention(intake.id).catch((error) => {
+          console.warn(
+            `[ReportIntake] Failed to clear report-thread attention for intake ${intake.id}`,
+            error
+          );
+        });
+        const promptIds = getReportConfirmationMessageIds(updated);
+        if (promptIds.length)
+          await this.threadManager
+            .retireReportConfirmationPrompts(updated, promptIds)
+            .catch((error: unknown) =>
+              console.warn(`Failed to retire reviewed report ${updated.id}:`, error)
+            );
+        await this.closeReportIntakeThreadAfterReview(updated, updated.status);
         return;
       }
-
-      const now = new Date();
-      const nextStatus = this.shouldPreserveReportIntakeStatus(intake.status)
-        ? intake.status
-        : status;
-      const updated = await this.reportIntakeRepository.update(intake.id, {
-        status: nextStatus,
-        closedAt: intake.closed_at ?? now,
-        metadata: {
-          ...this.metadataToRecord(intake.metadata),
-          observed_action_closed_by: moderator.id,
-          observed_action_closed_at: now.toISOString(),
-          observed_action_close_reason: reason,
-        },
-      });
-
-      await this.moderationQueueService?.deleteReportThreadAttention(intake.id).catch((error) => {
-        console.warn(
-          `[ReportIntake] Failed to clear report-thread attention for intake ${intake.id}`,
-          error
-        );
-      });
-      await this.closeReportIntakeThreadAfterReview(updated ?? intake, nextStatus);
+      console.warn(
+        `[ReportIntake] Linked report ${reportIntakeId} changed before its metadata could be updated.`
+      );
     } catch (error) {
       console.warn(
         `[ReportIntake] Failed to close linked report intake ${reportIntakeId} after observed action ${detectionEvent.id}:`,
@@ -2207,31 +2224,38 @@ export class SecurityActionService implements ISecurityActionService {
     }
 
     try {
-      const intake = await this.reportIntakeRepository.findById(reportIntakeId);
-      if (!intake || !this.isObservedCloseoutReportIntakeStatus(intake.status)) {
+      for (let attempt = 0; attempt < REPORT_INTAKE_STATE_WRITE_ATTEMPTS; attempt++) {
+        const intake = await this.reportIntakeRepository.findById(reportIntakeId);
+        if (!intake || !this.isObservedCloseoutReportIntakeStatus(intake.status)) {
+          return;
+        }
+
+        const now = new Date();
+        const intakeMetadata = this.metadataToRecord(intake.metadata);
+        delete intakeMetadata.observed_action_closed_by;
+        delete intakeMetadata.observed_action_closed_at;
+        delete intakeMetadata.observed_action_close_reason;
+        const updated = await this.reportIntakeRepository.updateIfCurrent(intake, {
+          status: ReportIntakeStatus.SUBMITTED,
+          closedAt: null,
+          metadata: {
+            ...intakeMetadata,
+            observed_action_reopened_by: moderator.id,
+            observed_action_reopened_at: now.toISOString(),
+            observed_action_reopen_reason:
+              observedAction === AdminActionType.FALSE_POSITIVE
+                ? 'observed_false_positive_undo'
+                : 'observed_dismiss_undo',
+          },
+        });
+
+        if (!updated) continue;
+        await this.reopenReportIntakeThreadAfterObservedUndo(updated);
         return;
       }
-
-      const now = new Date();
-      const intakeMetadata = this.metadataToRecord(intake.metadata);
-      delete intakeMetadata.observed_action_closed_by;
-      delete intakeMetadata.observed_action_closed_at;
-      delete intakeMetadata.observed_action_close_reason;
-      const updated = await this.reportIntakeRepository.update(intake.id, {
-        status: ReportIntakeStatus.SUBMITTED,
-        closedAt: null,
-        metadata: {
-          ...intakeMetadata,
-          observed_action_reopened_by: moderator.id,
-          observed_action_reopened_at: now.toISOString(),
-          observed_action_reopen_reason:
-            observedAction === AdminActionType.FALSE_POSITIVE
-              ? 'observed_false_positive_undo'
-              : 'observed_dismiss_undo',
-        },
-      });
-
-      await this.reopenReportIntakeThreadAfterObservedUndo(updated ?? intake);
+      console.warn(
+        `[ReportIntake] Linked report ${reportIntakeId} changed before its metadata could be updated.`
+      );
     } catch (error) {
       console.warn(
         `[ReportIntake] Failed to restore linked report intake ${reportIntakeId} after observed undo ${detectionEvent.id}:`,
@@ -2267,7 +2291,7 @@ export class SecurityActionService implements ISecurityActionService {
 
     await thread
       .send({
-        content: 'Report reopened. Moderators restored this intake for review.',
+        content: 'Report reopened for moderator review.',
         allowedMentions: { parse: [] },
       })
       .catch((error) => {
@@ -2317,10 +2341,10 @@ export class SecurityActionService implements ISecurityActionService {
 
   private buildReportIntakeReviewCloseoutMessage(status: ReportIntakeStatus): string {
     if (status === ReportIntakeStatus.DISMISSED) {
-      return 'Report reviewed. Moderators closed this report without additional action, so this intake thread is now closed.';
+      return 'Moderators reviewed this report and closed it without further action.';
     }
 
-    return 'Report reviewed. Moderators have completed this intake, so this thread is now closed.';
+    return 'Moderators have reviewed this report.';
   }
 
   private captureMemberAnalytics(

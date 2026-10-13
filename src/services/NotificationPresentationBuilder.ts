@@ -386,9 +386,9 @@ export class NotificationPresentationBuilder {
 
     const embed = new EmbedBuilder()
       .setColor(0x5865f2)
-      .setTitle('Report Intake Started')
+      .setTitle('Report thread opened')
       .setDescription(
-        `A private report intake thread was opened by <@${reporter.id}>. No report has been submitted yet.`
+        `<@${reporter.id}> opened a private report thread. No report was submitted when the thread opened.`
       )
       .addFields(
         {
@@ -414,7 +414,6 @@ export class NotificationPresentationBuilder {
           inline: false,
         }
       )
-      .setFooter({ text: 'Drasil will wait for reporter target confirmation before submitting.' })
       .setTimestamp();
 
     if (avatarUrl) {
