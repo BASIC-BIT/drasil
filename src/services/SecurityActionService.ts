@@ -1,3 +1,4 @@
+import { getReportConfirmationMessageIds } from './ReportIntakeService';
 import { context, ROOT_CONTEXT } from '@opentelemetry/api';
 import {
   withObservation,
@@ -2180,6 +2181,13 @@ export class SecurityActionService implements ISecurityActionService {
             error
           );
         });
+        const promptIds = getReportConfirmationMessageIds(updated);
+        if (promptIds.length)
+          await this.threadManager
+            .retireReportConfirmationPrompts(updated, promptIds)
+            .catch((error: unknown) =>
+              console.warn(`Failed to retire reviewed report ${updated.id}:`, error)
+            );
         await this.closeReportIntakeThreadAfterReview(updated, updated.status);
         return;
       }

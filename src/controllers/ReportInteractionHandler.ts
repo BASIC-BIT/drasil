@@ -4,6 +4,7 @@ import {
   ButtonInteraction,
   ButtonStyle,
   ChannelType,
+  ComponentType,
   Client,
   Guild,
   GuildMember,
@@ -18,6 +19,8 @@ import { IConfigService } from '../config/ConfigService';
 import { DiscordUserResolver } from '../services/DiscordUserResolver';
 import {
   IReportIntakeService,
+  getReportConfirmationUnavailableMessage,
+  getReportConfirmationMessageIds,
   REPORT_INTAKE_CONFIRM_CUSTOM_ID_PREFIX,
   REPORT_INTAKE_REJECT_CUSTOM_ID_PREFIX,
 } from '../services/ReportIntakeService';
@@ -208,15 +211,9 @@ export class ReportInteractionHandler {
         return;
       }
 
-      const guildId = interaction.guildId;
-      if (!guildId) {
-        await interaction.editReply({
-          content: 'Report confirmations can only be used in a server.',
-        });
-        return;
-      }
-
-      const guild = await this.client.guilds.fetch(guildId);
+      const context = await this.resolveReportConfirmationContext(interaction, intakeId);
+      if (!context) return;
+      const guild = context.guild;
       const targetMember = await guild.members.fetch(targetUserId).catch(() => null);
       if (!targetMember) {
         await interaction.editReply({
@@ -229,11 +226,8 @@ export class ReportInteractionHandler {
         intakeId,
         targetUserId,
         confirmedById: interaction.user.id,
-        confirmedByStaff: await canModerateReportIntake(
-          guild,
-          interaction.user.id,
-          this.configService
-        ),
+        confirmedByStaff: context.canModerate,
+        promptMessageId: interaction.message.id,
       });
       if (!confirmation.confirmed || !confirmation.reason) {
         await interaction.editReply({ content: confirmation.message });
@@ -303,23 +297,15 @@ export class ReportInteractionHandler {
         return;
       }
 
-      const guildId = interaction.guildId;
-      if (!guildId) {
-        await interaction.editReply({ content: 'Report answers can only be used in a server.' });
-        return;
-      }
-
-      const guild = await this.client.guilds.fetch(guildId);
+      const context = await this.resolveReportConfirmationContext(interaction, intakeId);
+      if (!context) return;
 
       const result = await this.reportIntakeService.rejectCandidates({
         intakeId,
         rejectedById: interaction.user.id,
         promptToken,
-        rejectedByStaff: await canModerateReportIntake(
-          guild,
-          interaction.user.id,
-          this.configService
-        ),
+        rejectedByStaff: context.canModerate,
+        promptMessageId: interaction.message.id,
       });
       await interaction.editReply({ content: result.message });
 
@@ -604,6 +590,81 @@ export class ReportInteractionHandler {
         });
       }
     }
+  }
+
+  private async resolveReportConfirmationContext(
+    interaction: ButtonInteraction,
+    intakeId: string
+  ): Promise<{ intake: ReportIntake; guild: Guild; canModerate: boolean } | null> {
+    const intake = await this.reportIntakeService?.findIntakeById(intakeId);
+    if (!intake || !interaction.guildId || intake.server_id !== interaction.guildId) {
+      await interaction.editReply({ content: 'This report could not be found.' });
+      return null;
+    }
+    if (
+      !this.client.user ||
+      interaction.message.author.id !== this.client.user.id ||
+      interaction.channelId !== intake.thread_id ||
+      interaction.channel?.id !== intake.thread_id ||
+      !this.getThreadChannel(interaction.channel)
+    ) {
+      await interaction.editReply({
+        content: 'This confirmation does not match the report thread.',
+      });
+      return null;
+    }
+    const guild =
+      (interaction.guild as Guild | null) ?? (await this.client.guilds.fetch(interaction.guildId));
+    const canModerate =
+      intake.reporter_id === interaction.user.id
+        ? false
+        : await canModerateReportIntake(guild, interaction.user.id, this.configService);
+    if (intake.reporter_id !== interaction.user.id && !canModerate) {
+      await interaction.editReply({
+        content: 'Only the reporter or a moderator can change this selection.',
+      });
+      return null;
+    }
+    const stateUnavailable = getReportConfirmationUnavailableMessage(intake);
+    const enabledControl = interaction.message.components.some(
+      (row) =>
+        row.type === ComponentType.ActionRow &&
+        row.components.some(
+          (button) =>
+            button.type === ComponentType.Button &&
+            'customId' in button &&
+            button.customId === interaction.customId &&
+            !button.disabled
+        )
+    );
+    if (!stateUnavailable && !enabledControl) {
+      await interaction.editReply({
+        content: 'Use the latest confirmation message in this thread.',
+      });
+      return null;
+    }
+    const metadata = intake.metadata;
+    const currentId =
+      metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+        ? metadata.last_confirmation_prompt_message_id
+        : null;
+    const stalePrompt = typeof currentId === 'string' && currentId !== interaction.message.id;
+    const unavailable =
+      stateUnavailable ??
+      (stalePrompt ? 'Use the latest confirmation message in this thread.' : null);
+    if (unavailable) {
+      const ids = stalePrompt
+        ? [interaction.message.id]
+        : getReportConfirmationMessageIds(intake, interaction.message.id);
+      await this.threadManager
+        .retireReportConfirmationPrompts(intake, ids)
+        .catch((error: unknown) =>
+          console.warn('Failed to retire stale report confirmation:', error)
+        );
+      await interaction.editReply({ content: unavailable });
+      return null;
+    }
+    return { intake, guild, canModerate };
   }
 
   private async resolveReportIntakeAdminContext(

@@ -15,6 +15,7 @@ import { ReportIntake, ReportIntakeEvidenceKind, ReportIntakeStatus } from '../r
 import { IUserRepository } from '../repositories/UserRepository';
 import { getReportAiSettings, ReportAttachmentMetadata } from '../utils/reportAiSettings';
 import { selectEligibleMessageReportImageAttachments } from '../utils/reportAttachments';
+import type { IThreadManager } from './ThreadManager';
 import type { ReportIntakeEvidenceExtraction } from './GPTService';
 import { IReportCandidateService, ReportCandidate } from './ReportCandidateService';
 import { IModerationQueueService } from './ModerationQueueService';
@@ -46,6 +47,13 @@ interface MessageSendChannel {
   }): Promise<unknown>;
 }
 
+interface ConfirmationPrompt {
+  message: Pick<Message, 'id' | 'edit'>;
+  metadata: Record<string, unknown>;
+  components: ActionRowBuilder<ButtonBuilder>[];
+  channel: MessageSendChannel;
+}
+
 interface ArchivableThreadChannel {
   id: string;
   archived: boolean;
@@ -72,6 +80,7 @@ export interface IReportIntakeService {
     targetUserId: string;
     confirmedById: string;
     confirmedByStaff?: boolean;
+    promptMessageId?: string;
   }): Promise<{
     confirmed: boolean;
     message: string;
@@ -84,6 +93,7 @@ export interface IReportIntakeService {
     rejectedById: string;
     promptToken: string;
     rejectedByStaff?: boolean;
+    promptMessageId?: string;
   }): Promise<{ rejected: boolean; message: string }>;
   closeIntakeForThread(input: {
     threadId: string;
@@ -116,6 +126,7 @@ export class ReportIntakeService implements IReportIntakeService {
     @inject(TYPES.ServerMemberRepository) private serverMemberRepository: IServerMemberRepository,
     @inject(TYPES.ConfigService) private configService: IConfigService,
     @inject(TYPES.ReportCandidateService) private candidateService: IReportCandidateService,
+    @inject(TYPES.ThreadManager) private threadManager: IThreadManager,
     @inject(TYPES.ModerationQueueService)
     @optional()
     private moderationQueueService?: IModerationQueueService
@@ -190,6 +201,7 @@ export class ReportIntakeService implements IReportIntakeService {
     targetUserId: string;
     confirmedById: string;
     confirmedByStaff?: boolean;
+    promptMessageId?: string;
   }): Promise<{
     confirmed: boolean;
     message: string;
@@ -212,6 +224,10 @@ export class ReportIntakeService implements IReportIntakeService {
       intake.status !== ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION ||
       intake.confirmed_target_user_id
     ) {
+      await this.retireConfirmationPrompts(
+        intake,
+        input.promptMessageId ? [input.promptMessageId] : []
+      );
       return {
         confirmed: false,
         message: this.confirmationUnavailableMessage(intake),
@@ -220,23 +236,15 @@ export class ReportIntakeService implements IReportIntakeService {
     if (input.targetUserId === intake.reporter_id || input.targetUserId === input.confirmedById) {
       return { confirmed: false, message: 'You cannot report yourself.' };
     }
-    if (intake.confirmed_target_user_id) {
-      if (intake.confirmed_target_user_id === input.targetUserId) {
-        return {
-          confirmed: false,
-          message:
-            'A person has already been selected for this report. No second report was submitted.',
-        };
-      }
-
-      return {
-        confirmed: false,
-        message:
-          'A person has already been selected for this report. No second report was submitted.',
-      };
-    }
-
     const metadata = toRecord(intake.metadata);
+    if (
+      typeof metadata.last_confirmation_prompt_message_id === 'string' &&
+      metadata.last_confirmation_prompt_message_id !== input.promptMessageId
+    ) {
+      if (input.promptMessageId)
+        await this.retireConfirmationPrompts(intake, [input.promptMessageId]);
+      return { confirmed: false, message: 'Use the latest confirmation message in this thread.' };
+    }
     if (!this.hasSuggestedCandidate(metadata, input.targetUserId)) {
       return {
         confirmed: false,
@@ -265,6 +273,11 @@ export class ReportIntakeService implements IReportIntakeService {
       };
     }
 
+    await this.retireConfirmationPrompts(
+      intake,
+      getReportConfirmationMessageIds(intake, input.promptMessageId)
+    );
+
     await this.reportIntakeRepository.addEvidence({
       intakeId: intake.id,
       kind: ReportIntakeEvidenceKind.CANDIDATE_CONFIRMATION,
@@ -291,6 +304,7 @@ export class ReportIntakeService implements IReportIntakeService {
     rejectedById: string;
     promptToken: string;
     rejectedByStaff?: boolean;
+    promptMessageId?: string;
   }): Promise<{ rejected: boolean; message: string }> {
     const intake = await this.reportIntakeRepository.findById(input.intakeId);
     if (!intake) {
@@ -307,6 +321,10 @@ export class ReportIntakeService implements IReportIntakeService {
       intake.status !== ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION ||
       intake.confirmed_target_user_id
     ) {
+      await this.retireConfirmationPrompts(
+        intake,
+        input.promptMessageId ? [input.promptMessageId] : []
+      );
       return {
         rejected: false,
         message: this.confirmationUnavailableMessage(intake),
@@ -314,6 +332,14 @@ export class ReportIntakeService implements IReportIntakeService {
     }
 
     const metadata = toRecord(intake.metadata);
+    if (
+      typeof metadata.last_confirmation_prompt_message_id === 'string' &&
+      metadata.last_confirmation_prompt_message_id !== input.promptMessageId
+    ) {
+      if (input.promptMessageId)
+        await this.retireConfirmationPrompts(intake, [input.promptMessageId]);
+      return { rejected: false, message: 'Use the latest confirmation message in this thread.' };
+    }
     if (metadata.last_confirmation_prompt_token !== input.promptToken) {
       return {
         rejected: false,
@@ -360,6 +386,11 @@ export class ReportIntakeService implements IReportIntakeService {
       };
     }
 
+    await this.retireConfirmationPrompts(
+      intake,
+      getReportConfirmationMessageIds(intake, input.promptMessageId)
+    );
+
     await this.reportIntakeRepository.addEvidence({
       intakeId: intake.id,
       kind: ReportIntakeEvidenceKind.CANDIDATE_CONFIRMATION,
@@ -402,19 +433,19 @@ export class ReportIntakeService implements IReportIntakeService {
     const aiSummary = input.extraction?.abuseSignals.length
       ? input.extraction.abuseSignals.join('; ')
       : null;
-    const promptMetadata =
+    const prompt =
       candidateSuggestions.length > 0
         ? await this.sendCandidateConfirmationPrompt(intake, input.message, candidateSuggestions)
-        : {};
+        : null;
 
     recordWorkflowOutcome({
       output: {
-        actual_outcome: promptMetadata.last_confirmation_prompt_token
+        actual_outcome: prompt?.metadata.last_confirmation_prompt_token
           ? 'confirmation_sent'
           : candidateSuggestions.length
             ? 'confirmation_suppressed'
             : 'no_candidates',
-        confirmation_sent: Boolean(promptMetadata.last_confirmation_prompt_token),
+        confirmation_sent: Boolean(prompt?.metadata.last_confirmation_prompt_token),
         persistence_completed: false,
       },
     });
@@ -433,10 +464,13 @@ export class ReportIntakeService implements IReportIntakeService {
             candidate_count: candidateSuggestions.length,
             analyzed_at: new Date().toISOString(),
           },
-          ...promptMetadata,
+          ...prompt?.metadata,
         },
       })
-    );
+    ).catch(async (error: unknown) => {
+      await this.finishConfirmationPrompt(intake, prompt, null);
+      throw error;
+    });
     recordWorkflowOutcome({
       output: {
         actual_outcome: persisted
@@ -444,14 +478,15 @@ export class ReportIntakeService implements IReportIntakeService {
             ? 'candidates_suggested'
             : 'no_candidates'
           : 'persistence_failed',
-        confirmation_sent: Boolean(promptMetadata.last_confirmation_prompt_token),
+        confirmation_sent: Boolean(prompt?.metadata.last_confirmation_prompt_token),
         persistence_completed: Boolean(persisted),
         candidate_count: candidateSuggestions.length,
       },
       ...(persisted ? {} : { level: 'ERROR' as const, statusMessage: 'persistence_failed' }),
     });
 
-    return Boolean(persisted && candidateSuggestions.length > 0);
+    const ready = await this.finishConfirmationPrompt(intake, prompt, persisted);
+    return Boolean(persisted && ready && candidateSuggestions.length > 0);
   }
 
   async markSubmitted(input: {
@@ -482,6 +517,7 @@ export class ReportIntakeService implements IReportIntakeService {
         },
       });
       if (updated) {
+        await this.retireConfirmationPrompts(updated, getReportConfirmationMessageIds(updated));
         await this.clearReportThreadAttention(input.intakeId);
         return true;
       }
@@ -652,16 +688,23 @@ export class ReportIntakeService implements IReportIntakeService {
     }
     if (intake.confirmed_target_user_id || !this.isOpenIntakeStatus(intake.status)) return;
 
-    const promptMetadata =
+    const prompt =
       isReporterMessage && candidateSuggestions.length > 0
         ? await this.sendCandidateConfirmationPrompt(intake, message, candidateSuggestions)
-        : {};
+        : null;
 
     const status = this.resolveNextStatus(intake.status, candidateSuggestions.length);
-    await this.reportIntakeRepository.updateIfCurrent(intake, {
-      status,
-      metadata: { ...nextMetadata, ...promptMetadata },
-    });
+    let persisted: ReportIntake | null;
+    try {
+      persisted = await this.reportIntakeRepository.updateIfCurrent(intake, {
+        status,
+        metadata: { ...nextMetadata, ...prompt?.metadata },
+      });
+    } catch (error) {
+      await this.finishConfirmationPrompt(intake, prompt, null);
+      throw error;
+    }
+    await this.finishConfirmationPrompt(intake, prompt, persisted);
   }
 
   private async selectEligibleImageAttachments(
@@ -696,11 +739,11 @@ export class ReportIntakeService implements IReportIntakeService {
     intake: ReportIntake,
     message: Message,
     candidates: Awaited<ReturnType<IReportCandidateService['resolvePlatformBackedCandidates']>>
-  ): Promise<Record<string, unknown>> {
+  ): Promise<ConfirmationPrompt | null> {
     return withObservation(
       'send-confirmation',
       'tool',
-      async (): Promise<Record<string, unknown>> => {
+      async (): Promise<ConfirmationPrompt | null> => {
         const eligibleCandidates = candidates.filter(
           (candidate) => candidate.discordUserId !== intake.reporter_id
         );
@@ -713,7 +756,7 @@ export class ReportIntakeService implements IReportIntakeService {
           recordObservation('tool', {
             output: { confirmation_sent: false, reason: 'no_visible_candidates' },
           });
-          return {};
+          return null;
         }
 
         const metadata = toRecord(intake.metadata);
@@ -721,7 +764,7 @@ export class ReportIntakeService implements IReportIntakeService {
           recordObservation('tool', {
             output: { confirmation_sent: false, reason: 'unchanged_candidates' },
           });
-          return {};
+          return null;
         }
 
         if (!hasMessageSend(message.channel)) {
@@ -730,7 +773,7 @@ export class ReportIntakeService implements IReportIntakeService {
             level: 'WARNING',
             statusMessage: 'channel_unavailable',
           });
-          return {};
+          return null;
         }
 
         const confirmButtons = visibleCandidates.map((candidate, index) =>
@@ -740,18 +783,20 @@ export class ReportIntakeService implements IReportIntakeService {
             )
             .setLabel(visibleCandidates.length === 1 ? 'Submit report' : `Report ${index + 1}`)
             .setStyle(ButtonStyle.Primary)
+            .setDisabled(true)
         );
         const promptToken = this.createPromptToken(candidateIds);
         const rejectButton = new ButtonBuilder()
           .setCustomId(`${REPORT_INTAKE_REJECT_CUSTOM_ID_PREFIX}:${intake.id}:${promptToken}`)
           .setLabel(visibleCandidates.length === 1 ? 'Different person' : 'None of these')
-          .setStyle(ButtonStyle.Secondary);
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(true);
         const components = [
           new ActionRowBuilder<ButtonBuilder>().addComponents(confirmButtons),
           new ActionRowBuilder<ButtonBuilder>().addComponents(rejectButton),
         ];
 
-        await message.channel.send({
+        const sent = await message.channel.send({
           content: this.buildCandidateConfirmationMessage(
             visibleCandidates,
             eligibleCandidates.length
@@ -760,20 +805,103 @@ export class ReportIntakeService implements IReportIntakeService {
           allowedMentions: { parse: [] },
         });
 
+        if (!isEditablePrompt(sent)) throw new Error('Confirmation message could not be tracked');
+
         recordObservation('tool', {
           output: { confirmation_sent: true, visible_candidate_count: candidateIds.length },
         });
         return {
-          last_confirmation_prompt_candidate_ids: candidateIds,
-          last_confirmation_prompt_token: promptToken,
-          last_confirmation_prompt_at: new Date().toISOString(),
-          confirmation_prompt_candidate_ids_by_token: {
-            ...toRecord(metadata.confirmation_prompt_candidate_ids_by_token),
-            [promptToken]: candidateIds,
+          message: sent,
+          channel: message.channel,
+          components: components.map((row) =>
+            new ActionRowBuilder<ButtonBuilder>().addComponents(
+              row.components.map((button) => ButtonBuilder.from(button).setDisabled(false))
+            )
+          ),
+          metadata: {
+            confirmation_prompt_message_ids: [
+              ...new Set([...readStringArray(metadata.confirmation_prompt_message_ids), sent.id]),
+            ],
+            last_confirmation_prompt_message_id: sent.id,
+            last_confirmation_prompt_candidate_ids: candidateIds,
+            last_confirmation_prompt_token: promptToken,
+            last_confirmation_prompt_at: new Date().toISOString(),
+            confirmation_prompt_candidate_ids_by_token: {
+              ...toRecord(metadata.confirmation_prompt_candidate_ids_by_token),
+              [promptToken]: candidateIds,
+            },
           },
         };
       }
     );
+  }
+
+  private async retireConfirmationPrompts(
+    intake: ReportIntake,
+    ids: readonly string[]
+  ): Promise<void> {
+    if (ids.length)
+      await this.threadManager
+        .retireReportConfirmationPrompts(intake, ids)
+        .catch((error: unknown) => console.warn('Failed to retire report confirmations:', error));
+  }
+
+  private async finishConfirmationPrompt(
+    intake: ReportIntake,
+    prompt: ConfirmationPrompt | null,
+    persisted: ReportIntake | null
+  ): Promise<boolean> {
+    if (!prompt) return Boolean(persisted);
+    const removeControls = async (): Promise<void> => {
+      await prompt.message
+        .edit({ components: [] })
+        .catch((error: unknown) =>
+          console.warn(`Failed to retire unpublished report prompt ${prompt.message.id}:`, error)
+        );
+    };
+    if (!persisted) {
+      await removeControls();
+      return false;
+    }
+    try {
+      await prompt.message.edit({ components: prompt.components });
+    } catch (error) {
+      console.warn(`Failed to enable report confirmation ${prompt.message.id}:`, error);
+      await removeControls();
+      if (persisted.thread_id) {
+        await prompt.channel
+          .send({
+            content:
+              "Drasil couldn't enable the confirmation buttons. Please ask a moderator to review this thread.",
+            components: [],
+            allowedMentions: { parse: [] },
+          })
+          .catch((sendError: unknown) =>
+            console.warn('Failed to report unavailable confirmation:', sendError)
+          );
+      }
+      return false;
+    }
+    const current = await this.reportIntakeRepository.findById(intake.id);
+    if (
+      !current ||
+      current.status !== ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION ||
+      current.confirmed_target_user_id ||
+      toRecord(current.metadata).last_confirmation_prompt_message_id !== prompt.message.id
+    ) {
+      await removeControls();
+      return false;
+    }
+    const oldIds = readStringArray(
+      toRecord(intake.metadata).confirmation_prompt_message_ids
+    ).filter((id) => id !== prompt.message.id);
+    if (oldIds.length)
+      await this.threadManager
+        .retireReportConfirmationPrompts(current, oldIds)
+        .catch((error: unknown) =>
+          console.warn('Failed to retire replaced report confirmations:', error)
+        );
+    return true;
   }
 
   private buildCandidateConfirmationMessage(
@@ -819,12 +947,10 @@ export class ReportIntakeService implements IReportIntakeService {
   }
 
   private confirmationUnavailableMessage(intake: ReportIntake): string {
-    if (intake.status === ReportIntakeStatus.SUBMITTED)
-      return 'This report has already been submitted.';
-    if (!this.isOpenIntakeStatus(intake.status)) return 'This report is closed.';
-    if (intake.confirmed_target_user_id)
-      return 'A person has already been selected for this report. No second report was submitted.';
-    return 'Use the latest confirmation message in this thread.';
+    return (
+      getReportConfirmationUnavailableMessage(intake) ??
+      'Use the latest confirmation message in this thread.'
+    );
   }
 
   private formatCandidateDisplayName(candidate: ReportCandidate): string {
@@ -968,6 +1094,7 @@ export class ReportIntakeService implements IReportIntakeService {
       },
     });
     if (!updated) return false;
+    await this.retireConfirmationPrompts(updated, getReportConfirmationMessageIds(updated));
     await this.clearReportThreadAttention(intake.id);
     return true;
   }
@@ -992,6 +1119,7 @@ export class ReportIntakeService implements IReportIntakeService {
       },
     });
     if (!updated) return false;
+    await this.retireConfirmationPrompts(updated, getReportConfirmationMessageIds(updated));
     await this.clearReportThreadAttention(intake.id);
     return true;
   }
@@ -1078,4 +1206,42 @@ function isReportCandidate(candidate: unknown): candidate is ReportCandidate {
 
 function truncate(value: string, maxLength: number): string {
   return value.length > maxLength ? `${value.slice(0, maxLength - 3)}...` : value;
+}
+
+function isEditablePrompt(value: unknown): value is Pick<Message, 'id' | 'edit'> {
+  return Boolean(
+    value &&
+    typeof value === 'object' &&
+    'id' in value &&
+    typeof value.id === 'string' &&
+    'edit' in value &&
+    typeof value.edit === 'function'
+  );
+}
+
+export function getReportConfirmationUnavailableMessage(intake: ReportIntake): string | null {
+  if (intake.status === ReportIntakeStatus.SUBMITTED)
+    return 'This report has already been submitted.';
+  if (
+    intake.status !== ReportIntakeStatus.COLLECTING_EVIDENCE &&
+    intake.status !== ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION
+  )
+    return 'This report is closed.';
+  if (intake.confirmed_target_user_id)
+    return 'A person is already selected. Submission is not confirmed. No second report was submitted.';
+  return intake.status === ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION
+    ? null
+    : 'Use the latest confirmation message in this thread.';
+}
+
+export function getReportConfirmationMessageIds(
+  intake: ReportIntake,
+  clickedId?: string
+): string[] {
+  return [
+    ...new Set([
+      ...readStringArray(toRecord(intake.metadata).confirmation_prompt_message_ids),
+      ...(clickedId ? [clickedId] : []),
+    ]),
+  ];
 }

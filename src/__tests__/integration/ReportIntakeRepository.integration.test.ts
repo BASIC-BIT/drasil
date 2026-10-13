@@ -1,3 +1,4 @@
+import type { IThreadManager } from '../../services/ThreadManager';
 import type { IConfigService } from '../../config/ConfigService';
 import type { IReportCandidateService } from '../../services/ReportCandidateService';
 import { ReportIntakeService } from '../../services/ReportIntakeService';
@@ -101,7 +102,10 @@ describeIntegration('ReportIntakeRepository conditional state (integration)', ()
         new UserRepository(prisma),
         new ServerMemberRepository(prisma),
         {} as IConfigService,
-        {} as IReportCandidateService
+        {} as IReportCandidateService,
+        {
+          retireReportConfirmationPrompts: jest.fn().mockResolvedValue(undefined),
+        } as unknown as IThreadManager
       );
       const submit = () =>
         service.markSubmitted({

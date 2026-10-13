@@ -1,3 +1,4 @@
+import type { IThreadManager } from '../../services/ThreadManager';
 import { GuildMember, Message, User } from 'discord.js';
 import { IConfigService } from '../../config/ConfigService';
 import {
@@ -23,6 +24,8 @@ const buildReporter = (): GuildMember =>
     } as User,
   }) as unknown as GuildMember;
 
+const buildPrompt = (id = 'prompt-1') => ({ id, edit: jest.fn().mockResolvedValue(undefined) });
+
 const buildMessage = (overrides: Record<string, unknown> = {}): Message =>
   ({
     id: 'message-1',
@@ -32,7 +35,7 @@ const buildMessage = (overrides: Record<string, unknown> = {}): Message =>
     channel: {
       id: 'thread-1',
       isThread: jest.fn().mockReturnValue(true),
-      send: jest.fn().mockResolvedValue(undefined),
+      send: jest.fn().mockResolvedValue(buildPrompt()),
     },
     author: { id: 'reporter-1', bot: false },
     attachments: {
@@ -97,6 +100,9 @@ describe('ReportIntakeService', () => {
       recordReportThreadAttention: jest.fn().mockResolvedValue(undefined),
       deleteReportThreadAttention: jest.fn().mockResolvedValue(undefined),
     } as unknown as IModerationQueueService;
+    const threadManager = {
+      retireReportConfirmationPrompts: jest.fn().mockResolvedValue(undefined),
+    } as unknown as IThreadManager;
     const service = new ReportIntakeService(
       reportIntakeRepository,
       serverRepository,
@@ -104,11 +110,228 @@ describe('ReportIntakeService', () => {
       serverMemberRepository,
       configService,
       candidateService,
+      threadManager,
       moderationQueueService
     );
 
-    return { service, reportIntakeRepository, candidateService, moderationQueueService };
+    return {
+      service,
+      reportIntakeRepository,
+      candidateService,
+      moderationQueueService,
+      threadManager,
+    };
   }
+
+  async function preparePrompt() {
+    const setup = buildService();
+    const intake = await setup.service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+    const prompt = buildPrompt();
+    const send = jest.fn().mockResolvedValue(prompt);
+    const message = buildMessage({ channel: { id: 'thread-1', isThread: () => true, send } });
+    return { ...setup, intake, prompt, send, message };
+  }
+
+  it('unpublished prompt keeps disabled controls until persistence succeeds', async () => {
+    const { service, reportIntakeRepository, intake, prompt, send, message } =
+      await preparePrompt();
+    prompt.edit.mockImplementationOnce(async () => {
+      expect((await reportIntakeRepository.findById(intake.id))?.metadata).toMatchObject({
+        last_confirmation_prompt_message_id: prompt.id,
+      });
+    });
+    await service.handleThreadMessage(message);
+    const rows = send.mock.calls[0][0].components;
+    expect(
+      rows
+        .flatMap((row: { components: { data: { disabled: boolean } }[] }) => row.components)
+        .every((button: { data: { disabled: boolean } }) => button.data.disabled)
+    ).toBe(true);
+    expect(prompt.edit).toHaveBeenCalledWith({ components: expect.any(Array) });
+    expect(
+      prompt.edit.mock.calls[0][0].components
+        .flatMap((row: { components: { data: { disabled: boolean } }[] }) => row.components)
+        .every((button: { data: { disabled: boolean } }) => button.data.disabled === false)
+    ).toBe(true);
+    expect((await reportIntakeRepository.findById(intake.id))?.metadata).toMatchObject({
+      confirmation_prompt_message_ids: [prompt.id],
+    });
+  });
+
+  it('lost publication write leaves the new prompt disabled', async () => {
+    const { service, reportIntakeRepository, prompt, message } = await preparePrompt();
+    jest.spyOn(reportIntakeRepository, 'updateIfCurrent').mockResolvedValueOnce(null);
+    await service.handleThreadMessage(message);
+    expect(prompt.edit).toHaveBeenCalledWith({ components: [] });
+    expect(prompt.edit).not.toHaveBeenCalledWith({
+      components: expect.arrayContaining([expect.anything()]),
+    });
+  });
+
+  it('enable failure preserves evidence and asks for moderator review', async () => {
+    const { service, reportIntakeRepository, intake, prompt, send, message } =
+      await preparePrompt();
+    prompt.edit.mockRejectedValueOnce(new Error('Discord denied edit'));
+    await service.handleThreadMessage(message);
+    expect((await reportIntakeRepository.listEvidence(intake.id)).length).toBeGreaterThan(0);
+    expect((await reportIntakeRepository.findById(intake.id))?.metadata).toMatchObject({
+      last_confirmation_prompt_message_id: prompt.id,
+    });
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content:
+          "Drasil couldn't enable the confirmation buttons. Please ask a moderator to review this thread.",
+      })
+    );
+  });
+
+  it('closeout overlapping enable cannot leave active confirmation controls', async () => {
+    const { service, reportIntakeRepository, intake, prompt, message } = await preparePrompt();
+    prompt.edit.mockImplementationOnce(async () => {
+      await service.closeIntakeForThread({ threadId: 'thread-1', closedById: 'reporter-1' });
+    });
+    await service.handleThreadMessage(message);
+    expect((await reportIntakeRepository.findById(intake.id))?.status).toBe(
+      ReportIntakeStatus.CLOSED_BY_REPORTER
+    );
+    expect(prompt.edit).toHaveBeenLastCalledWith({ components: [] });
+  });
+
+  it('replacement retires earlier tracked prompts', async () => {
+    const { service, candidateService, intake, threadManager, send, message } =
+      await preparePrompt();
+    await service.handleThreadMessage(message);
+    (candidateService.resolvePlatformBackedCandidates as jest.Mock).mockResolvedValueOnce([
+      buildCandidate('user-2'),
+    ]);
+    send.mockResolvedValueOnce(buildPrompt('prompt-2'));
+    await service.handleThreadMessage(message);
+    expect(threadManager.retireReportConfirmationPrompts).toHaveBeenCalledWith(
+      expect.objectContaining({ id: intake.id }),
+      ['prompt-1']
+    );
+  });
+
+  it.each(['confirm', 'reject'])(
+    'retires confirmation controls after %s and preserves outcome when cleanup fails',
+    async (action) => {
+      const { service, intake, reportIntakeRepository, threadManager, message } =
+        await preparePrompt();
+      await service.handleThreadMessage(message);
+      (threadManager.retireReportConfirmationPrompts as jest.Mock).mockRejectedValueOnce(
+        new Error('cleanup denied')
+      );
+      const metadata = (await reportIntakeRepository.findById(intake.id))?.metadata;
+      if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata))
+        throw new Error('Missing prompt metadata');
+      const token = metadata.last_confirmation_prompt_token;
+      const result =
+        action === 'confirm'
+          ? await service.confirmCandidate({
+              intakeId: intake.id,
+              targetUserId: 'user-1',
+              confirmedById: 'reporter-1',
+              promptMessageId: 'prompt-1',
+            })
+          : await service.rejectCandidates({
+              intakeId: intake.id,
+              promptToken: String(token),
+              rejectedById: 'reporter-1',
+              promptMessageId: 'prompt-1',
+            });
+      expect(result).toMatchObject(action === 'confirm' ? { confirmed: true } : { rejected: true });
+      expect(threadManager.retireReportConfirmationPrompts).toHaveBeenCalledWith(
+        expect.objectContaining({ id: intake.id }),
+        ['prompt-1']
+      );
+    }
+  );
+
+  it('an older tracked prompt cannot select a still-suggested candidate', async () => {
+    const { service, intake, message } = await preparePrompt();
+    await service.handleThreadMessage(message);
+    expect(
+      await service.confirmCandidate({
+        intakeId: intake.id,
+        targetUserId: 'user-1',
+        confirmedById: 'reporter-1',
+        promptMessageId: 'older-prompt',
+      })
+    ).toMatchObject({
+      confirmed: false,
+      message: 'Use the latest confirmation message in this thread.',
+    });
+  });
+
+  it('publication persistence exception retires the disabled new prompt', async () => {
+    const { service, reportIntakeRepository, intake, prompt, message } = await preparePrompt();
+    jest
+      .spyOn(reportIntakeRepository, 'updateIfCurrent')
+      .mockRejectedValueOnce(new Error('database failed'));
+    await expect(
+      service.recordAgentAnalysis({
+        intakeId: intake.id,
+        message,
+        candidates: [buildCandidate()],
+        evidenceCount: 1,
+        imageCount: 0,
+      })
+    ).rejects.toThrow('database failed');
+    expect(prompt.edit).toHaveBeenCalledWith({ components: [] });
+  });
+
+  it('keeps legacy candidates without tracked prompt IDs usable', async () => {
+    const { service, reportIntakeRepository, intake, message } = await preparePrompt();
+    await service.handleThreadMessage(message);
+    const metadata = (await reportIntakeRepository.findById(intake.id))?.metadata;
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata))
+      throw new Error('Missing fixture metadata');
+    const legacy = { ...metadata };
+    delete legacy.confirmation_prompt_message_ids;
+    delete legacy.last_confirmation_prompt_message_id;
+    await reportIntakeRepository.update(intake.id, { metadata: legacy });
+    expect(
+      await service.confirmCandidate({
+        intakeId: intake.id,
+        targetUserId: 'user-1',
+        confirmedById: 'reporter-1',
+      })
+    ).toMatchObject({ confirmed: true });
+  });
+
+  it.each([true, false])(
+    'preserves safe identity formatting with username available: %s',
+    async (hasUsername) => {
+      const { service } = buildService({
+        resolvePlatformBackedCandidates: jest.fn().mockResolvedValue([
+          {
+            ...buildCandidate(),
+            username: hasUsername ? 'user`name' : null,
+            displayName: 'Display`name',
+          },
+        ]),
+      });
+      await service.openIntakeFromThread({
+        serverId: 'guild-1',
+        reporter: buildReporter(),
+        threadId: 'thread-1',
+        channelId: 'channel-1',
+      });
+      const send = jest.fn().mockResolvedValue(buildPrompt());
+      await service.handleThreadMessage(
+        buildMessage({ channel: { id: 'thread-1', isThread: () => true, send } })
+      );
+      expect(send.mock.calls[0][0].content).toContain("`Display'name`");
+      if (hasUsername) expect(send.mock.calls[0][0].content).toContain("@`user'name`");
+      expect(send.mock.calls[0][0].content).toContain('User ID: `user-1`');
+      expect(send.mock.calls[0][0].allowedMentions).toEqual({ parse: [] });
+    }
+  );
 
   it('numbers duplicate long-name matches and excludes the reporter from the match count', async () => {
     const candidates = [
@@ -127,7 +350,7 @@ describe('ReportIntakeService', () => {
       threadId: 'thread-1',
       channelId: 'channel-1',
     });
-    const send = jest.fn().mockResolvedValue(undefined);
+    const send = jest.fn().mockResolvedValue(buildPrompt());
     const message = buildMessage({
       channel: { id: 'thread-1', isThread: jest.fn().mockReturnValue(true), send },
     });
@@ -163,6 +386,7 @@ describe('ReportIntakeService', () => {
       await service.confirmCandidate({
         intakeId: intake.id,
         targetUserId: 'user-1',
+        promptMessageId: 'prompt-1',
         confirmedById: 'reporter-1',
       })
     ).toEqual({ confirmed: false, message: 'This report is closed.' });
@@ -183,16 +407,18 @@ describe('ReportIntakeService', () => {
     await service.confirmCandidate({
       intakeId: intake.id,
       targetUserId: 'user-1',
+      promptMessageId: 'prompt-1',
       confirmedById: 'reporter-1',
     });
     const result = await service.rejectCandidates({
       intakeId: intake.id,
       promptToken: token,
+      promptMessageId: 'prompt-1',
       rejectedById: 'reporter-1',
     });
     expect(result.rejected).toBe(false);
     expect(result.message).toBe(
-      'A person has already been selected for this report. No second report was submitted.'
+      'A person is already selected. Submission is not confirmed. No second report was submitted.'
     );
     expect((await reportIntakeRepository.findById(intake.id))?.confirmed_target_user_id).toBe(
       'user-1'
@@ -272,6 +498,7 @@ describe('ReportIntakeService', () => {
     await service.confirmCandidate({
       intakeId: intake.id,
       targetUserId: 'user-1',
+      promptMessageId: 'prompt-1',
       confirmedById: 'reporter-1',
     });
     const result = await service.closeIntakeForThread({
@@ -459,6 +686,7 @@ describe('ReportIntakeService', () => {
     const result = await service.confirmCandidate({
       intakeId: intake.id,
       targetUserId: 'user-1',
+      promptMessageId: 'prompt-1',
       confirmedById: 'reporter-1',
     });
 
@@ -487,6 +715,7 @@ describe('ReportIntakeService', () => {
     const result = await service.confirmCandidate({
       intakeId: intake.id,
       targetUserId: 'user-1',
+      promptMessageId: 'prompt-1',
       confirmedById: 'staff-1',
       confirmedByStaff: true,
     });
@@ -522,6 +751,7 @@ describe('ReportIntakeService', () => {
     const result = await service.confirmCandidate({
       intakeId: intake.id,
       targetUserId: 'staff-1',
+      promptMessageId: 'prompt-1',
       confirmedById: 'staff-1',
       confirmedByStaff: true,
     });
@@ -545,6 +775,7 @@ describe('ReportIntakeService', () => {
     const result = await service.confirmCandidate({
       intakeId: intake.id,
       targetUserId: 'user-1',
+      promptMessageId: 'prompt-1',
       confirmedById: 'user-2',
     });
 
@@ -566,6 +797,7 @@ describe('ReportIntakeService', () => {
     await service.confirmCandidate({
       intakeId: intake.id,
       targetUserId: 'user-1',
+      promptMessageId: 'prompt-1',
       confirmedById: 'reporter-1',
     });
     await service.markSubmitted({
@@ -577,6 +809,7 @@ describe('ReportIntakeService', () => {
     const result = await service.confirmCandidate({
       intakeId: intake.id,
       targetUserId: 'user-1',
+      promptMessageId: 'prompt-1',
       confirmedById: 'reporter-1',
     });
     const confirmationEvidence = (await reportIntakeRepository.listEvidence(intake.id)).filter(
@@ -604,12 +837,14 @@ describe('ReportIntakeService', () => {
     await service.confirmCandidate({
       intakeId: intake.id,
       targetUserId: 'user-1',
+      promptMessageId: 'prompt-1',
       confirmedById: 'reporter-1',
     });
 
     const result = await service.confirmCandidate({
       intakeId: intake.id,
       targetUserId: 'user-1',
+      promptMessageId: 'prompt-1',
       confirmedById: 'reporter-1',
     });
     const confirmationEvidence = (await reportIntakeRepository.listEvidence(intake.id)).filter(
@@ -619,7 +854,7 @@ describe('ReportIntakeService', () => {
     expect(result).toMatchObject({
       confirmed: false,
       message:
-        'A person has already been selected for this report. No second report was submitted.',
+        'A person is already selected. Submission is not confirmed. No second report was submitted.',
     });
     expect(result).not.toHaveProperty('reason');
     expect(confirmationEvidence).toHaveLength(1);
@@ -645,6 +880,7 @@ describe('ReportIntakeService', () => {
     const result = await service.confirmCandidate({
       intakeId: intake.id,
       targetUserId: 'user-1',
+      promptMessageId: 'prompt-1',
       confirmedById: 'reporter-1',
     });
     const confirmationEvidence = (await reportIntakeRepository.listEvidence(intake.id)).filter(
@@ -654,7 +890,7 @@ describe('ReportIntakeService', () => {
     expect(result).toMatchObject({
       confirmed: false,
       message:
-        'A person has already been selected for this report. No second report was submitted.',
+        'A person is already selected. Submission is not confirmed. No second report was submitted.',
     });
     expect(result).not.toHaveProperty('reason');
     expect(confirmationEvidence).toHaveLength(0);
@@ -675,6 +911,7 @@ describe('ReportIntakeService', () => {
 
     const result = await service.rejectCandidates({
       intakeId: intake.id,
+      promptMessageId: 'prompt-1',
       rejectedById: 'reporter-1',
       promptToken,
     });
@@ -695,7 +932,7 @@ describe('ReportIntakeService', () => {
     const followupChannel = {
       id: 'thread-1',
       isThread: jest.fn().mockReturnValue(true),
-      send: jest.fn().mockResolvedValue(undefined),
+      send: jest.fn().mockResolvedValue(buildPrompt()),
     };
     await service.handleThreadMessage(buildMessage({ id: 'message-2', channel: followupChannel }));
     const afterFollowup = await reportIntakeRepository.findById(intake.id);
@@ -751,6 +988,7 @@ describe('ReportIntakeService', () => {
 
     const result = await service.rejectCandidates({
       intakeId: intake.id,
+      promptMessageId: 'prompt-1',
       rejectedById: 'staff-1',
       rejectedByStaff: true,
       promptToken,
@@ -782,6 +1020,7 @@ describe('ReportIntakeService', () => {
 
     const result = await service.rejectCandidates({
       intakeId: intake.id,
+      promptMessageId: 'prompt-1',
       rejectedById: 'reporter-1',
       promptToken: firstPromptToken,
     });
@@ -842,6 +1081,7 @@ describe('ReportIntakeService', () => {
     const result = await service.confirmCandidate({
       intakeId: intake.id,
       targetUserId: 'reporter-1',
+      promptMessageId: 'prompt-1',
       confirmedById: 'reporter-1',
     });
     const confirmationEvidence = (await reportIntakeRepository.listEvidence(intake.id)).filter(
@@ -880,6 +1120,7 @@ describe('ReportIntakeService', () => {
     const result = await service.confirmCandidate({
       intakeId: intake.id,
       targetUserId: 'user-1',
+      promptMessageId: 'prompt-1',
       confirmedById: 'reporter-1',
     });
 
@@ -893,7 +1134,7 @@ describe('ReportIntakeService', () => {
     const channel = {
       id: 'thread-1',
       isThread: jest.fn().mockReturnValue(true),
-      send: jest.fn().mockResolvedValue(undefined),
+      send: jest.fn().mockResolvedValue(buildPrompt()),
     };
     const { service } = buildService({
       resolvePlatformBackedCandidates: jest
@@ -918,7 +1159,7 @@ describe('ReportIntakeService', () => {
     const channel = {
       id: 'thread-1',
       isThread: jest.fn().mockReturnValue(true),
-      send: jest.fn().mockResolvedValue(undefined),
+      send: jest.fn().mockResolvedValue(buildPrompt()),
     };
     const { service } = buildService({
       resolvePlatformBackedCandidates: jest
@@ -968,7 +1209,7 @@ describe('ReportIntakeService', () => {
     const channel = {
       id: 'thread-1',
       isThread: jest.fn().mockReturnValue(true),
-      send: jest.fn().mockResolvedValue(undefined),
+      send: jest.fn().mockResolvedValue(buildPrompt()),
       archived: false,
       setArchived: jest.fn().mockResolvedValue(undefined),
     };

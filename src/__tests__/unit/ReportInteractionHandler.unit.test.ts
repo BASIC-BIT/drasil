@@ -49,8 +49,24 @@ const buildInteraction = (customId: string, guildId: string, user: User): Button
   const interaction = {
     customId,
     guildId,
-    channel: { id: 'channel-1', type: ChannelType.GuildText },
-    channelId: 'channel-1',
+    channel:
+      customId.startsWith('report_intake_confirm:') || customId.startsWith('report_intake_reject:')
+        ? {
+            id: 'thread-1',
+            isThread: () => true,
+            send: jest.fn().mockResolvedValue(undefined),
+            setArchived: jest.fn().mockResolvedValue(undefined),
+          }
+        : { id: 'channel-1', type: ChannelType.GuildText },
+    channelId:
+      customId.startsWith('report_intake_confirm:') || customId.startsWith('report_intake_reject:')
+        ? 'thread-1'
+        : 'channel-1',
+    message: {
+      id: 'prompt-1',
+      author: { id: 'bot-1' },
+      components: [{ type: 1, components: [{ type: 2, customId, disabled: false }] }],
+    },
     user,
     deferred: false,
     replied: false,
@@ -114,13 +130,18 @@ const buildReportIntake = (overrides: Partial<ReportIntake> = {}): ReportIntake 
 const createReportIntakeService = (): jest.Mocked<IReportIntakeService> => ({
   openIntakeFromThread: jest.fn().mockResolvedValue(buildReportIntake()),
   findOpenIntakeForReporter: jest.fn().mockResolvedValue(null),
-  findIntakeById: jest.fn().mockResolvedValue(null),
+  findIntakeById: jest.fn().mockResolvedValue(
+    buildReportIntake({
+      status: ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION,
+      thread_id: 'thread-1',
+    })
+  ),
   handleThreadMessage: jest.fn().mockResolvedValue(false),
   confirmCandidate: jest.fn().mockResolvedValue({ confirmed: false, message: '' }),
   rejectCandidates: jest.fn().mockResolvedValue({ rejected: false, message: '' }),
   closeIntakeForThread: jest.fn().mockResolvedValue({ closed: false, message: '' }),
   recordAgentAnalysis: jest.fn().mockResolvedValue(false),
-  markSubmitted: jest.fn().mockResolvedValue(undefined),
+  markSubmitted: jest.fn().mockResolvedValue(true),
   markOpenFailed: jest.fn().mockResolvedValue(undefined),
 });
 
@@ -133,6 +154,7 @@ describe('ReportInteractionHandler (unit)', () => {
   beforeEach(() => {
     const member = buildMember('guild-1', 'user-1');
     client = {
+      user: { id: 'bot-1' },
       guilds: {
         fetch: jest.fn().mockResolvedValue({
           members: {
@@ -152,6 +174,7 @@ describe('ReportInteractionHandler (unit)', () => {
       getAdminChannel: jest.fn(),
     } as unknown as jest.Mocked<IConfigService>;
     threadManager = {
+      retireReportConfirmationPrompts: jest.fn().mockResolvedValue(undefined),
       createReportIntakeThread: jest.fn().mockResolvedValue({
         id: 'report-thread-1',
         url: 'https://discord.com/channels/report-thread-1',
@@ -984,6 +1007,69 @@ describe('ReportInteractionHandler (unit)', () => {
     });
   });
 
+  it('authorized stale legacy click reports submission before looking up a departed target and retires its controls', async () => {
+    const service = createReportIntakeService();
+    service.findIntakeById.mockResolvedValue(
+      buildReportIntake({
+        status: ReportIntakeStatus.SUBMITTED,
+        thread_id: 'thread-1',
+        confirmed_target_user_id: 'user-1',
+      })
+    );
+    const fetch = jest.fn().mockRejectedValue(new Error('target departed'));
+    (client.guilds.fetch as jest.Mock).mockResolvedValueOnce({ members: { fetch } });
+    const interaction = buildInteraction('report_intake_confirm:intake-1:user-1', 'guild-1', {
+      id: 'reporter-1',
+    } as User);
+    await createHandler(service).handleReportIntakeConfirm(interaction, interaction.customId);
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: 'This report has already been submitted.',
+    });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(service.confirmCandidate).not.toHaveBeenCalled();
+    expect(threadManager.retireReportConfirmationPrompts).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'intake-1' }),
+      ['prompt-1']
+    );
+  });
+
+  it.each(
+    ['confirm', 'reject'].flatMap((action) =>
+      ['guild', 'thread', 'author', 'actor', 'disabled'].map((scope) => [action, scope])
+    )
+  )(
+    'rejects copied %s control with wrong %s without mutation or cleanup',
+    async (action, scope) => {
+      const service = createReportIntakeService();
+      const interaction = buildInteraction(
+        `report_intake_${action}:intake-1:${action === 'confirm' ? 'user-1' : 'token'}`,
+        scope === 'guild' ? 'guild-2' : 'guild-1',
+        { id: scope === 'actor' ? 'unauthorized-1' : 'reporter-1' } as User
+      );
+      if (scope === 'thread') Object.assign(interaction, { channelId: 'other-thread' });
+      if (scope === 'author')
+        Object.assign(interaction, { message: { id: 'prompt-1', author: { id: 'another-bot' } } });
+      if (scope === 'disabled')
+        Object.assign(interaction, {
+          message: {
+            id: 'prompt-1',
+            author: { id: 'bot-1' },
+            components: [
+              {
+                type: 1,
+                components: [{ type: 2, customId: interaction.customId, disabled: true }],
+              },
+            ],
+          },
+        });
+      await createHandler(service).handleReportIntakeConfirm(interaction, interaction.customId);
+      expect(service.confirmCandidate).not.toHaveBeenCalled();
+      expect(service.rejectCandidates).not.toHaveBeenCalled();
+      expect(service.markSubmitted).not.toHaveBeenCalled();
+      expect(threadManager.retireReportConfirmationPrompts).not.toHaveBeenCalled();
+    }
+  );
+
   it('submits a confirmed report intake target through the user report workflow', async () => {
     const reportIntakeService = createReportIntakeService();
     reportIntakeService.confirmCandidate.mockResolvedValue({
@@ -1021,6 +1107,7 @@ describe('ReportInteractionHandler (unit)', () => {
     expect(reportIntakeService.confirmCandidate).toHaveBeenCalledWith({
       intakeId: 'intake-1',
       targetUserId: 'user-1',
+      promptMessageId: 'prompt-1',
       confirmedById: 'reporter-1',
       confirmedByStaff: false,
     });
@@ -1097,6 +1184,7 @@ describe('ReportInteractionHandler (unit)', () => {
     expect(reportIntakeService.confirmCandidate).toHaveBeenCalledWith({
       intakeId: 'intake-1',
       targetUserId: 'user-1',
+      promptMessageId: 'prompt-1',
       confirmedById: 'staff-1',
       confirmedByStaff: true,
     });
@@ -1144,6 +1232,7 @@ describe('ReportInteractionHandler (unit)', () => {
     expect(reportIntakeService.confirmCandidate).toHaveBeenCalledWith({
       intakeId: 'intake-1',
       targetUserId: 'user-1',
+      promptMessageId: 'prompt-1',
       confirmedById: 'reporter-1',
       confirmedByStaff: false,
     });
@@ -1161,7 +1250,11 @@ describe('ReportInteractionHandler (unit)', () => {
       rejected: true,
       message: 'Okay, I will not submit a report for that target.',
     });
-    const threadChannel = { isThread: jest.fn().mockReturnValue(true), send: jest.fn() };
+    const threadChannel = {
+      id: 'thread-1',
+      isThread: jest.fn().mockReturnValue(true),
+      send: jest.fn(),
+    };
     const handler = createHandler(reportIntakeService);
     const interaction = {
       ...buildInteraction('report_intake_reject:intake-1:prompt-token', 'guild-1', {
@@ -1174,6 +1267,7 @@ describe('ReportInteractionHandler (unit)', () => {
 
     expect(reportIntakeService.rejectCandidates).toHaveBeenCalledWith({
       intakeId: 'intake-1',
+      promptMessageId: 'prompt-1',
       rejectedById: 'reporter-1',
       promptToken: 'prompt-token',
       rejectedByStaff: false,
@@ -1214,6 +1308,7 @@ describe('ReportInteractionHandler (unit)', () => {
 
     expect(reportIntakeService.rejectCandidates).toHaveBeenCalledWith({
       intakeId: 'intake-1',
+      promptMessageId: 'prompt-1',
       rejectedById: 'staff-1',
       promptToken: 'prompt-token',
       rejectedByStaff: true,
