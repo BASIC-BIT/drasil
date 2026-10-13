@@ -2312,13 +2312,34 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       throw new Error('Report instructions request is missing target channel.');
     }
 
+    const repost = this.readMetadataBoolean(request.metadata, 'repost') === true;
+    if (repost) {
+      const guild = await this.fetchGuild(request.server_id);
+      const administrator = await guild.members
+        .fetch({ user: request.actor_id, force: true })
+        .catch(() => null);
+      if (!administrator?.permissions.has(PermissionFlagsBits.Administrator)) {
+        throw new Error('Report panel repost requires current Administrator permission.');
+      }
+    }
+
     const targetChannel = await this.fetchRequestTextChannel(
       request.server_id,
       channelId,
       'Report instructions channel'
     );
     const manager = new ReportInstructionsManager(this.client, this.configService);
-    const result = await manager.upsertReportInstructionsMessage(request.server_id, targetChannel);
+    const result = await manager.upsertReportInstructionsMessage(request.server_id, targetChannel, {
+      repost,
+      ...(repost
+        ? {
+            expectedMessageId:
+              this.readMetadataString(request.metadata, 'expected_message_id') ?? null,
+            expectedChannelId:
+              this.readMetadataString(request.metadata, 'expected_channel_id') ?? null,
+          }
+        : {}),
+    });
 
     await this.repository.complete(request.id, {
       action: result.action,

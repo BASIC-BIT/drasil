@@ -1,5 +1,9 @@
 import { ChannelType, InteractionContextType, MessageFlags } from 'discord.js';
-import { ReportInstructionsManager } from '../../controllers/ReportInstructionsManager';
+import {
+  ReportInstructionsError,
+  ReportInstructionsManager,
+  ReportInstructionsRollbackRequiredError,
+} from '../../controllers/ReportInstructionsManager';
 import { USER_REPORT_REASON_REQUIRED_SETTING_KEY } from '../../utils/userReportSettings';
 import { buildHandler, restoreUserInstallReportingEnvAfterEach } from './commandHandlerTestHarness';
 
@@ -100,7 +104,7 @@ describe('CommandHandler report commands (unit)', () => {
     const guild = {
       id: 'guild-1',
       members: {
-        fetch: jest.fn(),
+        fetch: jest.fn().mockResolvedValue({ find: () => undefined }),
       },
     } as any;
 
@@ -134,7 +138,7 @@ describe('CommandHandler report commands (unit)', () => {
     const guild = {
       id: 'guild-1',
       members: {
-        fetch: jest.fn(),
+        fetch: jest.fn().mockResolvedValue({ find: () => undefined }),
       },
     } as any;
 
@@ -213,7 +217,7 @@ describe('CommandHandler report commands (unit)', () => {
     const guild = {
       id: 'guild-1',
       members: {
-        fetch: jest.fn(),
+        fetch: jest.fn().mockResolvedValue({ find: () => undefined }),
       },
     } as any;
 
@@ -344,6 +348,9 @@ describe('CommandHandler report commands (unit)', () => {
   it('updates the existing report instructions message instead of sending a duplicate', async () => {
     const existingMessage = {
       id: 'message-1',
+      author: { id: 'client-1' },
+      components: [{ components: [{ customId: 'report_user_initiate' }] }],
+      embeds: [{ title: 'Report a User' }],
       edit: jest.fn().mockResolvedValue(undefined),
     };
     const targetChannel = {
@@ -380,6 +387,7 @@ describe('CommandHandler report commands (unit)', () => {
       guild,
       options: {
         getChannel: jest.fn().mockReturnValue(targetChannel),
+        getBoolean: jest.fn().mockReturnValue(false),
       },
       reply: jest.fn().mockResolvedValue(undefined),
       deferReply: jest.fn().mockResolvedValue(undefined),
@@ -389,7 +397,10 @@ describe('CommandHandler report commands (unit)', () => {
     await handler.handleSlashCommand(interaction);
 
     expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
-    expect(targetChannel.messages.fetch).toHaveBeenCalledWith('message-1');
+    expect(targetChannel.messages.fetch).toHaveBeenCalledWith({
+      message: 'message-1',
+      force: true,
+    });
     expect(existingMessage.edit).toHaveBeenCalledWith({
       embeds: expect.any(Array),
       components: expect.any(Array),
@@ -407,6 +418,7 @@ describe('CommandHandler report commands (unit)', () => {
     expect(targetChannel.send).not.toHaveBeenCalled();
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       report_instructions_channel_id: 'channel-1',
+      report_instructions_message_channel_id: 'channel-1',
       report_instructions_message_id: 'message-1',
     });
     expect(interaction.editReply).toHaveBeenCalledWith({
@@ -414,12 +426,76 @@ describe('CommandHandler report commands (unit)', () => {
     });
   });
 
+  it('passes /setupreportbutton repost:true to the shared manager', async () => {
+    const upsert = jest
+      .spyOn(ReportInstructionsManager.prototype, 'upsertReportInstructionsMessage')
+      .mockResolvedValue({ action: 'reposted', messageId: 'replacement' });
+    const { handler } = buildHandler();
+    const channel = {
+      id: 'channel-1',
+      type: ChannelType.GuildText,
+      toString: () => '<#channel-1>',
+    };
+    const interaction = {
+      commandName: 'setupreportbutton',
+      user: { id: 'admin' },
+      guild: {
+        id: 'guild-1',
+        members: { fetch: jest.fn().mockResolvedValue({ permissions: { has: () => true } }) },
+      },
+      options: { getChannel: () => channel, getBoolean: () => true },
+      deferReply: jest.fn(),
+      editReply: jest.fn(),
+    };
+    await handler.handleSlashCommand(interaction as any);
+    expect(upsert).toHaveBeenCalledWith('guild-1', channel, { repost: true });
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: 'Report instructions reposted successfully in <#channel-1>.',
+    });
+  });
+
+  it.each([
+    [
+      new Error('database host=private.example ' + 'query'.repeat(1000)),
+      'Report panel setup failed. Check channel permissions and retry.',
+    ],
+    [
+      new ReportInstructionsError('Refresh setup before reposting.'),
+      'Report panel setup needs attention: Refresh setup before reposting.',
+    ],
+    [
+      new ReportInstructionsRollbackRequiredError(),
+      'Report panel setup needs attention: A report panel was published, but saving or rolling it back could not be confirmed. Existing panels were retained. Retry setup to recover the message.',
+    ],
+  ])('only exposes curated report setup errors (%s)', async (error, content) => {
+    jest
+      .spyOn(ReportInstructionsManager.prototype, 'upsertReportInstructionsMessage')
+      .mockRejectedValue(error);
+    const { handler } = buildHandler();
+    const interaction = {
+      commandName: 'setupreportbutton',
+      user: { id: 'admin' },
+      guild: {
+        id: 'guild-1',
+        members: { fetch: jest.fn().mockResolvedValue({ permissions: { has: () => true } }) },
+      },
+      options: {
+        getChannel: () => ({ id: 'channel-1', type: ChannelType.GuildText }),
+        getBoolean: () => true,
+      },
+      deferReply: jest.fn(),
+      editReply: jest.fn(),
+    };
+    await handler.handleSlashCommand(interaction as any);
+    expect(interaction.editReply).toHaveBeenCalledWith({ content, allowedMentions: { parse: [] } });
+  });
+
   it('recreates report instructions when the stored message no longer exists', async () => {
     const targetChannel = {
       id: 'channel-1',
       type: ChannelType.GuildText,
       messages: {
-        fetch: jest.fn().mockRejectedValue(new Error('missing')),
+        fetch: jest.fn().mockRejectedValue({ code: 10008 }),
       },
       send: jest.fn().mockResolvedValue({ id: 'message-2' }),
       toString: () => '<#channel-1>',
@@ -449,6 +525,7 @@ describe('CommandHandler report commands (unit)', () => {
       guild,
       options: {
         getChannel: jest.fn().mockReturnValue(targetChannel),
+        getBoolean: jest.fn().mockReturnValue(false),
       },
       reply: jest.fn().mockResolvedValue(undefined),
       deferReply: jest.fn().mockResolvedValue(undefined),
@@ -463,7 +540,9 @@ describe('CommandHandler report commands (unit)', () => {
     });
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       report_instructions_channel_id: 'channel-1',
+      report_instructions_message_channel_id: 'channel-1',
       report_instructions_message_id: 'message-2',
+      report_instructions_pending_publication: null,
     });
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: 'Report instructions recreated successfully in <#channel-1>.',
@@ -474,6 +553,7 @@ describe('CommandHandler report commands (unit)', () => {
     const existingMessage = {
       id: 'message-1',
       author: { id: 'client-1' },
+      components: [{ components: [{ customId: 'report_user_initiate' }] }],
       embeds: [{ title: 'Report a User' }],
       edit: jest.fn().mockResolvedValue(undefined),
     };
@@ -506,6 +586,7 @@ describe('CommandHandler report commands (unit)', () => {
       guild,
       options: {
         getChannel: jest.fn().mockReturnValue(targetChannel),
+        getBoolean: jest.fn().mockReturnValue(false),
       },
       reply: jest.fn().mockResolvedValue(undefined),
       deferReply: jest.fn().mockResolvedValue(undefined),
@@ -522,6 +603,7 @@ describe('CommandHandler report commands (unit)', () => {
     expect(targetChannel.send).not.toHaveBeenCalled();
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       report_instructions_channel_id: 'channel-1',
+      report_instructions_message_channel_id: 'channel-1',
       report_instructions_message_id: 'message-1',
     });
     expect(interaction.editReply).toHaveBeenCalledWith({
@@ -531,6 +613,9 @@ describe('CommandHandler report commands (unit)', () => {
 
   it('deletes old report instructions when moving them to a new channel', async () => {
     const oldMessage = {
+      author: { id: 'client-1' },
+      components: [{ components: [{ customId: 'report_user_initiate' }] }],
+      embeds: [{ title: 'Report a User' }],
       delete: jest.fn().mockResolvedValue(undefined),
     };
     const oldChannel = {
@@ -542,7 +627,7 @@ describe('CommandHandler report commands (unit)', () => {
       id: 'new-channel-1',
       type: ChannelType.GuildText,
       messages: {
-        fetch: jest.fn(),
+        fetch: jest.fn().mockResolvedValue({ find: () => undefined }),
       },
       send: jest.fn().mockResolvedValue({ id: 'new-message-1' }),
       toString: () => '<#new-channel-1>',
@@ -578,6 +663,7 @@ describe('CommandHandler report commands (unit)', () => {
       guild,
       options: {
         getChannel: jest.fn().mockReturnValue(targetChannel),
+        getBoolean: jest.fn().mockReturnValue(false),
       },
       reply: jest.fn().mockResolvedValue(undefined),
       deferReply: jest.fn().mockResolvedValue(undefined),
@@ -587,39 +673,49 @@ describe('CommandHandler report commands (unit)', () => {
     await handler.handleSlashCommand(interaction);
 
     expect(client.channels.fetch).toHaveBeenCalledWith('old-channel-1');
-    expect(oldChannel.messages.fetch).toHaveBeenCalledWith('old-message-1');
+    expect(oldChannel.messages.fetch).toHaveBeenCalledWith({
+      message: 'old-message-1',
+      force: true,
+    });
     expect(oldMessage.delete).toHaveBeenCalledTimes(1);
     expect(targetChannel.send).toHaveBeenCalledWith({
       embeds: expect.any(Array),
       components: expect.any(Array),
     });
-    expect(configService.updateServerSettings).toHaveBeenNthCalledWith(1, 'guild-1', {
+    expect(configService.updateServerSettings).toHaveBeenNthCalledWith(2, 'guild-1', {
       report_instructions_channel_id: 'new-channel-1',
+      report_instructions_message_channel_id: 'new-channel-1',
       report_instructions_message_id: 'new-message-1',
       report_instructions_cleanup_channel_id: 'old-channel-1',
       report_instructions_cleanup_message_id: 'old-message-1',
+      report_instructions_pending_publication: null,
     });
-    expect(configService.updateServerSettings).toHaveBeenNthCalledWith(2, 'guild-1', {
+    expect(configService.updateServerSettings).toHaveBeenNthCalledWith(3, 'guild-1', {
       report_instructions_cleanup_channel_id: null,
       report_instructions_cleanup_message_id: null,
     });
     expect(targetChannel.send.mock.invocationCallOrder[0]).toBeLessThan(
-      updateServerSettings.mock.invocationCallOrder[0]
+      updateServerSettings.mock.invocationCallOrder[1]
     );
-    expect(updateServerSettings.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(updateServerSettings.mock.invocationCallOrder[1]).toBeLessThan(
       oldMessage.delete.mock.invocationCallOrder[0]
     );
   });
 
   it('preserves old report instructions when publishing the replacement fails', async () => {
-    const oldMessage = { delete: jest.fn().mockResolvedValue(undefined) };
+    const oldMessage = {
+      author: { id: 'bot-1' },
+      embeds: [{ title: 'Report a User' }],
+      components: [{ components: [{ customId: 'report_user_initiate' }] }],
+      delete: jest.fn().mockResolvedValue(undefined),
+    };
     const client = {
+      user: { id: 'bot-1' },
       channels: {
         fetch: jest.fn().mockResolvedValue({
           messages: { fetch: jest.fn().mockResolvedValue(oldMessage) },
         }),
       },
-      user: { id: 'bot-1' },
     } as any;
     const configService = {
       getServerConfig: jest.fn().mockResolvedValue({
@@ -643,7 +739,13 @@ describe('CommandHandler report commands (unit)', () => {
       )
     ).rejects.toThrow('missing permission');
 
-    expect(configService.updateServerSettings).not.toHaveBeenCalled();
+    expect(configService.updateServerSettings).toHaveBeenCalledTimes(1);
+    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
+      report_instructions_pending_publication: {
+        channel_id: 'new-channel-1',
+        after_message_id: null,
+      },
+    });
     expect(client.channels.fetch).not.toHaveBeenCalled();
     expect(oldMessage.delete).not.toHaveBeenCalled();
   });
@@ -656,7 +758,10 @@ describe('CommandHandler report commands (unit)', () => {
     const client = { channels: { fetch: jest.fn() }, user: { id: 'bot-1' } } as any;
     const configService = {
       getServerConfig: jest.fn().mockResolvedValue({ settings: {} }),
-      updateServerSettings: jest.fn().mockRejectedValue(new Error('database unavailable')),
+      updateServerSettings: jest
+        .fn()
+        .mockResolvedValueOnce({})
+        .mockRejectedValue(new Error('database unavailable')),
     } as any;
     const targetChannel = {
       id: 'new-channel-1',
@@ -675,8 +780,14 @@ describe('CommandHandler report commands (unit)', () => {
   });
 
   it('preserves old report instructions when clearing settings fails', async () => {
-    const oldMessage = { delete: jest.fn().mockResolvedValue(undefined) };
+    const oldMessage = {
+      author: { id: 'bot-1' },
+      embeds: [{ title: 'Report a User' }],
+      components: [{ components: [{ customId: 'report_user_initiate' }] }],
+      delete: jest.fn().mockResolvedValue(undefined),
+    };
     const client = {
+      user: { id: 'bot-1' },
       channels: {
         fetch: jest.fn().mockResolvedValue({
           messages: { fetch: jest.fn().mockResolvedValue(oldMessage) },
@@ -699,6 +810,7 @@ describe('CommandHandler report commands (unit)', () => {
 
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       report_instructions_channel_id: null,
+      report_instructions_message_channel_id: null,
       report_instructions_message_id: null,
       report_instructions_cleanup_channel_id: 'old-channel-1',
       report_instructions_cleanup_message_id: 'old-message-1',
@@ -709,6 +821,7 @@ describe('CommandHandler report commands (unit)', () => {
 
   it('retains durable cleanup metadata when report-message deletion fails transiently', async () => {
     const client = {
+      user: { id: 'bot-1' },
       channels: {
         fetch: jest.fn().mockRejectedValue(new Error('Discord unavailable')),
       },
@@ -730,6 +843,7 @@ describe('CommandHandler report commands (unit)', () => {
     expect(configService.updateServerSettings).toHaveBeenCalledTimes(1);
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       report_instructions_channel_id: null,
+      report_instructions_message_channel_id: null,
       report_instructions_message_id: null,
       report_instructions_cleanup_channel_id: 'old-channel-1',
       report_instructions_cleanup_message_id: 'old-message-1',
@@ -737,8 +851,14 @@ describe('CommandHandler report commands (unit)', () => {
   });
 
   it('retries durable report-message cleanup after the active routing metadata was cleared', async () => {
-    const oldMessage = { delete: jest.fn().mockResolvedValue(undefined) };
+    const oldMessage = {
+      author: { id: 'bot-1' },
+      embeds: [{ title: 'Report a User' }],
+      components: [{ components: [{ customId: 'report_user_initiate' }] }],
+      delete: jest.fn().mockResolvedValue(undefined),
+    };
     const client = {
+      user: { id: 'bot-1' },
       channels: {
         fetch: jest.fn().mockResolvedValue({
           messages: { fetch: jest.fn().mockResolvedValue(oldMessage) },
@@ -777,14 +897,19 @@ describe('CommandHandler report commands (unit)', () => {
     const firstSendRelease = new Promise<void>((resolve) => {
       releaseFirstSend = resolve;
     });
-    const oldMessage = { delete: jest.fn().mockResolvedValue(undefined) };
+    const oldMessage = {
+      author: { id: 'bot-1' },
+      embeds: [{ title: 'Report a User' }],
+      components: [{ components: [{ customId: 'report_user_initiate' }] }],
+      delete: jest.fn().mockResolvedValue(undefined),
+    };
     const client = {
+      user: { id: 'bot-1' },
       channels: {
         fetch: jest.fn().mockResolvedValue({
           messages: { fetch: jest.fn().mockResolvedValue(oldMessage) },
         }),
       },
-      user: { id: 'bot-1' },
     } as any;
     let settings: Record<string, string | null> = {};
     const configService = {

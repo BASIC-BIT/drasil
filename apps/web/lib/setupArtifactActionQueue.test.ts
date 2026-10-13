@@ -1,14 +1,82 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ queue: vi.fn() }));
+const mocks = vi.hoisted(() => ({ queue: vi.fn(), queueReport: vi.fn() }));
 
 vi.mock('./e2eFixtures', () => ({ isWebE2eFixtureMode: () => false }));
 vi.mock('./moderationActionRequestQueue', () => ({
-  queueModerationActionRequest: vi.fn(),
+  queueModerationActionRequest: mocks.queueReport,
   queueSerializedModerationActionRequestWithReceipt: mocks.queue,
 }));
 
-import { queueCompleteSetupVerificationRequestWithReceipt } from './setupArtifactActionQueue';
+import {
+  queueCompleteSetupVerificationRequestWithReceipt,
+  queueReportInstructionsRepairRequest,
+} from './setupArtifactActionQueue';
+
+describe('report panel requests', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.queueReport.mockResolvedValue('queued');
+  });
+
+  it('keeps repair requests separate from explicit reposts', async () => {
+    await queueReportInstructionsRepairRequest({
+      actorId: 'admin',
+      channelId: 'channel',
+      guildId: 'guild',
+    });
+    expect(mocks.queueReport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionType: 'upsert_report_instructions',
+        metadata: {
+          channel_id: 'channel',
+          requested_surface: 'web',
+          setup_action: 'upsert_report_instructions',
+        },
+      })
+    );
+  });
+
+  it('deduplicates repeat reposts of the panel the administrator saw', async () => {
+    const input = {
+      actorId: 'admin',
+      channelId: 'channel',
+      guildId: 'guild',
+      repost: true,
+      expectedMessageId: 'old-panel',
+      expectedChannelId: 'original-channel',
+      submissionId: 'submission-1',
+    };
+    await queueReportInstructionsRepairRequest(input);
+    await queueReportInstructionsRepairRequest(input);
+    expect(mocks.queueReport.mock.calls[0][0]).toEqual(mocks.queueReport.mock.calls[1][0]);
+    expect(mocks.queueReport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        idempotencyKey: 'web:setup:repost_report_instructions:guild:channel:old-panel:submission-1',
+        metadata: expect.objectContaining({
+          repost: true,
+          expected_message_id: 'old-panel',
+          expected_channel_id: 'original-channel',
+        }),
+      })
+    );
+  });
+
+  it('allows another deliberate submission after a cleanup-only request completes', async () => {
+    const input = {
+      actorId: 'admin',
+      channelId: 'channel',
+      guildId: 'guild',
+      repost: true,
+      expectedMessageId: 'replacement',
+    };
+    await queueReportInstructionsRepairRequest({ ...input, submissionId: 'cleanup' });
+    await queueReportInstructionsRepairRequest({ ...input, submissionId: 'repost-after-refresh' });
+    expect(mocks.queueReport.mock.calls[0][0].idempotencyKey).not.toBe(
+      mocks.queueReport.mock.calls[1][0].idempotencyKey
+    );
+  });
+});
 
 describe('queueCompleteSetupVerificationRequestWithReceipt', () => {
   beforeEach(() => {

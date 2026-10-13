@@ -41,6 +41,54 @@ Good for privacy and low clutter. Reports start as triage alerts instead of crea
 
 ### Guild Report Instructions Button
 
+Administrators can use `/setupreportbutton channel:<channel> repost:true` or **Repost report
+button** in web setup after adding channel instructions. Ordinary setup and repair still edit the
+existing panel. Every new publication saves an intent before sending, including ordinary first
+setup, recreation, and channel moves. Repost sends a replacement, saves its ID, and then removes
+the previous Drasil panel. An unconfirmed save retains working panels and recovery state. Retries
+recover the intent even after a restart or channel move.
+The configured destination and the tracked message's actual channel are stored separately.
+Saving a new destination preserves the existing message's parent; publication recovery updates
+the tracked message without overwriting that newer destination.
+Repost requests include the panel and channel the administrator saw. A stale channel selection
+requires a refresh, while an intentional channel move from the current form is allowed. Repost
+stops if its untracked-panel lookup fails. If a saved replacement disappears before pending cleanup,
+Drasil verifies and re-adopts the earlier working panel instead of deleting it. A later deliberate
+repost can then replace that panel normally.
+If cleanup fails, retry finishes cleanup before publishing again. A fresh web submission can then
+request another repost. Untracked-panel lookup paginates up to 1,000 messages before publishing;
+it stops without sending if the search budget cannot establish absence. Publication recovery checks
+at most 1,000 messages newer than the saved boundary and
+stops with an error if that limit is reached; it never sends another panel on an incomplete search.
+Tracked-panel repair, repost, and recovery require Drasil to have View Channel and Read Message
+History so it can verify the bot author, report embed, and button before changing a message. Setup
+diagnostics warn when Read Message History is missing. Ordinary first
+setup can publish without history access; an uncertain send or save then requires history access
+to recover. Empty history without that permission
+is not evidence that a panel is missing ([Discord API](https://github.com/discord/discord-api-docs/blob/main/developers/resources/message.mdx#get-channel-messages)).
+Fetching a tracked panel by ID also requires history access ([Discord API](https://docs.discord.com/developers/resources/message#get-channel-message)).
+
+```mermaid
+flowchart LR
+  Discord[Discord administrator] --> Slash[setupreportbutton]
+  Direct[Direct web setup link] --> Auth[Discord sign-in and administrator check]
+  Auth --> Setup[Web setup]
+  Slash --> Repair[Default repair]
+  Setup --> Repair
+  Repair --> Exists{Panel exists?}
+  Exists -->|Yes| Edit[Edit existing panel]
+  Edit --> Button
+  Exists -->|No| Intent
+  Slash --> Repost[Explicit repost]
+  Setup --> Repost
+  Repost --> Intent[Save publication intent]
+  Intent --> Send[Send below newer instructions]
+  Send --> Save[Save replacement ID]
+  Save --> Delete[Remove old Drasil panel]
+  Delete --> Button[Existing Report a user button]
+  Button --> Intake[Private report intake thread]
+```
+
 1. Reporter clicks the report instructions button in a configured report channel.
 2. Drasil opens a private report intake thread and adds the reporter.
 3. Drasil adds configured case responders when responder routing is enabled.

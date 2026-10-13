@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { randomUUID } from 'node:crypto';
 import { redirect } from 'next/navigation';
 import {
   CASE_RESPONDER_DEFAULT_THREAD_MEMBER_CAP,
@@ -76,6 +77,7 @@ import {
 import {
   queueCompleteSetupVerification,
   queueReportInstructionsRepair,
+  queueReportInstructionsRepost,
   saveGuildSetup,
 } from './actions';
 import { AccountControl } from '@/components/AccountControl';
@@ -199,6 +201,7 @@ export default async function GuildSetupPage({ params }: PageProps) {
   const saveAction = saveGuildSetup.bind(null, guildId);
   const completeSetupVerificationAction = queueCompleteSetupVerification.bind(null, guildId);
   const repairReportInstructionsAction = queueReportInstructionsRepair.bind(null, guildId);
+  const repostReportInstructionsAction = queueReportInstructionsRepost.bind(null, guildId);
   const reportAiMaxAction = server?.settings.report_ai_max_action ?? 'hints';
   const reportAiAnalyzeText = server?.settings.report_ai_analyze_text ?? true;
   const reportAiAnalyzeImages = server?.settings.report_ai_analyze_images ?? true;
@@ -464,10 +467,29 @@ export default async function GuildSetupPage({ params }: PageProps) {
           >
             Queue report button repair
           </button>
+          <input
+            type="hidden"
+            name="reportInstructionsMessageId"
+            value={server?.settings.report_instructions_message_id ?? ''}
+          />
+          <input type="hidden" name="reportInstructionsSubmissionId" value={randomUUID()} />
+          <input
+            type="hidden"
+            name="reportInstructionsExpectedChannelId"
+            value={server?.settings.report_instructions_channel_id ?? ''}
+          />
+          <button
+            className="button secondary"
+            formAction={repostReportInstructionsAction}
+            type="submit"
+          >
+            Repost report button
+          </button>
           <p className="muted">
             Core setup uses the selected case role and admin channel, creating the verification
             channel when none is selected. Report button repair only posts or updates report
-            instructions, falling back to the admin alert channel.
+            instructions, falling back to the admin alert channel. Repost places a fresh panel below
+            newer channel instructions and removes the old panel.
           </p>
         </div>
 

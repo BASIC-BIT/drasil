@@ -260,9 +260,17 @@ export const serverSettingsSchema = z
       .max(VERIFICATION_ANALYSIS_MAX_RESTRICT_THRESHOLD)
       .optional(),
     report_instructions_channel_id: z.string().nullable().optional(),
+    report_instructions_message_channel_id: z.string().nullable().optional(),
     report_instructions_message_id: z.string().nullable().optional(),
     report_instructions_cleanup_channel_id: z.string().nullable().optional(),
     report_instructions_cleanup_message_id: z.string().nullable().optional(),
+    report_instructions_pending_publication: z
+      .object({
+        channel_id: z.string(),
+        after_message_id: z.string().nullable(),
+      })
+      .nullable()
+      .optional(),
     message_deletion_enabled: z.boolean().optional(),
     message_deletion_source_message_enabled: z.boolean().optional(),
     message_deletion_watchlist_enabled: z.boolean().optional(),

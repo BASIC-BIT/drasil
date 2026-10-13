@@ -1,6 +1,7 @@
 import { ModerationActionRequestService } from '../../services/ModerationActionRequestService';
+import { ReportInstructionsManager } from '../../controllers/ReportInstructionsManager';
 import type { Prisma } from '../../db/prisma';
-import { ChannelType } from 'discord.js';
+import { ChannelType, Collection } from 'discord.js';
 import {
   AdminActionType,
   CaseAttentionState,
@@ -701,6 +702,9 @@ describe('ModerationActionRequestService', () => {
       },
     };
     const reportInstructionsMessage = {
+      author: { id: 'bot-1' },
+      embeds: [{ title: 'Report a User' }],
+      components: [{ components: [{ customId: 'report_user_initiate' }] }],
       delete: jest.fn(async () => undefined),
       id: 'report-message-1',
     };
@@ -708,8 +712,16 @@ describe('ModerationActionRequestService', () => {
       guildId: 'guild-1',
       id: 'report-channel-1',
       messages: {
-        fetch: jest.fn(async (id: string) =>
-          id === reportInstructionsMessage.id ? reportInstructionsMessage : null
+        fetch: jest.fn(
+          async (input: string | { limit: number } | { message: string; force: boolean }) => {
+            const id =
+              typeof input === 'string' ? input : 'message' in input ? input.message : input;
+            return typeof id !== 'string'
+              ? new Collection()
+              : id === reportInstructionsMessage.id
+                ? reportInstructionsMessage
+                : null;
+          }
         ),
       },
       send: jest.fn(async () => reportInstructionsMessage),
@@ -3376,6 +3388,7 @@ describe('ModerationActionRequestService', () => {
     expect(reportInstructionsMessage.delete).toHaveBeenCalled();
     expect(configService.updateServerSettings).toHaveBeenNthCalledWith(1, 'guild-1', {
       report_instructions_channel_id: null,
+      report_instructions_message_channel_id: null,
       report_instructions_message_id: null,
       report_instructions_cleanup_channel_id: 'report-channel-1',
       report_instructions_cleanup_message_id: 'report-message-1',
@@ -3397,7 +3410,9 @@ describe('ModerationActionRequestService', () => {
     const { configService, reportInstructionsMessage, repository, service } = buildService([
       completeSetupVerificationRequest,
     ]);
-    configService.updateServerSettings.mockRejectedValueOnce(new Error('database unavailable'));
+    configService.updateServerSettings
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('database unavailable'));
     reportInstructionsMessage.delete.mockRejectedValueOnce(new Error('Discord unavailable'));
 
     await expect(service.processPendingRequests()).resolves.toBe(1);
@@ -3407,7 +3422,7 @@ describe('ModerationActionRequestService', () => {
       {
         id: 'setup-verification-request-1',
         error:
-          'Report instructions were published but could not be tracked or removed. Retry setup to recover the message.',
+          'A report panel was published, but saving or rolling it back could not be confirmed. Existing panels were retained. Retry setup to recover the message.',
       },
     ]);
   });
@@ -3427,7 +3442,9 @@ describe('ModerationActionRequestService', () => {
     );
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       report_instructions_channel_id: 'report-channel-1',
+      report_instructions_message_channel_id: 'report-channel-1',
       report_instructions_message_id: 'report-message-1',
+      report_instructions_pending_publication: null,
     });
     expect(repository.completed).toEqual([
       {
@@ -3443,6 +3460,76 @@ describe('ModerationActionRequestService', () => {
     ]);
     expect(repository.failed).toEqual([]);
   });
+
+  it('passes a web repost and its expected panel to the shared manager', async () => {
+    const upsert = jest
+      .spyOn(ReportInstructionsManager.prototype, 'upsertReportInstructionsMessage')
+      .mockResolvedValue({ action: 'reposted', messageId: 'replacement' });
+    const { guild, repository, service } = buildService([
+      {
+        ...upsertReportInstructionsRequest,
+        metadata: {
+          channel_id: 'report-channel-1',
+          repost: true,
+          expected_message_id: 'previous',
+          expected_channel_id: 'original-channel',
+        },
+      },
+    ]);
+    await service.processPendingRequests();
+    expect(guild.members.fetch).toHaveBeenCalledWith({
+      user: upsertReportInstructionsRequest.actor_id,
+      force: true,
+    });
+    expect(upsert).toHaveBeenCalledWith(
+      'guild-1',
+      expect.objectContaining({ id: 'report-channel-1' }),
+      {
+        repost: true,
+        expectedMessageId: 'previous',
+        expectedChannelId: 'original-channel',
+      }
+    );
+    expect(repository.completed[0]?.result).toEqual(
+      expect.objectContaining({ action: 'reposted', message_id: 'replacement' })
+    );
+  });
+
+  it.each(['revoked', 'departed', 'unavailable'])(
+    'rejects a queued repost when its administrator is %s',
+    async (state) => {
+      const upsert = jest.spyOn(
+        ReportInstructionsManager.prototype,
+        'upsertReportInstructionsMessage'
+      );
+      const { guild, reportInstructionsChannel, repository, service } = buildService([
+        {
+          ...upsertReportInstructionsRequest,
+          metadata: {
+            channel_id: 'report-channel-1',
+            repost: true,
+            expected_message_id: 'previous',
+          },
+        },
+      ]);
+      if (state === 'unavailable')
+        guild.members.fetch.mockRejectedValue(new Error('Discord unavailable'));
+      else
+        guild.members.fetch.mockResolvedValue(
+          state === 'departed' ? null : { permissions: { has: () => false } }
+        );
+      await service.processPendingRequests();
+      expect(upsert).not.toHaveBeenCalled();
+      expect(reportInstructionsChannel.send).not.toHaveBeenCalled();
+      expect(repository.completed).toEqual([]);
+      expect(repository.failed).toEqual([
+        {
+          id: upsertReportInstructionsRequest.id,
+          error: 'Report panel repost requires current Administrator permission.',
+        },
+      ]);
+    }
+  );
 
   it('syncs moderation queue mirrors through the logged-in bot Discord client', async () => {
     const { moderationQueueService, repository, service } = buildService([
