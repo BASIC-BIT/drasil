@@ -51,6 +51,8 @@ Numbered buttons avoid truncation and duplicate-name ambiguity; identity rows ke
 
 The moderator close confirmation asks "Close this report thread?" and describes the actual state. Before selection: "No report has been submitted." After selection: "The selected person and saved evidence will remain recorded." After submission: "The submitted report will remain recorded." Use **Close report** and **Keep open** buttons. Do not promise that a closeout message will be delivered or the thread archived. A close acknowledgement uses the returned report outcome. Only a successful archive may establish that the thread closed; an archive failure must retain the known report outcome and explain that Drasil could not archive the thread.
 
+For the existing moderator-confirmation-pending status, say "This report is waiting for a moderator." The report remains open, while reporter confirmation/rejection controls remain ineligible.
+
 Keep the existing thread-name prefix `Report intake:`. `EventHandler` uses it to avoid automatic detection in report threads if intake handling fails. Do not rename persisted custom IDs, command names, config keys, or enum values during this copy pass. Existing report confirmation/rejection custom IDs must continue to work.
 
 ## Behavior design

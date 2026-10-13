@@ -549,29 +549,71 @@ describe('ReportIntakeService', () => {
     );
   });
 
-  it('saved rejection remains successful when auxiliary evidence logging fails', async () => {
-    const { service, reportIntakeRepository, intake, message } = await preparePrompt();
-    await service.handleThreadMessage(message);
-    const metadata = (await reportIntakeRepository.findById(intake.id))?.metadata as Record<
-      string,
-      unknown
-    >;
-    jest
-      .spyOn(reportIntakeRepository, 'addEvidence')
-      .mockRejectedValueOnce(new Error('evidence insert failed'));
-    await expect(
-      service.rejectCandidates({
-        intakeId: intake.id,
-        rejectedById: 'reporter-1',
-        promptToken: String(metadata.last_confirmation_prompt_token),
-        promptMessageId: 'prompt-1',
-      })
-    ).resolves.toEqual({ rejected: true, message: 'Selection cleared.' });
-    expect(await reportIntakeRepository.findById(intake.id)).toMatchObject({
-      status: ReportIntakeStatus.COLLECTING_EVIDENCE,
-      metadata: { candidate_suggestions: [], rejected_candidate_ids: ['user-1'] },
-    });
-  });
+  it.each(['reporter-1', 'staff-1'])(
+    'saved rejection by %s remains successful when auxiliary evidence logging fails',
+    async (actor) => {
+      const { service, reportIntakeRepository, intake, message } = await preparePrompt();
+      await service.handleThreadMessage(message);
+      const metadata = (await reportIntakeRepository.findById(intake.id))?.metadata as Record<
+        string,
+        unknown
+      >;
+      jest
+        .spyOn(reportIntakeRepository, 'addEvidence')
+        .mockRejectedValueOnce(new Error('evidence insert failed'));
+      await expect(
+        service.rejectCandidates({
+          intakeId: intake.id,
+          rejectedById: actor,
+          rejectedByStaff: actor !== 'reporter-1',
+          promptToken: String(metadata.last_confirmation_prompt_token),
+          promptMessageId: 'prompt-1',
+        })
+      ).resolves.toEqual({ rejected: true, message: 'Selection cleared.' });
+      expect(await reportIntakeRepository.findById(intake.id)).toMatchObject({
+        status: ReportIntakeStatus.COLLECTING_EVIDENCE,
+        metadata: {
+          candidate_suggestions: [],
+          rejected_candidate_ids: ['user-1'],
+          last_rejected_by: actor,
+        },
+      });
+    }
+  );
+
+  it.each(['confirm', 'reject'])(
+    'a pending moderator confirmation is not called closed by %s',
+    async (action) => {
+      const { service, reportIntakeRepository } = buildService();
+      const intake = await service.openIntakeFromThread({
+        serverId: 'guild-1',
+        reporter: buildReporter(),
+        threadId: 'thread-1',
+        channelId: 'channel-1',
+      });
+      await reportIntakeRepository.update(intake.id, {
+        status: ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION,
+      });
+      const update = jest.spyOn(reportIntakeRepository, 'updateIfCurrent');
+      const result =
+        action === 'confirm'
+          ? await service.confirmCandidate({
+              intakeId: intake.id,
+              targetUserId: 'user-1',
+              confirmedById: 'reporter-1',
+            })
+          : await service.rejectCandidates({
+              intakeId: intake.id,
+              promptToken: 'old-token',
+              rejectedById: 'reporter-1',
+            });
+      expect(result.message).toBe('This report is waiting for a moderator.');
+      expect(update).not.toHaveBeenCalled();
+      expect((await reportIntakeRepository.findById(intake.id))?.status).toBe(
+        ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION
+      );
+    }
+  );
 
   it('an older tracked prompt cannot select a still-suggested candidate', async () => {
     const { service, intake, message } = await preparePrompt();

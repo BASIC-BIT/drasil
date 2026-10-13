@@ -372,6 +372,7 @@ export class ReportIntakeService implements IReportIntakeService {
         rejected_candidate_ids: allRejectedCandidateIds,
         last_rejected_candidate_ids: rejectedCandidateIds,
         last_rejected_at: now,
+        last_rejected_by: input.rejectedById,
         last_confirmation_prompt_candidate_ids: [],
       },
     });
@@ -1291,11 +1292,14 @@ export function getReportConfirmationUnavailableMessage(intake: ReportIntake): s
     return 'This report has already been submitted.';
   if (
     intake.status !== ReportIntakeStatus.COLLECTING_EVIDENCE &&
-    intake.status !== ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION
+    intake.status !== ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION &&
+    intake.status !== ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION
   )
     return 'This report is closed.';
   if (intake.confirmed_target_user_id)
     return 'A person is already selected. Submission is not confirmed. No second report was submitted.';
+  if (intake.status === ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION)
+    return 'This report is waiting for a moderator.';
   return intake.status === ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION
     ? null
     : 'Use the latest confirmation message in this thread.';
