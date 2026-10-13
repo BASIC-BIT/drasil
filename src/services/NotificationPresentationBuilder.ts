@@ -388,7 +388,7 @@ export class NotificationPresentationBuilder {
       .setColor(0x5865f2)
       .setTitle('Report thread opened')
       .setDescription(
-        `<@${reporter.id}> opened a private report thread. No report has been submitted yet.`
+        `<@${reporter.id}> opened a private report thread. No report was submitted when the thread opened.`
       )
       .addFields(
         {

@@ -258,6 +258,55 @@ describe('ReportInteractionHandler (unit)', () => {
     });
   });
 
+  it.each(
+    ['message modal', 'typed modal'].flatMap((route) =>
+      ['receipt', 'routing'].map((failure) => [route, failure])
+    )
+  )('preserves direct %s result when %s fails', async (route, failure) => {
+    Object.assign(client, {
+      users: { fetch: jest.fn().mockResolvedValue({ id: 'user-2', username: 'target' }) },
+      channels: { fetch: jest.fn().mockResolvedValue(null) },
+    });
+    const isMessage = route === 'message modal';
+    const interaction = buildModalInteraction(
+      isMessage
+        ? `${REPORT_MESSAGE_MODAL_PREFIX}:message-1:channel-1:user-2:guild-1:0`
+        : REPORT_USER_TYPED_MODAL_ID,
+      'guild-1',
+      { id: 'reporter-1' } as User,
+      (id) => (id === 'report_target_user_input' ? '123456789012345678' : 'reported')
+    );
+    if (failure === 'receipt')
+      (interaction.editReply as jest.Mock).mockRejectedValueOnce(new Error('receipt failed'));
+    const submit = isMessage
+      ? securityActionService.handleMessageReport
+      : securityActionService.handleUserReport;
+    if (failure === 'routing')
+      submit.mockRejectedValueOnce(new Error('delivery failed after saving detection'));
+    const handler = createHandler();
+    if (isMessage) await handler.handleReportMessageModalSubmit(interaction);
+    else await handler.handleReportUserModalSubmit(interaction);
+    expect(submit).toHaveBeenCalledTimes(1);
+    const calls = [
+      ...(interaction.editReply as jest.Mock).mock.calls,
+      ...(interaction.reply as jest.Mock).mock.calls,
+      ...(interaction.followUp as jest.Mock).mock.calls,
+    ];
+    if (failure === 'routing')
+      expect(calls).toContainEqual([
+        expect.objectContaining({
+          content:
+            "Drasil couldn't finish submitting this report. Please ask a moderator to review it.",
+        }),
+      ]);
+    else
+      expect(
+        calls.some(([payload]) =>
+          /error occurred|couldn't finish submitting|try again/i.test(payload.content)
+        )
+      ).toBe(false);
+  });
+
   it('submits Report Message modal with optional reason', async () => {
     const targetUser = { id: 'user-2', username: 'target' } as User;
     (client as any).users = {
@@ -890,7 +939,7 @@ describe('ReportInteractionHandler (unit)', () => {
       closedByStaff: true,
     });
     expect(interaction.editReply).toHaveBeenCalledWith({
-      content: 'Report intake closed.',
+      content: 'Report cancelled. No report was submitted.',
       components: [],
       allowedMentions: { parse: [] },
     });
@@ -935,6 +984,32 @@ describe('ReportInteractionHandler (unit)', () => {
       (interaction as any).message = { edit: jest.fn().mockResolvedValue(undefined) };
       return { interaction, thread };
     };
+
+    it.each([
+      'Report cancelled. No report was submitted.',
+      'The selected person remains recorded for moderator review.',
+      'Report submitted.',
+    ])('preserves %s when archive fails', async (message) => {
+      const service = createReportIntakeService();
+      service.findIntakeById.mockResolvedValue(buildReportIntake());
+      service.closeIntakeForThread.mockResolvedValue({
+        closed: true,
+        shouldArchiveThread: true,
+        message,
+      });
+      const { interaction, thread } = buildThreadCloseInteraction('reporter-1');
+      thread.setArchived.mockRejectedValueOnce(new Error('archive denied'));
+      await createHandler(service).handleReportIntakeAdminAction(interaction, interaction.customId);
+      expect(interaction.editReply).toHaveBeenCalledWith(
+        expect.objectContaining({ content: `${message}\nDrasil couldn't archive this thread.` })
+      );
+      expect(thread.send).toHaveBeenCalledWith(expect.objectContaining({ content: message }));
+      expect(
+        (interaction.editReply as jest.Mock).mock.calls.some(
+          ([payload]) => payload.content === 'Report intake closed.'
+        )
+      ).toBe(false);
+    });
 
     it('does not close the report when the clicker is neither the reporter nor staff', async () => {
       const reportIntakeService = createReportIntakeService();
@@ -1067,6 +1142,155 @@ describe('ReportInteractionHandler (unit)', () => {
       expect(service.rejectCandidates).not.toHaveBeenCalled();
       expect(service.markSubmitted).not.toHaveBeenCalled();
       expect(threadManager.retireReportConfirmationPrompts).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    'ephemeral receipt',
+    'thread receipt',
+    'controls',
+    'archive',
+    'state false',
+    'state exception',
+  ])('keeps routing success when a later %s fails', async (failure) => {
+    const service = createReportIntakeService();
+    service.confirmCandidate.mockResolvedValue({
+      confirmed: true,
+      message: 'confirmed',
+      reason: 'reported reason',
+    });
+    if (failure === 'state false') service.markSubmitted.mockResolvedValue(false);
+    if (failure === 'state exception')
+      service.markSubmitted.mockRejectedValue(new Error('state failed'));
+    const interaction = buildInteraction('report_intake_confirm:intake-1:user-1', 'guild-1', {
+      id: 'reporter-1',
+    } as User);
+    const thread = {
+      id: 'thread-1',
+      isThread: () => true,
+      send: jest.fn().mockResolvedValue(undefined),
+      setArchived: jest.fn().mockResolvedValue(undefined),
+    };
+    Object.assign(interaction, { channel: thread });
+    if (failure === 'ephemeral receipt')
+      (interaction.editReply as jest.Mock).mockRejectedValueOnce(new Error('reply failed'));
+    if (failure === 'thread receipt') thread.send.mockRejectedValueOnce(new Error('send failed'));
+    if (failure === 'controls')
+      threadManager.retireReportConfirmationPrompts.mockRejectedValueOnce(new Error('edit failed'));
+    if (failure === 'archive')
+      thread.setArchived.mockRejectedValueOnce(new Error('archive failed'));
+    await createHandler(service).handleReportIntakeConfirm(interaction, interaction.customId);
+    expect(securityActionService.handleConfirmedReportIntake).toHaveBeenCalledTimes(1);
+    expect(service.markSubmitted).toHaveBeenCalledTimes(1);
+    const replies = (interaction.editReply as jest.Mock).mock.calls.map(
+      ([payload]) => payload.content
+    );
+    expect(
+      replies.some((text: string) =>
+        /couldn't finish submitting|An error occurred|try again/i.test(text)
+      )
+    ).toBe(false);
+    if (failure.startsWith('state')) {
+      expect(replies).toContain(
+        "Report submitted. Drasil couldn't record its final status. Please ask a moderator to review this thread."
+      );
+      expect(thread.setArchived).not.toHaveBeenCalled();
+    } else {
+      expect(thread.setArchived).toHaveBeenCalledTimes(1);
+      expect(threadManager.retireReportConfirmationPrompts).toHaveBeenCalled();
+    }
+  });
+
+  it('an exception while confirming may have reserved selection and does not invite a retry', async () => {
+    const service = createReportIntakeService();
+    service.confirmCandidate.mockRejectedValueOnce(
+      new Error('confirmation evidence failed after reservation')
+    );
+    const interaction = buildInteraction('report_intake_confirm:intake-1:user-1', 'guild-1', {
+      id: 'reporter-1',
+    } as User);
+    await createHandler(service).handleReportIntakeConfirm(interaction, interaction.customId);
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content:
+        "Drasil couldn't finish submitting this report. Please ask a moderator to review this thread.",
+    });
+    expect(securityActionService.handleConfirmedReportIntake).not.toHaveBeenCalled();
+  });
+
+  it('markSubmitted failure retains successful routing and blocks the next submission', async () => {
+    const service = createReportIntakeService();
+    service.confirmCandidate.mockImplementationOnce(async () => {
+      service.findIntakeById.mockResolvedValue(
+        buildReportIntake({
+          thread_id: 'thread-1',
+          status: ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION,
+          confirmed_target_user_id: 'user-1',
+        })
+      );
+      return { confirmed: true, message: 'confirmed', reason: 'reported' };
+    });
+    service.markSubmitted.mockResolvedValue(false);
+    const handler = createHandler(service);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const interaction = buildInteraction('report_intake_confirm:intake-1:user-1', 'guild-1', {
+        id: 'reporter-1',
+      } as User);
+      await handler.handleReportIntakeConfirm(interaction, interaction.customId);
+    }
+    expect(securityActionService.handleConfirmedReportIntake).toHaveBeenCalledTimes(1);
+    expect(service.confirmCandidate).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['unselected', 'selected', 'submitted'])(
+    'close confirmation describes the %s report without promising an archive',
+    async (state) => {
+      (client.guilds.fetch as jest.Mock).mockResolvedValue({
+        members: {
+          fetch: jest.fn().mockResolvedValue({ id: 'staff-1', permissions: { has: () => true } }),
+        },
+      });
+      const service = createReportIntakeService();
+      service.findIntakeById.mockResolvedValue(
+        buildReportIntake({
+          status:
+            state === 'submitted'
+              ? ReportIntakeStatus.SUBMITTED
+              : ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION,
+          confirmed_target_user_id: state === 'unselected' ? null : 'user-1',
+        })
+      );
+      const interaction = buildInteraction(
+        buildReportIntakeAdminCloseCustomId('intake-1'),
+        'guild-1',
+        { id: 'staff-1' } as User
+      );
+      Object.assign(interaction, {
+        channelId: 'report-thread-1',
+        channel: {
+          id: 'report-thread-1',
+          isThread: () => true,
+          send: jest.fn().mockResolvedValue(undefined),
+        },
+      });
+      await createHandler(service).handleReportIntakeAdminAction(interaction, interaction.customId);
+      const calls = [
+        ...(interaction.update as jest.Mock).mock.calls,
+        ...(interaction.editReply as jest.Mock).mock.calls,
+      ];
+      const payload = calls.find(([value]) =>
+        value.content.startsWith('Close this report thread?')
+      )?.[0];
+      expect(payload).toBeDefined();
+      const consequence =
+        state === 'unselected'
+          ? 'No report has been submitted.'
+          : state === 'submitted'
+            ? 'The submitted report will remain recorded.'
+            : 'The selected person and saved evidence will remain recorded.';
+      expect(payload.content).toBe(`Close this report thread? ${consequence}`);
+      expect(
+        payload.components[0].toJSON().components.map((button: { label: string }) => button.label)
+      ).toEqual(['Close report', 'Keep open']);
     }
   );
 

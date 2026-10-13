@@ -1,4 +1,10 @@
-import { ChannelType, InteractionContextType, MessageFlags } from 'discord.js';
+import {
+  ChannelType,
+  ChatInputCommandInteraction,
+  UserContextMenuCommandInteraction,
+  InteractionContextType,
+  MessageFlags,
+} from 'discord.js';
 import {
   ReportInstructionsError,
   ReportInstructionsManager,
@@ -9,6 +15,54 @@ import { buildHandler, restoreUserInstallReportingEnvAfterEach } from './command
 
 describe('CommandHandler report commands (unit)', () => {
   restoreUserInstallReportingEnvAfterEach();
+
+  it.each(
+    ['slash', 'user context'].flatMap((route) =>
+      ['receipt', 'routing'].map((failure) => [route, failure])
+    )
+  )('preserves direct %s outcome when %s fails after saving evidence', async (route, failure) => {
+    const saved: string[] = [];
+    const handleUserReport = jest.fn(async () => {
+      saved.push('detection');
+      if (failure === 'routing') throw new Error('delivery failed after saving detection');
+    });
+    const { handler } = buildHandler({ handleUserReport });
+    const targetUser = { id: 'user-2', username: 'target' };
+    const interaction = {
+      commandName: route === 'slash' ? 'report' : 'Report User',
+      user: { id: 'reporter-1' },
+      targetUser,
+      guild: { id: 'guild-1', members: { fetch: jest.fn().mockResolvedValue({ id: 'user-2' }) } },
+      options: {
+        getUser: jest.fn().mockReturnValue(targetUser),
+        getString: jest.fn().mockReturnValue('reported'),
+      },
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+      reply: jest.fn().mockResolvedValue(undefined),
+    };
+    if (failure === 'receipt')
+      interaction.editReply.mockRejectedValueOnce(new Error('receipt failed'));
+    if (route === 'slash')
+      await handler.handleSlashCommand(interaction as unknown as ChatInputCommandInteraction);
+    else
+      await handler.handleUserContextMenuCommand(
+        interaction as unknown as UserContextMenuCommandInteraction
+      );
+    expect(handleUserReport).toHaveBeenCalledTimes(1);
+    expect(saved).toEqual(['detection']);
+    if (failure === 'routing')
+      expect(interaction.editReply).toHaveBeenCalledWith({
+        content:
+          "Drasil couldn't finish submitting this report. Please ask a moderator to review it.",
+      });
+    else
+      expect(
+        [...interaction.editReply.mock.calls, ...interaction.reply.mock.calls].some(([payload]) =>
+          /error occurred|couldn't finish submitting|try again/i.test(payload.content)
+        )
+      ).toBe(false);
+  });
 
   it('handles /report with Discord user picker target', async () => {
     const handleUserReport = jest.fn().mockResolvedValue(true);

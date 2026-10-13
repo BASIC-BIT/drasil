@@ -1953,6 +1953,7 @@ describe('SecurityActionService (unit)', () => {
       consoleError.mockRestore();
     }
 
+    expect(await detectionEventsRepository.findByServerAndUser(guildId, userId)).toHaveLength(1);
     expect(threadManager.createReportReviewThread).not.toHaveBeenCalled();
     expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
   });

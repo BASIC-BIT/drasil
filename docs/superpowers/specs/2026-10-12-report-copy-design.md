@@ -1,6 +1,6 @@
 # Clear reporting copy and truthful outcomes
 
-Design refreshed on October 13, 2026 against `main` at `7ce302eb6a11913503f96f9d670da7fcfe93d968`. The reporter-facing wording is approved. This document describes the complete intended behavior, not completed delivery. The isolated implementation branch has a copy commit and unfinished state-write changes; prompt retirement and submission failure handling remain work in progress. No live Discord rendering or deployed behavior was verified in this refresh.
+Design refreshed on October 13, 2026 against `main` at `7ce302eb6a11913503f96f9d670da7fcfe93d968`. The reporter-facing wording is approved. This document describes the complete intended behavior, not completed delivery. The reporting changes are implemented locally and awaiting final code/copy review, required CI, and controlled Discord checks. No live Discord rendering or deployed behavior was verified in this refresh.
 
 ## Changes since the last review
 

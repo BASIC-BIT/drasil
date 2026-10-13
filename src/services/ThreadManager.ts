@@ -468,7 +468,7 @@ export class ThreadManager implements IThreadManager {
   private buildReportIntakeThreadMessage(): string {
     return (
       'Describe what happened and who you want to report. Add a message link, screenshot, @mention, username, or user ID.\n\n' +
-      "You'll be asked to confirm the person before the report is submitted. To cancel, choose Close Report."
+      "You'll confirm the person before submitting. To cancel, choose Close Report."
     );
   }
 

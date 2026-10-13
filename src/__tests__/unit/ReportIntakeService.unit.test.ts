@@ -333,6 +333,54 @@ describe('ReportIntakeService', () => {
     }
   );
 
+  it('missing intake does not establish submission persistence', async () => {
+    const { service, reportIntakeRepository } = buildService();
+    const update = jest.spyOn(reportIntakeRepository, 'updateIfCurrent');
+    expect(
+      await service.markSubmitted({
+        intakeId: 'missing',
+        targetUserId: 'user-1',
+        submittedById: 'reporter-1',
+      })
+    ).toBe(false);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('exhausted null state writes retain the reservation and block duplicate submission', async () => {
+    const { service, reportIntakeRepository, intake, message } = await preparePrompt();
+    await service.handleThreadMessage(message);
+    await service.confirmCandidate({
+      intakeId: intake.id,
+      targetUserId: 'user-1',
+      confirmedById: 'reporter-1',
+      promptMessageId: 'prompt-1',
+    });
+    const update = jest.spyOn(reportIntakeRepository, 'updateIfCurrent').mockResolvedValue(null);
+    expect(
+      await service.markSubmitted({
+        intakeId: intake.id,
+        targetUserId: 'user-1',
+        submittedById: 'reporter-1',
+      })
+    ).toBe(false);
+    expect(update).toHaveBeenCalledTimes(2);
+    expect(
+      await service.confirmCandidate({
+        intakeId: intake.id,
+        targetUserId: 'user-1',
+        confirmedById: 'reporter-1',
+        promptMessageId: 'prompt-1',
+      })
+    ).toMatchObject({
+      confirmed: false,
+      message:
+        'A person is already selected. Submission is not confirmed. No second report was submitted.',
+    });
+    expect((await reportIntakeRepository.findById(intake.id))?.confirmed_target_user_id).toBe(
+      'user-1'
+    );
+  });
+
   it('numbers duplicate long-name matches and excludes the reporter from the match count', async () => {
     const candidates = [
       buildCandidate('reporter-1'),

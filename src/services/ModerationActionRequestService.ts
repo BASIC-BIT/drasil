@@ -515,17 +515,21 @@ export class ModerationActionRequestService implements IModerationActionRequestS
         console.warn(`Failed to post report intake closeout in thread ${thread.id}:`, error);
       });
 
-    if (result.shouldArchiveThread) {
-      await this.archiveReportIntakeThread(thread, 'Report intake closed');
-    }
+    const archived = result.shouldArchiveThread
+      ? await this.archiveReportIntakeThread(thread, 'Report intake closed')
+      : thread.archived;
+    const acknowledgement =
+      result.shouldArchiveThread && !archived
+        ? `${result.message}\nDrasil couldn't archive this thread.`
+        : result.message;
 
     await this.repository.complete(request.id, {
       action_type: request.action_type,
       closed: true,
-      message: result.message,
+      message: acknowledgement,
       report_intake_id: request.report_intake_id,
       server_id: request.server_id,
-      thread_archived: result.shouldArchiveThread === true,
+      thread_archived: archived,
       thread_id: intake.thread_id,
     });
   }
@@ -2416,13 +2420,15 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     return thread;
   }
 
-  private async archiveReportIntakeThread(thread: ThreadChannel, reason: string): Promise<void> {
+  private async archiveReportIntakeThread(thread: ThreadChannel, reason: string): Promise<boolean> {
+    if (thread.archived) return true;
+    if (typeof thread.setArchived !== 'function') return false;
     try {
-      if (!thread.archived && typeof thread.setArchived === 'function') {
-        await thread.setArchived(true, reason);
-      }
+      await thread.setArchived(true, reason);
+      return true;
     } catch (error) {
       console.warn(`Failed to archive report intake thread ${thread.id}:`, error);
+      return false;
     }
   }
 
