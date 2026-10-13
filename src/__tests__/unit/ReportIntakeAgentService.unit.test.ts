@@ -169,7 +169,7 @@ describe('ReportIntakeAgentService', () => {
     });
     expect((message.channel as any).send).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: expect.stringContaining('Are you trying to report this person?'),
+        content: expect.stringContaining('Report this person?'),
       })
     );
   });

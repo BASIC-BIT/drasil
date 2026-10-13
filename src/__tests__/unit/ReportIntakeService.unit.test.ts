@@ -110,6 +110,64 @@ describe('ReportIntakeService', () => {
     return { service, reportIntakeRepository, candidateService, moderationQueueService };
   }
 
+  it('numbers duplicate long-name matches and excludes the reporter from the match count', async () => {
+    const candidates = [
+      buildCandidate('reporter-1'),
+      ...Array.from({ length: 6 }, (_, index) => ({
+        ...buildCandidate(`user-${index + 1}`),
+        displayName: 'Same name'.repeat(12),
+      })),
+    ];
+    const { service } = buildService({
+      resolvePlatformBackedCandidates: jest.fn().mockResolvedValue(candidates),
+    });
+    await service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+    const send = jest.fn().mockResolvedValue(undefined);
+    const message = buildMessage({
+      channel: { id: 'thread-1', isThread: jest.fn().mockReturnValue(true), send },
+    });
+    await service.handleThreadMessage(message);
+    const payload = send.mock.calls[0][0];
+    expect(payload.content).toContain('Who do you want to report?');
+    expect(payload.content).toContain('Showing 5 of 6 matches.');
+    expect(
+      payload.components[0].components.map(
+        (button: { data: { label: string } }) => button.data.label
+      )
+    ).toEqual(['Report 1', 'Report 2', 'Report 3', 'Report 4', 'Report 5']);
+    expect(payload.components[1].components[0].data.label).toBe('None of these');
+    expect(payload.allowedMentions).toEqual({ parse: [] });
+  });
+
+  it.each([
+    ReportIntakeStatus.ACTIONED,
+    ReportIntakeStatus.DISMISSED,
+    ReportIntakeStatus.FALSE_POSITIVE,
+    ReportIntakeStatus.CLOSED_BY_REPORTER,
+    ReportIntakeStatus.EXPIRED,
+  ])('describes %s as closed rather than submitted', async (status) => {
+    const { service, reportIntakeRepository } = buildService();
+    const intake = await service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+    await reportIntakeRepository.update(intake.id, { status });
+    expect(
+      await service.confirmCandidate({
+        intakeId: intake.id,
+        targetUserId: 'user-1',
+        confirmedById: 'reporter-1',
+      })
+    ).toEqual({ confirmed: false, message: 'This report is closed.' });
+  });
+
   it('opens durable intake state for a new report thread', async () => {
     const { service, reportIntakeRepository } = buildService();
 
@@ -172,13 +230,13 @@ describe('ReportIntakeService', () => {
     });
     expect((message.channel as any).send).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: expect.stringContaining('Are you trying to report this person?'),
+        content: expect.stringContaining('Report this person?'),
         allowedMentions: { parse: [] },
       })
     );
     expect((message.channel as any).send).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: expect.stringContaining('1. <@user-1> (Target user-1) (user-1)'),
+        content: expect.stringContaining('`Target user-1` (@`target-user-1`)\nUser ID: `user-1`'),
       })
     );
   });
@@ -345,7 +403,7 @@ describe('ReportIntakeService', () => {
 
     expect(result).toMatchObject({
       confirmed: false,
-      message: 'Only the reporter or staff can confirm this target.',
+      message: 'Only the reporter or a moderator can confirm the person.',
     });
   });
 
@@ -380,7 +438,7 @@ describe('ReportIntakeService', () => {
 
     expect(result).toMatchObject({
       confirmed: false,
-      message: 'That report intake is no longer accepting target confirmations.',
+      message: 'This report has already been submitted.',
     });
     expect(confirmationEvidence).toHaveLength(1);
     expect((await reportIntakeRepository.findById(intake.id))?.closed_at).toBeInstanceOf(Date);
@@ -413,7 +471,8 @@ describe('ReportIntakeService', () => {
 
     expect(result).toMatchObject({
       confirmed: false,
-      message: 'That report target has already been confirmed for this intake.',
+      message:
+        'A person has already been selected for this report. No second report was submitted.',
     });
     expect(result).not.toHaveProperty('reason');
     expect(confirmationEvidence).toHaveLength(1);
@@ -441,7 +500,8 @@ describe('ReportIntakeService', () => {
 
     expect(result).toMatchObject({
       confirmed: false,
-      message: 'That report target has already been confirmed for this intake.',
+      message:
+        'A person has already been selected for this report. No second report was submitted.',
     });
     expect(result).not.toHaveProperty('reason');
     expect(confirmationEvidence).toHaveLength(0);
@@ -576,7 +636,7 @@ describe('ReportIntakeService', () => {
     const stored = await reportIntakeRepository.findById(intake.id);
     expect(result).toMatchObject({
       rejected: false,
-      message: 'That target question is no longer current. Please answer the latest prompt.',
+      message: 'Use the latest confirmation message in this thread.',
     });
     expect(stored?.status).toBe(ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION);
     expect(stored?.metadata).toMatchObject({
@@ -726,12 +786,12 @@ describe('ReportIntakeService', () => {
     expect(channel.send).toHaveBeenCalledTimes(2);
     expect(channel.send).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        content: expect.stringContaining('<@user-1>'),
+        content: expect.stringContaining('User ID: `user-1`'),
       })
     );
     expect(channel.send).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        content: expect.stringContaining('<@user-2>'),
+        content: expect.stringContaining('User ID: `user-2`'),
       })
     );
   });
@@ -769,7 +829,7 @@ describe('ReportIntakeService', () => {
     expect(stored?.closed_at).toBeInstanceOf(Date);
     expect(evidence).toHaveLength(2);
     expect(channel.send).toHaveBeenCalledWith({
-      content: 'Report intake closed. No report has been filed.',
+      content: 'Report cancelled. No report was submitted.',
       components: [],
       allowedMentions: { parse: [] },
     });
@@ -796,7 +856,7 @@ describe('ReportIntakeService', () => {
     const stored = await reportIntakeRepository.findById(intake.id);
     expect(result).toEqual({
       closed: false,
-      message: 'Only the reporter or staff can close this report intake.',
+      message: 'Only the reporter or a moderator can close this report.',
     });
     expect(stored?.status).toBe(ReportIntakeStatus.COLLECTING_EVIDENCE);
     expect(stored?.closed_at).toBeNull();
@@ -826,7 +886,7 @@ describe('ReportIntakeService', () => {
     expect(first.closed).toBe(true);
     expect(second).toEqual({
       closed: true,
-      message: 'This report intake is already closed. Archiving the thread now.',
+      message: 'This report is closed.',
       shouldArchiveThread: true,
     });
     expect(secondStored?.status).toBe(ReportIntakeStatus.CLOSED_BY_REPORTER);
@@ -851,7 +911,7 @@ describe('ReportIntakeService', () => {
     const stored = await reportIntakeRepository.findById(intake.id);
     expect(result).toEqual({
       closed: true,
-      message: 'Report intake closed. No report has been filed.',
+      message: 'Report cancelled. No report was submitted.',
       shouldArchiveThread: true,
     });
     expect(stored?.status).toBe(ReportIntakeStatus.CLOSED_BY_REPORTER);
@@ -885,8 +945,7 @@ describe('ReportIntakeService', () => {
     const stored = await reportIntakeRepository.findById(intake.id);
     expect(result).toEqual({
       closed: true,
-      message:
-        'Report submitted. Moderators have been notified, so this intake thread is now closed.',
+      message: 'Report submitted.',
       shouldArchiveThread: true,
     });
     expect(stored?.status).toBe(ReportIntakeStatus.SUBMITTED);

@@ -824,7 +824,7 @@ describe('ModerationActionRequestService', () => {
     const reportIntakeService = {
       closeIntakeForThread: jest.fn(async () => ({
         closed: true,
-        message: 'Report intake closed. No report has been filed.',
+        message: 'Report cancelled. No report was submitted.',
         shouldArchiveThread: true,
       })),
       findIntakeById: jest.fn(async () => ({
@@ -1386,7 +1386,7 @@ describe('ModerationActionRequestService', () => {
     });
     expect(reportIntakeThread.send).toHaveBeenCalledWith({
       allowedMentions: { parse: [] },
-      content: 'Report intake closed. No report has been filed.',
+      content: 'Report cancelled. No report was submitted.',
     });
     expect(reportIntakeThread.setArchived).toHaveBeenCalledWith(true, 'Report intake closed');
     expect(repository.completed).toEqual([

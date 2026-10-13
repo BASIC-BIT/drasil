@@ -3478,7 +3478,7 @@ describe('SecurityActionService (unit)', () => {
     expect(metadata.observed_action_close_reason).toBeUndefined();
     expect(reportThread.setArchived).toHaveBeenCalledWith(false, 'Report intake reopened');
     expect(reportThread.send).toHaveBeenCalledWith({
-      content: 'Report reopened. Moderators restored this intake for review.',
+      content: 'Report reopened for moderator review.',
       allowedMentions: { parse: [] },
     });
   });
@@ -3970,8 +3970,7 @@ describe('SecurityActionService (unit)', () => {
       observed_action_close_reason: 'observed_ban',
     });
     expect(reportThread.send).toHaveBeenCalledWith({
-      content:
-        'Report reviewed. Moderators have completed this intake, so this thread is now closed.',
+      content: 'Moderators have reviewed this report.',
       allowedMentions: { parse: [] },
     });
     expect(reportThread.setArchived).toHaveBeenCalledWith(true, 'Report intake reviewed');

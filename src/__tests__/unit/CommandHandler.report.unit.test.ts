@@ -45,7 +45,7 @@ describe('CommandHandler report commands (unit)', () => {
     );
     expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
     expect(interaction.editReply).toHaveBeenCalledWith({
-      content: 'Thank you for your report regarding <@user-2>. It has been submitted for review.',
+      content: 'Report submitted for user `user-2`.',
       allowedMentions: { parse: [] },
     });
   });
@@ -86,7 +86,7 @@ describe('CommandHandler report commands (unit)', () => {
       undefined
     );
     expect(interaction.editReply).toHaveBeenCalledWith({
-      content: 'Thank you for your report regarding <@user-2>. It has been submitted for review.',
+      content: 'Report submitted for user `user-2`.',
       allowedMentions: { parse: [] },
     });
     consoleError.mockRestore();
@@ -200,7 +200,7 @@ describe('CommandHandler report commands (unit)', () => {
     );
     expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
     expect(interaction.editReply).toHaveBeenCalledWith({
-      content: 'Thank you for your report regarding <@user-2>. It has been submitted for review.',
+      content: 'Report submitted for user `user-2`.',
       allowedMentions: { parse: [] },
     });
   });
@@ -408,7 +408,9 @@ describe('CommandHandler report commands (unit)', () => {
     const messagePayload = (existingMessage.edit as jest.Mock).mock.calls[0][0] as any;
     const embedJson = messagePayload.embeds[0].toJSON();
     expect(embedJson.title).toBe('Report a User');
-    expect(embedJson.description).toContain('open a private report thread');
+    expect(embedJson.description).toContain(
+      'Open a private thread to explain what happened and add evidence.'
+    );
     expect(embedJson.description).not.toContain('picker');
     const buttonJson = messagePayload.components[0].toJSON().components[0];
     expect(buttonJson).toMatchObject({

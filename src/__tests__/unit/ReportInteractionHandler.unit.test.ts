@@ -203,8 +203,7 @@ describe('ReportInteractionHandler (unit)', () => {
       (client.guilds.fetch as jest.Mock).mock.invocationCallOrder[0]
     );
     expect(interaction.editReply).toHaveBeenCalledWith({
-      content:
-        'Thank you for your report regarding <@123456789012345678>. It has been submitted for review.',
+      content: 'Report submitted for user `123456789012345678`.',
       allowedMentions: { parse: [] },
     });
   });
@@ -274,7 +273,7 @@ describe('ReportInteractionHandler (unit)', () => {
       }
     );
     expect(interaction.editReply).toHaveBeenCalledWith({
-      content: 'Thank you for your report regarding <@user-2>. It has been submitted for review.',
+      content: 'Report submitted for user `user-2`.',
       allowedMentions: { parse: [] },
     });
   });
@@ -511,7 +510,7 @@ describe('ReportInteractionHandler (unit)', () => {
       expect.objectContaining({
         embeds: [
           expect.objectContaining({
-            data: expect.objectContaining({ title: 'Report Intake Started' }),
+            data: expect.objectContaining({ title: 'Report thread opened' }),
           }),
         ],
         allowedMentions: { parse: [], roles: [], users: [], repliedUser: false },
@@ -563,7 +562,7 @@ describe('ReportInteractionHandler (unit)', () => {
     expect(reportIntakeService.openIntakeFromThread).not.toHaveBeenCalled();
     expect(interaction.editReply).toHaveBeenCalledWith({
       content:
-        'You already have an open report thread: https://discord.com/channels/guild-1/existing-thread-1\nPlease continue there. If it was opened by mistake, use the Close Report button there or send `close report` in the thread.',
+        'Continue your report here: https://discord.com/channels/guild-1/existing-thread-1\nTo cancel, choose Close Report or send `close report` in that thread.',
     });
   });
 
@@ -834,7 +833,7 @@ describe('ReportInteractionHandler (unit)', () => {
     reportIntakeService.findIntakeById.mockResolvedValue(buildReportIntake());
     reportIntakeService.closeIntakeForThread.mockResolvedValue({
       closed: true,
-      message: 'Report intake closed. No report has been filed.',
+      message: 'Report cancelled. No report was submitted.',
       shouldArchiveThread: true,
     });
     const handler = createHandler(reportIntakeService);
@@ -874,7 +873,7 @@ describe('ReportInteractionHandler (unit)', () => {
     });
     expect(interaction.update).not.toHaveBeenCalled();
     expect(thread.send).toHaveBeenCalledWith({
-      content: 'Report intake closed. No report has been filed.',
+      content: 'Report cancelled. No report was submitted.',
       allowedMentions: { parse: [] },
     });
     expect(thread.setArchived).toHaveBeenCalledWith(true, 'Report intake closed');
@@ -889,10 +888,10 @@ describe('ReportInteractionHandler (unit)', () => {
           closedById === 'reporter-1' || closedByStaff === true
             ? {
                 closed: true,
-                message: 'Report intake closed. No report has been filed.',
+                message: 'Report cancelled. No report was submitted.',
                 shouldArchiveThread: true,
               }
-            : { closed: false, message: 'Only the reporter or staff can close this report intake.' }
+            : { closed: false, message: 'Only the reporter or a moderator can close this report.' }
       );
 
     const buildThreadCloseInteraction = (userId: string) => {
@@ -930,7 +929,7 @@ describe('ReportInteractionHandler (unit)', () => {
       });
       expect(interaction.editReply).toHaveBeenCalledWith(
         expect.objectContaining({
-          content: 'Only the reporter or staff can close this report intake.',
+          content: 'Only the reporter or a moderator can close this report.',
         })
       );
       expect(thread.send).not.toHaveBeenCalled();
@@ -954,7 +953,7 @@ describe('ReportInteractionHandler (unit)', () => {
         closedByStaff: false,
       });
       expect(thread.send).toHaveBeenCalledWith({
-        content: 'Report intake closed. No report has been filed.',
+        content: 'Report cancelled. No report was submitted.',
         allowedMentions: { parse: [] },
       });
       expect(thread.setArchived).toHaveBeenCalledWith(true, 'Report intake closed');
@@ -968,7 +967,7 @@ describe('ReportInteractionHandler (unit)', () => {
       );
       reportIntakeService.closeIntakeForThread.mockResolvedValue({
         closed: true,
-        message: 'This report intake is already closed. Archiving the thread now.',
+        message: 'This report is closed.',
         shouldArchiveThread: true,
       });
       const handler = createHandler(reportIntakeService);
@@ -978,7 +977,7 @@ describe('ReportInteractionHandler (unit)', () => {
 
       expect(reportIntakeService.closeIntakeForThread).toHaveBeenCalledTimes(1);
       expect(thread.send).toHaveBeenCalledWith({
-        content: 'This report intake is already closed. Archiving the thread now.',
+        content: 'This report is closed.',
         allowedMentions: { parse: [] },
       });
       expect((interaction.message as any).edit).toHaveBeenCalledWith({ components: [] });
@@ -1047,11 +1046,10 @@ describe('ReportInteractionHandler (unit)', () => {
       submittedById: 'reporter-1',
     });
     expect(interaction.editReply).toHaveBeenCalledWith({
-      content: 'Submitted report for <@user-1> (ID: `user-1`; Discord username: `test-user`).',
+      content: 'Report submitted.',
     });
     expect(thread.send).toHaveBeenCalledWith({
-      content:
-        'Report submitted. Moderators have been notified, so this intake thread is now closed.\nTarget: <@user-1> (ID: `user-1`; Discord username: `test-user`)',
+      content: 'Report submitted for @`test-user`.',
       allowedMentions: { parse: [] },
     });
     expect(thread.setArchived).toHaveBeenCalledWith(true, 'Report intake submitted');
@@ -1152,7 +1150,7 @@ describe('ReportInteractionHandler (unit)', () => {
     expect(reportIntakeService.markSubmitted).not.toHaveBeenCalled();
     expect(interaction.editReply).toHaveBeenCalledWith({
       content:
-        'The report target was confirmed, but Drasil could not finish submitting it automatically. A moderator can review the intake thread.',
+        "Drasil couldn't finish submitting this report. Please ask a moderator to review this thread.",
     });
     expect(interaction.followUp).not.toHaveBeenCalled();
   });
@@ -1186,7 +1184,7 @@ describe('ReportInteractionHandler (unit)', () => {
     });
     expect(threadChannel.send).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: expect.stringContaining('I will not submit that target'),
+        content: expect.stringContaining('No report submitted.'),
       })
     );
   });

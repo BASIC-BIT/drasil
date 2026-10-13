@@ -20,14 +20,13 @@ import {
   IReportIntakeService,
   REPORT_INTAKE_CONFIRM_CUSTOM_ID_PREFIX,
   REPORT_INTAKE_REJECT_CUSTOM_ID_PREFIX,
-  REPORT_INTAKE_SUBMITTED_CLOSEOUT_MESSAGE,
 } from '../services/ReportIntakeService';
 import { NotificationPresentationBuilder } from '../services/NotificationPresentationBuilder';
 import { type MessageReportAttachment } from '../services/SecurityActionService';
 import { ReportSubmissionService } from '../services/ReportSubmissionService';
 import { IThreadManager } from '../services/ThreadManager';
 import { ReportIntake } from '../repositories/types';
-import { formatDiscordUserIdentity } from '../utils/discordUserIdentity';
+import { formatInlineIdentifier } from '../utils/discordUserIdentity';
 import {
   REPORT_MESSAGE_REASON_FIELD_ID,
   USER_REPORT_MESSAGE_CONTENT_MAX_LENGTH,
@@ -266,12 +265,12 @@ export class ReportInteractionHandler {
       });
 
       const targetLabel = this.formatReportTargetLabel(targetMember);
-      await interaction.editReply({ content: `Submitted report for ${targetLabel}.` });
+      await interaction.editReply({ content: 'Report submitted.' });
 
       const threadChannel = this.getThreadChannel(interaction.channel);
       if (threadChannel) {
         await threadChannel.send({
-          content: `${REPORT_INTAKE_SUBMITTED_CLOSEOUT_MESSAGE}\nTarget: ${targetLabel}`,
+          content: `Report submitted for ${targetLabel}.`,
           allowedMentions: { parse: [] },
         });
         await this.archiveReportIntakeThread(threadChannel, 'Report intake submitted');
@@ -280,7 +279,7 @@ export class ReportInteractionHandler {
       console.error('Error confirming report intake target:', error);
       await interaction.editReply({
         content: targetConfirmed
-          ? 'The report target was confirmed, but Drasil could not finish submitting it automatically. A moderator can review the intake thread.'
+          ? "Drasil couldn't finish submitting this report. Please ask a moderator to review this thread."
           : 'An error occurred while submitting this report. Please try again later.',
       });
     }
@@ -329,7 +328,7 @@ export class ReportInteractionHandler {
         if (threadChannel) {
           await threadChannel.send({
             content:
-              'I will not submit that target. Please add more context, a Discord ID, a message link, or another screenshot if you want me to keep looking.',
+              'No report submitted. Add a username, user ID, message link, or another screenshot.',
             allowedMentions: { parse: [] },
           });
         }
@@ -478,7 +477,7 @@ export class ReportInteractionHandler {
       }
 
       await interaction.editReply({
-        content: `Thank you for your report regarding <@${targetUserId}>. It has been submitted for review.`,
+        content: `Report submitted for user ${formatInlineIdentifier(targetUserId)}.`,
         allowedMentions: { parse: [] },
       });
     } catch (error) {
@@ -584,7 +583,7 @@ export class ReportInteractionHandler {
       }
 
       await interaction.editReply({
-        content: `Thank you for your report regarding <@${targetUserId}>. It has been submitted for review.`,
+        content: `Report submitted for user ${formatInlineIdentifier(targetUserId)}.`,
         allowedMentions: { parse: [] },
       });
     } catch (error) {
@@ -912,14 +911,13 @@ export class ReportInteractionHandler {
   private buildExistingReportIntakeMessage(guildId: string, threadId: string | null): string {
     // Threads opened before the Close Report button shipped do not have one, so always offer the
     // text fallback as well.
-    const cancelHint =
-      'If it was opened by mistake, use the Close Report button there or send `close report` in the thread.';
+    const cancelHint = 'To cancel, choose Close Report or send `close report` in that thread.';
 
     if (threadId) {
-      return `You already have an open report thread: https://discord.com/channels/${guildId}/${threadId}\nPlease continue there. ${cancelHint}`;
+      return `Continue your report here: https://discord.com/channels/${guildId}/${threadId}\n${cancelHint}`;
     }
 
-    return `You already have an open report intake. Please continue in the existing report thread. ${cancelHint}`;
+    return `Continue in your existing report thread. ${cancelHint}`;
   }
 
   private async deleteFailedReportIntakeThread(thread: ThreadChannel): Promise<void> {
@@ -1003,7 +1001,9 @@ export class ReportInteractionHandler {
   }
 
   private formatReportTargetLabel(member: GuildMember): string {
-    return formatDiscordUserIdentity(member);
+    return member.user.username?.trim()
+      ? `@${formatInlineIdentifier(member.user.username)}`
+      : `user ${formatInlineIdentifier(member.id)}`;
   }
 
   private async fetchReportMessage(

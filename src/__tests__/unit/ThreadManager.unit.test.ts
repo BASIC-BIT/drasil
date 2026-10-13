@@ -984,7 +984,7 @@ describe('ThreadManager (unit)', () => {
     expect(activated).toBe(true);
     expect(thread.members.add).toHaveBeenCalledWith('reporter-1');
     expect(thread.send).toHaveBeenCalledWith({
-      content: expect.stringContaining('Add what happened here.'),
+      content: expect.stringContaining('Describe what happened and who you want to report.'),
       components: expect.any(Array),
       allowedMentions: {
         parse: [],

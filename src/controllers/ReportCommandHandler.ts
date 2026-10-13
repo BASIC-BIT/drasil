@@ -1,3 +1,4 @@
+import { formatInlineIdentifier } from '../utils/discordUserIdentity';
 import {
   ActionRowBuilder,
   ChatInputCommandInteraction,
@@ -203,7 +204,7 @@ export class ReportCommandHandler {
     switch (result.status) {
       case 'submitted':
         await interaction.editReply({
-          content: `Thank you for your report regarding <@${result.targetUserId}>. It has been submitted for review.`,
+          content: `Report submitted for user ${formatInlineIdentifier(result.targetUserId)}.`,
           allowedMentions: { parse: [] },
         });
         return;

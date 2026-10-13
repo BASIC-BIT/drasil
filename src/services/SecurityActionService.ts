@@ -2267,7 +2267,7 @@ export class SecurityActionService implements ISecurityActionService {
 
     await thread
       .send({
-        content: 'Report reopened. Moderators restored this intake for review.',
+        content: 'Report reopened for moderator review.',
         allowedMentions: { parse: [] },
       })
       .catch((error) => {
@@ -2317,10 +2317,10 @@ export class SecurityActionService implements ISecurityActionService {
 
   private buildReportIntakeReviewCloseoutMessage(status: ReportIntakeStatus): string {
     if (status === ReportIntakeStatus.DISMISSED) {
-      return 'Report reviewed. Moderators closed this report without additional action, so this intake thread is now closed.';
+      return 'Moderators reviewed this report and closed it without further action.';
     }
 
-    return 'Report reviewed. Moderators have completed this intake, so this thread is now closed.';
+    return 'Moderators have reviewed this report.';
   }
 
   private captureMemberAnalytics(
