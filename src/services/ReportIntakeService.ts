@@ -678,11 +678,18 @@ export class ReportIntakeService implements IReportIntakeService {
         closedById: message.author.id,
       });
       if (hasMessageSend(message.channel))
-        await message.channel.send({
-          content: result.message,
-          components: [],
-          allowedMentions: { parse: [] },
-        });
+        await message.channel
+          .send({
+            content: result.message,
+            components: [],
+            allowedMentions: { parse: [] },
+          })
+          .catch((error: unknown) => {
+            console.error(
+              `Failed to post report closeout for thread ${message.channel.id}:`,
+              error
+            );
+          });
       if (result.shouldArchiveThread) await archiveClosedThread(message.channel);
       return;
     }

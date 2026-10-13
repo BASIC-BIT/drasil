@@ -1280,6 +1280,49 @@ describe('ReportIntakeService', () => {
     expect(moderationQueueService.deleteReportThreadAttention).toHaveBeenCalledWith(intake.id);
   });
 
+  it.each([false, true])(
+    'archives text cancellation despite receipt failure, with selected target %s',
+    async (selected) => {
+      const { service, reportIntakeRepository, threadManager } = buildService({
+        resolvePlatformBackedCandidates: jest.fn().mockResolvedValue([]),
+      });
+      const intake = await service.openIntakeFromThread({
+        serverId: 'guild-1',
+        reporter: buildReporter(),
+        threadId: 'thread-1',
+        channelId: 'channel-1',
+      });
+      await reportIntakeRepository.update(intake.id, {
+        status: ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION,
+        confirmedTargetUserId: selected ? 'user-1' : null,
+        metadata: { confirmation_prompt_message_ids: ['prompt-1'] },
+      });
+      const channel = {
+        id: 'thread-1',
+        isThread: jest.fn().mockReturnValue(true),
+        send: jest.fn().mockRejectedValue(new Error('receipt denied')),
+        archived: false,
+        setArchived: jest.fn().mockResolvedValue(undefined),
+      };
+
+      await service.handleThreadMessage(buildMessage({ content: 'close report', channel }));
+
+      const stored = await reportIntakeRepository.findById(intake.id);
+      expect(stored?.status).toBe(
+        selected
+          ? ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION
+          : ReportIntakeStatus.CLOSED_BY_REPORTER
+      );
+      expect(stored?.confirmed_target_user_id).toBe(selected ? 'user-1' : null);
+      expect(stored?.closed_at).toBeInstanceOf(Date);
+      expect(threadManager.retireReportConfirmationPrompts).toHaveBeenCalledWith(
+        expect.objectContaining({ id: intake.id }),
+        ['prompt-1']
+      );
+      expect(channel.setArchived).toHaveBeenCalledWith(true, 'Report intake closed');
+    }
+  );
+
   it('refuses to close an intake thread for a user who is neither the reporter nor staff', async () => {
     const { service, reportIntakeRepository, moderationQueueService } = buildService();
     const intake = await service.openIntakeFromThread({
