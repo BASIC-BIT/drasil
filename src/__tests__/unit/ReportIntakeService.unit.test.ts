@@ -168,6 +168,153 @@ describe('ReportIntakeService', () => {
     ).toEqual({ confirmed: false, message: 'This report is closed.' });
   });
 
+  it('confirmation prevents a concurrent rejection', async () => {
+    const { service, reportIntakeRepository } = buildService();
+    const intake = await service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+    await service.handleThreadMessage(buildMessage());
+    const current = await reportIntakeRepository.findById(intake.id);
+    const token = (current?.metadata as { last_confirmation_prompt_token: string })
+      .last_confirmation_prompt_token;
+    await service.confirmCandidate({
+      intakeId: intake.id,
+      targetUserId: 'user-1',
+      confirmedById: 'reporter-1',
+    });
+    const result = await service.rejectCandidates({
+      intakeId: intake.id,
+      promptToken: token,
+      rejectedById: 'reporter-1',
+    });
+    expect(result.rejected).toBe(false);
+    expect(result.message).toBe(
+      'A person has already been selected for this report. No second report was submitted.'
+    );
+    expect((await reportIntakeRepository.findById(intake.id))?.confirmed_target_user_id).toBe(
+      'user-1'
+    );
+    expect((await reportIntakeRepository.findById(intake.id))?.status).toBe(
+      ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION
+    );
+  });
+
+  it.each([
+    ReportIntakeStatus.ACTIONED,
+    ReportIntakeStatus.DISMISSED,
+    ReportIntakeStatus.FALSE_POSITIVE,
+    ReportIntakeStatus.CLOSED_BY_REPORTER,
+    ReportIntakeStatus.EXPIRED,
+  ])('late submission preserves %s and its closed timestamp', async (status) => {
+    const { service, reportIntakeRepository } = buildService();
+    const intake = await service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+    const closedAt = new Date('2026-01-01T00:00:00Z');
+    await reportIntakeRepository.update(intake.id, {
+      status,
+      closedAt,
+      confirmedTargetUserId: 'user-1',
+      metadata: { reviewed_by: 'staff-1' },
+    });
+    await service.markSubmitted({
+      intakeId: intake.id,
+      targetUserId: 'user-1',
+      submittedById: 'reporter-1',
+    });
+    expect(await reportIntakeRepository.findById(intake.id)).toMatchObject({
+      status,
+      closed_at: closedAt,
+      metadata: { reviewed_by: 'staff-1', submitted_by: 'reporter-1' },
+    });
+  });
+
+  it('submission and thread close retain each other metadata', async () => {
+    const { service, reportIntakeRepository } = buildService();
+    const intake = await service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+    const find = reportIntakeRepository.findById.bind(reportIntakeRepository);
+    jest.spyOn(reportIntakeRepository, 'findById').mockImplementationOnce(async (id) => {
+      const snapshot = await find(id);
+      await reportIntakeRepository.update(id, { metadata: { thread_closed_by: 'staff-1' } });
+      return snapshot;
+    });
+    await service.markSubmitted({
+      intakeId: intake.id,
+      targetUserId: 'user-1',
+      submittedById: 'reporter-1',
+    });
+    expect((await find(intake.id))?.metadata).toMatchObject({
+      thread_closed_by: 'staff-1',
+      submitted_by: 'reporter-1',
+    });
+  });
+
+  it('closing a selected report preserves its reservation without claiming cancellation', async () => {
+    const { service, reportIntakeRepository } = buildService();
+    const intake = await service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+    await service.handleThreadMessage(buildMessage());
+    await service.confirmCandidate({
+      intakeId: intake.id,
+      targetUserId: 'user-1',
+      confirmedById: 'reporter-1',
+    });
+    const result = await service.closeIntakeForThread({
+      threadId: 'thread-1',
+      closedById: 'reporter-1',
+    });
+    expect(result.message).toBe('The selected person remains recorded for moderator review.');
+    expect((await reportIntakeRepository.findById(intake.id))?.status).toBe(
+      ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION
+    );
+    expect((await reportIntakeRepository.findById(intake.id))?.confirmed_target_user_id).toBe(
+      'user-1'
+    );
+  });
+
+  it.each([ReportIntakeStatus.SUBMITTED, ReportIntakeStatus.CLOSED_BY_REPORTER])(
+    'slow evidence analysis cannot reopen a %s intake',
+    async (status) => {
+      const { service, reportIntakeRepository, candidateService } = buildService();
+      const intake = await service.openIntakeFromThread({
+        serverId: 'guild-1',
+        reporter: buildReporter(),
+        threadId: 'thread-1',
+        channelId: 'channel-1',
+      });
+      (candidateService.resolvePlatformBackedCandidates as jest.Mock).mockImplementationOnce(
+        async () => {
+          await reportIntakeRepository.update(intake.id, {
+            status,
+            confirmedTargetUserId: 'user-1',
+            metadata: { submitted_by: 'reporter-1' },
+          });
+          return [buildCandidate()];
+        }
+      );
+      await service.handleThreadMessage(buildMessage());
+      expect(await reportIntakeRepository.findById(intake.id)).toMatchObject({
+        status,
+        metadata: { submitted_by: 'reporter-1' },
+      });
+    }
+  );
+
   it('opens durable intake state for a new report thread', async () => {
     const { service, reportIntakeRepository } = buildService();
 
@@ -487,7 +634,13 @@ describe('ReportIntakeService', () => {
       channelId: 'channel-1',
     });
     await service.handleThreadMessage(buildMessage());
-    jest.spyOn(reportIntakeRepository, 'confirmTargetIfUnset').mockResolvedValueOnce(null);
+    const reserve = reportIntakeRepository.confirmTargetIfUnset.bind(reportIntakeRepository);
+    jest
+      .spyOn(reportIntakeRepository, 'confirmTargetIfUnset')
+      .mockImplementationOnce(async (id, data) => {
+        await reserve(id, data);
+        return null;
+      });
 
     const result = await service.confirmCandidate({
       intakeId: intake.id,

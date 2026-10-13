@@ -3458,6 +3458,18 @@ describe('SecurityActionService (unit)', () => {
       reportIntakeRepository
     );
 
+    const readIntake = reportIntakeRepository.findById.bind(reportIntakeRepository);
+    jest.spyOn(reportIntakeRepository, 'findById').mockImplementationOnce(async (id) => {
+      const snapshot = await readIntake(id);
+      await reportIntakeRepository.update(id, {
+        metadata: {
+          ...(snapshot?.metadata as Record<string, unknown>),
+          thread_closed_by: 'concurrent-worker',
+        },
+      });
+      return snapshot;
+    });
+
     const undoneAction = await service.undoObservedDetectionAction(
       guildId,
       userId,
@@ -3470,6 +3482,7 @@ describe('SecurityActionService (unit)', () => {
     expect(stored?.status).toBe(ReportIntakeStatus.SUBMITTED);
     expect(stored?.closed_at).toBeNull();
     expect(stored?.metadata).toMatchObject({
+      thread_closed_by: 'concurrent-worker',
       observed_action_reopened_by: moderator.id,
       observed_action_reopen_reason: 'observed_dismiss_undo',
     });
@@ -3961,11 +3974,24 @@ describe('SecurityActionService (unit)', () => {
       metadata: { reportIntakeId: intake.id },
     });
 
+    const readIntake = reportIntakeRepository.findById.bind(reportIntakeRepository);
+    jest.spyOn(reportIntakeRepository, 'findById').mockImplementationOnce(async (id) => {
+      const snapshot = await readIntake(id);
+      await reportIntakeRepository.update(id, {
+        metadata: {
+          ...(snapshot?.metadata as Record<string, unknown>),
+          submitted_by: 'concurrent-worker',
+        },
+      });
+      return snapshot;
+    });
+
     await service.banObservedDetection(member, detectionEvent.id, moderator, 'Confirmed scam');
 
     const stored = await reportIntakeRepository.findById(intake.id);
     expect(stored?.status).toBe(ReportIntakeStatus.ACTIONED);
     expect(stored?.metadata).toMatchObject({
+      submitted_by: 'concurrent-worker',
       observed_action_closed_by: moderator.id,
       observed_action_close_reason: 'observed_ban',
     });
