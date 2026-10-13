@@ -341,16 +341,22 @@ export class ReportInteractionHandler {
         rejectedByStaff: context.canModerate,
         promptMessageId: interaction.message.id,
       });
-      await interaction.editReply({ content: result.message });
+      await interaction.editReply({ content: result.message }).catch((error: unknown) => {
+        console.warn('Failed to deliver report selection result:', error);
+      });
 
       if (result.rejected) {
         const threadChannel = this.getThreadChannel(interaction.channel);
         if (threadChannel) {
-          await threadChannel.send({
-            content:
-              'No report submitted. Add a username, user ID, message link, or another screenshot.',
-            allowedMentions: { parse: [] },
-          });
+          await threadChannel
+            .send({
+              content:
+                'No report submitted. Add a username, user ID, message link, or another screenshot.',
+              allowedMentions: { parse: [] },
+            })
+            .catch((error: unknown) => {
+              console.warn('Failed to deliver saved report rejection follow-up:', error);
+            });
         }
       }
     } catch (error) {
@@ -464,13 +470,9 @@ export class ReportInteractionHandler {
 
     let reportSubmitted = false;
     try {
-      const targetUser = await this.client.users.fetch(targetUserId).catch(
-        () =>
-          ({
-            id: targetUserId,
-            username: targetUserId,
-          }) as User
-      );
+      const fetchedTargetUser = await this.client.users.fetch(targetUserId).catch(() => null);
+      const targetUser =
+        fetchedTargetUser ?? ({ id: targetUserId, username: targetUserId } as User);
       const message = await this.fetchReportMessage(channelId, messageId);
       const contextNumber = Number(contextRaw);
       const interactionContext =
@@ -499,7 +501,9 @@ export class ReportInteractionHandler {
 
       reportSubmitted = true;
       await interaction.editReply({
-        content: `Report submitted for user ${formatInlineIdentifier(targetUserId)}.`,
+        content: fetchedTargetUser?.username
+          ? `Report submitted for @${formatInlineIdentifier(fetchedTargetUser.username)}.`
+          : `Report submitted for user ${formatInlineIdentifier(targetUserId)}.`,
         allowedMentions: { parse: [] },
       });
     } catch (error) {
@@ -613,7 +617,9 @@ export class ReportInteractionHandler {
 
       reportSubmitted = true;
       await interaction.editReply({
-        content: `Report submitted for user ${formatInlineIdentifier(targetUserId)}.`,
+        content: submission.targetUsername
+          ? `Report submitted for @${formatInlineIdentifier(submission.targetUsername)}.`
+          : `Report submitted for user ${formatInlineIdentifier(targetUserId)}.`,
         allowedMentions: { parse: [] },
       });
     } catch (error) {

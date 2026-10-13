@@ -165,12 +165,68 @@ describe('ReportIntakeService', () => {
 
   it('lost publication write leaves the new prompt disabled', async () => {
     const { service, reportIntakeRepository, prompt, message } = await preparePrompt();
-    jest.spyOn(reportIntakeRepository, 'updateIfCurrent').mockResolvedValueOnce(null);
+    jest.spyOn(reportIntakeRepository, 'updateIfCurrent').mockResolvedValue(null);
     await service.handleThreadMessage(message);
     expect(prompt.edit).toHaveBeenCalledWith({ components: [] });
     expect(prompt.edit).not.toHaveBeenCalledWith({
       components: expect.arrayContaining([expect.anything()]),
     });
+  });
+
+  it('exhausted pending collisions keep evidence and ask for moderator review', async () => {
+    const { service, reportIntakeRepository, intake, message, send, candidateService } =
+      await preparePrompt();
+    jest.spyOn(reportIntakeRepository, 'updateIfCurrent').mockResolvedValue(null);
+    await service.handleThreadMessage(message);
+    expect(send).toHaveBeenLastCalledWith({
+      content:
+        "Drasil couldn't prepare the confirmation buttons. Please ask a moderator to review this thread.",
+      components: [],
+      allowedMentions: { parse: [] },
+    });
+    expect((await reportIntakeRepository.listEvidence(intake.id)).length).toBeGreaterThan(0);
+    expect(candidateService.resolvePlatformBackedCandidates).toHaveBeenCalledTimes(1);
+    expect(reportIntakeRepository.updateIfCurrent).toHaveBeenCalledTimes(2);
+  });
+
+  it('a selection winning the last pending collision suppresses the unavailable-prompt warning', async () => {
+    const { service, reportIntakeRepository, intake, message, send } = await preparePrompt();
+    jest
+      .spyOn(reportIntakeRepository, 'updateIfCurrent')
+      .mockResolvedValueOnce(null)
+      .mockImplementationOnce(async () => {
+        await reportIntakeRepository.update(intake.id, {
+          status: ReportIntakeStatus.SUBMITTED,
+          confirmedTargetUserId: 'user-1',
+        });
+        return null;
+      });
+    await service.handleThreadMessage(message);
+    expect(send.mock.calls.some(([payload]) => payload.content.includes("couldn't prepare"))).toBe(
+      false
+    );
+    expect((await reportIntakeRepository.findById(intake.id))?.status).toBe(
+      ReportIntakeStatus.SUBMITTED
+    );
+  });
+
+  it('a retry does not reintroduce a candidate rejected by the newer snapshot', async () => {
+    const { service, reportIntakeRepository, intake, message, send } = await preparePrompt();
+    const update = reportIntakeRepository.updateIfCurrent.bind(reportIntakeRepository);
+    jest
+      .spyOn(reportIntakeRepository, 'updateIfCurrent')
+      .mockImplementationOnce(async (snapshot, data) => {
+        await reportIntakeRepository.update(intake.id, {
+          metadata: { rejected_candidate_ids: ['user-1'] },
+        });
+        return update(snapshot, data);
+      });
+    await service.handleThreadMessage(message);
+    expect((await reportIntakeRepository.findById(intake.id))?.metadata).toMatchObject({
+      rejected_candidate_ids: ['user-1'],
+      candidate_suggestions: [],
+    });
+    expect(send).toHaveBeenCalledTimes(1);
   });
 
   it('enable failure preserves evidence and asks for moderator review', async () => {
@@ -251,6 +307,271 @@ describe('ReportIntakeService', () => {
       );
     }
   );
+
+  it('a moderator note cannot discard a reporter candidate resolved concurrently', async () => {
+    let releaseReporter!: () => void;
+    let reporterReached!: () => void;
+    const reporterCandidates = new Promise<ReportCandidate[]>((resolve) => {
+      releaseReporter = () => resolve([buildCandidate()]);
+    });
+    const reporterStarted = new Promise<void>((resolve) => {
+      reporterReached = resolve;
+    });
+    const { service, reportIntakeRepository } = buildService({
+      resolvePlatformBackedCandidates: jest.fn(async () => {
+        reporterReached();
+        return reporterCandidates;
+      }),
+    });
+    const intake = await service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+    const prompts = [buildPrompt('losing-prompt'), buildPrompt('current-prompt')];
+    const send = jest.fn().mockResolvedValueOnce(prompts[0]).mockResolvedValueOnce(prompts[1]);
+    const channel = { id: 'thread-1', isThread: () => true, send };
+    const reporting = service.handleThreadMessage(
+      buildMessage({ id: 'reporter-message', channel })
+    );
+    await reporterStarted;
+    await service.handleThreadMessage(
+      buildMessage({
+        id: 'staff-message',
+        author: { id: 'staff-1', bot: false },
+        content: 'Moderator note',
+        channel,
+      })
+    );
+    releaseReporter();
+    await reporting;
+    expect(await reportIntakeRepository.findById(intake.id)).toMatchObject({
+      status: ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION,
+      metadata: {
+        candidate_suggestions: [expect.objectContaining({ discordUserId: 'user-1' })],
+        last_confirmation_prompt_message_id: 'current-prompt',
+      },
+    });
+    expect(prompts[0].edit).toHaveBeenCalledWith({ components: [] });
+    expect(prompts[1].edit).toHaveBeenCalledWith({ components: expect.any(Array) });
+    expect(
+      (await reportIntakeRepository.listEvidence(intake.id)).some(
+        (entry) => entry.content === 'Moderator note'
+      )
+    ).toBe(true);
+  });
+
+  it('a retried prompt includes candidates from both overlapping reporter messages', async () => {
+    const { service, reportIntakeRepository, candidateService } = buildService();
+    const intake = await service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+    (candidateService.resolvePlatformBackedCandidates as jest.Mock).mockImplementationOnce(
+      async () => {
+        await reportIntakeRepository.update(intake.id, {
+          status: ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION,
+          metadata: {
+            candidate_suggestions: [buildCandidate('user-2')],
+            preserved_note: 'newer',
+            confirmation_prompt_message_ids: ['prior-prompt'],
+          },
+        });
+        return [buildCandidate('user-1')];
+      }
+    );
+    const prompt = buildPrompt('retry-prompt');
+    const send = jest
+      .fn()
+      .mockResolvedValueOnce(buildPrompt('lost-prompt'))
+      .mockResolvedValueOnce(prompt);
+    await service.handleThreadMessage(
+      buildMessage({ channel: { id: 'thread-1', isThread: () => true, send } })
+    );
+    expect(send).toHaveBeenLastCalledWith(
+      expect.objectContaining({ content: expect.stringContaining('User ID: `user-1`') })
+    );
+    expect(send).toHaveBeenLastCalledWith(
+      expect.objectContaining({ content: expect.stringContaining('User ID: `user-2`') })
+    );
+    expect((await reportIntakeRepository.findById(intake.id))?.metadata).toMatchObject({
+      preserved_note: 'newer',
+      candidate_suggestions: expect.arrayContaining([
+        expect.objectContaining({ discordUserId: 'user-1' }),
+        expect.objectContaining({ discordUserId: 'user-2' }),
+      ]),
+    });
+    expect(prompt.edit).toHaveBeenCalledWith({ components: expect.any(Array) });
+  });
+
+  it('analysis publication retries a pending metadata collision without losing fresh fields', async () => {
+    const { service, reportIntakeRepository } = buildService();
+    const intake = await service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+    const update = reportIntakeRepository.updateIfCurrent.bind(reportIntakeRepository);
+    jest
+      .spyOn(reportIntakeRepository, 'updateIfCurrent')
+      .mockImplementationOnce(async (snapshot, data) => {
+        await reportIntakeRepository.update(intake.id, { metadata: { staff_note: 'newer' } });
+        return update(snapshot, data);
+      });
+    const result = await service.recordAgentAnalysis({
+      intakeId: intake.id,
+      message: buildMessage(),
+      candidates: [buildCandidate()],
+      evidenceCount: 1,
+      imageCount: 0,
+    });
+    expect(result).toBe(true);
+    expect((await reportIntakeRepository.findById(intake.id))?.metadata).toMatchObject({
+      staff_note: 'newer',
+      candidate_suggestions: [expect.objectContaining({ discordUserId: 'user-1' })],
+    });
+  });
+
+  it('an older analysis retry preserves a newer assessment and merges both candidate sets', async () => {
+    const { service, reportIntakeRepository } = buildService();
+    const intake = await service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+    const extraction = {
+      visibleNames: [],
+      visibleUsernames: [],
+      visibleUserIds: [],
+      visibleMessageLinks: [],
+      quotedMessageText: [],
+      platformHints: [],
+      abuseSignals: ['older assessment'],
+      uncertainty: [],
+      confidence: 0.7,
+      analyzedImageCount: 1,
+      model: 'old-model',
+      promptVersion: 'test-prompt',
+      isFallback: false,
+    };
+    let releaseOld!: () => void;
+    let oldReached!: () => void;
+    const held = new Promise<void>((resolve) => {
+      releaseOld = resolve;
+    });
+    const reached = new Promise<void>((resolve) => {
+      oldReached = resolve;
+    });
+    const update = reportIntakeRepository.updateIfCurrent.bind(reportIntakeRepository);
+    jest
+      .spyOn(reportIntakeRepository, 'updateIfCurrent')
+      .mockImplementationOnce(async (snapshot, data) => {
+        oldReached();
+        await held;
+        return update(snapshot, data);
+      });
+    const send = jest
+      .fn()
+      .mockResolvedValueOnce(buildPrompt('old-prompt'))
+      .mockResolvedValueOnce(buildPrompt('new-prompt'))
+      .mockResolvedValueOnce(buildPrompt('merged-prompt'));
+    const message = buildMessage({ channel: { id: 'thread-1', isThread: () => true, send } });
+    const older = service.recordAgentAnalysis({
+      intakeId: intake.id,
+      message,
+      candidates: [buildCandidate('user-1')],
+      extraction,
+      evidenceCount: 1,
+      imageCount: 1,
+    });
+    await reached;
+    await service.recordAgentAnalysis({
+      intakeId: intake.id,
+      message,
+      candidates: [buildCandidate('user-2')],
+      extraction: {
+        ...extraction,
+        abuseSignals: ['newer assessment with more evidence'],
+        model: 'new-model',
+        analyzedImageCount: 2,
+      },
+      evidenceCount: 2,
+      imageCount: 2,
+    });
+    const newerMetadata = (await reportIntakeRepository.findById(intake.id))?.metadata as Record<
+      string,
+      unknown
+    >;
+    releaseOld();
+    await older;
+    const stored = await reportIntakeRepository.findById(intake.id);
+    expect(stored?.summary).toBe('newer assessment with more evidence');
+    expect(stored?.metadata).toMatchObject({
+      report_intake_agent: newerMetadata.report_intake_agent,
+      candidate_suggestions: expect.arrayContaining([
+        expect.objectContaining({ discordUserId: 'user-1' }),
+        expect.objectContaining({ discordUserId: 'user-2' }),
+      ]),
+    });
+  });
+
+  it('analysis retry computes status from the current pending snapshot', async () => {
+    const { service, reportIntakeRepository } = buildService();
+    const intake = await service.openIntakeFromThread({
+      serverId: 'guild-1',
+      reporter: buildReporter(),
+      threadId: 'thread-1',
+      channelId: 'channel-1',
+    });
+    const update = reportIntakeRepository.updateIfCurrent.bind(reportIntakeRepository);
+    jest
+      .spyOn(reportIntakeRepository, 'updateIfCurrent')
+      .mockImplementationOnce(async (snapshot, data) => {
+        await reportIntakeRepository.update(intake.id, {
+          status: ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION,
+        });
+        return update(snapshot, data);
+      });
+    await service.recordAgentAnalysis({
+      intakeId: intake.id,
+      message: buildMessage(),
+      candidates: [],
+      evidenceCount: 0,
+      imageCount: 0,
+    });
+    expect((await reportIntakeRepository.findById(intake.id))?.status).toBe(
+      ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION
+    );
+  });
+
+  it('saved rejection remains successful when auxiliary evidence logging fails', async () => {
+    const { service, reportIntakeRepository, intake, message } = await preparePrompt();
+    await service.handleThreadMessage(message);
+    const metadata = (await reportIntakeRepository.findById(intake.id))?.metadata as Record<
+      string,
+      unknown
+    >;
+    jest
+      .spyOn(reportIntakeRepository, 'addEvidence')
+      .mockRejectedValueOnce(new Error('evidence insert failed'));
+    await expect(
+      service.rejectCandidates({
+        intakeId: intake.id,
+        rejectedById: 'reporter-1',
+        promptToken: String(metadata.last_confirmation_prompt_token),
+        promptMessageId: 'prompt-1',
+      })
+    ).resolves.toEqual({ rejected: true, message: 'Selection cleared.' });
+    expect(await reportIntakeRepository.findById(intake.id)).toMatchObject({
+      status: ReportIntakeStatus.COLLECTING_EVIDENCE,
+      metadata: { candidate_suggestions: [], rejected_candidate_ids: ['user-1'] },
+    });
+  });
 
   it('an older tracked prompt cannot select a still-suggested candidate', async () => {
     const { service, intake, message } = await preparePrompt();

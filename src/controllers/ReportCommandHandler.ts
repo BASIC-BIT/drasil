@@ -205,7 +205,9 @@ export class ReportCommandHandler {
       case 'submitted':
         try {
           await interaction.editReply({
-            content: `Report submitted for user ${formatInlineIdentifier(result.targetUserId)}.`,
+            content: result.targetUsername
+              ? `Report submitted for @${formatInlineIdentifier(result.targetUsername)}.`
+              : `Report submitted for user ${formatInlineIdentifier(result.targetUserId)}.`,
             allowedMentions: { parse: [] },
           });
         } catch (error) {

@@ -226,7 +226,7 @@ describe('ReportInteractionHandler (unit)', () => {
       (client.guilds.fetch as jest.Mock).mock.invocationCallOrder[0]
     );
     expect(interaction.editReply).toHaveBeenCalledWith({
-      content: 'Report submitted for user `123456789012345678`.',
+      content: 'Report submitted for @`test-user`.',
       allowedMentions: { parse: [] },
     });
   });
@@ -307,48 +307,55 @@ describe('ReportInteractionHandler (unit)', () => {
       ).toBe(false);
   });
 
-  it('submits Report Message modal with optional reason', async () => {
-    const targetUser = { id: 'user-2', username: 'target' } as User;
-    (client as any).users = {
-      fetch: jest.fn().mockResolvedValue(targetUser),
-    };
-    (client as any).channels = {
-      fetch: jest.fn().mockResolvedValue({
-        messages: {
-          fetch: jest.fn().mockResolvedValue({
-            content: 'suspicious message',
-            attachments: new Map(),
-          }),
-        },
-      }),
-    };
-    const handler = createHandler();
-    const interaction = buildModalInteraction(
-      `${REPORT_MESSAGE_MODAL_PREFIX}:message-1:channel-1:user-2:guild-1:0`,
-      'guild-1',
-      { id: 'reporter-1' } as User,
-      () => 'message report reason'
-    );
+  it.each([true, false])(
+    'submits Report Message modal with optional reason and resolved username %s',
+    async (resolved) => {
+      const targetUser = { id: 'user-2', username: resolved ? 'tar`get' : 'user-2' } as User;
+      (client as any).users = {
+        fetch: resolved
+          ? jest.fn().mockResolvedValue(targetUser)
+          : jest.fn().mockRejectedValue(new Error('target unavailable')),
+      };
+      (client as any).channels = {
+        fetch: jest.fn().mockResolvedValue({
+          messages: {
+            fetch: jest.fn().mockResolvedValue({
+              content: 'suspicious message',
+              attachments: new Map(),
+            }),
+          },
+        }),
+      };
+      const handler = createHandler();
+      const interaction = buildModalInteraction(
+        `${REPORT_MESSAGE_MODAL_PREFIX}:message-1:channel-1:user-2:guild-1:0`,
+        'guild-1',
+        { id: 'reporter-1' } as User,
+        () => 'message report reason'
+      );
 
-    await handler.handleReportMessageModalSubmit(interaction);
+      await handler.handleReportMessageModalSubmit(interaction);
 
-    expect(securityActionService.handleMessageReport).toHaveBeenCalledWith(
-      targetUser,
-      interaction.user,
-      {
-        messageId: 'message-1',
-        channelId: 'channel-1',
-        guildId: 'guild-1',
-        content: 'suspicious message',
-        reason: 'message report reason',
-        interactionContext: 0,
-      }
-    );
-    expect(interaction.editReply).toHaveBeenCalledWith({
-      content: 'Report submitted for user `user-2`.',
-      allowedMentions: { parse: [] },
-    });
-  });
+      expect(securityActionService.handleMessageReport).toHaveBeenCalledWith(
+        targetUser,
+        interaction.user,
+        {
+          messageId: 'message-1',
+          channelId: 'channel-1',
+          guildId: 'guild-1',
+          content: 'suspicious message',
+          reason: 'message report reason',
+          interactionContext: 0,
+        }
+      );
+      expect(interaction.editReply).toHaveBeenCalledWith({
+        content: resolved
+          ? "Report submitted for @`tar'get`."
+          : 'Report submitted for user `user-2`.',
+        allowedMentions: { parse: [] },
+      });
+    }
+  );
 
   it('handles report modal submission with a modern username', async () => {
     const member = {
@@ -1467,6 +1474,31 @@ describe('ReportInteractionHandler (unit)', () => {
     });
     expect(interaction.followUp).not.toHaveBeenCalled();
   });
+
+  it.each(['receipt', 'thread'])(
+    'saved rejection is not reported as failed when %s delivery fails',
+    async (failure) => {
+      const reportIntakeService = createReportIntakeService();
+      reportIntakeService.rejectCandidates.mockResolvedValue({
+        rejected: true,
+        message: 'Selection cleared.',
+      });
+      const handler = createHandler(reportIntakeService);
+      const customId = 'report_intake_reject:intake-1:token';
+      const interaction = buildInteraction(customId, 'guild-1', { id: 'reporter-1' } as User);
+      const send = (interaction.channel as unknown as { send: jest.Mock }).send;
+      if (failure === 'receipt')
+        (interaction.editReply as jest.Mock).mockRejectedValueOnce(new Error('receipt denied'));
+      else send.mockRejectedValueOnce(new Error('follow-up denied'));
+      await handler.handleReportIntakeReject(interaction, customId);
+      expect(
+        (interaction.editReply as jest.Mock).mock.calls.some(([payload]) =>
+          /error occurred|could not|couldn't/i.test(payload.content)
+        )
+      ).toBe(false);
+      expect(send).toHaveBeenCalled();
+    }
+  );
 
   it('records a reporter No answer for report intake candidates', async () => {
     const reportIntakeService = createReportIntakeService();

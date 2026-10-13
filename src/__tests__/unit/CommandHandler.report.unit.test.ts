@@ -64,6 +64,46 @@ describe('CommandHandler report commands (unit)', () => {
       ).toBe(false);
   });
 
+  it.each(
+    ['slash', 'user context'].flatMap((route) =>
+      [true, false].map((hasUsername) => [route, hasUsername])
+    )
+  )(
+    'direct %s receipt uses the resolved username when available: %s',
+    async (route, hasUsername) => {
+      const { handler } = buildHandler({ handleUserReport: jest.fn().mockResolvedValue(true) });
+      const targetUser = { id: 'user-2', username: 'picker-label' };
+      const targetMember = { id: 'user-2', user: { username: hasUsername ? 'tar`get' : '' } };
+      const fetch = jest.fn().mockResolvedValue(targetMember);
+      const interaction = {
+        commandName: route === 'slash' ? 'report' : 'Report User',
+        user: { id: 'reporter-1' },
+        targetUser,
+        guild: { id: 'guild-1', members: { fetch } },
+        options: {
+          getUser: jest.fn().mockReturnValue(targetUser),
+          getString: jest.fn().mockReturnValue('reported'),
+        },
+        deferReply: jest.fn().mockResolvedValue(undefined),
+        editReply: jest.fn().mockResolvedValue(undefined),
+        reply: jest.fn().mockResolvedValue(undefined),
+      };
+      if (route === 'slash')
+        await handler.handleSlashCommand(interaction as unknown as ChatInputCommandInteraction);
+      else
+        await handler.handleUserContextMenuCommand(
+          interaction as unknown as UserContextMenuCommandInteraction
+        );
+      expect(interaction.editReply).toHaveBeenCalledWith({
+        content: hasUsername
+          ? "Report submitted for @`tar'get`."
+          : 'Report submitted for user `user-2`.',
+        allowedMentions: { parse: [] },
+      });
+      expect(fetch).toHaveBeenCalledTimes(1);
+    }
+  );
+
   it('handles /report with Discord user picker target', async () => {
     const handleUserReport = jest.fn().mockResolvedValue(true);
     const { handler, securityActionService } = buildHandler({ handleUserReport });

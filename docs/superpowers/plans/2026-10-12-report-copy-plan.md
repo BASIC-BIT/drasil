@@ -10,7 +10,7 @@
 
 **Spec:** [Clear reporting copy and truthful outcomes](../specs/2026-10-12-report-copy-design.md).
 
-Planning refresh: October 13, 2026. Current `main` is `7ce302eb6a11913503f96f9d670da7fcfe93d968`, including merged PR #242. The existing isolated implementation worktree is `D:/bench/drasil-wt/report-copy`, with one copy commit and unfinished conditional-write changes. These checkboxes describe acceptance requirements, not completed work. Reconcile that work with current `main` before continuing; preserve the merged panel publication/recovery logic and its tests.
+Planning refresh: October 13, 2026. Current `main` is `7ce302eb6a11913503f96f9d670da7fcfe93d968`, including merged PR #242. The isolated implementation worktree is `D:/bench/drasil-wt/report-copy`. Tasks 1 through 4 are implemented and locally reviewed; the delivery task remains open for automated review, controlled Discord QA, and the readiness window. These checkboxes retain the acceptance requirements rather than recording completion. The branch preserves the merged panel publication/recovery logic and its tests.
 
 ## Global constraints
 
@@ -27,11 +27,11 @@ Cover these in the owning task's tests: duplicate/long names and malformed ident
 
 ## Task 1: Reporting text and identity presentation
 
-**Modify:** `src/services/ReportIntakeService.ts`, `src/controllers/ReportInteractionHandler.ts`, `src/controllers/ReportCommandHandler.ts`, `src/controllers/ReportInstructionsManager.ts`, `src/services/ThreadManager.ts`, `src/services/NotificationPresentationBuilder.ts`, `src/services/SecurityActionService.ts`.
+**Modify:** `src/services/ReportIntakeService.ts`, `src/controllers/ReportInteractionHandler.ts`, `src/controllers/ReportCommandHandler.ts`, `src/controllers/ReportInstructionsManager.ts`, `src/services/ThreadManager.ts`, `src/services/NotificationPresentationBuilder.ts`, `src/services/SecurityActionService.ts`, `src/services/ReportSubmissionService.ts`.
 
 **Tests:** Existing matching unit suites, including `ReportIntakeAgentService.unit.test.ts`, `CommandHandler.report.unit.test.ts`, and `discordUserIdentity.unit.test.ts` as unchanged-contract coverage. Add panel payload assertions to the current report-command suite instead of creating a copy-only test harness.
 
-**Interfaces:** Retain current public signatures in this task. Consume `formatInlineIdentifier(value: string): string` and current resolved `ReportCandidate`/`GuildMember` values. Use reporter-specific formatting at callers; do not change the shared moderator formatter.
+**Interfaces:** Retain current input signatures. The submitted user-report result carries an optional `targetUsername` from the already resolved member. Direct receipts use it when present and otherwise use the ID fallback; do not add a Discord lookup for presentation. Consume `formatInlineIdentifier(value: string): string` and current resolved `ReportCandidate`/`GuildMember` values. Use reporter-specific formatting at callers; do not change the shared moderator formatter.
 
 - [ ] Update existing assertions to the exact spec strings and identity rows. Assert one person has no numeric prefix; multiple people have numbered rows and `Report 1` through `Report 5`; duplicate and 80+ character names remain distinguishable; usernames containing backticks cannot break formatting; mentions remain suppressed; reporter exclusion controls the match count.
 - [ ] Verify the changed assertions fail against the baseline, then apply only these presentation changes and update the report panel/welcome/moderator-start/reopened messages. The moderator-start notice is a historical event: `No report was submitted when the thread opened.` Test delayed notification without asserting the current submission state.
@@ -94,4 +94,10 @@ Cover these in the owning task's tests: duplicate/long names and malformed ident
 - [ ] Publish the PR with a linked issue and `[AGENT]` public prose. Do not repeat required CI checks in the PR description; include only manual/provider verification that reviewers cannot infer from CI.
 - [ ] After the latest pushed commit's 30-minute window, refresh exact-head checks, comments, reviews, inline threads, and mutable review summaries. Resolve valid feedback and refresh again before claiming merge readiness. The later merge decision includes automatic production deployment.
 
-Implement these dependent tasks natively in one isolated worktree, then run independent whole-branch and editorial reviews. This plan is ready for scope review. Planning changed no product code and included no tests or live Discord checks.
+Implement these dependent tasks natively in one isolated worktree, then run independent whole-branch and editorial reviews. The original planning pass changed no product code and included no tests or live Discord checks. Implementation now has passing local CI and independent source/copy review; controlled Discord proof and the final exact-head PR sweep remain required.
+
+Review correction: direct user-report submission already resolves a member username. Carry that value through the success result rather than treating it as unavailable at the receipt caller. Message-modal receipts use the fetched user name and never the ID placeholder as a username. This replaces the earlier ID-only implementation decision without adding a lookup or changing submission outcomes.
+
+Concurrency review correction: pending candidate publication may collide with a moderator note or another reporter message while the intake remains open. Retire the losing disabled prompt, re-read and merge the candidates/metadata, and retry that state write once. Do not redo evidence insertion or candidate lookup, reopen selected/closed reports, or reintroduce rejected candidates. Exhausted collisions retain evidence and request moderator review. Saved rejection results also survive auxiliary evidence logging and later Discord delivery failures.
+
+Analysis retry preserves the fresh summary and complete analysis metadata when it covered more evidence than the incoming analysis, while merging both candidate sets. Its next status also comes from the fresh snapshot. Cover both with deterministic overlapping-analysis tests.

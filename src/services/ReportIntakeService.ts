@@ -391,16 +391,20 @@ export class ReportIntakeService implements IReportIntakeService {
       getReportConfirmationMessageIds(intake, input.promptMessageId)
     );
 
-    await this.reportIntakeRepository.addEvidence({
-      intakeId: intake.id,
-      kind: ReportIntakeEvidenceKind.CANDIDATE_CONFIRMATION,
-      content: 'rejected',
-      metadata: {
-        rejected_by: input.rejectedById,
-        rejected_candidate_ids: rejectedCandidateIds,
-        rejected_at: now,
-      },
-    });
+    await this.reportIntakeRepository
+      .addEvidence({
+        intakeId: intake.id,
+        kind: ReportIntakeEvidenceKind.CANDIDATE_CONFIRMATION,
+        content: 'rejected',
+        metadata: {
+          rejected_by: input.rejectedById,
+          rejected_candidate_ids: rejectedCandidateIds,
+          rejected_at: now,
+        },
+      })
+      .catch((error: unknown) => {
+        console.warn(`Failed to append evidence for saved report rejection ${intake.id}:`, error);
+      });
 
     return {
       rejected: true,
@@ -428,65 +432,89 @@ export class ReportIntakeService implements IReportIntakeService {
       return false;
     }
 
-    const metadata = toRecord(intake.metadata);
-    const candidateSuggestions = this.mergeCandidateSuggestions(metadata, input.candidates);
-    const aiSummary = input.extraction?.abuseSignals.length
-      ? input.extraction.abuseSignals.join('; ')
-      : null;
-    const prompt =
-      candidateSuggestions.length > 0
-        ? await this.sendCandidateConfirmationPrompt(intake, input.message, candidateSuggestions)
+    let current: ReportIntake | null = intake;
+    for (let attempt = 0; attempt < REPORT_INTAKE_STATE_WRITE_ATTEMPTS; attempt++) {
+      if (!current || current.confirmed_target_user_id || !this.isOpenIntakeStatus(current.status))
+        return false;
+      const snapshot = current;
+      const metadata = toRecord(snapshot.metadata);
+      const candidateSuggestions = this.mergeCandidateSuggestions(metadata, input.candidates);
+      const storedEvidenceCount = toRecord(metadata.report_intake_agent).evidence_count;
+      const preserveAnalysis =
+        typeof storedEvidenceCount === 'number' && storedEvidenceCount > input.evidenceCount;
+      const aiSummary = input.extraction?.abuseSignals.length
+        ? input.extraction.abuseSignals.join('; ')
         : null;
+      const prompt =
+        candidateSuggestions.length > 0
+          ? await this.sendCandidateConfirmationPrompt(
+              snapshot,
+              input.message,
+              candidateSuggestions
+            )
+          : null;
 
-    recordWorkflowOutcome({
-      output: {
-        actual_outcome: prompt?.metadata.last_confirmation_prompt_token
-          ? 'confirmation_sent'
-          : candidateSuggestions.length
-            ? 'confirmation_suppressed'
-            : 'no_candidates',
-        confirmation_sent: Boolean(prompt?.metadata.last_confirmation_prompt_token),
-        persistence_completed: false,
-      },
-    });
-    const persisted = await withObservation('persist-result', 'span', () =>
-      this.reportIntakeRepository.updateIfCurrent(intake, {
-        status: this.resolveNextStatus(intake.status, candidateSuggestions.length),
-        summary: aiSummary ?? intake.summary,
-        metadata: {
-          ...metadata,
-          ...(aiSummary ? { summary_source: 'ai_report_intake_extraction' } : {}),
-          candidate_suggestions: candidateSuggestions,
-          report_intake_agent: {
-            extraction: input.extraction,
-            evidence_count: input.evidenceCount,
-            image_count: input.imageCount,
-            candidate_count: candidateSuggestions.length,
-            analyzed_at: new Date().toISOString(),
-          },
-          ...prompt?.metadata,
+      recordWorkflowOutcome({
+        output: {
+          actual_outcome: prompt?.metadata.last_confirmation_prompt_token
+            ? 'confirmation_sent'
+            : candidateSuggestions.length
+              ? 'confirmation_suppressed'
+              : 'no_candidates',
+          confirmation_sent: Boolean(prompt?.metadata.last_confirmation_prompt_token),
+          persistence_completed: false,
         },
-      })
-    ).catch(async (error: unknown) => {
-      await this.finishConfirmationPrompt(intake, prompt, null);
-      throw error;
-    });
-    recordWorkflowOutcome({
-      output: {
-        actual_outcome: persisted
-          ? candidateSuggestions.length
-            ? 'candidates_suggested'
-            : 'no_candidates'
-          : 'persistence_failed',
-        confirmation_sent: Boolean(prompt?.metadata.last_confirmation_prompt_token),
-        persistence_completed: Boolean(persisted),
-        candidate_count: candidateSuggestions.length,
-      },
-      ...(persisted ? {} : { level: 'ERROR' as const, statusMessage: 'persistence_failed' }),
-    });
+      });
+      const persisted = await withObservation('persist-result', 'span', () =>
+        this.reportIntakeRepository.updateIfCurrent(snapshot, {
+          status: this.resolveNextStatus(snapshot.status, candidateSuggestions.length),
+          summary: preserveAnalysis ? snapshot.summary : (aiSummary ?? snapshot.summary),
+          metadata: {
+            ...metadata,
+            candidate_suggestions: candidateSuggestions,
+            ...(preserveAnalysis
+              ? {}
+              : {
+                  ...(aiSummary ? { summary_source: 'ai_report_intake_extraction' } : {}),
+                  report_intake_agent: {
+                    extraction: input.extraction,
+                    evidence_count: input.evidenceCount,
+                    image_count: input.imageCount,
+                    candidate_count: candidateSuggestions.length,
+                    analyzed_at: new Date().toISOString(),
+                  },
+                }),
+            ...prompt?.metadata,
+          },
+        })
+      ).catch(async (error: unknown) => {
+        await this.finishConfirmationPrompt(snapshot, prompt, null);
+        throw error;
+      });
+      recordWorkflowOutcome({
+        output: {
+          actual_outcome: persisted
+            ? candidateSuggestions.length
+              ? 'candidates_suggested'
+              : 'no_candidates'
+            : 'persistence_failed',
+          confirmation_sent: Boolean(prompt?.metadata.last_confirmation_prompt_token),
+          persistence_completed: Boolean(persisted),
+          candidate_count: candidateSuggestions.length,
+        },
+        ...(persisted || attempt + 1 < REPORT_INTAKE_STATE_WRITE_ATTEMPTS
+          ? {}
+          : { level: 'ERROR' as const, statusMessage: 'persistence_failed' }),
+      });
 
-    const ready = await this.finishConfirmationPrompt(intake, prompt, persisted);
-    return Boolean(persisted && ready && candidateSuggestions.length > 0);
+      const ready = await this.finishConfirmationPrompt(snapshot, prompt, persisted);
+      if (persisted) return Boolean(ready && candidateSuggestions.length > 0);
+      if (attempt + 1 < REPORT_INTAKE_STATE_WRITE_ATTEMPTS)
+        current = await this.reportIntakeRepository.findById(intake.id);
+    }
+    if (input.candidates.length)
+      await this.reportUnavailableConfirmation(intake, input.message, input.candidates);
+    return false;
   }
 
   async markSubmitted(input: {
@@ -661,16 +689,6 @@ export class ReportIntakeService implements IReportIntakeService {
       ? await this.candidateService.resolvePlatformBackedCandidates(message)
       : [];
     const now = new Date();
-    const metadata = toRecord(intake.metadata);
-    const candidateSuggestions = this.mergeCandidateSuggestions(metadata, candidates);
-    const nextMetadata = {
-      ...metadata,
-      last_evidence_message_id: message.id,
-      last_evidence_author_id: message.author.id,
-      last_evidence_recorded_at: now.toISOString(),
-      ...(isReporterMessage ? { candidate_signals: signals } : {}),
-      candidate_suggestions: candidateSuggestions,
-    };
 
     if (isReporterMessage && this.isReporterCloseCommand(trimmedContent)) {
       const result = await this.closeIntakeForThread({
@@ -693,25 +711,67 @@ export class ReportIntakeService implements IReportIntakeService {
       if (result.shouldArchiveThread) await archiveClosedThread(message.channel);
       return;
     }
-    if (intake.confirmed_target_user_id || !this.isOpenIntakeStatus(intake.status)) return;
-
-    const prompt =
-      isReporterMessage && candidateSuggestions.length > 0
-        ? await this.sendCandidateConfirmationPrompt(intake, message, candidateSuggestions)
-        : null;
-
-    const status = this.resolveNextStatus(intake.status, candidateSuggestions.length);
-    let persisted: ReportIntake | null;
-    try {
-      persisted = await this.reportIntakeRepository.updateIfCurrent(intake, {
-        status,
-        metadata: { ...nextMetadata, ...prompt?.metadata },
-      });
-    } catch (error) {
-      await this.finishConfirmationPrompt(intake, prompt, null);
-      throw error;
+    let current: ReportIntake | null = intake;
+    for (let attempt = 0; attempt < REPORT_INTAKE_STATE_WRITE_ATTEMPTS; attempt++) {
+      if (!current || current.confirmed_target_user_id || !this.isOpenIntakeStatus(current.status))
+        return;
+      const metadata = toRecord(current.metadata);
+      const candidateSuggestions = this.mergeCandidateSuggestions(metadata, candidates);
+      const nextMetadata = {
+        ...metadata,
+        last_evidence_message_id: message.id,
+        last_evidence_author_id: message.author.id,
+        last_evidence_recorded_at: now.toISOString(),
+        ...(isReporterMessage ? { candidate_signals: signals } : {}),
+        candidate_suggestions: candidateSuggestions,
+      };
+      const prompt =
+        isReporterMessage && candidateSuggestions.length > 0
+          ? await this.sendCandidateConfirmationPrompt(current, message, candidateSuggestions)
+          : null;
+      let persisted: ReportIntake | null;
+      try {
+        persisted = await this.reportIntakeRepository.updateIfCurrent(current, {
+          status: this.resolveNextStatus(current.status, candidateSuggestions.length),
+          metadata: { ...nextMetadata, ...prompt?.metadata },
+        });
+      } catch (error) {
+        await this.finishConfirmationPrompt(current, prompt, null);
+        throw error;
+      }
+      await this.finishConfirmationPrompt(current, prompt, persisted);
+      if (persisted) return;
+      if (attempt + 1 < REPORT_INTAKE_STATE_WRITE_ATTEMPTS)
+        current = await this.reportIntakeRepository.findById(intake.id);
     }
-    await this.finishConfirmationPrompt(intake, prompt, persisted);
+    if (isReporterMessage && candidates.length)
+      await this.reportUnavailableConfirmation(intake, message, candidates);
+  }
+
+  private async reportUnavailableConfirmation(
+    intake: ReportIntake,
+    message: Message,
+    candidates: ReportCandidate[]
+  ): Promise<void> {
+    const current = await this.reportIntakeRepository.findById(intake.id);
+    if (
+      !current ||
+      current.confirmed_target_user_id ||
+      !this.isOpenIntakeStatus(current.status) ||
+      !this.mergeCandidateSuggestions(toRecord(current.metadata), candidates).length ||
+      !hasMessageSend(message.channel)
+    )
+      return;
+    await message.channel
+      .send({
+        content:
+          "Drasil couldn't prepare the confirmation buttons. Please ask a moderator to review this thread.",
+        components: [],
+        allowedMentions: { parse: [] },
+      })
+      .catch((error: unknown) => {
+        console.warn('Failed to deliver unavailable report confirmation notice:', error);
+      });
   }
 
   private async selectEligibleImageAttachments(
