@@ -32,6 +32,10 @@ export interface IDetectionEventsRepository {
     detectionEventId: string,
     verificationEventId: string
   ): Promise<DetectionEvent | null>;
+  patchMetadata(
+    detectionEventId: string,
+    patch: Record<string, unknown>
+  ): Promise<DetectionEvent | null>;
   updateMetadata(
     detectionEventId: string,
     metadata: Record<string, unknown>
@@ -48,7 +52,8 @@ export interface IDetectionEventsRepository {
   releaseObservedAction(
     detectionEventId: string,
     actionType: string,
-    adminId: string
+    adminId: string,
+    operationId?: string
   ): Promise<DetectionEvent | null>;
   clearObservedAction(
     detectionEventId: string,
@@ -338,6 +343,16 @@ export class DetectionEventsRepository implements IDetectionEventsRepository {
     }
   }
 
+  async patchMetadata(
+    detectionEventId: string,
+    patch: Record<string, unknown>
+  ): Promise<DetectionEvent | null> {
+    const rows = await this.prisma.$queryRaw<DetectionEvent[]>`
+      update detection_events set metadata = coalesce(metadata, '{}'::jsonb) || ${JSON.stringify(patch)}::jsonb
+      where id = ${detectionEventId}::uuid returning *`;
+    return rows[0] ?? null;
+  }
+
   async markExcludedFromAccounting(
     detectionEventId: string,
     metadata: Record<string, unknown>
@@ -407,7 +422,8 @@ export class DetectionEventsRepository implements IDetectionEventsRepository {
   async releaseObservedAction(
     detectionEventId: string,
     actionType: string,
-    adminId: string
+    adminId: string,
+    operationId?: string
   ): Promise<DetectionEvent | null> {
     try {
       const rows = await this.prisma.$queryRaw<DetectionEvent[]>`
@@ -417,6 +433,7 @@ export class DetectionEventsRepository implements IDetectionEventsRepository {
             - 'observed_action'
             - 'observed_action_by'
             - 'observed_action_at'
+            - 'report_ban_operation_id'
             - ${DETECTION_ACCOUNTING_EXCLUDED_METADATA_KEY}
             - ${DETECTION_ACCOUNTING_EXCLUSION_SCOPE_METADATA_KEY}
             - ${DETECTION_ACCOUNTING_EXCLUDED_BY_METADATA_KEY}
@@ -426,10 +443,12 @@ export class DetectionEventsRepository implements IDetectionEventsRepository {
             - 'observed_action'
             - 'observed_action_by'
             - 'observed_action_at'
+            - 'report_ban_operation_id'
         END
         WHERE id = ${detectionEventId}::uuid
           AND COALESCE(metadata, '{}'::jsonb)->>'observed_action' = ${actionType}
           AND COALESCE(metadata, '{}'::jsonb)->>'observed_action_by' = ${adminId}
+          AND (${operationId ?? null}::text is null OR metadata->>'report_ban_operation_id' = ${operationId ?? null}::text)
         RETURNING *
       `;
       return rows[0] ?? null;

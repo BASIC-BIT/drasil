@@ -11,6 +11,7 @@ import {
 export interface IModerationActionRequestRepository {
   enqueue(data: ModerationActionRequestCreate): Promise<ModerationActionRequest>;
   findById(id: string): Promise<ModerationActionRequest | null>;
+  claimReportBanReconciliation(now: Date): Promise<ModerationActionRequest | null>;
   claimNext(): Promise<ModerationActionRequest | null>;
   heartbeat(id: string): Promise<ModerationActionRequest | null>;
   mergeMetadata(id: string, metadata: Prisma.JsonObject): Promise<ModerationActionRequest | null>;
@@ -114,6 +115,21 @@ export class ModerationActionRequestRepository implements IModerationActionReque
     }
   }
 
+  public async claimReportBanReconciliation(now: Date): Promise<ModerationActionRequest | null> {
+    const rows = await this.prisma.$queryRaw<ModerationActionRequest[]>`
+      update moderation_action_requests
+      set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('report_ban_lease_until', (${now}::timestamptz + interval '15 minutes')::text), updated_at = ${now}
+      where id = (
+        select id from moderation_action_requests
+        where action_type = 'ban_observed_detection'
+          and metadata->>'report_ban_phase' in ('preparing', 'enforcement_started', 'discord_confirmed', 'reconciliation_required')
+          and coalesce((metadata->>'report_ban_retry_at')::timestamptz, '-infinity'::timestamptz) <= ${now}
+          and coalesce((metadata->>'report_ban_lease_until')::timestamptz, updated_at + interval '15 minutes') <= ${now}
+        order by updated_at asc for update skip locked limit 1
+      ) returning *`;
+    return rows[0] ?? null;
+  }
+
   public async claimNext(): Promise<ModerationActionRequest | null> {
     try {
       await this.prisma.$executeRaw`
@@ -145,7 +161,8 @@ export class ModerationActionRequestRepository implements IModerationActionReque
         where id = (
           select id
           from moderation_action_requests
-          where status = 'queued'::moderation_action_request_status
+          where (status = 'queued'::moderation_action_request_status
+               and coalesce(metadata->>'report_ban_phase', '') = '')
              or (
                status = 'processing'::moderation_action_request_status
                and action_type in (
@@ -175,9 +192,10 @@ export class ModerationActionRequestRepository implements IModerationActionReque
     try {
       const rows = await this.prisma.$queryRaw<ModerationActionRequest[]>`
         update moderation_action_requests
-        set updated_at = now()
+        set updated_at = now(),
+            metadata = case when metadata->>'report_ban_phase' is not null then metadata || jsonb_build_object('report_ban_lease_until', (now() + interval '15 minutes')::text) else metadata end
         where id = ${id}::uuid
-          and status = 'processing'::moderation_action_request_status
+          and (status = 'processing'::moderation_action_request_status or metadata->>'report_ban_phase' is not null)
         returning *
       `;
       return rows[0] ?? null;

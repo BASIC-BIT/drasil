@@ -144,13 +144,43 @@ export interface IUserModerationService {
   recordMemberLeftGuild(member: GuildMember | PartialGuildMember): Promise<number>;
 }
 
+export interface ObservedBanLifecycle {
+  prepare(cases: VerificationEvent[], attemptId: string): Promise<void>;
+  beforeEnforcement(cases: VerificationEvent[], attemptId: string | null): Promise<void>;
+  operationId: string;
+}
+export interface ObservedBanFinalization {
+  operationId: string;
+  reason: string;
+  detectionEventId: string;
+  caseIds: string[];
+  attemptId: string;
+  confirmedAt: Date;
+  reportId: string | null;
+}
 export interface ICombinedBanLifecycleService {
+  finalizeObservedBan(
+    guild: Guild,
+    userId: string,
+    moderator: User,
+    input: ObservedBanFinalization
+  ): Promise<void>;
+
   markCombinedBanCleanupPending(
     verificationEventId: string,
     cleanupJobId: string
   ): Promise<VerificationEvent>;
-  performDiscordMemberBan(member: GuildMember, reason: string): Promise<void>;
-  performDiscordBanById(guild: Guild, userId: string, reason: string): Promise<void>;
+  performDiscordMemberBan(
+    member: GuildMember,
+    reason: string,
+    lifecycle?: ObservedBanLifecycle
+  ): Promise<void>;
+  performDiscordBanById(
+    guild: Guild,
+    userId: string,
+    reason: string,
+    lifecycle?: ObservedBanLifecycle
+  ): Promise<void>;
   finalizeSuccessfulMemberBan(
     member: GuildMember,
     reason: string,
@@ -254,13 +284,17 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     this.captchaChallengeRepository = captchaChallengeRepository;
   }
 
-  private async cancelPendingCaptchaChallenge(verificationEvent: VerificationEvent): Promise<void> {
+  private async cancelPendingCaptchaChallenge(
+    verificationEvent: VerificationEvent,
+    strict = false
+  ): Promise<void> {
     let cancelled = false;
     try {
       cancelled =
         (await this.captchaChallengeRepository?.cancelPendingForCase(verificationEvent.id)) ??
         false;
     } catch (error) {
+      if (strict) throw error;
       console.warn(
         `Failed to cancel pending security check for case ${verificationEvent.id}:`,
         error
@@ -279,6 +313,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         );
       }
     } catch (error) {
+      if (strict) throw error;
       console.warn(
         `Failed to refresh cancelled security-check presentation for case ${verificationEvent.id}:`,
         error
@@ -669,7 +704,10 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     return verificationEvents.filter((event) => event.status === VerificationStatus.PENDING);
   }
 
-  private async claimPendingTerminalActions(events: readonly VerificationEvent[]): Promise<{
+  private async claimPendingTerminalActions(
+    events: readonly VerificationEvent[],
+    ownedAttemptId?: string
+  ): Promise<{
     events: VerificationEvent[];
     originalEvents: VerificationEvent[];
     attemptId: string | null;
@@ -680,7 +718,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     }
 
     const firstEvent = events[0];
-    const attemptId = `${CASE_TERMINAL_ACTION_ATTEMPT_PREFIX}${randomUUID()}`;
+    const attemptId = ownedAttemptId ?? `${CASE_TERMINAL_ACTION_ATTEMPT_PREFIX}${randomUUID()}`;
     const claimedEvents = await this.verificationEventRepository.claimTerminalActions(
       events.map((event) => event.id),
       firstEvent.server_id,
@@ -1754,41 +1792,218 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     return updatedEvent;
   }
 
-  public async performDiscordMemberBan(member: GuildMember, reason: string): Promise<void> {
+  public async performDiscordMemberBan(
+    member: GuildMember,
+    reason: string,
+    lifecycle?: ObservedBanLifecycle
+  ): Promise<void> {
     const pendingVerificationEvents = await this.getPendingVerificationEvents(member);
-    const terminalClaim = await this.claimPendingTerminalActions(pendingVerificationEvents);
+    const attemptId = lifecycle
+      ? `${CASE_TERMINAL_ACTION_ATTEMPT_PREFIX}${lifecycle.operationId}`
+      : undefined;
+    if (lifecycle && attemptId) await lifecycle.prepare(pendingVerificationEvents, attemptId);
+    const terminalClaim = await this.claimPendingTerminalActions(
+      pendingVerificationEvents,
+      attemptId
+    );
     const auditReason = reason.trim().slice(0, DISCORD_AUDIT_LOG_REASON_MAX_LENGTH);
     try {
+      await lifecycle?.beforeEnforcement(terminalClaim.events, terminalClaim.attemptId);
       await member.ban({ reason: auditReason || 'Moderator-requested ban' });
     } catch (error) {
-      await this.rollbackPendingTerminalActions(
-        terminalClaim.originalEvents,
-        terminalClaim.attemptId
-      );
+      if (!lifecycle)
+        await this.rollbackPendingTerminalActions(
+          terminalClaim.originalEvents,
+          terminalClaim.attemptId
+        );
       throw error;
     }
     console.log(`Banned user ${member.user.tag}. Reason: ${reason}`);
   }
 
-  public async performDiscordBanById(guild: Guild, userId: string, reason: string): Promise<void> {
+  public async performDiscordBanById(
+    guild: Guild,
+    userId: string,
+    reason: string,
+    lifecycle?: ObservedBanLifecycle
+  ): Promise<void> {
     const verificationEvents = await this.verificationEventRepository.findByUserAndServer(
       userId,
       guild.id
     );
-    const terminalClaim = await this.claimPendingTerminalActions(
-      verificationEvents.filter((event) => event.status === VerificationStatus.PENDING)
+    const pendingEvents = verificationEvents.filter(
+      (event) => event.status === VerificationStatus.PENDING
     );
+    const attemptId = lifecycle
+      ? `${CASE_TERMINAL_ACTION_ATTEMPT_PREFIX}${lifecycle.operationId}`
+      : undefined;
+    if (lifecycle && attemptId) await lifecycle.prepare(pendingEvents, attemptId);
+    const terminalClaim = await this.claimPendingTerminalActions(pendingEvents, attemptId);
     const auditReason = reason.trim().slice(0, DISCORD_AUDIT_LOG_REASON_MAX_LENGTH);
     try {
+      await lifecycle?.beforeEnforcement(terminalClaim.events, terminalClaim.attemptId);
       await guild.bans.create(userId, { reason: auditReason || 'Moderator-requested ban' });
     } catch (error) {
-      await this.rollbackPendingTerminalActions(
-        terminalClaim.originalEvents,
-        terminalClaim.attemptId
-      );
+      if (!lifecycle)
+        await this.rollbackPendingTerminalActions(
+          terminalClaim.originalEvents,
+          terminalClaim.attemptId
+        );
       throw error;
     }
     console.log(`Banned user ${userId} for combined message cleanup. Reason: ${reason}`);
+  }
+
+  public async finalizeObservedBan(
+    guild: Guild,
+    userId: string,
+    moderator: User,
+    input: ObservedBanFinalization
+  ): Promise<void> {
+    const bannedUser = (await guild.bans.fetch(userId)).user;
+    const target: ModerationTarget = {
+      guildId: guild.id,
+      userId,
+      userTag: bannedUser.tag,
+      username: bannedUser.username,
+      accountCreatedAt: this.getUserAccountCreatedAt(bannedUser),
+    };
+    const events: VerificationEvent[] = [];
+    for (const id of input.caseIds) {
+      const event = await this.verificationEventRepository.findById(id);
+      if (!event || event.server_id !== guild.id || event.user_id !== userId)
+        throw new Error('Linked ban case is missing or changed.');
+      const owned =
+        this.metadataToRecord(event.metadata).report_ban_operation_id === input.operationId;
+      if (event.status === VerificationStatus.BANNED && owned) {
+        events.push(event);
+        continue;
+      }
+      if (
+        event.status !== VerificationStatus.PENDING ||
+        event.quarantine_attempt_id !== input.attemptId
+      )
+        throw new Error('Linked ban case ownership changed.');
+      const completed = await this.completeTerminalVerificationEvents(
+        [event],
+        VerificationStatus.BANNED,
+        moderator,
+        input.confirmedAt,
+        input.reason,
+        this.withUserSnapshot(
+          {
+            report_ban_operation_id: input.operationId,
+            report_intake_id: input.reportId,
+            discord_confirmed_at: input.confirmedAt.toISOString(),
+          },
+          bannedUser
+        ),
+        true
+      );
+      events.push(completed[0].event);
+    }
+    await this.serverMemberRepository.upsertMember(guild.id, userId, {
+      verification_status: VerificationStatus.BANNED,
+      case_role_active: false,
+      last_status_change: input.confirmedAt,
+    });
+    if (this.roleQuarantineService)
+      await this.roleQuarantineService.abandonActiveSnapshot(
+        guild.id,
+        userId,
+        'drasil_ban',
+        moderator.id
+      );
+    const actions = await this.adminActionService.getActionsForUser(guild.id, userId);
+    for (const event of events) {
+      await this.cancelPendingCaptchaChallenge(event, true);
+      await this.threadManager.resolveVerificationThread(
+        event,
+        VerificationStatus.BANNED,
+        moderator.id
+      );
+      const closure = await this.threadManager.closeResolvedVerificationThreads(event, {
+        execute: true,
+      });
+      if (closure.results.some((result) => result.error)) {
+        throw new Error('Linked ban case thread closure is incomplete.');
+      }
+      const alreadyAudited = actions.some(
+        (action) =>
+          this.metadataToRecord(action.metadata).report_ban_operation_id === input.operationId &&
+          action.verification_event_id === event.id
+      );
+      if (event.notification_message_id && !alreadyAudited) {
+        const logged = await this.notificationManager.logActionToMessage(
+          event,
+          AdminActionType.BAN,
+          moderator
+        );
+        if (!logged) throw new Error('Linked ban case notification update is incomplete.');
+      }
+      await this.notificationManager.updateNotificationButtons(event, VerificationStatus.BANNED);
+      await this.moderationQueueService?.deleteCaseMirror(event.id);
+      await this.moderationQueueService?.deleteCaseAttention(event.id);
+    }
+    for (const event of events.length ? events : [null]) {
+      if (
+        !actions.some(
+          (action) =>
+            this.metadataToRecord(action.metadata).report_ban_operation_id === input.operationId &&
+            action.verification_event_id === (event?.id ?? null)
+        )
+      ) {
+        await this.adminActionService.recordAction({
+          server_id: guild.id,
+          user_id: userId,
+          admin_id: moderator.id,
+          action_type: AdminActionType.BAN,
+          verification_event_id: event?.id ?? null,
+          detection_event_id: input.detectionEventId,
+          previous_status: event ? VerificationStatus.PENDING : null,
+          new_status: VerificationStatus.BANNED,
+          notes: input.reason,
+          metadata: this.buildOutcomeMetadata(
+            {
+              report_ban_operation_id: input.operationId,
+              report_intake_id: input.reportId,
+              discord_confirmed_at: input.confirmedAt.toISOString(),
+            },
+            bannedUser
+          ) as Prisma.JsonObject,
+        });
+      }
+      if (!this.moderationOutcomeService)
+        throw new Error('Moderation outcome persistence is unavailable.');
+      const outcomes = await this.moderationOutcomeService.findOutcomesForOperation(
+        guild.id,
+        userId,
+        input.operationId
+      );
+      if (!outcomes.some((outcome) => outcome.verification_event_id === (event?.id ?? null))) {
+        await this.recordModerationOutcomes(
+          target,
+          ModerationOutcomeType.BANNED,
+          ModerationOutcomeSource.DRASIL,
+          event ? [event] : [],
+          {
+            actorId: moderator.id,
+            reason: input.reason,
+            detectionEventId: input.detectionEventId,
+            occurredAt: input.confirmedAt,
+            recordWithoutVerificationEvent: true,
+            metadata: this.buildOutcomeMetadata(
+              {
+                report_ban_operation_id: input.operationId,
+                report_intake_id: input.reportId,
+                discord_confirmed_at: input.confirmedAt.toISOString(),
+              },
+              bannedUser
+            ),
+          }
+        );
+      }
+    }
   }
 
   public async finalizeSuccessfulMemberBan(

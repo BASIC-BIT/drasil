@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { PostgresReportQueueDataAdapter, parseReportQueueRow } from './reportQueueDataAdapter';
 
+const db = vi.hoisted(() => ({ query: vi.fn() }));
+vi.mock('./setupDataAdapter', () => ({ getPostgresPool: () => ({ query: db.query }) }));
+
 const baseRow = {
   id: 'report-1',
   server_id: 'guild-1',
@@ -149,4 +152,32 @@ describe('reportQueueDataAdapter', () => {
       serverId: 'guild-1',
     });
   });
+});
+
+it('keeps a claimed report busy in the SQL close and case-open paths', async () => {
+  db.query.mockReset();
+  db.query
+    .mockResolvedValueOnce({ rows: [] })
+    .mockResolvedValueOnce({ rows: [{ ...baseRow, busy: true }] })
+    .mockResolvedValueOnce({ rows: [{ ...baseRow, busy: true }] });
+  const adapter = new PostgresReportQueueDataAdapter();
+  expect(
+    await adapter.closeSubmittedReport({
+      guildId: 'guild-1',
+      reportId: 'report-1',
+      action: 'dismiss_no_action',
+      adminId: 'admin-1',
+    })
+  ).toBe(false);
+  expect(db.query.mock.calls[0][0]).toContain(
+    "coalesce(metadata->>'report_ban_operation_id', '') = ''"
+  );
+  expect(
+    await adapter.openCaseFromSubmittedReport({
+      guildId: 'guild-1',
+      reportId: 'report-1',
+      adminId: 'admin-1',
+    })
+  ).toMatchObject({ status: 'busy' });
+  expect(db.query).toHaveBeenCalledTimes(3);
 });

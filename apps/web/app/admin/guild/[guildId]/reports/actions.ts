@@ -80,6 +80,7 @@ export async function closeInboxSubmittedReport(
 }
 
 const openCaseErrorMessages = {
+  busy: 'A ban is already being processed for this report.',
   already_handled: 'Report is no longer available to open. Refresh the queue and try again.',
   case_exists: 'Report already has a linked case.',
   missing_detection: 'Report does not have a linked detection event to open as a case.',

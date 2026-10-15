@@ -17,6 +17,7 @@ export const TYPES = {
   NotificationManager: Symbol.for('NotificationManager'),
   ConfigService: Symbol.for('ConfigService'),
   UserService: Symbol.for('UserService'),
+  ModerationEvidenceService: Symbol.for('ModerationEvidenceService'),
   SecurityActionService: Symbol.for('SecurityActionService'),
   UserModerationService: Symbol.for('UserModerationService'),
   VerificationThreadAnalysisService: Symbol.for('VerificationThreadAnalysisService'),

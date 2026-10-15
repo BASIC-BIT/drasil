@@ -136,10 +136,16 @@ class PostgresReportReviewRepository implements ReportReviewRepository {
            updated_at = $4,
            metadata = coalesce(metadata, '{}'::jsonb) || $5::jsonb
        where id = $1 and server_id = $2 and status = 'submitted'
+         and coalesce(metadata->>'report_ban_operation_id', '') = ''
        returning id, server_id, thread_id, status`,
       [input.reportId, input.serverId, input.status, input.closedAt, JSON.stringify(input.metadata)]
     );
-    return result.rows[0] ?? null;
+    if (result.rows[0]) return result.rows[0];
+    const busy = await getPostgresPool().query<ReportReviewRecord>(
+      `select id, server_id, thread_id, status, true as busy from report_intakes where id = $1 and server_id = $2 and coalesce(metadata->>'report_ban_operation_id', '') <> ''`,
+      [input.reportId, input.serverId]
+    );
+    return busy.rows[0] ?? null;
   }
 }
 
@@ -168,6 +174,7 @@ class PostgresReportOpenCaseRepository implements ReportOpenCaseRepository {
          ri.server_id,
          ri.status,
          ri.confirmed_target_user_id,
+         coalesce(ri.metadata->>'report_ban_operation_id', '') <> '' as busy,
          de.id as latest_detection_id,
          de.latest_verification_event_id as latest_case_id
        from report_intakes ri

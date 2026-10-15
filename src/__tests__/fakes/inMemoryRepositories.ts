@@ -170,6 +170,11 @@ export class InMemoryDetectionEventsRepository implements IDetectionEventsReposi
     return `det-${this.idCounter}`;
   }
 
+  async patchMetadata(id: string, patch: Record<string, unknown>): Promise<DetectionEvent | null> {
+    const event = await this.findById(id);
+    return event ? this.updateMetadata(id, { ...event.metadata, ...patch }) : null;
+  }
+
   async create(data: Partial<DetectionEvent>): Promise<DetectionEvent> {
     if (!data.user_id || !data.detection_type || data.confidence === undefined) {
       throw new Error(
@@ -399,7 +404,8 @@ export class InMemoryDetectionEventsRepository implements IDetectionEventsReposi
   async releaseObservedAction(
     detectionEventId: string,
     actionType: string,
-    adminId: string
+    adminId: string,
+    operationId?: string
   ): Promise<DetectionEvent | null> {
     const eventIndex = this.events.findIndex((item) => item.id === detectionEventId);
     if (eventIndex === -1) {
@@ -409,7 +415,8 @@ export class InMemoryDetectionEventsRepository implements IDetectionEventsReposi
     const existingMetadata = this.events[eventIndex].metadata ?? {};
     if (
       existingMetadata.observed_action !== actionType ||
-      existingMetadata.observed_action_by !== adminId
+      existingMetadata.observed_action_by !== adminId ||
+      (operationId !== undefined && existingMetadata.report_ban_operation_id !== operationId)
     ) {
       return null;
     }
@@ -418,6 +425,7 @@ export class InMemoryDetectionEventsRepository implements IDetectionEventsReposi
     delete metadata.observed_action;
     delete metadata.observed_action_by;
     delete metadata.observed_action_at;
+    delete metadata.report_ban_operation_id;
     if (actionType === 'false_positive') {
       delete metadata[DETECTION_ACCOUNTING_EXCLUDED_METADATA_KEY];
       delete metadata[DETECTION_ACCOUNTING_EXCLUSION_SCOPE_METADATA_KEY];
@@ -1540,6 +1548,55 @@ export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
     return `evidence-${this.evidenceIdCounter}`;
   }
 
+  async claimBan(input: {
+    reportId: string;
+    serverId: string;
+    targetUserId: string;
+    detectionEventId: string;
+    operationId: string;
+  }): Promise<ReportIntake | null> {
+    const index = this.intakes.findIndex(
+      (item) =>
+        item.id === input.reportId &&
+        item.server_id === input.serverId &&
+        item.confirmed_target_user_id === input.targetUserId &&
+        item.status === ReportIntakeStatus.SUBMITTED &&
+        !(item.metadata as Record<string, unknown>)?.report_ban_operation_id
+    );
+    if (index < 0) return null;
+    this.intakes[index] = {
+      ...this.intakes[index],
+      metadata: {
+        ...(this.intakes[index].metadata as Record<string, unknown>),
+        report_ban_operation_id: input.operationId,
+      },
+    };
+    return { ...this.intakes[index] };
+  }
+  async updateBan(
+    reportId: string,
+    operationId: string,
+    input: { release?: boolean; complete?: boolean; metadata?: Record<string, unknown> }
+  ): Promise<ReportIntake | null> {
+    const index = this.intakes.findIndex(
+      (item) =>
+        item.id === reportId &&
+        (item.metadata as Record<string, unknown>)?.report_ban_operation_id === operationId
+    );
+    if (index < 0) return null;
+    const metadata = {
+      ...(this.intakes[index].metadata as Record<string, unknown>),
+      ...input.metadata,
+    };
+    if (input.release) delete metadata.report_ban_operation_id;
+    this.intakes[index] = {
+      ...this.intakes[index],
+      metadata: metadata as ReportIntake['metadata'],
+      ...(input.complete ? { status: ReportIntakeStatus.ACTIONED, closed_at: new Date() } : {}),
+    };
+    return { ...this.intakes[index] };
+  }
+
   async create(data: ReportIntakeCreate): Promise<ReportIntake> {
     const now = new Date();
     const intake: ReportIntake = {
@@ -1606,6 +1663,7 @@ export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
     }
 
     const existing = this.intakes[index];
+    if ((existing.metadata as Record<string, unknown>)?.report_ban_operation_id) return null;
     const updated: ReportIntake = {
       ...existing,
       status: data.status ?? existing.status,

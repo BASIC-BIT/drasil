@@ -167,3 +167,17 @@ describe('inboxActionReceipts', () => {
     ).toEqual(new Set(['request-unobserved', 'request-active']));
   });
 });
+import { blocksBanResubmission } from './inboxActionReceipts';
+it.each(['banned_updates_pending', 'ban_outcome_unknown'] as const)(
+  'keeps completed %s receipts active and blocks another ban',
+  (status) => {
+    const request = buildRequest({
+      status: 'completed',
+      actionType: 'ban_observed_detection',
+      reportIntakeId: 'report-1',
+      observedBanResult: { status, operationId: 'request-1' },
+    });
+    expect(hasActiveInboxActionRequests([request])).toBe(true);
+    expect(blocksBanResubmission(request)).toBe(true);
+  }
+);

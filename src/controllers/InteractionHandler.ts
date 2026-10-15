@@ -1,3 +1,6 @@
+import { IReportIntakeRepository } from '../repositories/ReportIntakeRepository';
+import { IModerationActionRequestRepository } from '../repositories/ModerationActionRequestRepository';
+import { ModerationActionRequestType } from '../repositories/types';
 import {
   Client,
   ButtonInteraction,
@@ -211,7 +214,13 @@ export class InteractionHandler implements IInteractionHandler {
     accountQuarantineService?: IAccountQuarantineService,
     @inject(TYPES.CaptchaChallengeService)
     @optional()
-    captchaChallengeService?: ICaptchaChallengeService
+    captchaChallengeService?: ICaptchaChallengeService,
+    @inject(TYPES.ModerationActionRequestRepository)
+    @optional()
+    private readonly actionRequests?: IModerationActionRequestRepository,
+    @inject(TYPES.ReportIntakeRepository)
+    @optional()
+    private readonly reportIntakes?: IReportIntakeRepository
   ) {
     this.client = client;
     this.notificationManager = notificationManager;
@@ -3772,33 +3781,49 @@ export class InteractionHandler implements IInteractionHandler {
 
     const reason = providedReason || OBSERVED_BAN_DEFAULT_REASON;
     try {
-      const guild = await this.client.guilds.fetch(interaction.guildId);
-      const member = await guild.members.fetch(parsed.userId).catch(() => null);
-      const banned = member
-        ? await this.securityActionService.banObservedDetection(
-            member,
-            parsed.detectionEventId,
-            interaction.user,
-            reason
-          )
-        : await this.securityActionService.banObservedDetectionById(
-            guild,
-            parsed.userId,
-            parsed.detectionEventId,
-            interaction.user,
-            reason
-          );
+      if (!this.actionRequests || !this.detectionEventsRepository)
+        throw new Error('Moderation request queue is unavailable.');
+      const detection = await this.detectionEventsRepository.findById(parsed.detectionEventId);
+      if (
+        !detection ||
+        detection.server_id !== interaction.guildId ||
+        detection.user_id !== parsed.userId
+      )
+        throw new Error('Observed target changed.');
+      const reportId =
+        typeof detection.metadata?.reportIntakeId === 'string'
+          ? detection.metadata.reportIntakeId
+          : undefined;
+      if (reportId) {
+        const report = await this.reportIntakes?.findById(reportId);
+        if (
+          !report ||
+          report.server_id !== interaction.guildId ||
+          report.status !== 'submitted' ||
+          report.confirmed_target_user_id !== parsed.userId ||
+          (report.metadata as Record<string, unknown> | null)?.report_ban_operation_id
+        )
+          throw new Error('Report is no longer available for this ban.');
+      }
+      await this.actionRequests.enqueue({
+        serverId: interaction.guildId,
+        actorId: interaction.user.id,
+        actorSurface: 'discord_interaction',
+        actionType: ModerationActionRequestType.BAN_OBSERVED_DETECTION,
+        targetUserId: parsed.userId,
+        detectionEventId: parsed.detectionEventId,
+        reportIntakeId: reportId,
+        idempotencyKey: `observed-ban:${interaction.guildId}:${parsed.detectionEventId}`,
+        metadata: { reason, requested_action: 'ban_user' },
+      });
       await interaction.reply({
-        content: banned
-          ? `Banned <@${parsed.userId}>.`
-          : `This observed alert for <@${parsed.userId}> was already actioned.`,
+        content: `Ban queued for <@${parsed.userId}>.`,
         flags: MessageFlags.Ephemeral,
       });
     } catch (error) {
       console.error('Error handling observed ban modal submission:', error);
       const response = {
-        content:
-          'Failed to ban from the observed alert. A verification case may have been opened; check the case before retrying.',
+        content: 'Could not queue this ban. Refresh the report before trying again.',
         flags: MessageFlags.Ephemeral,
       } as const;
       if (interaction.replied || interaction.deferred) {

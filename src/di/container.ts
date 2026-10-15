@@ -1,3 +1,4 @@
+import { ModerationEvidenceService } from '../services/ModerationEvidenceService';
 import 'reflect-metadata';
 import { Container } from 'inversify';
 import { Client, GatewayIntentBits } from 'discord.js';
@@ -291,6 +292,7 @@ function configureServices(container: Container): void {
   container.bind<IDetectionOrchestrator>(TYPES.DetectionOrchestrator).to(DetectionOrchestrator);
   container.bind<IConfigService>(TYPES.ConfigService).to(ConfigService).inSingletonScope();
 
+  container.bind(TYPES.ModerationEvidenceService).to(ModerationEvidenceService).inSingletonScope();
   // Add SecurityActionService binding
   container
     .bind<ISecurityActionService>(TYPES.SecurityActionService)
