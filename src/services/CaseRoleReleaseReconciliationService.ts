@@ -135,7 +135,6 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
           containment_status: CaseContainmentStatus.NOT_APPLICABLE,
           parked_at: verificationEvent.parked_at,
           parked_by: verificationEvent.parked_by,
-          metadata: verificationEvent.metadata,
         }
       );
       if (recovered) {
@@ -145,7 +144,6 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
     }
     if (isCaseAttentionAttempt(attemptId)) {
       const metadata = {
-        ...this.metadataToRecord(verificationEvent.metadata),
         account_quarantine_reconciliation: {
           checked_at: now.toISOString(),
           result: 'incomplete',
@@ -177,7 +175,6 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
     }
 
     const metadata = {
-      ...this.metadataToRecord(verificationEvent.metadata),
       account_quarantine_reconciliation: {
         checked_at: now.toISOString(),
         result: 'incomplete',

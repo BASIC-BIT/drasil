@@ -19,7 +19,10 @@ import {
   renderSupportThreadReminder,
   SUPPORT_THREAD_REMINDER_INTERVAL_HOURS,
 } from '../utils/caseReviewReminderSchedule';
-import { markSupportThreadReminderSent } from '../utils/supportThreadReminderState';
+import {
+  markSupportThreadReminderSent,
+  SUPPORT_THREAD_REMINDER_METADATA_KEY,
+} from '../utils/supportThreadReminderState';
 import { buildAdminModerationInboxUrl } from '../utils/publicWebLinks';
 import { getPendingScreeningSettings } from '../utils/pendingScreeningSettings';
 import { IModerationQueueService } from './ModerationQueueService';
@@ -650,8 +653,22 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
       return;
     }
 
+    // Recheck after channel lookup, which can overlap departure or resolution.
+    const latest = await this.verificationEventRepository.findById(verificationEvent.id);
+    if (!latest || !this.isUserFacingSupportCase(latest)) return;
+    const member = await this.serverMemberRepository?.findByServerAndUser(
+      latest.server_id,
+      latest.user_id
+    );
+    if (member && member.verification_status !== VerificationStatus.PENDING) return;
+    const latestPlan = buildCaseReminderPlan(latest, settings, now, {
+      lastAdminDigestAt,
+      supportsUserReminder: true,
+    });
+    if (!latestPlan.nextUserReminderAt || latestPlan.nextUserReminderAt > now) return;
+
     await thread.send({
-      content: renderSupportThreadReminder(verificationEvent, now),
+      content: renderSupportThreadReminder(latest, now),
       allowedMentions: {
         parse: [],
         users: [verificationEvent.user_id],
@@ -660,13 +677,11 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
       },
     });
 
-    await this.verificationEventRepository.update(
-      verificationEvent.id,
+    const reminderPatch = markSupportThreadReminderSent(latest.metadata, now);
+    await this.verificationEventRepository.patchMetadata(
+      latest.id,
       {
-        metadata: markSupportThreadReminderSent(
-          verificationEvent.metadata,
-          now
-        ) as VerificationEvent['metadata'],
+        [SUPPORT_THREAD_REMINDER_METADATA_KEY]: reminderPatch[SUPPORT_THREAD_REMINDER_METADATA_KEY],
       },
       { touchUpdatedAt: false }
     );
@@ -678,7 +693,10 @@ export class CaseReviewReminderService implements ICaseReviewReminderService {
     }
 
     const metadata = this.metadataToRecord(verificationEvent.metadata);
-    return metadata[VERIFICATION_THREAD_TYPE_METADATA_KEY] !== REPORT_REVIEW_THREAD_TYPE;
+    return (
+      metadata.membership_state !== 'left_or_removed' &&
+      metadata[VERIFICATION_THREAD_TYPE_METADATA_KEY] !== REPORT_REVIEW_THREAD_TYPE
+    );
   }
 
   private async fetchSupportThread(

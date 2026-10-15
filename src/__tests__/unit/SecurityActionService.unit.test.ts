@@ -30,7 +30,11 @@ import {
   REPORT_REVIEW_THREAD_TYPE,
   VERIFICATION_THREAD_TYPE_METADATA_KEY,
 } from '../../services/ThreadManager';
-import { IUserModerationService } from '../../services/UserModerationService';
+import {
+  UserModerationService,
+  IUserModerationService,
+} from '../../services/UserModerationService';
+import { NotificationPresentationBuilder } from '../../services/NotificationPresentationBuilder';
 import { IAdminActionService } from '../../services/AdminActionService';
 import { USER_REPORT_EXTERNAL_RESPONSE_MODE_SETTING_KEY } from '../../utils/userReportSettings';
 import {
@@ -599,6 +603,131 @@ describe('SecurityActionService (unit)', () => {
     );
   });
 
+  it.each([false, true])(
+    'preserves departure during evidence collection (terminal completion: %s)',
+    async (resolveDuringDelivery) => {
+      const member = buildMember('guild-overlap', 'user-overlap');
+      notificationManager.upsertSuspiciousUserNotification.mockResolvedValue({
+        id: 'notif-1',
+        channelId: 'admin-overlap',
+      } as Message);
+      const queue = {
+        upsertCaseMirror: jest.fn().mockResolvedValue(undefined),
+        deletePendingScreeningMember: jest.fn().mockResolvedValue(undefined),
+      } as unknown as jest.Mocked<IModerationQueueService>;
+      const moderation = new UserModerationService(
+        serverMemberRepository,
+        notificationManager,
+        { assignCaseRole: jest.fn(), removeCaseRole: jest.fn() },
+        verificationEventRepository,
+        adminActionService,
+        threadManager,
+        undefined,
+        undefined,
+        queue
+      );
+      let entered!: () => void;
+      const collecting = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      let resume!: () => void;
+      const collected = new Promise<void>((resolve) => {
+        resume = resolve;
+      });
+      gptService.describeProfileImages.mockImplementationOnce(async () => {
+        entered();
+        await collected;
+        return null;
+      });
+      const service = new SecurityActionService(
+        notificationManager,
+        detectionEventsRepository,
+        serverMemberRepository,
+        verificationEventRepository,
+        userRepository,
+        serverRepository,
+        adminActionService,
+        threadManager,
+        userModerationService,
+        {} as Client,
+        gptService as any,
+        undefined,
+        queue
+      );
+      const opening = service.handleSuspiciousMessage(member, {
+        label: 'SUSPICIOUS',
+        confidence: 0.9,
+        reasons: ['Suspicious content'],
+        triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+        triggerContent: 'test message',
+      });
+      await collecting;
+      const [event] = await verificationEventRepository.findByUserAndServer(
+        member.id,
+        member.guild.id
+      );
+      await verificationEventRepository.patchMetadata(event.id, {
+        support_thread_reminder: { reminderCount: 1, lastReminderAt: '2026-10-14T12:00:00Z' },
+        active_moderation_operation: { kind: 'ban', operation_id: 'operation-overlap' },
+      });
+      await verificationEventRepository.update(event.id, {
+        case_kind: CaseKind.COMPROMISED_ACCOUNT,
+        containment_status: CaseContainmentStatus.IN_PROGRESS,
+        quarantine_attempt_id: 'case-terminal-action:overlap',
+      });
+      expect(await moderation.recordMemberLeftGuild(member)).toBe(1);
+      const evidenceThread = await threadManager.createPrivateEvidenceThread.mock.results[0].value;
+      evidenceThread.send.mockImplementationOnce(async () => {
+        if (resolveDuringDelivery) {
+          await verificationEventRepository.update(
+            event.id,
+            { status: VerificationStatus.BANNED, resolved_by: 'moderator-overlap' },
+            { allowQuarantineOverride: true }
+          );
+        } else {
+          // Delivery itself can overlap a newer owned patch after evidence was saved.
+          await verificationEventRepository.patchMetadata(event.id, { delivery_overlap: true });
+        }
+        return { id: 'evidence-message-overlap' };
+      });
+      resume();
+      await expect(opening).resolves.toBe(true);
+      const latest = await verificationEventRepository.findById(event.id);
+      expect(latest).toMatchObject({
+        status: resolveDuringDelivery ? VerificationStatus.BANNED : VerificationStatus.PENDING,
+        metadata: {
+          membership_state: 'left_or_removed',
+          member_left_at: expect.any(String),
+          support_thread_reminder: { reminderCount: 1, lastReminderAt: '2026-10-14T12:00:00Z' },
+          active_moderation_operation: { kind: 'ban', operation_id: 'operation-overlap' },
+          evidence_bundle: expect.any(Object),
+        },
+      });
+      if (!resolveDuringDelivery)
+        expect(latest).toMatchObject({
+          containment_status: CaseContainmentStatus.IN_PROGRESS,
+          quarantine_attempt_id: 'case-terminal-action:overlap',
+        });
+      expect(notificationManager.upsertSuspiciousUserNotification.mock.calls.at(-1)?.[2]).toEqual(
+        latest
+      );
+      expect(queue.upsertCaseMirror.mock.calls.at(-1)?.[0]).toEqual(latest);
+      if (!resolveDuringDelivery && latest) {
+        const presentation = new NotificationPresentationBuilder();
+        const labels = presentation
+          .createAdminNotificationActionRows(member.id, {
+            verificationStatus: latest.status,
+            caseMembershipState: presentation.getCaseMembershipState(latest),
+          })
+          .flatMap((row) =>
+            row.components.map((button) => ('label' in button.data ? button.data.label : undefined))
+          );
+        expect(labels).toEqual(expect.arrayContaining(['Ban by ID...', 'Close']));
+        expect(labels).not.toContain('Verify');
+      }
+    }
+  );
+
   it('captures the visible server avatar for case evidence and skips invalid image lengths', async () => {
     const guildId = 'guild-avatar-evidence';
     const userId = 'user-avatar-evidence';
@@ -754,7 +883,15 @@ describe('SecurityActionService (unit)', () => {
     const member = buildMember(guildId, userId);
     const message = buildMessage(guildId, 'channel-1');
     userModerationService.applyCaseRole.mockRejectedValueOnce(new Error('Missing Permissions'));
-    jest.spyOn(verificationEventRepository, 'update').mockRejectedValueOnce(new Error('DB down'));
+    const patchMetadata = verificationEventRepository.patchMetadata.bind(
+      verificationEventRepository
+    );
+    jest
+      .spyOn(verificationEventRepository, 'patchMetadata')
+      .mockImplementation(async (id, patch, options) => {
+        if ('action_failures' in patch) throw new Error('DB down');
+        return patchMetadata(id, patch, options);
+      });
 
     const detectionResult: DetectionResult = {
       label: 'SUSPICIOUS',

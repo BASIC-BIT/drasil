@@ -260,7 +260,6 @@ export class AccountQuarantineService implements IAccountQuarantineService {
       unremovable_privilege_reasons: memberAudit.unremovablePrivilegeReasons,
     };
     const metadata = {
-      ...this.metadataToRecord(claimedEvent.metadata),
       account_quarantine: auditMetadata,
     } as unknown as VerificationEvent['metadata'];
     let updated: VerificationEvent | null;
@@ -424,7 +423,6 @@ export class AccountQuarantineService implements IAccountQuarantineService {
       failed_removals: input.roleResult?.failedRemovals ?? [],
     };
     const metadata = {
-      ...this.metadataToRecord(input.claimedEvent.metadata),
       account_quarantine: failureMetadata,
     } as unknown as VerificationEvent['metadata'];
     const updated = await this.verificationEvents
@@ -495,13 +493,6 @@ export class AccountQuarantineService implements IAccountQuarantineService {
       .catch((error) => {
         console.warn(`Failed to refresh quarantine notification ${event.id}:`, error);
       });
-  }
-
-  private metadataToRecord(metadata: unknown): Record<string, unknown> {
-    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
-      return {};
-    }
-    return { ...(metadata as Record<string, unknown>) };
   }
 
   private formatError(error: unknown): string {

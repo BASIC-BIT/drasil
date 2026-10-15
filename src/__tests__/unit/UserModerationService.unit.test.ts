@@ -3052,6 +3052,51 @@ describe('UserModerationService (unit)', () => {
     );
   });
 
+  it('preserves departure and reminder evidence when a ban completes with an older case snapshot', async () => {
+    const member = buildMember('guild-ban-departure', 'user-ban-departure');
+    await serverRepository.getOrCreateServer(member.guild.id);
+    await userRepository.getOrCreateUser(member.id, 'target');
+    const event = await verificationEventRepository.createFromDetection(
+      null,
+      member.guild.id,
+      member.id,
+      VerificationStatus.PENDING
+    );
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager
+    );
+    const complete = verificationEventRepository.completeTerminalActions.bind(
+      verificationEventRepository
+    );
+    jest
+      .spyOn(verificationEventRepository, 'completeTerminalActions')
+      .mockImplementationOnce(async (...args) => {
+        await service.recordMemberLeftGuild(member);
+        await verificationEventRepository.patchMetadata(event.id, {
+          support_thread_reminder: { reminderCount: 2 },
+          evidence_bundle: { detection_history_count: 3 },
+        });
+        return complete(...args);
+      });
+    await expect(
+      service.banUser(member, 'Moderator decision', { id: 'moderator-ban-departure' } as User)
+    ).resolves.toBe(true);
+    expect(await verificationEventRepository.findById(event.id)).toMatchObject({
+      status: VerificationStatus.BANNED,
+      metadata: {
+        membership_state: 'left_or_removed',
+        member_left_at: expect.any(String),
+        support_thread_reminder: { reminderCount: 2 },
+        evidence_bundle: { detection_history_count: 3 },
+      },
+    });
+  });
+
   it('marks pending cases when a member leaves without closing them', async () => {
     const guildId = 'guild-member-left';
     const userId = 'user-member-left';

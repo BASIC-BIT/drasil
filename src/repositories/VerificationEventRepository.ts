@@ -30,12 +30,15 @@ import {
 
 export interface VerificationReleaseCompletion {
   id: string;
+  // Only keys owned by this completion, merged with current metadata under the guard.
   metadata: VerificationEvent['metadata'];
   requiresCaseRoleReleaseClaim: boolean;
 }
 
 export interface TerminalActionCompletion {
   id: string;
+  clearActiveModerationOperation?: boolean;
+  // Only keys owned by this completion, merged with current metadata under the guard.
   metadata: VerificationEvent['metadata'];
   requiresTerminalActionClaim: boolean;
 }
@@ -170,6 +173,7 @@ export interface IVerificationEventRepository {
     attemptId: string,
     data: Partial<VerificationEvent>
   ): Promise<VerificationEvent | null>;
+  // data.metadata is an owned patch, merged under the pending/attempt guard.
   updatePendingAfterMemberLeft(
     id: string,
     expectedQuarantineAttemptId: string | null,
@@ -482,6 +486,12 @@ export class VerificationEventRepository implements IVerificationEventRepository
           if (completion.requiresTerminalActionClaim && !attemptId) {
             throw new TerminalActionClaimConflictError();
           }
+          const metadata = await this.mergeLockedMetadataPatch(
+            transaction,
+            completion.id,
+            completion.metadata,
+            completion.clearActiveModerationOperation
+          );
           const completed = await transaction.verification_events.updateMany({
             where: {
               id: completion.id,
@@ -506,7 +516,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
               quarantine_lease_renewed_at: null,
               parked_at: null,
               parked_by: null,
-              metadata: completion.metadata as Prisma.InputJsonValue,
+              metadata,
               updated_at: new Date(),
             },
           });
@@ -538,6 +548,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
   ): Promise<VerificationEvent | null> {
     try {
       return (await this.prisma.$transaction(async (transaction) => {
+        const mergedMetadata = await this.mergeLockedMetadataPatch(transaction, id, metadata);
         const completed = await transaction.verification_events.updateMany({
           where: {
             id,
@@ -557,7 +568,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
             quarantine_lease_renewed_at: null,
             parked_at: null,
             parked_by: null,
-            metadata: metadata as Prisma.InputJsonValue,
+            metadata: mergedMetadata,
             updated_at: new Date(),
           },
         });
@@ -580,6 +591,11 @@ export class VerificationEventRepository implements IVerificationEventRepository
     try {
       return (await this.prisma.$transaction(async (transaction) => {
         for (const completion of completions) {
+          const metadata = await this.mergeLockedMetadataPatch(
+            transaction,
+            completion.id,
+            completion.metadata
+          );
           const completed = await transaction.verification_events.updateMany({
             where: {
               id: completion.id,
@@ -604,7 +620,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
               quarantine_lease_renewed_at: null,
               parked_at: null,
               parked_by: null,
-              metadata: completion.metadata as Prisma.InputJsonValue,
+              metadata,
               updated_at: new Date(),
             },
           });
@@ -1049,6 +1065,10 @@ export class VerificationEventRepository implements IVerificationEventRepository
   ): Promise<VerificationEvent | null> {
     try {
       return (await this.prisma.$transaction(async (transaction) => {
+        const metadata =
+          data.metadata === undefined
+            ? undefined
+            : await this.mergeLockedMetadataPatch(transaction, id, data.metadata);
         const recovered = await transaction.verification_events.updateMany({
           where: {
             id,
@@ -1067,7 +1087,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
             quarantine_lease_renewed_at: null,
             parked_at: data.parked_at,
             parked_by: data.parked_by,
-            metadata: data.metadata as Prisma.InputJsonValue | undefined,
+            metadata,
             updated_at: new Date(),
           },
         });
@@ -1088,6 +1108,10 @@ export class VerificationEventRepository implements IVerificationEventRepository
   ): Promise<VerificationEvent | null> {
     try {
       return (await this.prisma.$transaction(async (transaction) => {
+        const metadata =
+          data.metadata === undefined
+            ? undefined
+            : await this.mergeLockedMetadataPatch(transaction, id, data.metadata);
         const updated = await transaction.verification_events.updateMany({
           where: {
             id,
@@ -1104,7 +1128,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
             parked_at: data.parked_at,
             parked_by: data.parked_by,
             quarantine_case_role_id: data.quarantine_case_role_id,
-            metadata: data.metadata as Prisma.InputJsonValue | undefined,
+            metadata,
             updated_at: new Date(),
           },
         });
@@ -1118,34 +1142,58 @@ export class VerificationEventRepository implements IVerificationEventRepository
     }
   }
 
+  private async mergeLockedMetadataPatch(
+    transaction: Prisma.TransactionClient,
+    id: string,
+    patch: VerificationEvent['metadata'],
+    clearActiveModerationOperation = false
+  ): Promise<Prisma.InputJsonValue> {
+    const rows = await transaction.$queryRaw<Array<Pick<VerificationEvent, 'metadata'>>>`
+      SELECT metadata FROM verification_events WHERE id = ${id}::uuid FOR UPDATE
+    `;
+    const current = rows.at(0)?.metadata;
+    const metadata = {
+      ...(current && typeof current === 'object' && !Array.isArray(current) ? current : {}),
+      ...(patch && typeof patch === 'object' && !Array.isArray(patch) ? patch : {}),
+    };
+    if (clearActiveModerationOperation) delete metadata.active_moderation_operation;
+    return metadata as Prisma.InputJsonValue;
+  }
+
   async updatePendingAfterMemberLeft(
     id: string,
     expectedQuarantineAttemptId: string | null,
     data: Partial<VerificationEvent>
   ): Promise<VerificationEvent | null> {
     try {
-      const updated = await this.prisma.verification_events.updateMany({
-        where: {
-          id,
-          status: VerificationStatus.PENDING,
-          quarantine_attempt_id: expectedQuarantineAttemptId,
-        },
-        data: {
-          attention_state: data.attention_state as case_attention_state | undefined,
-          containment_status: data.containment_status as case_containment_status | undefined,
-          quarantine_attempt_id: data.quarantine_attempt_id,
-          quarantine_lease_renewed_at: data.quarantine_lease_renewed_at,
-          parked_at: data.parked_at,
-          parked_by: data.parked_by,
-          metadata: data.metadata as Prisma.InputJsonValue | undefined,
-        },
+      return await this.prisma.$transaction(async (transaction) => {
+        const metadata =
+          data.metadata === undefined
+            ? undefined
+            : await this.mergeLockedMetadataPatch(transaction, id, data.metadata);
+        const updated = await transaction.verification_events.updateMany({
+          where: {
+            id,
+            status: VerificationStatus.PENDING,
+            quarantine_attempt_id: expectedQuarantineAttemptId,
+          },
+          data: {
+            attention_state: data.attention_state as case_attention_state | undefined,
+            containment_status: data.containment_status as case_containment_status | undefined,
+            quarantine_attempt_id: data.quarantine_attempt_id,
+            quarantine_lease_renewed_at: data.quarantine_lease_renewed_at,
+            parked_at: data.parked_at,
+            parked_by: data.parked_by,
+            metadata,
+          },
+        });
+        if (updated.count !== 1) {
+          return null;
+        }
+        return (await transaction.verification_events.findUnique({
+          where: { id },
+        })) as VerificationEvent | null;
       });
-      if (updated.count !== 1) {
-        return null;
-      }
-      return (await this.prisma.verification_events.findUnique({
-        where: { id },
-      })) as VerificationEvent | null;
     } catch (error) {
       this.handleError(error, 'updatePendingAfterMemberLeft');
     }

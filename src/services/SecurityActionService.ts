@@ -792,26 +792,14 @@ export class SecurityActionService implements ISecurityActionService {
     return snapshot;
   }
 
-  private withUserSnapshot(
-    metadata: VerificationEvent['metadata'],
-    member: GuildMember
-  ): VerificationEvent['metadata'] {
-    return {
-      ...this.metadataToRecord(metadata),
-      user_snapshot: this.buildUserSnapshot(member),
-    } as VerificationEvent['metadata'];
-  }
-
   private async refreshVerificationUserSnapshot(
     verificationEvent: VerificationEvent,
     member: GuildMember
   ): Promise<VerificationEvent> {
     try {
-      const updated = await this.verificationEventRepository.update(
+      const updated = await this.verificationEventRepository.patchMetadata(
         verificationEvent.id,
-        {
-          metadata: this.withUserSnapshot(verificationEvent.metadata, member),
-        },
+        { user_snapshot: this.buildUserSnapshot(member) },
         { touchUpdatedAt: false }
       );
 
@@ -903,11 +891,9 @@ export class SecurityActionService implements ISecurityActionService {
         return;
       }
 
-      await this.verificationEventRepository.update(
+      await this.verificationEventRepository.patchMetadata(
         activeCase.id,
-        {
-          metadata: this.mergeVerificationMetadata(activeCase.metadata, metadata),
-        },
+        this.metadataToRecord(this.mergeVerificationMetadata(activeCase.metadata, metadata)),
         { touchUpdatedAt: false }
       );
     } catch (error) {
@@ -923,7 +909,6 @@ export class SecurityActionService implements ISecurityActionService {
     const nextRecord = this.metadataToRecord(next);
     const sourceMessages = this.mergeSourceMessages(existingRecord, nextRecord);
     return {
-      ...existingRecord,
       ...nextRecord,
       ...(sourceMessages ? { source_messages: sourceMessages } : {}),
     } as VerificationEvent['metadata'];
@@ -946,7 +931,6 @@ export class SecurityActionService implements ISecurityActionService {
     const notificationChannelId = metadata.observed_notification_channel_id;
     const observedEvidenceThreadId = metadata.observed_evidence_thread_id;
     const adoptedMetadata = {
-      ...this.metadataToRecord(verificationEvent.metadata),
       case_origin: 'observed_alert',
       observed_detection_event_id: detectionEvent.id,
     } as VerificationEvent['metadata'];
@@ -962,12 +946,15 @@ export class SecurityActionService implements ISecurityActionService {
       metadata: adoptedMetadata,
     };
 
+    await this.verificationEventRepository.patchMetadata(
+      verificationEvent.id,
+      this.metadataToRecord(adoptedMetadata)
+    );
     return (
       (await this.verificationEventRepository.update(verificationEvent.id, {
         notification_message_id: adoptedEvent.notification_message_id,
         notification_channel_id: adoptedEvent.notification_channel_id,
         private_evidence_thread_id: adoptedEvent.private_evidence_thread_id,
-        metadata: adoptedEvent.metadata,
       })) ?? adoptedEvent
     );
   }
@@ -1072,7 +1059,6 @@ export class SecurityActionService implements ISecurityActionService {
           ]);
           const profileImageDescription = await this.describeProfileImages(member, profileAssets);
           const metadata = {
-            ...this.metadataToRecord(verificationEvent.metadata),
             profile_assets: profileAssets,
             ...(profileImageDescription
               ? {
@@ -1085,10 +1071,11 @@ export class SecurityActionService implements ISecurityActionService {
               recent_message_count: recentMessages.length,
               detection_history_count: detectionEvents.length,
             },
-          } as unknown as VerificationEvent['metadata'];
-          const updatedEvent = await this.verificationEventRepository.update(verificationEvent.id, {
-            metadata,
-          });
+          };
+          const updatedEvent = await this.verificationEventRepository.patchMetadata(
+            verificationEvent.id,
+            metadata
+          );
           const bundle = this.formatCaseEvidenceBundle(
             member,
             verificationEvent,
@@ -1107,7 +1094,7 @@ export class SecurityActionService implements ISecurityActionService {
             output: { evidence_delivered: true },
             metadata: { case_id: verificationEvent.id },
           });
-          return updatedEvent ?? { ...verificationEvent, metadata };
+          return updatedEvent ?? verificationEvent;
         } catch (error) {
           recordObservation('chain', {
             level: 'WARNING',
@@ -1422,10 +1409,7 @@ export class SecurityActionService implements ISecurityActionService {
       verificationEvent,
       sourceMessage
     );
-    const previousPrivateEvidenceThreadId = verificationEvent.private_evidence_thread_id;
-    const previousMetadata = verificationEvent.metadata;
-
-    const updatedEvent = await this.ensurePrivateEvidenceThread(
+    const evidenceEvent = await this.ensurePrivateEvidenceThread(
       member,
       verificationEvent,
       detectionResult,
@@ -1433,12 +1417,10 @@ export class SecurityActionService implements ISecurityActionService {
       sourceMessage
     );
 
-    if (
-      updatedEvent.private_evidence_thread_id !== previousPrivateEvidenceThreadId ||
-      updatedEvent.metadata !== previousMetadata
-    ) {
-      await this.upsertNotification(member, detectionResult, updatedEvent, sourceMessage);
-    }
+    // Discord evidence delivery can outlive a departure or moderation action.
+    const updatedEvent =
+      (await this.verificationEventRepository.findById(verificationEvent.id)) ?? evidenceEvent;
+    await this.upsertNotification(member, detectionResult, updatedEvent, sourceMessage);
 
     return updatedEvent;
   }
@@ -1468,9 +1450,10 @@ export class SecurityActionService implements ISecurityActionService {
     };
 
     try {
-      const updatedEvent = await this.verificationEventRepository.update(verificationEvent.id, {
-        metadata: updatedMetadata as VerificationEvent['metadata'],
-      });
+      const updatedEvent = await this.verificationEventRepository.patchMetadata(
+        verificationEvent.id,
+        { action_failures: updatedMetadata.action_failures ?? [] }
+      );
 
       return updatedEvent ?? fallbackEvent;
     } catch (recordError) {
@@ -1500,9 +1483,10 @@ export class SecurityActionService implements ISecurityActionService {
     };
 
     try {
-      const updatedEvent = await this.verificationEventRepository.update(verificationEvent.id, {
-        metadata: updatedMetadata as VerificationEvent['metadata'],
-      });
+      const updatedEvent = await this.verificationEventRepository.patchMetadata(
+        verificationEvent.id,
+        { action_failures: updatedMetadata.action_failures ?? [] }
+      );
 
       return updatedEvent ?? fallbackEvent;
     } catch (error) {

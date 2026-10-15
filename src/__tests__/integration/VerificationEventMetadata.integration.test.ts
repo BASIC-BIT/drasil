@@ -1,7 +1,12 @@
 import { VerificationEventRepository } from '../../repositories/VerificationEventRepository';
 import { ServerRepository } from '../../repositories/ServerRepository';
 import { UserRepository } from '../../repositories/UserRepository';
-import { VerificationStatus } from '../../repositories/types';
+import {
+  CaseKind,
+  CaseAttentionState,
+  CaseContainmentStatus,
+  VerificationStatus,
+} from '../../repositories/types';
 import { getPrismaClient } from '../testDb';
 
 const describeIntegration = process.env.JEST_INTEGRATION === '1' ? describe : describe.skip;
@@ -52,6 +57,159 @@ describeIntegration('verification metadata patches (integration)', () => {
       await repository.patchMetadata('00000000-0000-0000-0000-000000000000', { missing: true })
     ).toBeNull();
   });
+
+  it('merges guarded departure metadata with concurrent evidence without changing unrelated state', async () => {
+    const prisma = getPrismaClient();
+    await new ServerRepository(prisma).getOrCreateServer('guild-departure-patch');
+    await new UserRepository(prisma).getOrCreateUser('user-departure-patch', 'target');
+    const repository = new VerificationEventRepository(prisma);
+    const event = await repository.createFromDetection(
+      null,
+      'guild-departure-patch',
+      'user-departure-patch',
+      VerificationStatus.PENDING
+    );
+    await repository.update(event.id, {
+      thread_id: 'thread-retained',
+      notes: 'retained',
+      metadata: { support_thread_reminder: { reminderCount: 1 } },
+    });
+    await Promise.all([
+      repository.patchMetadata(event.id, { evidence_bundle: { detection_history_count: 2 } }),
+      repository.updatePendingAfterMemberLeft(event.id, null, {
+        metadata: { membership_state: 'left_or_removed' },
+      }),
+    ]);
+    expect(await repository.findById(event.id)).toMatchObject({
+      status: VerificationStatus.PENDING,
+      thread_id: 'thread-retained',
+      notes: 'retained',
+      resolved_at: null,
+      resolved_by: null,
+      metadata: {
+        support_thread_reminder: { reminderCount: 1 },
+        evidence_bundle: { detection_history_count: 2 },
+        membership_state: 'left_or_removed',
+      },
+    });
+    await repository.update(event.id, { status: VerificationStatus.BANNED });
+    expect(
+      await repository.updatePendingAfterMemberLeft(event.id, null, {
+        metadata: { forbidden: true },
+      })
+    ).toBeNull();
+    expect((await repository.findById(event.id))?.metadata).not.toHaveProperty('forbidden');
+  });
+
+  it.each([
+    ['terminal', VerificationStatus.BANNED],
+    ['terminal_clear', VerificationStatus.BANNED],
+    ['verification_release', VerificationStatus.VERIFIED],
+    ['case_role_release', VerificationStatus.VERIFIED],
+    ['quarantine', VerificationStatus.PENDING],
+    ['recovery', VerificationStatus.PENDING],
+  ])(
+    'preserves concurrent metadata during guarded %s completion',
+    async (operation, expectedStatus) => {
+      const prisma = getPrismaClient();
+      await new ServerRepository(prisma).getOrCreateServer('guild-guarded-patch');
+      await new UserRepository(prisma).getOrCreateUser('user-guarded-patch', 'target');
+      const repository = new VerificationEventRepository(prisma);
+      const event = await repository.createFromDetection(
+        null,
+        'guild-guarded-patch',
+        'user-guarded-patch',
+        VerificationStatus.PENDING
+      );
+      const oldTime = new Date('2026-01-01T00:00:00Z');
+      await repository.update(event.id, {
+        case_kind: CaseKind.COMPROMISED_ACCOUNT,
+        attention_state: CaseAttentionState.PARKED,
+        containment_status: CaseContainmentStatus.IN_PROGRESS,
+        quarantine_attempt_id: 'attempt-guarded',
+        quarantine_lease_renewed_at: oldTime,
+        metadata: {
+          support_thread_reminder: { reminderCount: 1 },
+          active_moderation_operation: { operationId: 'retained-operation' },
+        },
+      });
+      const complete = async (attemptId: string): Promise<unknown> => {
+        const metadata = { completion_owned: true };
+        switch (operation) {
+          case 'terminal':
+          case 'terminal_clear':
+            return repository.completeTerminalActions(
+              [
+                {
+                  id: event.id,
+                  metadata,
+                  requiresTerminalActionClaim: true,
+                  clearActiveModerationOperation: operation === 'terminal_clear',
+                },
+              ],
+              attemptId,
+              VerificationStatus.BANNED,
+              'moderator',
+              new Date(),
+              'Decision'
+            );
+          case 'verification_release':
+            return repository.completeVerificationRelease(
+              [{ id: event.id, metadata, requiresCaseRoleReleaseClaim: true }],
+              attemptId,
+              'moderator',
+              new Date()
+            );
+          case 'case_role_release':
+            return repository.completeCaseRoleRelease(
+              event.id,
+              attemptId,
+              'moderator',
+              new Date(),
+              metadata
+            );
+          case 'quarantine':
+            return repository.updateQuarantineAttempt(event.id, attemptId, {
+              metadata,
+              containment_status: CaseContainmentStatus.CONTAINED,
+            });
+          case 'recovery':
+            return repository.recoverExpiredQuarantineAttempt(event.id, attemptId, new Date(), {
+              metadata,
+              containment_status: CaseContainmentStatus.INCOMPLETE,
+            });
+          default:
+            throw new Error('Unsupported fixture');
+        }
+      };
+      expect(await complete('wrong-owner')).toBeNull();
+      await Promise.all([
+        complete('attempt-guarded'),
+        repository.patchMetadata(event.id, {
+          membership_state: 'left_or_removed',
+          evidence_bundle: { detection_history_count: 2 },
+        }),
+      ]);
+      expect(await repository.findById(event.id)).toMatchObject({
+        status: expectedStatus,
+        quarantine_attempt_id: null,
+        metadata: {
+          support_thread_reminder: { reminderCount: 1 },
+          completion_owned: true,
+          membership_state: 'left_or_removed',
+          evidence_bundle: { detection_history_count: 2 },
+        },
+      });
+      const latest = await repository.findById(event.id);
+      if (operation === 'terminal_clear')
+        expect(latest?.metadata).not.toHaveProperty('active_moderation_operation');
+      else
+        expect(latest?.metadata).toHaveProperty(
+          'active_moderation_operation.operationId',
+          'retained-operation'
+        );
+    }
+  );
 
   it('atomically stores thread identity and type while preserving concurrent metadata and lifecycle state', async () => {
     const prisma = getPrismaClient();

@@ -444,8 +444,9 @@ export class UserModerationService implements IUserModerationService, ICombinedB
 
     try {
       return (
-        (await this.verificationEventRepository.update(verificationEvent.id, { metadata })) ??
-        fallbackEvent
+        (await this.verificationEventRepository.patchMetadata(verificationEvent.id, {
+          role_quarantine: this.metadataToRecord(metadata).role_quarantine,
+        })) ?? fallbackEvent
       );
     } catch (error) {
       console.warn(
@@ -472,8 +473,8 @@ export class UserModerationService implements IUserModerationService, ICombinedB
 
     try {
       return (
-        (await this.verificationEventRepository.update(verificationEvent.id, {
-          metadata: metadata as VerificationEvent['metadata'],
+        (await this.verificationEventRepository.patchMetadata(verificationEvent.id, {
+          action_failures: metadata.action_failures ?? [],
         })) ?? fallbackEvent
       );
     } catch (recordError) {
@@ -725,7 +726,8 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     moderator: User,
     resolvedAt: Date,
     notes: string,
-    metadataFor: (event: VerificationEvent) => VerificationEvent['metadata']
+    metadataPatch: VerificationEvent['metadata'],
+    clearActiveModerationOperation = false
   ): Promise<Array<{ event: VerificationEvent; previousStatus: VerificationStatus }>> {
     const terminalAttemptIds = [
       ...new Set(
@@ -743,7 +745,8 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     const completedEvents = await this.verificationEventRepository.completeTerminalActions(
       events.map((event) => ({
         id: event.id,
-        metadata: metadataFor(event),
+        metadata: metadataPatch,
+        clearActiveModerationOperation,
         requiresTerminalActionClaim: isCaseTerminalActionAttempt(event.quarantine_attempt_id),
       })),
       terminalAttemptIds[0] ?? null,
@@ -1128,7 +1131,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       const completedEvents = await this.verificationEventRepository.completeVerificationRelease(
         pendingVerificationEvents.map((pendingEvent) => ({
           id: pendingEvent.id,
-          metadata: this.withUserSnapshot(pendingEvent.metadata, member.user, member),
+          metadata: this.withUserSnapshot(null, member.user, member),
           requiresCaseRoleReleaseClaim: releaseClaimedEventIds.has(pendingEvent.id),
         })),
         releaseAttemptId,
@@ -1810,10 +1813,8 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         moderator,
         resolvedAt,
         reason,
-        (pendingEvent) =>
-          this.withoutActiveModerationOperation(
-            this.withUserSnapshot(pendingEvent.metadata, member.user, member)
-          )
+        this.withUserSnapshot(null, member.user, member),
+        true
       );
 
       await this.tryAbandonRoleQuarantine(member.guild.id, member.id, 'drasil_ban', moderator.id);
@@ -1922,7 +1923,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       moderator,
       resolvedAt,
       reason,
-      (pendingEvent) => this.withUserSnapshot(pendingEvent.metadata, existingBan.user)
+      this.withUserSnapshot(null, existingBan.user)
     );
 
     if (
@@ -2063,7 +2064,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
           moderator,
           resolvedAt,
           reason,
-          (pendingEvent) => this.withUserSnapshot(pendingEvent.metadata, member.user, member)
+          this.withUserSnapshot(null, member.user, member)
         );
 
         await this.tryAbandonRoleQuarantine(
@@ -2170,13 +2171,11 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         moderator,
         resolvedAt,
         reason,
-        (pendingEvent) =>
-          ({
-            ...this.metadataToRecord(pendingEvent.metadata),
-            ...(targetUser ? { user_snapshot: this.buildUserSnapshot(targetUser) } : {}),
-            membership_state: 'left_or_removed',
-            banned_by_id_at: resolvedAt.toISOString(),
-          }) as VerificationEvent['metadata']
+        {
+          ...(targetUser ? { user_snapshot: this.buildUserSnapshot(targetUser) } : {}),
+          membership_state: 'left_or_removed',
+          banned_by_id_at: resolvedAt.toISOString(),
+        } as VerificationEvent['metadata']
       );
       await this.tryAbandonRoleQuarantine(guild.id, userId, 'drasil_ban_by_id', moderator.id);
 
@@ -2884,10 +2883,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
                 parked_by: null,
               }
             : {}),
-          metadata: {
-            ...this.metadataToRecord(pendingEvent.metadata),
-            ...outcomeMetadata,
-          } as VerificationEvent['metadata'],
+          metadata: outcomeMetadata as VerificationEvent['metadata'],
         };
         const updatedEvent = await this.verificationEventRepository.updatePendingAfterMemberLeft(
           pendingEvent.id,

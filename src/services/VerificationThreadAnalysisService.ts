@@ -212,7 +212,6 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
             metadata: attentionDelivered
               ? undefined
               : {
-                  ...(this.asObject(responseEvent.metadata) ?? {}),
                   recovery_attention_delivery_failed_at: new Date().toISOString(),
                   recovery_attention_message_id: message.id,
                 },

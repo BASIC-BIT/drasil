@@ -468,6 +468,19 @@ export class InMemoryDetectionEventsRepository implements IDetectionEventsReposi
   }
 }
 
+function mergeCaseMetadata(
+  current: VerificationEvent['metadata'],
+  patch: VerificationEvent['metadata'],
+  clearActiveModerationOperation = false
+): VerificationEvent['metadata'] {
+  const metadata = {
+    ...(current && typeof current === 'object' && !Array.isArray(current) ? current : {}),
+    ...(patch && typeof patch === 'object' && !Array.isArray(patch) ? patch : {}),
+  };
+  if (clearActiveModerationOperation) delete metadata.active_moderation_operation;
+  return metadata;
+}
+
 export class InMemoryVerificationEventRepository implements IVerificationEventRepository {
   private events: VerificationEvent[] = [];
   private idCounter = 0;
@@ -1090,7 +1103,11 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
         quarantine_lease_renewed_at: null,
         parked_at: null,
         parked_by: null,
-        metadata: completions[index].metadata,
+        metadata: mergeCaseMetadata(
+          this.events[eventIndex].metadata,
+          completions[index].metadata,
+          completions[index].clearActiveModerationOperation
+        ),
         updated_at: completedAt,
       };
       this.events[eventIndex] = completed;
@@ -1129,7 +1146,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       quarantine_lease_renewed_at: null,
       parked_at: null,
       parked_by: null,
-      metadata,
+      metadata: mergeCaseMetadata(this.events[eventIndex].metadata, metadata),
       updated_at: new Date(),
     };
     this.events[eventIndex] = completed;
@@ -1171,7 +1188,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
         quarantine_lease_renewed_at: null,
         parked_at: null,
         parked_by: null,
-        metadata: completion.metadata,
+        metadata: mergeCaseMetadata(this.events[eventIndex].metadata, completion.metadata),
         updated_at: new Date(),
       };
       this.events[eventIndex] = completed;
@@ -1267,6 +1284,10 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     const updated = {
       ...this.events[eventIndex],
       ...data,
+      metadata:
+        data.metadata === undefined
+          ? this.events[eventIndex].metadata
+          : mergeCaseMetadata(this.events[eventIndex].metadata, data.metadata),
       quarantine_attempt_id: null,
       quarantine_lease_renewed_at: null,
       updated_at: new Date(),
@@ -1293,6 +1314,10 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     const updated = {
       ...this.events[eventIndex],
       ...data,
+      metadata:
+        data.metadata === undefined
+          ? this.events[eventIndex].metadata
+          : mergeCaseMetadata(this.events[eventIndex].metadata, data.metadata),
       quarantine_attempt_id: null,
       quarantine_lease_renewed_at: null,
       updated_at: new Date(),
@@ -1342,9 +1367,13 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     if (eventIndex === -1) {
       return null;
     }
-    const updated = {
+    const updated: VerificationEvent = {
       ...this.events[eventIndex],
       ...data,
+      metadata:
+        data.metadata === undefined
+          ? this.events[eventIndex].metadata
+          : mergeCaseMetadata(this.events[eventIndex].metadata, data.metadata),
     };
     this.events[eventIndex] = updated;
     return { ...updated };
