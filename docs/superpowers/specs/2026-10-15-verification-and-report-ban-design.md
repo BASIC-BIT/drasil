@@ -51,7 +51,7 @@ The existing bot action worker runs a bounded reconciliation sweep every poll, i
 
 ## Delivery recommendation and limits
 
-Ship two PRs: verification lifecycle fixes first, then report-ban entry points and shared evidence capture. Existing JSON metadata and request types should be sufficient; no schema migration is proposed. If implementation proves otherwise, revise this plan before introducing one.
+The user requested one PR with subagent implementation. Sequence verification lifecycle fixes before report-ban entry points and shared evidence capture, keeping all task commits in the same PR. Existing JSON metadata and request types should be sufficient; no schema migration is proposed. If implementation proves otherwise, revise this plan before introducing one.
 
 Single-instance coordination addresses the reproduced overlap. Discord send followed by a process crash remains an uncertain-send boundary; recovery must reconcile persisted identity and thread history. Do not claim universal exactly-once Discord delivery.
 
@@ -59,7 +59,7 @@ Production repair is separate. After the code fix, propose an exact-case repair 
 
 ## Decision still needed
 
-Review this behavior and choose execution in the current session or task-by-task subagents. Native execution is recommended because the tasks share repository and evidence interfaces. The confirmed both-surfaces scope is preserved either way.
+The user confirmed both surfaces and selected one PR with subagent implementation. Implementation is authorized within the stated worktree and release boundaries.
 
 ## Engineering references
 

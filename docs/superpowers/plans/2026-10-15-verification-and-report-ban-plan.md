@@ -16,7 +16,7 @@
 - Preserve existing moderator Ban Members permissions and server reason/policy settings.
 - Preserve all available evidence and audit links; explicitly record unavailable optional fields.
 - No live moderation, historical repair, merge, deployment, or duplicate-message deletion as part of implementation.
-- Keep the protected mirror clean. Use `D:/bench/drasil-wt/verification-case-investigation` for the first PR, and a separate feature worktree after the first PR's interface is settled.
+- Keep the protected mirror clean. Use `D:/bench/drasil-wt/verification-case-investigation` for every task in one PR, as requested by the user on October 15.
 - Use neutral public examples, prefix GitHub prose with `[AGENT]`, and link issues. No private guild names or incident identities in committed files or public posts.
 
 ## Review focus
@@ -27,7 +27,7 @@
 4. Two clicks or repairs overlap: one destructive operation and one initial verification prompt.
 5. The target left or optional profile/context sources are unavailable: ban by ID with the available evidence and explicit gaps.
 
-## PR 1: Verification lifecycle fixes
+## Verification lifecycle fixes
 
 ### Task 1: Coordinate initial thread setup and repair
 
@@ -51,9 +51,9 @@
 - [ ] Add a real-Postgres integration test with independent concurrent patches. Assert both metadata keys remain and unrelated fields are unchanged.
 - [ ] Add reminder eligibility tests for left members, verified/banned members, and present pending members. Keep the existing second-reminder timing tests.
 - [ ] Observe new assertions fail, then implement the merge and fresh-state presentation. Leave a departed case pending and show existing Ban by ID/Close No Action controls.
-- [ ] Run bot unit tests, build, lint, format, and serial local integration tests using the integration-testing skill. Open the linked bugfix draft PR after source checks pass. Do not merge or repair production.
+- [ ] Run bot unit tests, build, lint, format, and serial local integration tests using the integration-testing skill. Keep the tested task commits on the shared feature branch for the single combined PR. Do not merge or repair production.
 
-## PR 2: Direct report bans with evidence parity
+## Direct report bans with evidence parity
 
 ### Task 3: Share evidence capture and bind bans to current reports
 
@@ -84,12 +84,12 @@ Add `claimReportBanReconciliation(now: Date): Promise<ModerationActionRequest | 
 - [ ] Add web action/component tests for target/reason confirmation, auth return to the same report, queue receipts, stale report rejection, and failure recovery. Confirm `banned_updates_pending` displays its distinct receipt and never offers another Ban submit while reconciliation is pending. Update exhaustive contract/action maps and stories.
 - [ ] Observe failures, implement the controls using the existing confirmation patterns, and show Queued until the bot receipt confirms completion. Revalidate the report detail, report queue, and inbox after completion.
 - [ ] Add a Playwright report-ban flow with simulated provider I/O. Assert no Open Case step, no case creation, and the final report status reflects the actual result.
-- [ ] Run `npm run check:ci` with the repository's local test prerequisites. Request a whole-branch review and open the linked feature draft PR. Report any unavailable checks explicitly.
+- [ ] Run `npm run check:ci` with the repository's local test prerequisites. Request a whole-branch review and open the single linked draft PR containing all four tasks. Report any unavailable checks explicitly.
 
 ## Completion and release boundaries
 
-Update task checkboxes as work completes. Each PR gets an issue and a focused description. A PR is not merge-ready until the latest head is pushed, 30 minutes have elapsed since that commit, and a post-window sweep covers all checks, comments, reviews, inline threads, and mutable review summaries. Every commit restarts the window. No merge or deployment is authorized by this plan.
+Update task checkboxes as work completes. One PR links the issue and contains all four tasks. A PR is not merge-ready until the latest head is pushed, 30 minutes have elapsed since that commit, and a post-window sweep covers all checks, comments, reviews, inline threads, and mutable review summaries. Every commit restarts the window. No merge or deployment is authorized by this plan.
 
 ## Plan review
 
-Recommendation: native implementation, because repository, collector, and request interfaces are shared across tasks. Task-by-task subagents are available if preferred. Review the behavior and choose the execution approach before product-code edits, as required by the writing-plans skill.
+The user approved one PR with subagent implementation on October 15. Execute task-by-task with fresh implementation and review subagents, then review the combined branch. No further execution-method approval is needed.
