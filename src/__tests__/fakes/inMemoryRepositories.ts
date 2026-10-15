@@ -619,7 +619,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       containment_status: CaseContainmentStatus.INCOMPLETE,
       parked_at: null,
       parked_by: null,
-      metadata,
+      metadata: mergeCaseMetadata(this.events[eventIndex].metadata, metadata),
       updated_at: new Date(),
     };
     this.events[eventIndex] = updated;

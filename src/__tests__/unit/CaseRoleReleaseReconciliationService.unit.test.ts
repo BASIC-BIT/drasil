@@ -543,6 +543,79 @@ describe('CaseRoleReleaseReconciliationService (unit)', () => {
     expect(queue.upsertCaseMirror).toHaveBeenCalledWith(updated);
   });
 
+  it('preserves evidence collected during a parked containment audit that finds drift', async () => {
+    const verificationEvents = new InMemoryVerificationEventRepository();
+    const verificationEvent = await verificationEvents.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationEvents.update(verificationEvent.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      thread_id: 'thread-1',
+      metadata: { support_thread_reminder: { reminderCount: 1 } },
+    });
+    const member = {
+      id: 'user-1',
+      roles: { cache: new Map([['case-role-1', { id: 'case-role-1' }]]) },
+    };
+    const guild = { id: 'guild-1', members: { fetch: jest.fn().mockResolvedValue(member) } };
+    const notifications = {
+      notifyAccountQuarantineAttention: jest.fn().mockResolvedValue(true),
+    };
+    const queue = { upsertCaseMirror: jest.fn().mockResolvedValue(undefined) };
+    const service = buildService({
+      client: { guilds: { cache: new Map([['guild-1', guild]]), fetch: jest.fn() } },
+      verificationEvents,
+      lockdown: {
+        auditGuild: jest.fn().mockImplementation(async () => {
+          await verificationEvents.patchMetadata(verificationEvent.id, {
+            support_thread_reminder: { reminderCount: 2 },
+            evidence_bundle: { detection_history_count: 3 },
+          });
+          return readyLockdown;
+        }),
+        auditMemberBypasses: jest.fn().mockResolvedValue({
+          ...readyMemberAudit,
+          bypasses: [
+            {
+              channelId: 'channel-1',
+              channelName: 'general',
+              subjectType: 'member',
+              subjectId: 'user-1',
+              permissions: ['Send Messages'],
+            },
+          ],
+        }),
+      },
+      notifications,
+      queue,
+    });
+
+    await service.runOnce(new Date('2026-08-18T12:00:00.000Z'));
+
+    const updated = await verificationEvents.findById(verificationEvent.id);
+    expect(updated).toEqual(
+      expect.objectContaining({
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: CaseContainmentStatus.INCOMPLETE,
+        metadata: {
+          support_thread_reminder: { reminderCount: 2 },
+          evidence_bundle: { detection_history_count: 3 },
+          account_quarantine_reconciliation: expect.objectContaining({ result: 'incomplete' }),
+        },
+      })
+    );
+    expect(notifications.notifyAccountQuarantineAttention).toHaveBeenCalledWith(
+      updated,
+      'containment_incomplete'
+    );
+    expect(queue.upsertCaseMirror).toHaveBeenCalledWith(updated);
+  });
+
   it('resumes role restoration for a verified standard case with an active snapshot', async () => {
     const verificationEvents = new InMemoryVerificationEventRepository();
     const verificationEvent = await verificationEvents.createFromDetection(

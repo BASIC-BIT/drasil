@@ -211,6 +211,49 @@ describeIntegration('verification metadata patches (integration)', () => {
     }
   );
 
+  it('merges parked containment drift with concurrent evidence and rejects a changed case state', async () => {
+    const prisma = getPrismaClient();
+    await new ServerRepository(prisma).getOrCreateServer('guild-parked-drift');
+    await new UserRepository(prisma).getOrCreateUser('user-parked-drift', 'target');
+    const repository = new VerificationEventRepository(prisma);
+    const event = await repository.createFromDetection(
+      null,
+      'guild-parked-drift',
+      'user-parked-drift',
+      VerificationStatus.PENDING
+    );
+    await repository.update(event.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      metadata: { support_thread_reminder: { reminderCount: 1 } },
+    });
+    await Promise.all([
+      repository.markParkedContainmentIncomplete(event.id, {
+        account_quarantine_reconciliation: { result: 'incomplete' },
+      }),
+      repository.patchMetadata(event.id, { evidence_bundle: { detection_history_count: 3 } }),
+    ]);
+    const latest = await repository.findById(event.id);
+    expect(latest).toMatchObject({
+      status: VerificationStatus.PENDING,
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      containment_status: CaseContainmentStatus.INCOMPLETE,
+      quarantine_attempt_id: null,
+      resolved_at: null,
+      metadata: {
+        support_thread_reminder: { reminderCount: 1 },
+        evidence_bundle: { detection_history_count: 3 },
+        account_quarantine_reconciliation: { result: 'incomplete' },
+      },
+    });
+    expect(
+      await repository.markParkedContainmentIncomplete(event.id, { forbidden: true })
+    ).toBeNull();
+    expect(await repository.findById(event.id)).toEqual(latest);
+  });
+
   it('atomically stores thread identity and type while preserving concurrent metadata and lifecycle state', async () => {
     const prisma = getPrismaClient();
     await new ServerRepository(prisma).getOrCreateServer('guild-thread-identity');

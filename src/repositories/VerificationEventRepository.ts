@@ -1384,30 +1384,33 @@ export class VerificationEventRepository implements IVerificationEventRepository
     metadata: VerificationEvent['metadata']
   ): Promise<VerificationEvent | null> {
     try {
-      const updated = await this.prisma.verification_events.updateMany({
-        where: {
-          id,
-          status: VerificationStatus.PENDING,
-          case_kind: CaseKind.COMPROMISED_ACCOUNT,
-          attention_state: CaseAttentionState.PARKED,
-          containment_status: CaseContainmentStatus.CONTAINED,
-          quarantine_attempt_id: null,
-        },
-        data: {
-          attention_state: CaseAttentionState.REVIEW_REQUIRED,
-          containment_status: CaseContainmentStatus.INCOMPLETE,
-          parked_at: null,
-          parked_by: null,
-          metadata: metadata as Prisma.InputJsonValue,
-          updated_at: new Date(),
-        },
+      return await this.prisma.$transaction(async (transaction) => {
+        const mergedMetadata = await this.mergeLockedMetadataPatch(transaction, id, metadata);
+        const updated = await transaction.verification_events.updateMany({
+          where: {
+            id,
+            status: VerificationStatus.PENDING,
+            case_kind: CaseKind.COMPROMISED_ACCOUNT,
+            attention_state: CaseAttentionState.PARKED,
+            containment_status: CaseContainmentStatus.CONTAINED,
+            quarantine_attempt_id: null,
+          },
+          data: {
+            attention_state: CaseAttentionState.REVIEW_REQUIRED,
+            containment_status: CaseContainmentStatus.INCOMPLETE,
+            parked_at: null,
+            parked_by: null,
+            metadata: mergedMetadata,
+            updated_at: new Date(),
+          },
+        });
+        if (updated.count !== 1) {
+          return null;
+        }
+        return (await transaction.verification_events.findUnique({
+          where: { id },
+        })) as VerificationEvent | null;
       });
-      if (updated.count !== 1) {
-        return null;
-      }
-      return (await this.prisma.verification_events.findUnique({
-        where: { id },
-      })) as VerificationEvent | null;
     } catch (error) {
       this.handleError(error, 'markParkedContainmentIncomplete');
     }

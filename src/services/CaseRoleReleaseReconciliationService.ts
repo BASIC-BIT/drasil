@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Client, Guild, GuildMember } from 'discord.js';
 import { inject, injectable } from 'inversify';
-import { Prisma } from '../db/prisma';
 import { IConfigService } from '../config/ConfigService';
 import { TYPES } from '../di/symbols';
 import { IRoleQuarantineSnapshotRepository } from '../repositories/RoleQuarantineSnapshotRepository';
@@ -434,7 +433,6 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
     }
 
     const metadata = {
-      ...this.metadataToRecord(verificationEvent.metadata),
       account_quarantine_reconciliation: {
         checked_at: now.toISOString(),
         result: 'incomplete',
@@ -481,12 +479,6 @@ export class CaseRoleReleaseReconciliationService implements ICaseRoleReleaseRec
     const guild =
       this.client.guilds.cache.get(serverId) ?? (await this.client.guilds.fetch(serverId));
     return guild.members.fetch(userId);
-  }
-
-  private metadataToRecord(metadata: Prisma.JsonValue | null): Record<string, unknown> {
-    return metadata && typeof metadata === 'object' && !Array.isArray(metadata)
-      ? (metadata as Record<string, unknown>)
-      : {};
   }
 
   private formatError(error: unknown): string {
