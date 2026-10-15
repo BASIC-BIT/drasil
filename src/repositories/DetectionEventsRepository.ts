@@ -406,14 +406,33 @@ export class DetectionEventsRepository implements IDetectionEventsRepository {
     metadata: Record<string, unknown>
   ): Promise<DetectionEvent | null> {
     try {
-      const rows = await this.prisma.$queryRaw<DetectionEvent[]>`
-        UPDATE detection_events
-        SET metadata = COALESCE(metadata, '{}'::jsonb) || ${JSON.stringify(metadata)}::jsonb
-        WHERE id = ${detectionEventId}::uuid
-          AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'observed_action')
-        RETURNING *
-      `;
-      return rows[0] ?? null;
+      const openingCase = metadata.observed_action === 'open_case';
+      const claim = async (
+        transaction: Prisma.TransactionClient
+      ): Promise<DetectionEvent | null> => {
+        const rows = await transaction.$queryRaw<DetectionEvent[]>`
+          UPDATE detection_events d
+          SET metadata = COALESCE(d.metadata, '{}'::jsonb) || ${JSON.stringify(metadata)}::jsonb
+          WHERE d.id = ${detectionEventId}::uuid
+            AND NOT (COALESCE(d.metadata, '{}'::jsonb) ? 'observed_action')
+            AND (NOT ${openingCase} OR NOT EXISTS (
+              SELECT 1 FROM report_intakes r WHERE r.id::text = d.metadata->>'reportIntakeId'
+                AND coalesce(r.metadata->>'report_ban_operation_id', '') <> ''
+            ))
+          RETURNING d.*
+        `;
+        return rows[0] ?? null;
+      };
+      if (!openingCase) return await claim(this.prisma);
+      return await this.prisma.$transaction(async (transaction) => {
+        // Serialize with claimBan, then read its committed marker in the next statement.
+        await transaction.$queryRaw`
+          SELECT r.id FROM report_intakes r JOIN detection_events d
+            ON r.id::text = d.metadata->>'reportIntakeId'
+          WHERE d.id = ${detectionEventId}::uuid FOR UPDATE OF r
+        `;
+        return claim(transaction);
+      });
     } catch (error) {
       this.handleError(error, 'claimObservedAction');
     }

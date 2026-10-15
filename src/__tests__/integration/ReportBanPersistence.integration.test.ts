@@ -151,4 +151,38 @@ integration('report ban claims and reconciliation (Postgres)', () => {
       'observed_action'
     );
   });
+  it.each(['ban', 'open_case'])(
+    'rejects the competing claim when %s claims first',
+    async (first) => {
+      const f = await fixture();
+      const open = () =>
+        f.detections.claimObservedAction(f.detection.id, {
+          observed_action: 'open_case',
+          observed_action_by: 'moderator',
+        });
+      if (first === 'ban') {
+        expect(await f.reports.claimBan(f.claim)).not.toBeNull();
+        expect(await open()).toBeNull();
+      } else {
+        expect(await open()).not.toBeNull();
+        expect(await f.reports.claimBan(f.claim)).toBeNull();
+      }
+    }
+  );
+  it.each([true, false])(
+    'serializes overlapping report-ban and case-open claims (ban starts first: %s)',
+    async (banFirst) => {
+      const f = await fixture();
+      const claims = [
+        () => f.reports.claimBan(f.claim),
+        () =>
+          f.detections.claimObservedAction(f.detection.id, {
+            observed_action: 'open_case',
+            observed_action_by: 'moderator',
+          }),
+      ];
+      if (!banFirst) claims.reverse();
+      expect((await Promise.all(claims.map((claim) => claim()))).filter(Boolean)).toHaveLength(1);
+    }
+  );
 });

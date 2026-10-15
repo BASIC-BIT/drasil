@@ -75,7 +75,10 @@ export class ReportIntakeRepository implements IReportIntakeRepository {
   }
 
   async claimBan(input: ReportBanClaim): Promise<ReportIntake | null> {
-    const rows = await this.prisma.$queryRaw<ReportIntake[]>`
+    return this.prisma.$transaction(async (transaction) => {
+      // Match case opening's report-first lock order before checking the detection claim.
+      await transaction.$queryRaw`select id from report_intakes where id = ${input.reportId}::uuid for update`;
+      const rows = await transaction.$queryRaw<ReportIntake[]>`
       update report_intakes r
       set metadata = coalesce(r.metadata, '{}'::jsonb) || jsonb_build_object('report_ban_operation_id', ${input.operationId}::text), updated_at = now()
       where r.id = ${input.reportId}::uuid and r.server_id = ${input.serverId}
@@ -83,9 +86,11 @@ export class ReportIntakeRepository implements IReportIntakeRepository {
         and coalesce(r.metadata->>'report_ban_operation_id', '') = ''
         and exists (select 1 from detection_events d where d.id = ${input.detectionEventId}::uuid
           and d.server_id = r.server_id and d.user_id = r.confirmed_target_user_id
-          and d.metadata->>'reportIntakeId' = r.id::text)
+          and d.metadata->>'reportIntakeId' = r.id::text
+          and not (coalesce(d.metadata, '{}'::jsonb) ? 'observed_action'))
       returning r.*`;
-    return rows[0] ?? null;
+      return rows[0] ?? null;
+    });
   }
 
   async updateBan(
