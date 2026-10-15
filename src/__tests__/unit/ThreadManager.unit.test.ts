@@ -1,4 +1,12 @@
-import { ChannelType, Client, Guild, GuildMember, ThreadChannel, User } from 'discord.js';
+import {
+  ChannelType,
+  Client,
+  Collection,
+  Guild,
+  GuildMember,
+  ThreadChannel,
+  User,
+} from 'discord.js';
 import {
   CASE_STAFF_ROUTING_METADATA_KEY,
   REPORT_REVIEW_THREAD_TYPE,
@@ -383,6 +391,7 @@ describe('ThreadManager (unit)', () => {
     expect(thread.setInvitable).toHaveBeenCalledWith(false, expect.any(String));
     expect(createdThread?.id).toBe('thread-1');
     expect(storedEvent?.thread_id).toBe('thread-1');
+    expect(event.metadata).toMatchObject({ initial_verification_prompt_message_id: 'message-1' });
     expect(storedEvent?.metadata).toMatchObject({
       [VERIFICATION_THREAD_TYPE_METADATA_KEY]: VERIFICATION_THREAD_TYPE,
     });
@@ -645,6 +654,7 @@ describe('ThreadManager (unit)', () => {
       );
       const storedEvent = await verificationEventRepository.findById(event.id);
 
+      expect(event.thread_id).toBe('thread-1');
       expect(channel.threads.create).toHaveBeenCalled();
       expect(storedEvent?.thread_id).toBe('thread-1');
       expect(storedEvent?.metadata).toMatchObject({
@@ -665,7 +675,14 @@ describe('ThreadManager (unit)', () => {
       serverMemberRepository
     );
     const member = buildMember('guild-1', 'user-1');
-    const event = buildVerificationEvent({ thread_id: 'thread-1' });
+    const event = await verificationEventRepository.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(event.id, { thread_id: 'thread-1' });
+    event.thread_id = 'thread-1';
 
     const result = await manager.repairVerificationThread(member, event);
 
@@ -710,7 +727,14 @@ describe('ThreadManager (unit)', () => {
           'message-1',
           {
             author: { id: 'bot-1', bot: true },
-            content: '<@user-1> already asked for verification.',
+            id: 'message-1',
+            content: renderVerificationPromptTemplate(DEFAULT_VERIFICATION_PROMPT_TEMPLATE, {
+              userMention: '<@user-1>',
+              serverName: 'Test Guild',
+            }),
+            components: [
+              { type: 1, components: [{ type: 2, customId: 'admin_actions:m:c:user-1' }] },
+            ],
           },
         ],
       ])
@@ -724,7 +748,14 @@ describe('ThreadManager (unit)', () => {
       serverMemberRepository
     );
     const member = buildMember('guild-1', 'user-1');
-    const event = buildVerificationEvent({ thread_id: 'thread-1' });
+    const event = await verificationEventRepository.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(event.id, { thread_id: 'thread-1' });
+    event.thread_id = 'thread-1';
 
     const result = await manager.repairVerificationThread(member, event);
 
@@ -742,6 +773,7 @@ describe('ThreadManager (unit)', () => {
           {
             author: { id: 'bot-1', bot: true },
             content: 'Case responder routing updated.',
+            components: [],
           },
         ],
       ])
@@ -755,7 +787,14 @@ describe('ThreadManager (unit)', () => {
       serverMemberRepository
     );
     const member = buildMember('guild-1', 'user-1');
-    const event = buildVerificationEvent({ thread_id: 'thread-1' });
+    const event = await verificationEventRepository.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.update(event.id, { thread_id: 'thread-1' });
+    event.thread_id = 'thread-1';
 
     const result = await manager.repairVerificationThread(member, event);
 
@@ -765,6 +804,337 @@ describe('ThreadManager (unit)', () => {
     );
     expect(result.promptAlreadyPresent).toBe(false);
     expect(result.promptSent).toBe(true);
+  });
+
+  describe('initial verification setup recovery', () => {
+    // eslint-disable-next-line no-unused-vars -- This parameter belongs to a function type.
+    const deferred = <T>(): { promise: Promise<T>; resolve: (value: T) => void } => {
+      // eslint-disable-next-line no-unused-vars -- This parameter belongs to a function type.
+      let resolve!: (value: T) => void;
+      const promise = new Promise<T>((done) => {
+        resolve = done;
+      });
+      return { promise, resolve };
+    };
+    const prompt = (
+      customId = 'admin_actions:m:c:user-1:_:ver-1',
+      content = 'Welcome <@user-1>'
+    ) => ({
+      id: 'saved-prompt',
+      author: { id: 'bot-1', bot: true },
+      content,
+      components: [{ type: 1, components: [{ type: 2, customId }] }],
+    });
+    const manager = (): ThreadManager =>
+      new ThreadManager(
+        { user: { id: 'bot-1' } } as unknown as Client,
+        configService,
+        verificationEventRepository,
+        userRepository,
+        serverRepository,
+        serverMemberRepository
+      );
+    const createCase = async (
+      metadata: NonNullable<VerificationEvent['metadata']> = {}
+    ): Promise<VerificationEvent> => {
+      const event = await verificationEventRepository.createFromDetection(
+        null,
+        'guild-1',
+        'user-1',
+        VerificationStatus.PENDING
+      );
+      return (await verificationEventRepository.update(event.id, {
+        thread_id: thread.id,
+        metadata,
+      }))!;
+    };
+
+    it('coordinates repair while creation pauses after storing the thread ID', async () => {
+      const stored = deferred<void>();
+      const resume = deferred<void>();
+      const update = verificationEventRepository.update.bind(verificationEventRepository);
+      jest
+        .spyOn(verificationEventRepository, 'update')
+        .mockImplementation(async (id, data, options) => {
+          const result = await update(id, data, options);
+          if (data.thread_id) {
+            stored.resolve();
+            await resume.promise;
+          }
+          return result;
+        });
+      const event = await verificationEventRepository.createFromDetection(
+        null,
+        'guild-1',
+        'user-1',
+        VerificationStatus.PENDING
+      );
+      const service = manager();
+      const creating = service.createVerificationThread(buildMember('guild-1', 'user-1'), event);
+      await stored.promise;
+      const persisted = (await verificationEventRepository.findById(event.id))!;
+      const repairing = service.repairVerificationThread(
+        buildMember('guild-1', 'user-1'),
+        persisted
+      );
+      resume.resolve();
+      const [created, repaired] = await Promise.all([creating, repairing]);
+      expect(created?.id).toBe('thread-1');
+      expect(repaired.threadId).toBe('thread-1');
+      expect(channel.threads.create).toHaveBeenCalledTimes(1);
+      expect(thread.send).toHaveBeenCalledTimes(1);
+    });
+
+    it('coordinates two repairs inspecting a missing prompt', async () => {
+      const entered = deferred<void>();
+      const resume = deferred<Map<string, never>>();
+      (thread.messages.fetch as jest.Mock).mockImplementation(async () => {
+        entered.resolve();
+        return resume.promise;
+      });
+      const event = await createCase();
+      const service = manager();
+      const first = service.repairVerificationThread(buildMember('guild-1', 'user-1'), event);
+      await entered.promise;
+      const second = service.repairVerificationThread(buildMember('guild-1', 'user-1'), {
+        ...event,
+      });
+      resume.resolve(new Map<string, never>());
+      const results = await Promise.all([first, second]);
+      expect(results.map((result) => result.threadId)).toEqual(['thread-1', 'thread-1']);
+      expect(channel.threads.create).not.toHaveBeenCalled();
+      expect(thread.send).toHaveBeenCalledTimes(1);
+    });
+
+    it('fetches the stored prompt after restart without scanning history or sending', async () => {
+      const event = await createCase({ initial_verification_prompt_message_id: 'saved-prompt' });
+      (thread.messages.fetch as jest.Mock).mockResolvedValueOnce(prompt());
+      const result = await manager().repairVerificationThread(
+        buildMember('guild-1', 'user-1'),
+        event
+      );
+      expect(result.promptAlreadyPresent).toBe(true);
+      expect(thread.messages.fetch).toHaveBeenCalledWith({ message: 'saved-prompt', force: true });
+      expect(thread.messages.fetch).toHaveBeenCalledTimes(1);
+      expect(thread.send).not.toHaveBeenCalled();
+    });
+
+    it('replaces a confirmed missing stored prompt after readable history confirms absence', async () => {
+      const event = await createCase({
+        initial_verification_prompt_message_id: 'deleted-prompt',
+        unrelated: true,
+      });
+      (thread.messages.fetch as jest.Mock)
+        .mockRejectedValueOnce({ code: 10008 })
+        .mockResolvedValueOnce(new Map());
+      const result = await manager().repairVerificationThread(
+        buildMember('guild-1', 'user-1'),
+        event
+      );
+      expect(result.promptSent).toBe(true);
+      expect(thread.send).toHaveBeenCalledTimes(1);
+      expect((await verificationEventRepository.findById(event.id))?.metadata).toMatchObject({
+        unrelated: true,
+        initial_verification_prompt_message_id: 'message-1',
+      });
+    });
+
+    it.each([50001, 50013, 'ETIMEDOUT'])(
+      'does not replace an unreadable stored prompt (%s)',
+      async (code) => {
+        const event = await createCase({ initial_verification_prompt_message_id: 'saved-prompt' });
+        (thread.messages.fetch as jest.Mock).mockRejectedValueOnce(
+          Object.assign(new Error('unreadable'), { code })
+        );
+        await expect(
+          manager().repairVerificationThread(buildMember('guild-1', 'user-1'), event)
+        ).rejects.toThrow('unreadable');
+        expect(thread.send).not.toHaveBeenCalled();
+        expect(thread.messages.fetch).toHaveBeenCalledTimes(1);
+      }
+    );
+
+    it('does not send when history cannot be read', async () => {
+      const event = await createCase();
+      (thread.messages.fetch as jest.Mock).mockRejectedValueOnce(new Error('history unavailable'));
+      await expect(
+        manager().repairVerificationThread(buildMember('guild-1', 'user-1'), event)
+      ).rejects.toThrow('history unavailable');
+      expect(thread.send).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['unrelated mention', 'admin_actions:m:c:user-1:_:other-case', 'Note about <@user-1>'],
+      ['unbound unrelated mention', 'admin_actions:m:c:user-1', 'Note about <@user-1>'],
+      ['foreign bot', 'admin_actions:m:c:user-1:_:ver-1', 'Welcome <@user-1>'],
+    ])('does not mistake %s for the initial prompt', async (variant, customId, content) => {
+      const event = await createCase();
+      const message = prompt(customId, content);
+      if (variant === 'foreign bot') message.author.id = 'other-bot';
+      (thread.messages.fetch as jest.Mock).mockResolvedValueOnce(new Map([[message.id, message]]));
+      expect(
+        (await manager().repairVerificationThread(buildMember('guild-1', 'user-1'), event))
+          .promptSent
+      ).toBe(true);
+      expect(thread.send).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(['admin_actions:m:c:user-1', 'admin_actions:menu:case:user-1'])(
+      'recovers the shipped unbound prompt %s only with its rendered template',
+      async (customId) => {
+        const event = await createCase();
+        const message = prompt(
+          customId,
+          renderVerificationPromptTemplate(DEFAULT_VERIFICATION_PROMPT_TEMPLATE, {
+            userMention: '<@user-1>',
+            serverName: 'Test Guild',
+          })
+        );
+        (thread.messages.fetch as jest.Mock).mockResolvedValueOnce(
+          new Map([[message.id, message]])
+        );
+        expect(
+          (await manager().repairVerificationThread(buildMember('guild-1', 'user-1'), event))
+            .promptAlreadyPresent
+        ).toBe(true);
+        expect(thread.send).not.toHaveBeenCalled();
+        expect((await verificationEventRepository.findById(event.id))?.metadata).toMatchObject({
+          initial_verification_prompt_message_id: 'saved-prompt',
+        });
+      }
+    );
+
+    it('recovers a sent prompt after its metadata write fails', async () => {
+      const event = await createCase();
+      thread.send.mockResolvedValueOnce({ id: 'saved-prompt' } as never);
+      // Fail only the new prompt identity write, preserving real repository behavior otherwise.
+      const patch = verificationEventRepository.patchMetadata.bind(verificationEventRepository);
+      jest
+        .spyOn(verificationEventRepository, 'patchMetadata')
+        .mockImplementationOnce(async (id, data, options) => {
+          if ('initial_verification_prompt_message_id' in data)
+            throw new Error('write interrupted');
+          return patch(id, data, options);
+        });
+      await expect(
+        manager().repairVerificationThread(buildMember('guild-1', 'user-1'), event)
+      ).rejects.toThrow('write interrupted');
+      (thread.messages.fetch as jest.Mock).mockResolvedValueOnce(
+        new Map([['saved-prompt', prompt()]])
+      );
+      expect(
+        (await manager().repairVerificationThread(buildMember('guild-1', 'user-1'), event))
+          .promptAlreadyPresent
+      ).toBe(true);
+      expect(thread.send).toHaveBeenCalledTimes(1);
+    });
+
+    it('recovers creation after member addition failed without creating a second thread', async () => {
+      const event = await verificationEventRepository.createFromDetection(
+        null,
+        'guild-1',
+        'user-1',
+        VerificationStatus.PENDING
+      );
+      const service = manager();
+      const error = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+      const member = buildMember('guild-1', 'user-1');
+      (thread.members.add as jest.Mock).mockRejectedValueOnce(new Error('member add failed'));
+      // Membership screening discovered on refresh stops retries immediately.
+      Object.assign(member, {
+        fetch: jest.fn().mockResolvedValue(buildMember('guild-1', 'user-1', 'Test Guild', true)),
+      });
+      jest.useFakeTimers();
+      await Promise.all([
+        expect(service.createVerificationThread(member, event)).rejects.toThrow(
+          'Failed to add flagged user'
+        ),
+        jest.runAllTimersAsync(),
+      ]);
+      const persisted = (await verificationEventRepository.findById(event.id))!;
+      const result = await service.repairVerificationThread(
+        buildMember('guild-1', 'user-1'),
+        persisted
+      );
+      expect(result.promptSent).toBe(true);
+      expect(channel.threads.create).toHaveBeenCalledTimes(1);
+      expect(thread.send).toHaveBeenCalledTimes(1);
+      error.mockRestore();
+    });
+
+    it('finds a prompt older than the first history page before considering replacement', async () => {
+      const event = await createCase();
+      const recent = new Collection(
+        Array.from({ length: 100 }, (_, index) => {
+          const message = { ...prompt('unrelated', 'Case note'), id: `recent-${index}` };
+          return [message.id, message] as const;
+        })
+      );
+      (thread.messages.fetch as jest.Mock)
+        .mockResolvedValueOnce(recent)
+        .mockResolvedValueOnce(new Collection([['saved-prompt', prompt()]]));
+      const result = await manager().repairVerificationThread(
+        buildMember('guild-1', 'user-1'),
+        event
+      );
+      expect(result.promptAlreadyPresent).toBe(true);
+      expect(thread.messages.fetch).toHaveBeenLastCalledWith({ limit: 100, before: 'recent-99' });
+      expect(thread.send).not.toHaveBeenCalled();
+    });
+
+    it('preserves newer resolution and metadata while a stale setup finishes', async () => {
+      const event = await verificationEventRepository.createFromDetection(
+        null,
+        'guild-1',
+        'user-1',
+        VerificationStatus.PENDING
+      );
+      const add = thread.members.add as jest.Mock;
+      add.mockImplementationOnce(async () => {
+        await verificationEventRepository.update(event.id, {
+          status: VerificationStatus.CLOSED_NO_ACTION,
+          metadata: { member_left: true, reminder_count: 2 },
+        });
+      });
+      await manager().createVerificationThread(buildMember('guild-1', 'user-1'), event);
+      expect(await verificationEventRepository.findById(event.id)).toMatchObject({
+        status: VerificationStatus.CLOSED_NO_ACTION,
+        metadata: {
+          member_left: true,
+          reminder_count: 2,
+          initial_verification_prompt_message_id: 'message-1',
+        },
+      });
+    });
+
+    it('creates a user-visible thread when promoting a legacy report review', async () => {
+      const event = await createCase({ thread_type: 'report_review' });
+      const reviewThread = buildThread('review-thread');
+      await verificationEventRepository.update(event.id, { thread_id: reviewThread.id });
+      event.thread_id = reviewThread.id;
+      channel.threads.fetch!.mockResolvedValue(reviewThread);
+      const created = await manager().createVerificationThread(
+        buildMember('guild-1', 'user-1'),
+        event
+      );
+      expect(created?.id).toBe('thread-1');
+      expect(channel.threads.create).toHaveBeenCalledTimes(1);
+      expect(reviewThread.members.add).not.toHaveBeenCalled();
+      expect(reviewThread.send).not.toHaveBeenCalled();
+    });
+
+    it('creates a missing thread during repair without waiting on its own setup promise', async () => {
+      const event = await verificationEventRepository.createFromDetection(
+        null,
+        'guild-1',
+        'user-1',
+        VerificationStatus.PENDING
+      );
+      expect(
+        (await manager().repairVerificationThread(buildMember('guild-1', 'user-1'), event)).threadId
+      ).toBe('thread-1');
+      expect(thread.send).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('uses custom verification prompt template when configured', async () => {

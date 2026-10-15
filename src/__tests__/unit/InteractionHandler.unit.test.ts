@@ -413,6 +413,7 @@ describe('InteractionHandler (unit)', () => {
       recoverExpiredQuarantineAttempt: jest.fn(),
       updateQuarantineAttempt: jest.fn(),
       updatePendingAfterMemberLeft: jest.fn(),
+      patchMetadata: jest.fn(),
       update: jest.fn(),
     };
     threadManager = {

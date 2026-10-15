@@ -1350,6 +1350,27 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     return { ...updated };
   }
 
+  async patchMetadata(
+    id: string,
+    patch: Record<string, unknown>,
+    options: { touchUpdatedAt?: boolean } = {}
+  ): Promise<VerificationEvent | null> {
+    const eventIndex = this.events.findIndex((event) => event.id === id);
+    if (eventIndex === -1) return null;
+    const event = this.events[eventIndex];
+    const metadata =
+      event.metadata && typeof event.metadata === 'object' && !Array.isArray(event.metadata)
+        ? event.metadata
+        : {};
+    const updated: VerificationEvent = {
+      ...event,
+      metadata: JSON.parse(JSON.stringify({ ...metadata, ...patch })),
+      updated_at: options.touchUpdatedAt === false ? event.updated_at : new Date(),
+    };
+    this.events[eventIndex] = updated;
+    return { ...updated };
+  }
+
   async update(
     id: string,
     data: Partial<VerificationEvent>,
