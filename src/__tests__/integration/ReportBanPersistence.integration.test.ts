@@ -121,9 +121,15 @@ integration('report ban claims and reconciliation (Postgres)', () => {
   });
   it('never gives uncertain queued enforcement back to the ordinary worker', async () => {
     const f = await fixture();
-    await f.requests.mergeMetadata(f.request.id, {
-      report_ban_phase: 'enforcement_started',
-      report_ban_lease_until: new Date(0).toISOString(),
+    // Seed an interrupted persisted operation; normal writes now reject skipping preparation.
+    await f.prisma.moderation_action_requests.update({
+      where: { id: f.request.id },
+      data: {
+        metadata: {
+          report_ban_phase: 'enforcement_started',
+          report_ban_lease_until: new Date(0).toISOString(),
+        },
+      },
     });
     expect(await f.requests.claimNext()).toBeNull();
     expect(await f.requests.claimReportBanReconciliation(new Date())).toMatchObject({

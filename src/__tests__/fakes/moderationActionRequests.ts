@@ -1,3 +1,6 @@
+import { IVerificationEventRepository } from '../../repositories/VerificationEventRepository';
+import { IReportIntakeRepository } from '../../repositories/ReportIntakeRepository';
+import { IDetectionEventsRepository } from '../../repositories/DetectionEventsRepository';
 import { Prisma } from '../../db/prisma';
 import { IModerationActionRequestRepository } from '../../repositories/ModerationActionRequestRepository';
 import {
@@ -6,6 +9,13 @@ import {
   ModerationActionRequestStatus,
 } from '../../repositories/types';
 export class InMemoryModerationActionRequestRepository implements IModerationActionRequestRepository {
+  constructor(
+    private readonly banContext?: {
+      cases: IVerificationEventRepository;
+      reports: IReportIntakeRepository;
+      detections: IDetectionEventsRepository;
+    }
+  ) {}
   public rows = new Map<string, ModerationActionRequest>();
   async enqueue(input: ModerationActionRequestCreate): Promise<ModerationActionRequest> {
     const existing = [...this.rows.values()].find(
@@ -45,7 +55,7 @@ export class InMemoryModerationActionRequestRepository implements IModerationAct
     const row = [...this.rows.values()].find(
       (row) =>
         row.status === ModerationActionRequestStatus.QUEUED &&
-        !(row.metadata as Prisma.JsonObject)?.report_ban_phase
+        !(row.metadata as Prisma.JsonObject).report_ban_phase
     );
     if (!row) return null;
     const claimed = {
@@ -65,6 +75,26 @@ export class InMemoryModerationActionRequestRepository implements IModerationAct
   ): Promise<ModerationActionRequest | null> {
     const row = this.rows.get(id);
     if (!row) return null;
+    const current = row.metadata as Prisma.JsonObject;
+    const receipt = (row.result as Prisma.JsonObject).observed_ban_result as
+      | Prisma.JsonObject
+      | undefined;
+    if (receipt?.status === 'banned' && patch.report_ban_phase !== null) return row;
+    if (row.status === ModerationActionRequestStatus.FAILED && !current.report_ban_phase)
+      return row;
+    if (
+      current.report_ban_phase === 'discord_confirmed' &&
+      patch.report_ban_phase &&
+      patch.report_ban_phase !== 'discord_confirmed'
+    )
+      return row;
+    if (
+      patch.report_ban_phase === 'enforcement_started' &&
+      current.report_ban_phase !== 'preparing'
+    )
+      return row;
+    patch = { ...patch };
+    if (current.report_ban_confirmed_at) delete patch.report_ban_confirmed_at;
     const next = {
       ...row,
       metadata: { ...(row.metadata as Prisma.JsonObject), ...patch },
@@ -79,6 +109,17 @@ export class InMemoryModerationActionRequestRepository implements IModerationAct
   ): Promise<ModerationActionRequest | null> {
     const row = this.rows.get(id);
     if (!row) return null;
+    const receipt = (row.result as Prisma.JsonObject).observed_ban_result as
+      | Prisma.JsonObject
+      | undefined;
+    const incoming = (result as Prisma.JsonObject).observed_ban_result as
+      | Prisma.JsonObject
+      | undefined;
+    if (
+      receipt?.status === 'banned' ||
+      (receipt?.status === 'banned_updates_pending' && incoming?.status === 'ban_outcome_unknown')
+    )
+      return row;
     const next = {
       ...row,
       status: ModerationActionRequestStatus.COMPLETED,
@@ -92,7 +133,67 @@ export class InMemoryModerationActionRequestRepository implements IModerationAct
   async fail(id: string, error: string): Promise<ModerationActionRequest | null> {
     const row = this.rows.get(id);
     if (!row) return null;
+    const receipt = (row.result as Prisma.JsonObject).observed_ban_result as
+      | Prisma.JsonObject
+      | undefined;
+    if (
+      (row.metadata as Prisma.JsonObject).report_ban_phase ||
+      ['banned', 'banned_updates_pending', 'ban_outcome_unknown'].includes(String(receipt?.status))
+    )
+      return row;
     const next = { ...row, status: ModerationActionRequestStatus.FAILED, last_error: error };
+    this.rows.set(id, next);
+    return next;
+  }
+  async releaseReportBanPreparation(
+    id: string,
+    expectedPhase: 'preparing' | 'enforcement_started'
+  ): Promise<ModerationActionRequest | null> {
+    const row = this.rows.get(id);
+    if (!row) return null;
+    const metadata = row.metadata as Prisma.JsonObject;
+    if (
+      metadata.report_ban_phase !== expectedPhase &&
+      !(row.status === ModerationActionRequestStatus.FAILED && !metadata.report_ban_phase)
+    )
+      return row;
+    const context = this.banContext;
+    const candidates = (metadata.report_ban_cases ?? []) as Prisma.JsonObject[];
+    if (context) {
+      for (const candidate of candidates) {
+        const event = await context.cases.findById(String(candidate.id));
+        if (
+          event?.status === 'pending' &&
+          event.quarantine_attempt_id === metadata.report_ban_attempt_id
+        ) {
+          await context.cases.updateQuarantineAttempt(
+            event.id,
+            String(metadata.report_ban_attempt_id),
+            {
+              case_kind: candidate.case_kind,
+              attention_state: candidate.attention_state,
+              containment_status: candidate.containment_status,
+              parked_at: candidate.parked_at,
+              parked_by: candidate.parked_by,
+            } as never
+          );
+        }
+      }
+      if (row.detection_event_id)
+        await context.detections.releaseObservedAction(
+          row.detection_event_id,
+          'ban',
+          row.actor_id,
+          id
+        );
+      if (row.report_intake_id)
+        await context.reports.updateBan(row.report_intake_id, id, { release: true });
+    }
+    const next = {
+      ...row,
+      status: ModerationActionRequestStatus.FAILED,
+      metadata: { ...metadata, report_ban_phase: null, report_ban_lease_until: null },
+    };
     this.rows.set(id, next);
     return next;
   }

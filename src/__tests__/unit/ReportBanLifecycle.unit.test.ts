@@ -27,8 +27,8 @@ import {
 async function fixture() {
   const detections = new InMemoryDetectionEventsRepository();
   const reports = new InMemoryReportIntakeRepository();
-  const requests = new InMemoryModerationActionRequestRepository();
   const cases = new InMemoryVerificationEventRepository();
+  const requests = new InMemoryModerationActionRequestRepository({ cases, reports, detections });
   const members = new InMemoryServerMemberRepository();
   const servers = new InMemoryServerRepository();
   const users = new InMemoryUserRepository();

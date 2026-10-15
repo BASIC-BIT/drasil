@@ -1,5 +1,8 @@
 import { ModerationEvidenceService } from '../../services/ModerationEvidenceService';
-import { InMemoryDetectionEventsRepository } from '../fakes/inMemoryRepositories';
+import {
+  InMemoryDetectionEventsRepository,
+  InMemoryReportIntakeRepository,
+} from '../fakes/inMemoryRepositories';
 
 describe('ModerationEvidenceService', () => {
   it('records missing optional sources without starting model analysis', async () => {
@@ -18,7 +21,6 @@ describe('ModerationEvidenceService', () => {
   });
 });
 
-import { InMemoryReportIntakeRepository } from '../fakes/inMemoryRepositories';
 import { ReportIntakeStatus } from '../../repositories/types';
 it('claims a submitted report once and rejects close and target changes until release', async () => {
   const reports = new InMemoryReportIntakeRepository();

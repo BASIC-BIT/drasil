@@ -1,5 +1,4 @@
 import { IModerationActionRequestRepository } from '../repositories/ModerationActionRequestRepository';
-import { ModerationActionRequest } from '../repositories/types';
 import { getReportConfirmationMessageIds } from './ReportIntakeService';
 import { context, ROOT_CONTEXT } from '@opentelemetry/api';
 import {
@@ -37,6 +36,7 @@ import {
   DetectionEvent,
   DetectionType,
   MessageContext,
+  ModerationActionRequest,
   ModerationOutcome,
   ReportIntake,
   ReportIntakeStatus,
@@ -3781,51 +3781,20 @@ export class SecurityActionService implements ISecurityActionService {
       patch as import('../db/prisma').Prisma.JsonObject
     );
     if (!saved) throw new Error('Could not persist report ban operation.');
+    if (
+      (patch.report_ban_phase === 'preparing' ||
+        patch.report_ban_phase === 'enforcement_started') &&
+      this.metadataToRecord(saved.metadata).report_ban_phase !== patch.report_ban_phase
+    )
+      throw new Error('Report ban preparation ownership changed.');
     return saved;
   }
 
-  private async releaseBanPreparation(
-    request: ModerationActionRequest,
-    detection: DetectionEvent,
-    moderator: User
-  ): Promise<void> {
-    const metadata = this.metadataToRecord(request.metadata);
-    const cases = Array.isArray(metadata.report_ban_cases)
-      ? (metadata.report_ban_cases as VerificationEvent[])
-      : [];
-    const attemptId = this.readString(metadata.report_ban_attempt_id);
-    if (attemptId)
-      for (const event of cases) {
-        const current = await this.verificationEventRepository.findById(event.id);
-        if (
-          current?.quarantine_attempt_id === attemptId &&
-          current.status === VerificationStatus.PENDING
-        ) {
-          const restored = await this.verificationEventRepository.updateQuarantineAttempt(
-            event.id,
-            attemptId,
-            {
-              case_kind: event.case_kind,
-              attention_state: event.attention_state,
-              containment_status: event.containment_status,
-              parked_at: event.parked_at,
-              parked_by: event.parked_by,
-            }
-          );
-          if (!restored) throw new Error('Could not release report ban case preparation.');
-        }
-      }
-    await this.detectionEventsRepository.releaseObservedAction(
-      detection.id,
-      AdminActionType.BAN,
-      moderator.id,
-      request.id
-    );
-    if (request.report_intake_id)
-      await this.reportIntakeRepository?.updateBan(request.report_intake_id, request.id, {
-        release: true,
-      });
-    await this.saveBanPhase(request, { report_ban_phase: null, report_ban_lease_until: null });
+  private async releaseBanPreparation(request: ModerationActionRequest): Promise<void> {
+    const phase = this.metadataToRecord(request.metadata).report_ban_phase;
+    if (phase !== 'preparing' && phase !== 'enforcement_started') return;
+    const released = await this.actionRequests?.releaseReportBanPreparation(request.id, phase);
+    if (!released) throw new Error('Could not release report ban preparation.');
   }
 
   private async executeObservedBan(
@@ -3839,7 +3808,6 @@ export class SecurityActionService implements ISecurityActionService {
   ): Promise<ObservedBanResult> {
     const detection = await this.getObservedDetectionForUser(guild.id, userId, detectionEventId);
     if (
-      !request ||
       !this.actionRequests ||
       request.server_id !== guild.id ||
       request.target_user_id !== userId ||
@@ -3856,8 +3824,7 @@ export class SecurityActionService implements ISecurityActionService {
       report_ban_reason: reason,
       report_ban_lease_until: new Date(Date.now() + 15 * 60_000).toISOString(),
     });
-    let claimed = false;
-    let enforcementStarted = false;
+    const enforcement = { started: false };
     let confirmed = false;
     let confirmedAt: string | undefined;
     try {
@@ -3878,12 +3845,9 @@ export class SecurityActionService implements ISecurityActionService {
         request.id
       );
       if (!claimedDetection) {
-        if (reportId)
-          await this.reportIntakeRepository?.updateBan(reportId, request.id, { release: true });
-        await this.saveBanPhase(current, { report_ban_phase: null, report_ban_lease_until: null });
+        await this.releaseBanPreparation(current);
         return { status: 'already_handled' };
       }
-      claimed = true;
       await this.ensureObservedEntitiesExist(guild.id, userId);
       const evidence = await this.evidenceService.capture({ guildId: guild.id, userId, member });
       if (
@@ -3946,7 +3910,7 @@ export class SecurityActionService implements ISecurityActionService {
             report_ban_phase: 'enforcement_started',
             report_ban_case_ids: acquiredCases.map((event) => event.id),
           });
-          enforcementStarted = true;
+          enforcement.started = true;
         },
       };
       const moderation = this.userModerationService as IUserModerationService &
@@ -3963,7 +3927,9 @@ export class SecurityActionService implements ISecurityActionService {
       return { status: 'banned' };
     } catch (error) {
       const rejection =
-        error && typeof error === 'object' ? (error as { status?: number; code?: number }) : {};
+        typeof error === 'object' && error !== null
+          ? (error as { status?: number; code?: number })
+          : {};
       const rejectedByDiscord =
         !confirmed &&
         (rejection.code === 50013 ||
@@ -3972,16 +3938,8 @@ export class SecurityActionService implements ISecurityActionService {
             rejection.status >= 400 &&
             rejection.status < 500 &&
             rejection.status !== 408));
-      if (!enforcementStarted || rejectedByDiscord) {
-        if (claimed) await this.releaseBanPreparation(current, detection, moderator);
-        else {
-          if (reportId)
-            await this.reportIntakeRepository?.updateBan(reportId, request.id, { release: true });
-          await this.saveBanPhase(current, {
-            report_ban_phase: null,
-            report_ban_lease_until: null,
-          });
-        }
+      if (!enforcement.started || rejectedByDiscord) {
+        await this.releaseBanPreparation(current);
         throw error;
       }
       const result: ObservedBanResult = {
@@ -4019,14 +3977,14 @@ export class SecurityActionService implements ISecurityActionService {
   public async reconcileReportBan(request: ModerationActionRequest): Promise<ObservedBanResult> {
     if (!request.target_user_id || !request.detection_event_id || !this.actionRequests)
       throw new Error('Report ban operation is missing required bindings.');
-    const detection = await this.getObservedDetectionForUser(
+    await this.getObservedDetectionForUser(
       request.server_id,
       request.target_user_id,
       request.detection_event_id
     );
     const metadata = this.metadataToRecord(request.metadata);
     if (metadata.report_ban_phase === 'preparing') {
-      await this.releaseBanPreparation(request, detection, { id: request.actor_id } as User);
+      await this.releaseBanPreparation(request);
       await this.actionRequests.fail(
         request.id,
         'Worker interrupted before enforcement. No ban was sent.'
@@ -4037,8 +3995,7 @@ export class SecurityActionService implements ISecurityActionService {
     try {
       const guild = await this.client.guilds.fetch(request.server_id);
       const moderator = await this.client.users.fetch(request.actor_id);
-      const ban = await guild.bans.fetch(request.target_user_id);
-      if (!ban) throw new Error('Ban outcome needs review.');
+      await guild.bans.fetch(request.target_user_id);
       confirmed = true;
       const current = await this.saveBanPhase(request, {
         report_ban_phase: 'discord_confirmed',

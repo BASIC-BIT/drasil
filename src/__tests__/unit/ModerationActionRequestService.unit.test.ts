@@ -606,6 +606,10 @@ class FakeModerationActionRequestRepository implements IModerationActionRequestR
     return this.byId.get(id) ?? null;
   }
 
+  public async releaseReportBanPreparation(id: string): Promise<ModerationActionRequest | null> {
+    return this.findById(id);
+  }
+
   public async claimReportBanReconciliation(): Promise<ModerationActionRequest | null> {
     return null;
   }

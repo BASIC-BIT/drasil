@@ -1561,7 +1561,7 @@ export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
         item.server_id === input.serverId &&
         item.confirmed_target_user_id === input.targetUserId &&
         item.status === ReportIntakeStatus.SUBMITTED &&
-        !(item.metadata as Record<string, unknown>)?.report_ban_operation_id
+        !(item.metadata as Record<string, unknown> | null)?.report_ban_operation_id
     );
     if (index < 0) return null;
     this.intakes[index] = {
@@ -1581,7 +1581,7 @@ export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
     const index = this.intakes.findIndex(
       (item) =>
         item.id === reportId &&
-        (item.metadata as Record<string, unknown>)?.report_ban_operation_id === operationId
+        (item.metadata as Record<string, unknown> | null)?.report_ban_operation_id === operationId
     );
     if (index < 0) return null;
     const metadata = {
@@ -1663,7 +1663,7 @@ export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
     }
 
     const existing = this.intakes[index];
-    if ((existing.metadata as Record<string, unknown>)?.report_ban_operation_id) return null;
+    if ((existing.metadata as Record<string, unknown> | null)?.report_ban_operation_id) return null;
     const updated: ReportIntake = {
       ...existing,
       status: data.status ?? existing.status,

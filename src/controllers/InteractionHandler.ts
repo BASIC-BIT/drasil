@@ -1,6 +1,5 @@
 import { IReportIntakeRepository } from '../repositories/ReportIntakeRepository';
 import { IModerationActionRequestRepository } from '../repositories/ModerationActionRequestRepository';
-import { ModerationActionRequestType } from '../repositories/types';
 import {
   Client,
   ButtonInteraction,
@@ -23,6 +22,7 @@ import { injectable, inject, optional } from 'inversify';
 import { INotificationManager } from '../services/NotificationManager';
 import { TYPES } from '../di/symbols';
 import {
+  ModerationActionRequestType,
   AdminActionType,
   CaseAttentionState,
   CaseKind,
