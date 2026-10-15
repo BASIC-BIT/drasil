@@ -414,6 +414,7 @@ describe('InteractionHandler (unit)', () => {
       updateQuarantineAttempt: jest.fn(),
       updatePendingAfterMemberLeft: jest.fn(),
       patchMetadata: jest.fn(),
+      setThreadIdentity: jest.fn(),
       update: jest.fn(),
     };
     threadManager = {

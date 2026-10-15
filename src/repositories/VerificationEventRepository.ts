@@ -175,6 +175,12 @@ export interface IVerificationEventRepository {
     expectedQuarantineAttemptId: string | null,
     data: Partial<VerificationEvent>
   ): Promise<VerificationEvent | null>;
+  setThreadIdentity(
+    id: string,
+    threadId: string,
+    threadType: 'verification' | 'report_review',
+    metadataPatch?: Record<string, unknown>
+  ): Promise<VerificationEvent | null>;
   patchMetadata(
     id: string,
     patch: Record<string, unknown>,
@@ -1447,6 +1453,30 @@ export class VerificationEventRepository implements IVerificationEventRepository
   async getVerificationHistory(userId: string, serverId: string): Promise<VerificationEvent[]> {
     // Re-implement using findByUserAndServer
     return this.findByUserAndServer(userId, serverId, { limit: 100 });
+  }
+
+  async setThreadIdentity(
+    id: string,
+    threadId: string,
+    threadType: 'verification' | 'report_review',
+    metadataPatch: Record<string, unknown> = {}
+  ): Promise<VerificationEvent | null> {
+    try {
+      const rows = await this.prisma.$queryRaw<VerificationEvent[]>`
+        UPDATE verification_events
+        SET thread_id = ${threadId},
+        metadata = CASE
+          WHEN jsonb_typeof(metadata) = 'object' THEN metadata
+          ELSE '{}'::jsonb
+        END || ${JSON.stringify({ ...metadataPatch, thread_type: threadType })}::jsonb,
+        updated_at = now()
+        WHERE id = ${id}::uuid
+        RETURNING *
+      `;
+      return rows[0] ?? null;
+    } catch (error) {
+      this.handleError(error, 'setThreadIdentity');
+    }
   }
 
   async patchMetadata(

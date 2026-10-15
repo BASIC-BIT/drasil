@@ -852,15 +852,15 @@ describe('ThreadManager (unit)', () => {
     it('coordinates repair while creation pauses after storing the thread ID', async () => {
       const stored = deferred<void>();
       const resume = deferred<void>();
-      const update = verificationEventRepository.update.bind(verificationEventRepository);
+      const setThreadIdentity = verificationEventRepository.setThreadIdentity.bind(
+        verificationEventRepository
+      );
       jest
-        .spyOn(verificationEventRepository, 'update')
-        .mockImplementation(async (id, data, options) => {
-          const result = await update(id, data, options);
-          if (data.thread_id) {
-            stored.resolve();
-            await resume.promise;
-          }
+        .spyOn(verificationEventRepository, 'setThreadIdentity')
+        .mockImplementation(async (id, threadId, threadType, patch) => {
+          const result = await setThreadIdentity(id, threadId, threadType, patch);
+          stored.resolve();
+          await resume.promise;
           return result;
         });
       const event = await verificationEventRepository.createFromDetection(
@@ -1038,6 +1038,7 @@ describe('ThreadManager (unit)', () => {
       );
       const service = manager();
       const error = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+      const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
       const member = buildMember('guild-1', 'user-1');
       (thread.members.add as jest.Mock).mockRejectedValueOnce(new Error('member add failed'));
       // Membership screening discovered on refresh stops retries immediately.
@@ -1059,6 +1060,11 @@ describe('ThreadManager (unit)', () => {
       expect(result.promptSent).toBe(true);
       expect(channel.threads.create).toHaveBeenCalledTimes(1);
       expect(thread.send).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(
+        'Failed to add user-1 to verification thread thread-1; retrying in 750ms:',
+        expect.objectContaining({ message: 'member add failed' })
+      );
+      warn.mockRestore();
       error.mockRestore();
     });
 
@@ -1106,6 +1112,55 @@ describe('ThreadManager (unit)', () => {
         },
       });
     });
+
+    it.each([false, true])(
+      'keeps thread identity and type consistent if a separate metadata write fails (legacy=%s)',
+      async (legacy) => {
+        const event = await verificationEventRepository.createFromDetection(
+          null,
+          'guild-1',
+          'user-1',
+          VerificationStatus.PENDING
+        );
+        if (legacy) {
+          const updated = await verificationEventRepository.update(event.id, {
+            thread_id: 'legacy-review',
+            metadata: { thread_type: 'report_review', retained: true },
+          });
+          Object.assign(event, updated);
+        }
+        const patch = verificationEventRepository.patchMetadata.bind(verificationEventRepository);
+        jest
+          .spyOn(verificationEventRepository, 'patchMetadata')
+          .mockImplementation(async (id, data, options) => {
+            if ('thread_type' in data) throw new Error('separate thread type write failed');
+            return patch(id, data, options);
+          });
+        const error = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+        const service = manager();
+        // A failed separate type write must never leave a newly persisted identity
+        // paired with its old type or hidden from the caller.
+        await service
+          .createVerificationThread(buildMember('guild-1', 'user-1'), event)
+          .catch(() => null);
+        expect(await verificationEventRepository.findById(event.id)).toMatchObject({
+          thread_id: 'thread-1',
+          metadata: { thread_type: 'verification' },
+        });
+        expect(event.thread_id).toBe('thread-1');
+        expect(event.metadata).toMatchObject({ thread_type: 'verification' });
+        (thread.messages.fetch as jest.Mock).mockResolvedValueOnce({
+          ...prompt(),
+          id: 'message-1',
+        });
+        expect(
+          (await service.createVerificationThread(buildMember('guild-1', 'user-1'), event))?.id
+        ).toBe('thread-1');
+        expect(channel.threads.create).toHaveBeenCalledTimes(1);
+        expect(thread.send).toHaveBeenCalledTimes(1);
+        error.mockRestore();
+      }
+    );
 
     it('creates a user-visible thread when promoting a legacy report review', async () => {
       const event = await createCase({ thread_type: 'report_review' });

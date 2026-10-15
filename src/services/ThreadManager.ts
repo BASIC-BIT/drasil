@@ -507,18 +507,17 @@ export class ThreadManager implements IThreadManager {
     threadType: typeof VERIFICATION_THREAD_TYPE | typeof REPORT_REVIEW_THREAD_TYPE,
     extraMetadata: Record<string, unknown> = {}
   ): Promise<void> {
-    // Setup owns thread identity and routing metadata, never lifecycle state.
-    const updated = await this.verificationEventRepository.update(verificationEvent.id, {
-      thread_id: threadId,
-    });
+    // Thread identity and type must commit together so a retry cannot mistake a
+    // newly promoted verification thread for its old moderator-only review thread.
+    const updated = await this.verificationEventRepository.setThreadIdentity(
+      verificationEvent.id,
+      threadId,
+      threadType,
+      extraMetadata
+    );
     if (!updated) throw new Error(`Verification event ${verificationEvent.id} was not found`);
-    const patched = await this.verificationEventRepository.patchMetadata(verificationEvent.id, {
-      [VERIFICATION_THREAD_TYPE_METADATA_KEY]: threadType,
-      ...extraMetadata,
-    });
-    if (!patched) throw new Error(`Verification event ${verificationEvent.id} was not found`);
-    verificationEvent.thread_id = threadId;
-    verificationEvent.metadata = patched.metadata;
+    verificationEvent.thread_id = updated.thread_id;
+    verificationEvent.metadata = updated.metadata;
   }
 
   private async storePrivateEvidenceThreadId(

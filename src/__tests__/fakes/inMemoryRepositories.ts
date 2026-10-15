@@ -1350,6 +1350,31 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     return { ...updated };
   }
 
+  async setThreadIdentity(
+    id: string,
+    threadId: string,
+    threadType: 'verification' | 'report_review',
+    metadataPatch: Record<string, unknown> = {}
+  ): Promise<VerificationEvent | null> {
+    const eventIndex = this.events.findIndex((event) => event.id === id);
+    if (eventIndex === -1) return null;
+    const event = this.events[eventIndex];
+    const metadata =
+      event.metadata && typeof event.metadata === 'object' && !Array.isArray(event.metadata)
+        ? event.metadata
+        : {};
+    const updated: VerificationEvent = {
+      ...event,
+      thread_id: threadId,
+      metadata: JSON.parse(
+        JSON.stringify({ ...metadata, ...metadataPatch, thread_type: threadType })
+      ),
+      updated_at: new Date(),
+    };
+    this.events[eventIndex] = updated;
+    return { ...updated };
+  }
+
   async patchMetadata(
     id: string,
     patch: Record<string, unknown>,
