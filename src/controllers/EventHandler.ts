@@ -1268,14 +1268,12 @@ export class EventHandler implements IEventHandler {
               parked_by: shouldRemainParked ? claimed.parked_by : null,
               metadata: directDelivered
                 ? {
-                    ...this.metadataToRecord(claimed.metadata),
                     breach_attention_direct_notified_at: completedAt,
                     breach_attention_direct_message_id: message.id,
                   }
                 : attentionDelivered
                   ? undefined
                   : {
-                      ...this.metadataToRecord(claimed.metadata),
                       breach_attention_delivery_failed_at: completedAt,
                       breach_attention_message_id: message.id,
                     },

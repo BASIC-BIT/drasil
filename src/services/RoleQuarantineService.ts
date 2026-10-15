@@ -576,7 +576,7 @@ export class RoleQuarantineService implements IRoleQuarantineService {
     ) {
       await this.verificationEventRepository.markParkedContainmentIncomplete(
         verificationEvent.id,
-        verificationEvent.metadata
+        {}
       );
     }
 

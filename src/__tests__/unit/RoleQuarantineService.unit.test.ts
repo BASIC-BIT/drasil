@@ -7,7 +7,10 @@ import {
   CASE_ROLE_RELEASE_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_LEASE_MS,
 } from '../../utils/caseRoleRelease';
-import { InMemoryRoleQuarantineSnapshotRepository } from '../fakes/inMemoryRepositories';
+import {
+  InMemoryRoleQuarantineSnapshotRepository,
+  InMemoryVerificationEventRepository,
+} from '../fakes/inMemoryRepositories';
 import { IConfigService } from '../../config/ConfigService';
 import {
   CaseAttentionState,
@@ -956,7 +959,7 @@ describe('RoleQuarantineService (unit)', () => {
     expect(result.containmentRegressed).toBe(true);
     expect(verificationEventRepository.markParkedContainmentIncomplete).toHaveBeenCalledWith(
       parkedEvent.id,
-      parkedEvent.metadata
+      {}
     );
   });
 
@@ -1103,8 +1106,69 @@ describe('RoleQuarantineService (unit)', () => {
 
     expect(verificationEventRepository.markParkedContainmentIncomplete).toHaveBeenCalledWith(
       parkedEvent.id,
-      parkedEvent.metadata
+      {}
     );
+  });
+
+  it('preserves newer evidence and reminder state while auditing an unremovable role', async () => {
+    const caseRole = createRole({ id: 'case-role' });
+    const managedRole = createRole({
+      id: 'managed-role',
+      managed: true,
+      permissions: [PermissionFlagsBits.Administrator],
+    });
+    const oldMember = createMember([caseRole], [caseRole, managedRole]);
+    const newMember = createMember([caseRole, managedRole], [caseRole, managedRole]);
+    const repository = new InMemoryVerificationEventRepository();
+    const event = await repository.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    const parkedEvent = await repository.update(event.id, {
+      case_kind: CaseKind.COMPROMISED_ACCOUNT,
+      attention_state: CaseAttentionState.PARKED,
+      containment_status: CaseContainmentStatus.CONTAINED,
+      metadata: {
+        evidence_bundle: { detection_history_count: 1 },
+        support_thread_reminder: { reminderCount: 1 },
+      },
+    });
+    if (!parkedEvent) throw new Error('Missing test case');
+    const lockdown = {
+      auditMemberBypasses: jest.fn().mockImplementation(async () => {
+        await repository.patchMetadata(event.id, {
+          evidence_bundle: { detection_history_count: 2 },
+          support_thread_reminder: { reminderCount: 2 },
+        });
+        return {
+          memberId: 'user-1',
+          bypasses: [],
+          retainedPrivilegedRoleIds: ['managed-role'],
+          retainedAdministratorRoleIds: ['managed-role'],
+          unremovablePrivilegeReasons: [],
+        };
+      }),
+    };
+    const service = new RoleQuarantineService(
+      createConfigService({ role_quarantine_mode: 'on' }),
+      new InMemoryRoleQuarantineSnapshotRepository(),
+      repository,
+      lockdown as unknown as ConstructorParameters<typeof RoleQuarantineService>[3]
+    );
+    const result = await service.enforceActiveCaseRoleUpdate(oldMember, newMember, parkedEvent);
+    expect(result.containmentRegressed).toBe(true);
+    expect(await repository.findById(event.id)).toMatchObject({
+      status: VerificationStatus.PENDING,
+      attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      containment_status: CaseContainmentStatus.INCOMPLETE,
+      metadata: {
+        evidence_bundle: { detection_history_count: 2 },
+        support_thread_reminder: { reminderCount: 2 },
+        active_case_role_updates: expect.any(Array),
+      },
+    });
   });
 
   it('audits newly gained roles without removing them in audit-only mode', async () => {
