@@ -85,7 +85,7 @@ Add `claimReportBanReconciliation(now: Date): Promise<ModerationActionRequest | 
 - [x] Observe failures, implement the controls using the existing confirmation patterns, and show Queued until the bot receipt confirms completion. Revalidate the report detail, report queue, and inbox after completion.
 - [x] Add a Playwright report-ban flow with simulated provider I/O. Assert no Open Case step, no case creation, and the final report status reflects the actual result.
 - [x] Run `npm run check:ci` with the repository's local test prerequisites and report unavailable checks. The full local gate and separate code metrics gate passed.
-- [ ] Controller: request a whole-branch review and finish the single linked draft PR containing all four tasks.
+- [x] Controller: requested a whole-branch review and published the single linked PR containing all four tasks. Final fixes are committed; scoped re-review and exact-head CI are the remaining readiness checks.
 
 Acceptance invalidates report detail, report queue and inbox. Detail polls through the terminal receipt; queue and inbox use dynamic session reads on navigation. The fixture browser journey verifies that a completed report ban removes pending attention from both views. No extra completion callback is required.
 
