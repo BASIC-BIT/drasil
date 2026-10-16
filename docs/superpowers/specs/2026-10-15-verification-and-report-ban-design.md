@@ -2,20 +2,20 @@
 
 ## Outcome and confirmed scope
 
-Fix duplicate verification prompts and stale member-departure controls. Let moderators ban directly from a submitted report in both the Discord intake-thread menu and the web report detail page, without first opening a case. Preserve the same available evidence and moderation audit information. One operator command lets a moderator review an uncertain ban with no current ban and release its claims. It never performs enforcement.
+Fix duplicate verification prompts and stale member-departure controls. Let moderators ban directly from a submitted report in the Discord intake-thread menu, the configured admin-notification menu, and the web report detail page, without first opening a case. Preserve the same available evidence and moderation audit information. One operator command lets a moderator review an uncertain ban with no current ban and release its claims. It never performs enforcement.
 
 The user selected both Discord and web. The existing Discord report-alert Ban action remains part of the same workflow. All four tasks are implemented locally on the shared feature branch. Internal branch review is complete. Newly arrived external review feedback is being addressed in the same PR; PR completion remains pending. No merge, deployment, historical repair, or live Discord edit has been performed by this work.
 
 ## Moderator experience
 
-A submitted report with a confirmed target offers Ban. The moderator reviews the target's readable identity and immutable ID, enters a reason under the existing server policy, and confirms the action. The bot rechecks the moderator's Ban Members permission, server policy, report state, and target at execution time.
+A submitted report with a confirmed target offers Ban. Discord accepts the current report thread or the currently configured admin-notification channel, and checks that channel again on modal submission. The moderator reviews the target's readable identity and immutable ID, enters a reason under the existing server policy, and confirms the action. The bot rechecks the moderator's Ban Members permission, server policy, report state, and target at execution time.
 
 The web page reports Queued while the bot is processing, then shows the actual outcome. A failed ban leaves the report available for review. A successful ban marks the report actioned and removes pending review attention. If Discord confirms the ban but later updates fail, show "Banned. Report updates are still pending." Keep the report unavailable for a second ban and reconcile audit/report updates without repeating enforcement. If the subject already left, the same confirmation bans by ID. If a case already exists, normal case resolution still runs.
 
 ```mermaid
 flowchart TD
   A[Discord report alert] --> D[Ban: review target and reason]
-  B[Discord intake Admin Actions] --> D
+  B[Discord intake or admin-notification Admin Actions] --> D
   C[Web report detail] --> D
   D --> E[Recheck permission, policy, report and target]
   E --> F[Save available evidence snapshot]
@@ -50,6 +50,12 @@ Extract one evidence collector for case setup and direct report bans. Store the 
 Evidence persistence must succeed before enforcement. Optional data that cannot be fetched is recorded as unavailable; do not invent history, require a new model analysis, or prevent a ban solely because an optional enrichment is absent. Retained context remains subject to existing retention. A departed member's missing live profile fields cannot be reconstructed reliably.
 
 Both surfaces use the existing observed-ban service and its action claim, rather than duplicating enforcement logic. A queued request carries the report ID and expected detection/target. Its request ID identifies the operation. The database mints a fresh internal attempt token for each safe retry; preparation and claims require the current token and a successful compare-and-swap transition. Neither entry point supplies that token. At worker execution, atomically claim that exact submitted report before collecting evidence. All competing close/open-case/target-change paths must honor the claim and return a busy result. A report closed before the claim cancels the queued ban; a close after the claim is rejected until completion or reconciliation. Revalidate the claim immediately before enforcement. Repeated clicks execute one destructive operation.
+
+Before enforcement, persist the initial owned case set and the target's membership join time for that attempt. Store each automatic case's join time in its initial insert so overlapping setup cannot leave its membership ambiguous. A retry captures fresh membership evidence and clears the previous value, including when the new value is unknown.
+
+After persisted Discord confirmation, cleanup can adopt additional pending cases for the same server, user and known membership that were created no later than confirmation. Under the current request and attempt, atomically claim those cases and append their IDs and prior state to the durable owned set before finalization. Existing owned cases retain their original recovery path. A later join, a post-confirmation case or a terminal case stays separate. Competing ownership or unknown membership leaves cleanup visibly pending rather than taking the case or reporting success.
+
+An unattributed Discord ban event may arrive before HTTP confirmation. Its case update locks matching active report-ban requests before the case and defers to enforcement or reconciliation for the same membership. Unknown membership also defers conservatively; preparation alone does not suppress ordinary external-ban handling. Delayed case-role completion checks the case and membership under the existing database guards, preserves a completed ban, and stops terminal setup before creating a thread. Confirmed member cleanup matches the captured join time as well as the existing status-time guard, so a rejoin during the HTTP wait stays separate.
 
 Use a structured outcome with `banned`, `already_handled`, `banned_updates_pending`, and `ban_outcome_unknown` variants. Pre-enforcement failures report a failed request and release the preparation claim. After confirmed enforcement, retain the operation identity and finish only idempotent audit/report cleanup. An interrupted send with no confirmed outcome is reconciliation-required. If Discord confirms the ban, finish cleanup; otherwise show "Ban outcome needs review." Never automatically resend an uncertain enforcement action or turn an audit failure into a generic retryable ban failure.
 

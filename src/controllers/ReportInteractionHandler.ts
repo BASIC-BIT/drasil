@@ -45,6 +45,7 @@ import {
   buildReportIntakeAdminCloseCustomId,
   buildReportIntakeAdminConfirmCloseCustomId,
   isReportIntakeAdminActionCustomId,
+  isReportIntakeActionChannel,
   parseReportIntakeAdminActionCustomId,
 } from '../utils/reportIntakeAdminActions';
 
@@ -792,7 +793,12 @@ export class ReportInteractionHandler {
       intake.thread_id &&
       currentChannelId &&
       currentChannelId !== intake.thread_id &&
-      !(await this.isReportIntakeAdminNotificationChannel(guildId, currentChannelId))
+      !(await isReportIntakeActionChannel(
+        this.configService,
+        guildId,
+        currentChannelId,
+        intake.thread_id
+      ))
     ) {
       await this.respondToReportIntakeAdminInteraction(
         interaction,
@@ -1082,17 +1088,6 @@ export class ReportInteractionHandler {
       channel.isThread()
     );
     return isThread ? (channel as unknown as ReportIntakeThreadChannel) : null;
-  }
-
-  private async isReportIntakeAdminNotificationChannel(
-    guildId: string,
-    channelId: string
-  ): Promise<boolean> {
-    const adminChannel = await this.configService.getAdminChannel(guildId).catch((error) => {
-      console.warn(`Failed to resolve admin channel for report intake admin action:`, error);
-      return null;
-    });
-    return adminChannel?.id === channelId;
   }
 
   private buildExistingReportIntakeMessage(guildId: string, threadId: string | null): string {

@@ -1,7 +1,10 @@
 import { isDeepStrictEqual } from 'util';
 import type { IAdminActionRepository } from '../../repositories/AdminActionRepository';
 import type { IDetectionEventsRepository } from '../../repositories/DetectionEventsRepository';
-import type { IServerMemberRepository } from '../../repositories/ServerMemberRepository';
+import type {
+  IServerMemberRepository,
+  CaseRoleApplicationCompletion,
+} from '../../repositories/ServerMemberRepository';
 import type {
   IServerRepository,
   ServerSetupConfigurationUpdate,
@@ -661,7 +664,8 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     detectionEventId: string | null,
     serverId: string,
     userId: string,
-    status: VerificationStatus
+    status: VerificationStatus,
+    metadata?: VerificationEvent['metadata']
   ): Promise<VerificationEvent> {
     const now = new Date();
     const event: VerificationEvent = {
@@ -689,7 +693,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       resolved_at: null,
       resolved_by: null,
       notes: null,
-      metadata: null,
+      metadata: metadata ?? null,
     };
 
     this.events.push(event);
@@ -2045,16 +2049,38 @@ export class InMemoryServerMemberRepository implements IServerMemberRepository {
     return member ? { ...member } : null;
   }
 
+  async completeCaseRoleApplication(
+    serverId: string,
+    userId: string,
+    input: CaseRoleApplicationCompletion
+  ): Promise<boolean> {
+    const member = await this.findByServerAndUser(serverId, userId);
+    if (
+      member &&
+      (member.verification_status === VerificationStatus.BANNED ||
+        (member.last_status_change && member.last_status_change > input.startedAt) ||
+        member.join_date?.getTime() !== input.joinedAt?.getTime())
+    )
+      return false;
+    await this.upsertMember(serverId, userId, {
+      case_role_active: true,
+      verification_status: VerificationStatus.PENDING,
+      last_status_change: new Date(),
+      updated_by: input.moderatorId,
+    });
+    return true;
+  }
   async markBannedIfNotNewer(
     serverId: string,
     userId: string,
-    confirmedAt: Date
+    confirmedAt: Date,
+    joinedAt: Date | null
   ): Promise<boolean> {
     const member = await this.findByServerAndUser(serverId, userId);
     if (
       !member ||
       (member.last_status_change && member.last_status_change > confirmedAt) ||
-      (member.join_date && member.join_date > confirmedAt)
+      (member.join_date && member.join_date.getTime() !== joinedAt?.getTime())
     )
       return false;
     await this.upsertMember(serverId, userId, {

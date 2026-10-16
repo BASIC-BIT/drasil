@@ -96,7 +96,8 @@ export interface IVerificationEventRepository {
     detectionEventId: string | null,
     serverId: string, // Explicitly require server/user IDs
     userId: string, // Explicitly require server/user IDs
-    status: VerificationStatus
+    status: VerificationStatus,
+    metadata?: VerificationEvent['metadata']
   ): Promise<VerificationEvent>;
   getVerificationHistory(userId: string, serverId: string): Promise<VerificationEvent[]>;
   findById(id: string): Promise<VerificationEvent | null>;
@@ -1464,12 +1465,39 @@ export class VerificationEventRepository implements IVerificationEventRepository
     }
   }
 
-  // Modified: Requires serverId and userId explicitly now
+  private activeReportBanMayOwnCase(
+    metadata: Prisma.JsonObject,
+    event: VerificationEvent
+  ): boolean {
+    if (
+      !['enforcement_started', 'discord_confirmed', 'reconciliation_required'].includes(
+        String(metadata.report_ban_phase)
+      )
+    )
+      return false;
+    const snapshot = ((event.metadata ?? {}) as Prisma.JsonObject).user_snapshot as
+      | Prisma.JsonObject
+      | undefined;
+    const operationJoin = metadata.report_ban_membership_joined_at;
+    const caseJoin = snapshot?.joined_at;
+    if (
+      typeof operationJoin === 'string' &&
+      typeof caseJoin === 'string' &&
+      Number.isFinite(Date.parse(operationJoin)) &&
+      Number.isFinite(Date.parse(caseJoin)) &&
+      Date.parse(operationJoin) !== Date.parse(caseJoin)
+    )
+      return false;
+    const confirmedAt = metadata.report_ban_confirmed_at;
+    return !(typeof confirmedAt === 'string' && event.created_at > new Date(confirmedAt));
+  }
+
   async createFromDetection(
     detectionEventId: string | null,
     serverId: string,
     userId: string,
-    status: VerificationStatus
+    status: VerificationStatus,
+    metadata?: VerificationEvent['metadata']
   ): Promise<VerificationEvent> {
     try {
       if (!serverId || !userId) {
@@ -1485,7 +1513,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
           ? { connect: { id: detectionEventId } }
           : undefined,
         status: status as verification_status, // Cast to Prisma enum
-        metadata: Prisma.JsonNull,
+        metadata: metadata ?? Prisma.JsonNull,
         // created_at, updated_at handled by default
       };
 
@@ -1647,12 +1675,24 @@ export class VerificationEventRepository implements IVerificationEventRepository
         data.status === VerificationStatus.CLOSED_NO_ACTION;
       if (isResolution && options.deferReportBanEnforcement) {
         return this.prisma.$transaction(async (transaction) => {
+          const binding = await transaction.verification_events.findUnique({ where: { id } });
+          if (!binding) return null;
+          // The gateway can precede HTTP confirmation and adoption of a late case.
+          const operations = await transaction.$queryRaw<Array<{ metadata: Prisma.JsonObject }>>`
+            SELECT metadata FROM moderation_action_requests
+            WHERE server_id = ${binding.server_id} AND target_user_id = ${binding.user_id}
+              AND action_type = 'ban_observed_detection'
+              AND metadata->>'report_ban_phase' IN ('preparing', 'enforcement_started', 'discord_confirmed', 'reconciliation_required')
+            ORDER BY id FOR UPDATE`;
           const rows = await transaction.$queryRaw<VerificationEvent[]>`
             SELECT * FROM verification_events WHERE id = ${id}::uuid FOR UPDATE`;
           const current = rows.at(0);
           if (
             !current ||
             current.status !== VerificationStatus.PENDING ||
+            operations.some((operation) =>
+              this.activeReportBanMayOwnCase(operation.metadata, current)
+            ) ||
             (current.quarantine_attempt_id?.startsWith(REPORT_BAN_TERMINAL_ATTEMPT_PREFIX) &&
               (current.metadata as Record<string, unknown> | null)
                 ?.report_ban_enforcement_operation_id)

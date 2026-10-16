@@ -70,6 +70,7 @@ async function fixture(withReport = true) {
   } as unknown as Client;
   const member = {
     id: user.id,
+    joinedAt: new Date('2025-01-01T00:00:00Z'),
     guild,
     user,
     client: { users: { fetch: jest.fn().mockResolvedValue(user) } },
@@ -84,16 +85,24 @@ async function fixture(withReport = true) {
     markObservedDetectionActionTaken: jest.fn().mockResolvedValue(true),
     updateNotificationButtons: jest.fn().mockResolvedValue(undefined),
     logActionToMessage: jest.fn().mockResolvedValue(true),
+    upsertSuspiciousUserNotification: jest
+      .fn()
+      .mockResolvedValue({ id: 'notice', channelId: 'admin' }),
   };
   const threads = {
     resolveVerificationThread: jest.fn().mockResolvedValue(true),
     closeResolvedVerificationThreads: jest.fn().mockResolvedValue({ results: [] }),
-    createVerificationThread: jest.fn(),
+    createVerificationThread: jest.fn().mockResolvedValue({ id: 'case-thread' }),
+    createPrivateEvidenceThread: jest.fn().mockResolvedValue({
+      id: 'evidence-thread',
+      send: jest.fn().mockResolvedValue({ id: 'evidence' }),
+    }),
     createReportReviewThread: jest.fn(),
     retireReportConfirmationPrompts: jest.fn().mockResolvedValue(undefined),
   };
-  const roles = { assignCaseRole: jest.fn() };
+  const roles = { assignCaseRole: jest.fn().mockResolvedValue(true) };
   const queue = {
+    upsertCaseMirror: jest.fn().mockResolvedValue(undefined),
     deletePendingScreeningMember: jest.fn().mockResolvedValue(undefined),
     deleteObservedAlertMirror: jest.fn().mockResolvedValue(undefined),
     deleteReportThreadAttention: jest.fn().mockResolvedValue(undefined),
@@ -231,6 +240,234 @@ async function fixture(withReport = true) {
 
 const integration = process.env.JEST_INTEGRATION === '1' ? describe : describe.skip;
 integration('report-ban stale worker recovery with real services and Postgres', () => {
+  it.each(['http-first', 'observer-first'])(
+    'adopts an independent automatic case during paused enforcement (%s)',
+    async (ordering) => {
+      const f = await fixture();
+      let sending!: () => void;
+      let confirm!: () => void;
+      const reached = new Promise<void>((resolve) => {
+        sending = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        confirm = resolve;
+      });
+      f.ban.mockImplementation(async () => {
+        sending();
+        await gate;
+      });
+      const execution = f.execute();
+      try {
+        await reached;
+        expect((await f.requests.findById(f.request.id))?.metadata).toMatchObject({
+          report_ban_case_ids: [],
+        });
+        const create = f.cases.createFromDetection.bind(f.cases);
+        jest.spyOn(f.cases, 'createFromDetection').mockImplementation(async (...args) => {
+          const inserted = await create(...args);
+          expect(inserted.metadata).toMatchObject({
+            user_snapshot: { joined_at: f.member.joinedAt!.toISOString() },
+          });
+          return inserted;
+        });
+        await f.security.handleSuspiciousMessage(f.member, {
+          label: 'SUSPICIOUS',
+          confidence: 0.9,
+          reasons: ['Suspicious content'],
+          triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+          triggerContent: 'Suspicious content',
+        });
+        const lateCase = (await f.cases.findByUserAndServer('target', 'guild'))[0];
+        expect(lateCase.status).toBe('pending');
+        if (ordering === 'observer-first') {
+          expect(
+            await f.moderation.recordObservedDiscordBan(f.guild, f.user, {
+              source: ModerationOutcomeSource.UNKNOWN_EXTERNAL,
+            })
+          ).toBe(0);
+          expect((await f.cases.findById(lateCase.id))?.status).toBe('pending');
+          expect(await f.outcomeRepo.findByUserAndServer('target', 'guild')).toHaveLength(0);
+        }
+        confirm();
+        expect(await execution).toEqual({ status: 'banned' });
+        expect(await f.cases.findById(lateCase.id)).toMatchObject({
+          status: 'banned',
+          metadata: { report_ban_operation_id: f.request.id },
+        });
+        expect((await f.requests.findById(f.request.id))?.metadata).toMatchObject({
+          report_ban_case_ids: [lateCase.id],
+        });
+        expect(await f.actionRepo.getActionHistory('target', 'guild')).toEqual([
+          expect.objectContaining({ verification_event_id: lateCase.id }),
+        ]);
+        expect(f.queue.deleteCaseMirror).toHaveBeenCalledWith(lateCase.id);
+        expect(f.ban).toHaveBeenCalledTimes(1);
+      } finally {
+        confirm();
+        await execution;
+      }
+    }
+  );
+
+  it('preserves confirmed cleanup when a late case role assignment completes afterward', async () => {
+    const f = await fixture();
+    let sending!: () => void, confirm!: () => void, assigning!: () => void, finishRole!: () => void;
+    const sent = new Promise<void>((resolve) => {
+      sending = resolve;
+    });
+    const banGate = new Promise<void>((resolve) => {
+      confirm = resolve;
+    });
+    const roleStarted = new Promise<void>((resolve) => {
+      assigning = resolve;
+    });
+    const roleGate = new Promise<void>((resolve) => {
+      finishRole = resolve;
+    });
+    f.ban.mockImplementation(async () => {
+      sending();
+      await banGate;
+    });
+    f.roles.assignCaseRole.mockImplementation(async () => {
+      assigning();
+      await roleGate;
+      return true;
+    });
+    const execution = f.execute();
+    await sent;
+    const setup = f.security.handleSuspiciousMessage(f.member, {
+      label: 'SUSPICIOUS',
+      confidence: 0.9,
+      reasons: ['Suspicious content'],
+      triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+      triggerContent: 'Suspicious content',
+    });
+    try {
+      await roleStarted;
+      const lateCase = (await f.cases.findByUserAndServer('target', 'guild'))[0];
+      confirm();
+      expect(await execution).toEqual({ status: 'banned' });
+      finishRole();
+      await setup;
+      expect(await f.members.findByServerAndUser('guild', 'target')).toMatchObject({
+        verification_status: 'banned',
+        case_role_active: false,
+      });
+      expect(await f.cases.findById(lateCase.id)).toMatchObject({
+        status: 'banned',
+        metadata: { report_ban_operation_id: f.request.id },
+      });
+      expect(f.threads.createVerificationThread).not.toHaveBeenCalled();
+      expect(f.ban).toHaveBeenCalledTimes(1);
+    } finally {
+      confirm();
+      finishRole();
+      await Promise.all([execution, setup]);
+    }
+  });
+
+  it.each([
+    'restart',
+    'competing',
+    'unknown-case-epoch',
+    'missing-ban-epoch',
+    'later-join',
+    'later-join-before-confirmation',
+    'after-confirmation',
+    'uncertain',
+  ])('bounds late-case adoption for %s', async (scenario) => {
+    const f = await fixture();
+    let lateId = '';
+    const newJoin = new Date(
+      Date.now() + (scenario === 'later-join-before-confirmation' ? -1000 : 60000)
+    );
+    if (scenario === 'missing-ban-epoch') Object.assign(f.member, { joinedAt: null });
+    f.ban.mockImplementation(async () => {
+      const event = await f.cases.createFromDetection(
+        null,
+        'guild',
+        'target',
+        VerificationStatus.PENDING,
+        scenario === 'unknown-case-epoch'
+          ? {}
+          : {
+              user_snapshot: {
+                joined_at: scenario.startsWith('later-join')
+                  ? newJoin.toISOString()
+                  : '2025-01-01T00:00:00.000Z',
+              },
+            }
+      );
+      lateId = event.id;
+      if (scenario === 'competing')
+        await f.cases.claimTerminalActions(
+          [event.id],
+          'guild',
+          'target',
+          'case-terminal-action:other'
+        );
+      if (scenario === 'after-confirmation')
+        await getPrismaClient().verification_events.update({
+          where: { id: event.id },
+          data: { created_at: new Date(Date.now() + 60000) },
+        });
+      if (scenario.startsWith('later-join'))
+        await f.members.upsertMember('guild', 'target', {
+          join_date: newJoin,
+          last_status_change: newJoin,
+          verification_status: VerificationStatus.VERIFIED,
+        });
+      if (scenario === 'uncertain') throw new Error('socket closed');
+    });
+    const finalize = jest.spyOn(f.moderation, 'finalizeObservedBan');
+    if (scenario === 'restart')
+      finalize.mockRejectedValueOnce(new Error('interrupted after adoption'));
+    const result = await f.execute();
+    const expected =
+      scenario === 'uncertain'
+        ? 'ban_outcome_unknown'
+        : ['restart', 'competing', 'unknown-case-epoch', 'missing-ban-epoch'].includes(scenario)
+          ? 'banned_updates_pending'
+          : 'banned';
+    expect(result.status).toBe(expected);
+    const stored = (await f.requests.findById(f.request.id))!;
+    if (scenario === 'restart') {
+      expect(stored.metadata).toMatchObject({ report_ban_case_ids: [lateId] });
+      expect(await f.cases.findById(lateId)).toMatchObject({
+        status: 'pending',
+        metadata: { report_ban_enforcement_operation_id: f.request.id },
+      });
+      await f.cases.patchMetadata(lateId, { evidence_snapshot: { retained: true } });
+      expect(await f.requests.adoptConfirmedReportBanCases(f.request.id, 'stale-token')).toBeNull();
+      f.banFetch.mockRejectedValue({ code: 10026 });
+      expect(await f.security.reconcileReportBan(stored)).toEqual({ status: 'banned' });
+      expect(await f.cases.findById(lateId)).toMatchObject({
+        status: 'banned',
+        metadata: { evidence_snapshot: { retained: true }, report_ban_operation_id: f.request.id },
+      });
+      expect(await f.actionRepo.getActionHistory('target', 'guild')).toHaveLength(1);
+    } else {
+      expect(await f.cases.findById(lateId)).toMatchObject({
+        status: 'pending',
+        quarantine_attempt_id: scenario === 'competing' ? 'case-terminal-action:other' : null,
+      });
+      if (scenario.startsWith('later-join'))
+        expect(await f.members.findByServerAndUser('guild', 'target')).toMatchObject({
+          verification_status: 'verified',
+          join_date: newJoin,
+        });
+      if (scenario === 'uncertain')
+        expect(
+          await f.requests.adoptConfirmedReportBanCases(
+            f.request.id,
+            getReportBanAttemptToken(stored)!
+          )
+        ).toBeNull();
+      if (expected !== 'banned') expect(finalize).not.toHaveBeenCalled();
+    }
+    expect(f.ban).toHaveBeenCalledTimes(1);
+  });
+
   async function uncertain(withReport = true) {
     const f = await fixture(withReport);
     const event = await f.cases.createFromDetection(
@@ -374,6 +611,7 @@ integration('report-ban stale worker recovery with real services and Postgres', 
       idempotencyKey: 'ban:report',
       metadata: { reason: 'New confirmed decision' },
     });
+    Object.assign(f.member, { joinedAt: null });
     f.ban.mockResolvedValue(undefined);
     expect(
       await f.security.banObservedDetection(
@@ -386,6 +624,7 @@ integration('report-ban stale worker recovery with real services and Postgres', 
     ).toEqual({ status: 'banned' });
     const completed = (await f.requests.findById(retry.id))!;
     expect(completed.metadata).toMatchObject({
+      report_ban_membership_joined_at: null,
       observed_ban_reviews: [
         expect.objectContaining({
           reviewed_by: 'reviewer',

@@ -84,6 +84,13 @@ export class InMemoryModerationActionRequestRepository implements IModerationAct
   async findById(id: string): Promise<ModerationActionRequest | null> {
     return this.rows.get(id) ?? null;
   }
+  async adoptConfirmedReportBanCases(
+    id: string,
+    token: string
+  ): Promise<ModerationActionRequest | null> {
+    const current = await this.findById(id);
+    return current && getReportBanAttemptToken(current) === token ? current : null;
+  }
   async reviewUncertainReportBan(): Promise<ModerationActionRequest | null> {
     throw new Error('Review atomicity is tested with the Postgres repository.');
   }

@@ -2530,7 +2530,8 @@ export class SecurityActionService implements ISecurityActionService {
         detectionEventId,
         member.guild.id,
         member.id,
-        VerificationStatus.PENDING
+        VerificationStatus.PENDING,
+        { user_snapshot: this.buildUserSnapshot(member) }
       );
       const linkedDetectionEvent = await this.detectionEventsRepository.linkToVerificationEvent(
         detectionEventId,
@@ -2559,6 +2560,7 @@ export class SecurityActionService implements ISecurityActionService {
       );
 
       newVerificationEvent = await this.tryApplyCaseRole(member, newVerificationEvent, moderator);
+      if (newVerificationEvent.status !== VerificationStatus.PENDING) return true;
 
       newVerificationEvent = await this.tryCreateCaseThread(
         member,
@@ -3937,6 +3939,7 @@ export class SecurityActionService implements ISecurityActionService {
       report_ban_preparation_id: randomUUID(),
       report_ban_reason: reason,
       report_ban_source_detail: member ? null : 'ban_by_id',
+      report_ban_membership_joined_at: null,
       report_ban_lease_until: new Date(Date.now() + 15 * 60_000).toISOString(),
     });
     const enforcement = { started: false };
@@ -3966,6 +3969,11 @@ export class SecurityActionService implements ISecurityActionService {
         return { status: 'already_handled' };
       }
       await this.ensureObservedEntitiesExist(guild.id, userId);
+      const membership = await this.serverMemberRepository.findByServerAndUser(guild.id, userId);
+      const joinedAt = member ? member.joinedAt : membership?.join_date;
+      current = await this.saveBanPhase(current, {
+        report_ban_membership_joined_at: joinedAt?.toISOString() ?? null,
+      });
       const evidence = await this.evidenceService.capture({ guildId: guild.id, userId, member });
       if (
         !(await this.detectionEventsRepository.patchMetadata(detection.id, {
@@ -4159,6 +4167,14 @@ export class SecurityActionService implements ISecurityActionService {
   ): Promise<void> {
     if (!request.target_user_id || !request.detection_event_id || !this.actionRequests)
       throw new Error('Report ban operation is missing required bindings.');
+    const adopted = await this.actionRequests.adoptConfirmedReportBanCases(
+      request.id,
+      getReportBanAttemptToken(request) ?? ''
+    );
+    if (!adopted) throw new Error('Confirmed ban cleanup ownership changed.');
+    request = adopted;
+    if (!request.target_user_id || !request.detection_event_id)
+      throw new Error('Confirmed ban cleanup bindings changed.');
     const metadata = this.metadataToRecord(request.metadata);
     const cases = Array.isArray(metadata.report_ban_cases)
       ? (metadata.report_ban_cases as { id: string }[])
@@ -4175,6 +4191,11 @@ export class SecurityActionService implements ISecurityActionService {
         : cases.map((event) => event.id),
       attemptId: String(metadata.report_ban_attempt_id),
       confirmedAt: new Date(String(metadata.report_ban_confirmed_at)),
+      joinedAt:
+        typeof metadata.report_ban_membership_joined_at === 'string' &&
+        Number.isFinite(Date.parse(metadata.report_ban_membership_joined_at))
+          ? new Date(metadata.report_ban_membership_joined_at)
+          : null,
       targetSnapshot: (metadata.report_ban_target_snapshot ?? {
         id: request.target_user_id,
       }) as Record<string, string>,

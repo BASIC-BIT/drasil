@@ -158,6 +158,7 @@ export interface ObservedBanFinalization {
   caseIds: string[];
   attemptId: string;
   confirmedAt: Date;
+  joinedAt: Date | null;
   targetSnapshot: Partial<Record<string, string>>;
   reportId: string | null;
 }
@@ -1072,6 +1073,11 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         verificationEvent = rollbackResult.verificationEvent ?? verificationEvent;
       };
 
+      const applicationStartedAt = new Date();
+      const membership = await this.serverMemberRepository.findByServerAndUser(
+        member.guild.id,
+        member.id
+      );
       let roleAssigned: boolean;
       try {
         roleAssigned = await this.roleManager.assignCaseRole(member);
@@ -1084,12 +1090,21 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         throw new Error(`Failed to assign case role to ${member.user.tag}`);
       }
 
-      await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
-        case_role_active: true,
-        verification_status: VerificationStatus.PENDING,
-        last_status_change: new Date(),
-        updated_by: moderator?.id,
-      });
+      if (verificationEvent) {
+        await this.serverMemberRepository.completeCaseRoleApplication(member.guild.id, member.id, {
+          caseId: verificationEvent.id,
+          joinedAt: member.joinedAt ?? membership?.join_date ?? null,
+          startedAt: applicationStartedAt,
+          moderatorId: moderator?.id,
+        });
+      } else {
+        await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
+          case_role_active: true,
+          verification_status: VerificationStatus.PENDING,
+          last_status_change: new Date(),
+          updated_by: moderator?.id,
+        });
+      }
 
       console.log(`Successfully applied case role to ${member.user.tag}`);
       return true;
@@ -1918,7 +1933,8 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     const currentMembership = await this.serverMemberRepository.markBannedIfNotNewer(
       guild.id,
       userId,
-      input.confirmedAt
+      input.confirmedAt,
+      input.joinedAt
     );
     if (currentMembership && this.roleQuarantineService)
       await this.roleQuarantineService.abandonActiveSnapshot(

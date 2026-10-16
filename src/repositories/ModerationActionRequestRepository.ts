@@ -1,3 +1,4 @@
+import { REPORT_BAN_TERMINAL_ATTEMPT_PREFIX } from '../utils/caseRoleRelease';
 import { inject, injectable } from 'inversify';
 import { Prisma, PrismaClient } from '../db/prisma';
 import { TYPES } from '../di/symbols';
@@ -24,6 +25,10 @@ export interface ReportBanReviewDisposition {
 }
 
 export interface IModerationActionRequestRepository {
+  adoptConfirmedReportBanCases(
+    id: string,
+    attemptToken: string
+  ): Promise<ModerationActionRequest | null>;
   reviewUncertainReportBan(
     input: ReportBanReviewDisposition
   ): Promise<ModerationActionRequest | null>;
@@ -346,6 +351,7 @@ export class ModerationActionRequestRepository implements IModerationActionReque
         'report_ban_attempt_id',
         'report_ban_preparation_id',
         'report_ban_enforcement_id',
+        'report_ban_membership_joined_at',
       ])
         delete owned[key];
     }
@@ -385,7 +391,9 @@ export class ModerationActionRequestRepository implements IModerationActionReque
 
   private async lockReportBanContext(
     transaction: Prisma.TransactionClient,
-    request: ModerationActionRequest
+    request: ModerationActionRequest,
+    caseIds?: string[],
+    confirmed = false
   ): Promise<boolean> {
     const metadata = (request.metadata ?? {}) as Prisma.JsonObject;
     const report = request.report_intake_id
@@ -408,18 +416,138 @@ export class ModerationActionRequestRepository implements IModerationActionReque
     const cases = Array.isArray(metadata.report_ban_cases)
       ? (metadata.report_ban_cases as Prisma.JsonObject[])
       : [];
-    const ids = cases.map((event) => String(event.id)).sort();
+    const ids = [
+      ...new Set([...cases.map((event) => String(event.id)), ...(caseIds ?? [])]),
+    ].sort();
     if (ids.length)
       await transaction.$queryRaw`SELECT id FROM verification_events WHERE id::text = ANY(${ids}::text[]) ORDER BY id FOR UPDATE`;
     return (
       (!request.report_intake_id ||
-        (report[0]?.status === 'submitted' &&
+        ((report[0]?.status === 'submitted' || (confirmed && report[0]?.status === 'actioned')) &&
           report[0].server_id === request.server_id &&
           report[0].confirmed_target_user_id === request.target_user_id &&
           report[0].operation_id === request.id)) &&
       detection[0]?.operation_id === request.id &&
       detection[0].action === 'ban'
     );
+  }
+
+  public async adoptConfirmedReportBanCases(
+    id: string,
+    attemptToken: string
+  ): Promise<ModerationActionRequest | null> {
+    return this.prisma.$transaction(async (transaction) => {
+      const rows = await transaction.$queryRaw<ModerationActionRequest[]>`
+        SELECT * FROM moderation_action_requests WHERE id = ${id}::uuid FOR UPDATE`;
+      const current = rows.at(0);
+      if (
+        !current ||
+        !current.target_user_id ||
+        current.action_type !== 'ban_observed_detection' ||
+        getReportBanAttemptToken(current) !== attemptToken
+      )
+        return null;
+      const metadata = (current.metadata ?? {}) as Prisma.JsonObject;
+      if (metadata.report_ban_phase !== 'discord_confirmed' || !metadata.report_ban_confirmed_at)
+        return null;
+      const confirmedAt = new Date(String(metadata.report_ban_confirmed_at));
+      const savedIds = Array.isArray(metadata.report_ban_case_ids)
+        ? (metadata.report_ban_case_ids as string[])
+        : [];
+      const candidates = await transaction.verification_events.findMany({
+        where: {
+          server_id: current.server_id,
+          user_id: current.target_user_id,
+          status: 'pending',
+          created_at: { lte: confirmedAt },
+          id: { notIn: savedIds },
+        },
+      });
+      if (
+        !(await this.lockReportBanContext(
+          transaction,
+          current,
+          candidates.map((event) => event.id),
+          true
+        ))
+      )
+        return null;
+      const locked = await transaction.verification_events.findMany({
+        where: {
+          id: { in: candidates.map((event) => event.id) },
+          server_id: current.server_id,
+          user_id: current.target_user_id,
+          status: 'pending',
+          created_at: { lte: confirmedAt },
+        },
+      });
+      const adopted = [];
+      for (const event of locked) {
+        const snapshot = ((event.metadata ?? {}) as Prisma.JsonObject).user_snapshot as
+          | Prisma.JsonObject
+          | undefined;
+        const joinedAt = snapshot?.joined_at;
+        const expectedJoin = metadata.report_ban_membership_joined_at;
+        if (
+          typeof expectedJoin !== 'string' ||
+          typeof joinedAt !== 'string' ||
+          !Number.isFinite(Date.parse(expectedJoin)) ||
+          !Number.isFinite(Date.parse(joinedAt))
+        )
+          throw new Error('Late case membership is unknown; cleanup requires review.');
+        if (
+          Date.parse(joinedAt) !== Date.parse(expectedJoin) ||
+          (event.parked_at && event.parked_at > confirmedAt)
+        )
+          continue;
+        if (
+          event.quarantine_attempt_id ||
+          event.containment_status === 'in_progress' ||
+          ((event.metadata ?? {}) as Prisma.JsonObject).report_ban_enforcement_operation_id
+        )
+          throw new Error('Late case has competing ownership; confirmed cleanup is pending.');
+        adopted.push(event);
+      }
+      if (!adopted.length) return current;
+      const attemptId = String(metadata.report_ban_attempt_id);
+      if (!attemptId.startsWith(REPORT_BAN_TERMINAL_ATTEMPT_PREFIX))
+        throw new Error('Confirmed ban case attempt is missing.');
+      await transaction.verification_events.updateMany({
+        where: { id: { in: adopted.map((event) => event.id) } },
+        data: {
+          containment_status: 'in_progress',
+          quarantine_attempt_id: attemptId,
+          quarantine_lease_renewed_at: new Date(),
+          updated_at: new Date(),
+        },
+      });
+      await transaction.$executeRaw`
+        UPDATE verification_events SET metadata = coalesce(nullif(metadata, 'null'::jsonb), '{}'::jsonb) ||
+          jsonb_build_object('report_ban_enforcement_operation_id', ${id}::text)
+        WHERE id::text = ANY(${adopted.map((event) => event.id)}::text[])`;
+      const prior = Array.isArray(metadata.report_ban_cases) ? metadata.report_ban_cases : [];
+      return transaction.moderation_action_requests.update({
+        where: { id },
+        data: {
+          metadata: {
+            ...metadata,
+            report_ban_case_ids: [...savedIds, ...adopted.map((event) => event.id)],
+            report_ban_cases: [
+              ...prior,
+              ...adopted.map((event) => ({
+                id: event.id,
+                case_kind: event.case_kind,
+                attention_state: event.attention_state,
+                containment_status: event.containment_status,
+                parked_at: event.parked_at?.toISOString() ?? null,
+                parked_by: event.parked_by,
+              })),
+            ],
+          },
+          updated_at: new Date(),
+        },
+      }) as Promise<ModerationActionRequest>;
+    });
   }
 
   private async releaseReportBanClaims(

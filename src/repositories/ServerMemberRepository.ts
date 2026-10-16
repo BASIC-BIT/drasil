@@ -1,3 +1,4 @@
+import { CASE_TERMINAL_ACTION_ATTEMPT_PREFIX } from '../utils/caseRoleRelease';
 import { injectable, inject } from 'inversify';
 import { Prisma, PrismaClient, verification_status } from '../db/prisma';
 import { ServerMember, VerificationStatus } from './types'; // Import VerificationStatus enum
@@ -17,6 +18,13 @@ export interface VerifiedMemberStateInput {
   updatedBy: string;
 }
 
+export interface CaseRoleApplicationCompletion {
+  caseId: string;
+  joinedAt: Date | null;
+  startedAt: Date;
+  moderatorId?: string;
+}
+
 /**
  * Interface for the ServerMemberRepository (Remains the same)
  */
@@ -27,7 +35,17 @@ export interface IServerMemberRepository {
     userId: string,
     data: Partial<ServerMember>
   ): Promise<ServerMember>;
-  markBannedIfNotNewer(serverId: string, userId: string, confirmedAt: Date): Promise<boolean>;
+  completeCaseRoleApplication(
+    serverId: string,
+    userId: string,
+    input: CaseRoleApplicationCompletion
+  ): Promise<boolean>;
+  markBannedIfNotNewer(
+    serverId: string,
+    userId: string,
+    confirmedAt: Date,
+    joinedAt: Date | null
+  ): Promise<boolean>;
   markVerifiedIfNoPendingCase(
     serverId: string,
     userId: string,
@@ -119,11 +137,48 @@ export class ServerMemberRepository implements IServerMemberRepository {
     }
   }
 
+  async completeCaseRoleApplication(
+    serverId: string,
+    userId: string,
+    input: CaseRoleApplicationCompletion
+  ): Promise<boolean> {
+    return this.prisma.$transaction(async (transaction) => {
+      const cases = await transaction.$queryRaw<
+        Array<{ status: string; quarantine_attempt_id: string | null }>
+      >`
+        SELECT status, quarantine_attempt_id FROM verification_events
+        WHERE id = ${input.caseId}::uuid AND server_id = ${serverId} AND user_id = ${userId} FOR UPDATE`;
+      const current = cases.at(0);
+      if (
+        current?.status !== 'pending' ||
+        current.quarantine_attempt_id?.startsWith(CASE_TERMINAL_ACTION_ATTEMPT_PREFIX)
+      )
+        return false;
+      const updated = await transaction.server_members.updateMany({
+        where: {
+          server_id: serverId,
+          user_id: userId,
+          join_date: input.joinedAt,
+          verification_status: { not: 'banned' },
+          OR: [{ last_status_change: null }, { last_status_change: { lte: input.startedAt } }],
+        },
+        data: {
+          case_role_active: true,
+          verification_status: 'pending',
+          last_status_change: new Date(),
+          updated_by: input.moderatorId,
+        },
+      });
+      return updated.count === 1;
+    });
+  }
+
   // Historical cleanup must not overwrite a newer moderation decision or membership.
   async markBannedIfNotNewer(
     serverId: string,
     userId: string,
-    confirmedAt: Date
+    confirmedAt: Date,
+    joinedAt: Date | null
   ): Promise<boolean> {
     const result = await this.prisma.server_members.updateMany({
       where: {
@@ -131,7 +186,7 @@ export class ServerMemberRepository implements IServerMemberRepository {
         user_id: userId,
         AND: [
           { OR: [{ last_status_change: null }, { last_status_change: { lte: confirmedAt } }] },
-          { OR: [{ join_date: null }, { join_date: { lte: confirmedAt } }] },
+          { OR: [{ join_date: null }, { join_date: joinedAt }] },
         ],
       },
       data: {

@@ -1,3 +1,5 @@
+import type { IConfigService } from '../config/ConfigService';
+
 export const REPORT_INTAKE_ADMIN_ACTION_CUSTOM_ID_PREFIX = 'report_intake_admin';
 
 const DISCORD_CUSTOM_ID_MAX_LENGTH = 100;
@@ -85,4 +87,19 @@ function assertCustomIdLength(customId: string): string {
   }
 
   return customId;
+}
+
+export async function isReportIntakeActionChannel(
+  configService: IConfigService,
+  guildId: string,
+  channelId: string | null,
+  threadId: string | null
+): Promise<boolean> {
+  if (!channelId) return false;
+  if (threadId && channelId === threadId) return true;
+  const adminChannel = await configService.getAdminChannel(guildId).catch((error) => {
+    console.warn('Failed to resolve admin channel for report intake admin action:', error);
+    return null;
+  });
+  return adminChannel?.id === channelId;
 }

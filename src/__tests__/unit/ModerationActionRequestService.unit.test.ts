@@ -591,6 +591,9 @@ const upsertReportInstructionsRequest: ModerationActionRequest = {
 };
 
 class FakeModerationActionRequestRepository implements IModerationActionRequestRepository {
+  public async adoptConfirmedReportBanCases(): Promise<ModerationActionRequest | null> {
+    throw new Error('not used');
+  }
   public async reviewUncertainReportBan(): Promise<ModerationActionRequest | null> {
     throw new Error('not used');
   }

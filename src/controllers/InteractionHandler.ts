@@ -1,3 +1,4 @@
+import { isReportIntakeActionChannel } from '../utils/reportIntakeAdminActions';
 import { IReportIntakeRepository } from '../repositories/ReportIntakeRepository';
 import { IModerationActionRequestRepository } from '../repositories/ModerationActionRequestRepository';
 import {
@@ -3729,7 +3730,12 @@ export class InteractionHandler implements IInteractionHandler {
       detection.user_id !== report.confirmed_target_user_id ||
       detection.metadata?.reportIntakeId !== reportId ||
       detection.metadata.observed_action ||
-      interaction.channelId !== report.thread_id
+      !(await isReportIntakeActionChannel(
+        this.configService,
+        interaction.guildId,
+        interaction.channelId,
+        report.thread_id
+      ))
     ) {
       await interaction.reply({
         content: 'This report is no longer available for a ban. Refresh the report.',
@@ -3880,7 +3886,14 @@ export class InteractionHandler implements IInteractionHandler {
           report.server_id !== interaction.guildId ||
           report.status !== 'submitted' ||
           report.confirmed_target_user_id !== parsed.userId ||
-          (report.metadata as Record<string, unknown> | null)?.report_ban_operation_id
+          (report.metadata as Record<string, unknown> | null)?.report_ban_operation_id ||
+          (reportParts &&
+            !(await isReportIntakeActionChannel(
+              this.configService,
+              interaction.guildId,
+              interaction.channelId,
+              report.thread_id
+            )))
         )
           throw new Error('Report is no longer available for this ban.');
       }
