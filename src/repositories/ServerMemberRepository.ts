@@ -143,6 +143,26 @@ export class ServerMemberRepository implements IServerMemberRepository {
     input: CaseRoleApplicationCompletion
   ): Promise<boolean> {
     return this.prisma.$transaction(async (transaction) => {
+      // Role I/O can finish after confirmation but before late-case adoption.
+      const operations = await transaction.$queryRaw<Array<{ metadata: Prisma.JsonObject }>>`
+        SELECT metadata FROM moderation_action_requests
+        WHERE server_id = ${serverId} AND target_user_id = ${userId}
+          AND action_type = 'ban_observed_detection'
+          AND metadata->>'report_ban_phase' IN ('preparing', 'enforcement_started', 'discord_confirmed', 'reconciliation_required')
+        ORDER BY id FOR UPDATE`;
+      if (
+        operations.some(({ metadata }) => {
+          if (metadata.report_ban_phase === 'preparing') return false;
+          const joinedAt = metadata.report_ban_membership_joined_at;
+          return (
+            typeof joinedAt !== 'string' ||
+            !Number.isFinite(Date.parse(joinedAt)) ||
+            !input.joinedAt ||
+            Date.parse(joinedAt) === input.joinedAt.getTime()
+          );
+        })
+      )
+        return false;
       const cases = await transaction.$queryRaw<
         Array<{ status: string; quarantine_attempt_id: string | null }>
       >`

@@ -309,62 +309,98 @@ integration('report-ban stale worker recovery with real services and Postgres', 
     }
   );
 
-  it('preserves confirmed cleanup when a late case role assignment completes afterward', async () => {
-    const f = await fixture();
-    let sending!: () => void, confirm!: () => void, assigning!: () => void, finishRole!: () => void;
-    const sent = new Promise<void>((resolve) => {
-      sending = resolve;
-    });
-    const banGate = new Promise<void>((resolve) => {
-      confirm = resolve;
-    });
-    const roleStarted = new Promise<void>((resolve) => {
-      assigning = resolve;
-    });
-    const roleGate = new Promise<void>((resolve) => {
-      finishRole = resolve;
-    });
-    f.ban.mockImplementation(async () => {
-      sending();
-      await banGate;
-    });
-    f.roles.assignCaseRole.mockImplementation(async () => {
-      assigning();
-      await roleGate;
-      return true;
-    });
-    const execution = f.execute();
-    await sent;
-    const setup = f.security.handleSuspiciousMessage(f.member, {
-      label: 'SUSPICIOUS',
-      confidence: 0.9,
-      reasons: ['Suspicious content'],
-      triggerSource: DetectionType.SUSPICIOUS_CONTENT,
-      triggerContent: 'Suspicious content',
-    });
-    try {
-      await roleStarted;
-      const lateCase = (await f.cases.findByUserAndServer('target', 'guild'))[0];
-      confirm();
-      expect(await execution).toEqual({ status: 'banned' });
-      finishRole();
-      await setup;
-      expect(await f.members.findByServerAndUser('guild', 'target')).toMatchObject({
-        verification_status: 'banned',
-        case_role_active: false,
+  it.each(['after-cleanup', 'before-adoption'])(
+    'preserves confirmed cleanup when late role assignment finishes %s',
+    async (ordering) => {
+      const f = await fixture();
+      let sending!: () => void,
+        confirm!: () => void,
+        assigning!: () => void,
+        finishRole!: () => void;
+      const sent = new Promise<void>((resolve) => {
+        sending = resolve;
       });
-      expect(await f.cases.findById(lateCase.id)).toMatchObject({
-        status: 'banned',
-        metadata: { report_ban_operation_id: f.request.id },
+      const banGate = new Promise<void>((resolve) => {
+        confirm = resolve;
       });
-      expect(f.threads.createVerificationThread).not.toHaveBeenCalled();
-      expect(f.ban).toHaveBeenCalledTimes(1);
-    } finally {
-      confirm();
-      finishRole();
-      await Promise.all([execution, setup]);
+      const roleStarted = new Promise<void>((resolve) => {
+        assigning = resolve;
+      });
+      const roleGate = new Promise<void>((resolve) => {
+        finishRole = resolve;
+      });
+      f.ban.mockImplementation(async () => {
+        sending();
+        await banGate;
+      });
+      f.roles.assignCaseRole.mockImplementation(async () => {
+        assigning();
+        await roleGate;
+        return true;
+      });
+      let reachedAdoption!: () => void, resumeAdoption!: () => void;
+      const adoptionStarted = new Promise<void>((resolve) => {
+        reachedAdoption = resolve;
+      });
+      const adoptionGate = new Promise<void>((resolve) => {
+        resumeAdoption = resolve;
+      });
+      if (ordering === 'before-adoption') {
+        const adopt = f.requests.adoptConfirmedReportBanCases.bind(f.requests);
+        jest
+          .spyOn(f.requests, 'adoptConfirmedReportBanCases')
+          .mockImplementation(async (...args) => {
+            reachedAdoption();
+            await adoptionGate;
+            return adopt(...args);
+          });
+      }
+      const execution = f.execute();
+      await sent;
+      const setup = f.security.handleSuspiciousMessage(f.member, {
+        label: 'SUSPICIOUS',
+        confidence: 0.9,
+        reasons: ['Suspicious content'],
+        triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+        triggerContent: 'Suspicious content',
+      });
+      try {
+        await roleStarted;
+        const lateCase = (await f.cases.findByUserAndServer('target', 'guild'))[0];
+        confirm();
+        if (ordering === 'before-adoption') {
+          await adoptionStarted;
+          expect((await f.requests.findById(f.request.id))?.metadata).toMatchObject({
+            report_ban_phase: 'discord_confirmed',
+            report_ban_case_ids: [],
+          });
+          finishRole();
+          await setup;
+          resumeAdoption();
+        }
+        expect(await execution).toEqual({ status: 'banned' });
+        finishRole();
+        await setup;
+        expect(await f.members.findByServerAndUser('guild', 'target')).toMatchObject({
+          verification_status: 'banned',
+          case_role_active: false,
+        });
+        expect(await f.cases.findById(lateCase.id)).toMatchObject({
+          status: 'banned',
+          metadata: { report_ban_operation_id: f.request.id },
+        });
+        if (ordering === 'after-cleanup')
+          expect(f.threads.createVerificationThread).not.toHaveBeenCalled();
+        expect(f.queue.deleteCaseMirror).toHaveBeenCalledWith(lateCase.id);
+        expect(f.ban).toHaveBeenCalledTimes(1);
+      } finally {
+        confirm();
+        finishRole();
+        resumeAdoption();
+        await Promise.all([execution, setup]);
+      }
     }
-  });
+  );
 
   it.each([
     'restart',
