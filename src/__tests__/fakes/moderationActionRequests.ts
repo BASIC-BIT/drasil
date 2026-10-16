@@ -84,6 +84,23 @@ export class InMemoryModerationActionRequestRepository implements IModerationAct
   async findById(id: string): Promise<ModerationActionRequest | null> {
     return this.rows.get(id) ?? null;
   }
+  async reviewUncertainReportBan(): Promise<ModerationActionRequest | null> {
+    throw new Error('Review atomicity is tested with the Postgres repository.');
+  }
+  async claimReportBanCompletionAnalytics(id: string, token: string): Promise<boolean> {
+    const current = this.rows.get(id);
+    if (!current || getReportBanAttemptToken(current) !== token) return false;
+    const metadata = current.metadata as Prisma.JsonObject;
+    const result = (current.result as Prisma.JsonObject).observed_ban_result as
+      | Prisma.JsonObject
+      | undefined;
+    if (result?.status !== 'banned' || metadata.report_ban_analytics_claimed_at) return false;
+    this.rows.set(id, {
+      ...current,
+      metadata: { ...metadata, report_ban_analytics_claimed_at: new Date().toISOString() },
+    });
+    return true;
+  }
   async claimNext(): Promise<ModerationActionRequest | null> {
     const row = [...this.rows.values()].find(
       (row) =>

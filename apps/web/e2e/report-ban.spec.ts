@@ -31,14 +31,17 @@ test('bans directly from the report with a queued receipt and no case creation',
 for (const scenario of ['banned_updates_pending', 'ban_outcome_unknown']) {
   test(`retains ${scenario} without another ban submit`, async ({ page }) => {
     await page.goto(`${reportPath}?reportBanScenario=${scenario}`);
-    await expect(
-      page.getByText(
-        scenario === 'banned_updates_pending'
-          ? 'Banned. Report updates are still pending.'
-          : 'Ban outcome needs review.',
-        { exact: true }
-      )
-    ).toBeVisible();
+    const receipt = page.getByRole('form', { name: 'Confirm Ban action' }).getByRole('alert');
+    await expect(receipt).toContainText(
+      scenario === 'banned_updates_pending'
+        ? 'Banned. Report updates are still pending.'
+        : 'Ban outcome needs review.'
+    );
+    if (scenario === 'ban_outcome_unknown') {
+      await expect(receipt).toContainText(
+        'Use /review-report-ban operation:fixture-report-ban-report-1 reason:<review reason> if no current ban exists.'
+      );
+    }
     await expect(page.getByRole('button', { name: 'Confirm Ban', exact: true })).toHaveCount(0);
   });
 }

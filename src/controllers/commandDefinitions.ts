@@ -71,6 +71,25 @@ const baseApplicationCommandBuilders = [
     .setContexts(InteractionContextType.Guild)
     .setDefaultMemberPermissions(PermissionFlagsBits.BanMembers),
   new SlashCommandBuilder()
+    .setName('review-report-ban')
+    .setDescription('Review an uncertain report ban when no current ban exists')
+    .addStringOption((option) =>
+      option
+        .setName('operation')
+        .setDescription('Operation ID from the ban receipt')
+        .setRequired(true)
+    )
+    .addStringOption((option) =>
+      option
+        .setName('reason')
+        .setDescription('Reason for the review disposition')
+        .setRequired(true)
+        .setMaxLength(1000)
+    )
+    .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
+    .setContexts(InteractionContextType.Guild)
+    .setDefaultMemberPermissions(PermissionFlagsBits.BanMembers),
+  new SlashCommandBuilder()
     .setName('report')
     .setDescription('Report a user to moderators')
     .addUserOption((option) =>

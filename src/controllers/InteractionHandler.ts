@@ -3884,7 +3884,7 @@ export class InteractionHandler implements IInteractionHandler {
         )
           throw new Error('Report is no longer available for this ban.');
       }
-      await this.actionRequests.enqueue({
+      const request = await this.actionRequests.enqueue({
         serverId: interaction.guildId,
         actorId: interaction.user.id,
         actorSurface: 'discord_interaction',
@@ -3896,7 +3896,7 @@ export class InteractionHandler implements IInteractionHandler {
         metadata: { reason, requested_action: 'ban_user' },
       });
       await interaction.reply({
-        content: `Ban queued for <@${parsed.userId}>.`,
+        content: `Ban queued for <@${parsed.userId}>. Operation: ${request.id}. If the outcome remains uncertain, use /review-report-ban with this operation ID.`,
         flags: MessageFlags.Ephemeral,
       });
     } catch (error) {

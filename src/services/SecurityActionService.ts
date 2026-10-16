@@ -19,6 +19,7 @@ import {
   Message,
   Client,
   User,
+  PermissionFlagsBits,
   APIUser,
   InteractionContextType,
   Role,
@@ -124,7 +125,24 @@ export type ObservedBanResult =
   | { status: 'already_handled' }
   | { status: 'banned_updates_pending'; operationId: string }
   | { status: 'ban_outcome_unknown'; operationId: string };
+export interface ReportBanReviewReference {
+  operationId: string;
+  attemptToken: string;
+  updatedAt: Date;
+  targetUserId: string;
+}
 export interface ISecurityActionService {
+  prepareReportBanReview(
+    guild: Guild,
+    operationId: string,
+    moderator: User
+  ): Promise<ReportBanReviewReference>;
+  reviewUncertainReportBan(
+    guild: Guild,
+    reference: ReportBanReviewReference,
+    moderator: User,
+    reason: string
+  ): Promise<void>;
   reconcileReportBan(request: ModerationActionRequest): Promise<ObservedBanResult>;
   /**
    * Handle the response to a suspicious message
@@ -3776,6 +3794,82 @@ export class SecurityActionService implements ISecurityActionService {
     );
   }
 
+  private async checkReportBanReviewActor(guild: Guild, moderator: User): Promise<void> {
+    const actor = await guild.members.fetch({ user: moderator.id, force: true });
+    if (!actor.permissions.has(PermissionFlagsBits.BanMembers))
+      throw new Error('Ban Members permission is required to review this operation.');
+  }
+
+  public async prepareReportBanReview(
+    guild: Guild,
+    operationId: string,
+    moderator: User
+  ): Promise<ReportBanReviewReference> {
+    await this.checkReportBanReviewActor(guild, moderator);
+    if (!/^[0-9a-f-]{36}$/i.test(operationId))
+      throw new Error('Use the operation ID from the ban receipt.');
+    const request = await this.actionRequests?.findById(operationId);
+    const metadata = this.metadataToRecord(request?.metadata);
+    const result = this.metadataToRecord(request?.result);
+    if (
+      !request ||
+      request.server_id !== guild.id ||
+      request.action_type !== 'ban_observed_detection' ||
+      !request.target_user_id ||
+      !request.updated_at ||
+      metadata.report_ban_phase !== 'reconciliation_required' ||
+      metadata.report_ban_confirmed_at ||
+      this.metadataToRecord(result.observed_ban_result).status !== 'ban_outcome_unknown'
+    )
+      throw new Error('This operation is not awaiting uncertain-ban review.');
+    const attemptToken = getReportBanAttemptToken(request);
+    if (!attemptToken) throw new Error('The operation has no attempt identity.');
+    return {
+      operationId,
+      attemptToken,
+      updatedAt: request.updated_at,
+      targetUserId: request.target_user_id,
+    };
+  }
+
+  public async reviewUncertainReportBan(
+    guild: Guild,
+    reference: ReportBanReviewReference,
+    moderator: User,
+    reason: string
+  ): Promise<void> {
+    await this.checkReportBanReviewActor(guild, moderator);
+    if (!reason.trim() || reason.length > 1000)
+      throw new Error('A review reason of 1 to 1000 characters is required.');
+    const request = await this.actionRequests?.findById(reference.operationId);
+    if (
+      !request ||
+      request.server_id !== guild.id ||
+      request.target_user_id !== reference.targetUserId
+    )
+      throw new Error('The review operation binding changed.');
+    let absent = false;
+    try {
+      await guild.bans.fetch({ user: reference.targetUserId, force: true });
+    } catch (error) {
+      if (typeof error === 'object' && error !== null && 'code' in error && error.code === 10026)
+        absent = true;
+      else throw error;
+    }
+    if (!absent)
+      throw new Error('A current ban exists. Allow confirmed-ban reconciliation to finish.');
+    await this.userRepository.getOrCreateUser(moderator.id, moderator.username);
+    const reviewed = await this.actionRequests?.reviewUncertainReportBan({
+      ...reference,
+      serverId: guild.id,
+      actorId: moderator.id,
+      reason,
+      banAbsentCheckedAt: new Date(),
+    });
+    if (!reviewed)
+      throw new Error('The operation changed. Re-run the review command for its current state.');
+  }
+
   private async saveBanPhase(
     request: ModerationActionRequest,
     patch: Record<string, unknown>
@@ -3842,6 +3936,7 @@ export class SecurityActionService implements ISecurityActionService {
       report_ban_phase: 'preparing',
       report_ban_preparation_id: randomUUID(),
       report_ban_reason: reason,
+      report_ban_source_detail: member ? null : 'ban_by_id',
       report_ban_lease_until: new Date(Date.now() + 15 * 60_000).toISOString(),
     });
     const enforcement = { started: false };
@@ -4134,6 +4229,26 @@ export class SecurityActionService implements ISecurityActionService {
       report_ban_retry_at: null,
       report_ban_last_error: null,
     });
+    // Claim before capture: best effort, at most one logical emission per operation.
+    // A process crash between claim and capture can lose analytics, never moderation.
+    try {
+      const token = getReportBanAttemptToken(request);
+      if (token && (await this.actionRequests.claimReportBanCompletionAnalytics(request.id, token)))
+        await this.productAnalyticsService.captureUserEvent(
+          guild.id,
+          request.target_user_id,
+          'observed detection action completed',
+          {
+            action_type: AdminActionType.BAN,
+            ...(metadata.report_ban_source_detail === 'ban_by_id'
+              ? { source_detail: 'ban_by_id' }
+              : {}),
+          },
+          { moderatorId: moderator.id, detectionEventId: request.detection_event_id }
+        );
+    } catch (error) {
+      console.warn('Could not capture completed report-ban analytics:', error);
+    }
   }
 
   private async closeReportBanThread(

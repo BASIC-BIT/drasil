@@ -181,3 +181,19 @@ it.each(['banned_updates_pending', 'ban_outcome_unknown'] as const)(
     expect(blocksBanResubmission(request)).toBe(true);
   }
 );
+
+it('allows a new explicit action after review but blocks a later unknown attempt', () => {
+  const reviewed = buildRequest({
+    status: 'failed',
+    actionType: 'ban_observed_detection',
+    observedBanResult: { status: 'ban_reviewed_no_current_ban', operationId: 'request-1' },
+  });
+  expect(blocksBanResubmission(reviewed)).toBe(false);
+  expect(hasActiveInboxActionRequests([reviewed])).toBe(false);
+  expect(
+    blocksBanResubmission({
+      ...reviewed,
+      observedBanResult: { status: 'ban_outcome_unknown', operationId: 'request-1' },
+    })
+  ).toBe(true);
+});

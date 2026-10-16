@@ -205,6 +205,10 @@ export class CommandHandler implements ICommandHandler {
     const { commandName } = interaction;
 
     switch (commandName) {
+      case 'review-report-ban':
+        await this.moderationCommandHandler.handleReviewReportBanCommand(interaction);
+        break;
+
       case 'ban':
         await this.moderationCommandHandler.handleBanCommand(interaction);
         break;

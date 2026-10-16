@@ -591,6 +591,12 @@ const upsertReportInstructionsRequest: ModerationActionRequest = {
 };
 
 class FakeModerationActionRequestRepository implements IModerationActionRequestRepository {
+  public async reviewUncertainReportBan(): Promise<ModerationActionRequest | null> {
+    throw new Error('not used');
+  }
+  public async claimReportBanCompletionAnalytics(): Promise<boolean> {
+    return false;
+  }
   public byId = new Map<string, ModerationActionRequest>();
   public requests: ModerationActionRequest[] = [];
   public completed: Array<{ id: string; result: unknown }> = [];

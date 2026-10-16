@@ -32,6 +32,7 @@ describe('CommandHandler command catalog (unit)', () => {
     for (const name of [
       'ping',
       'ban',
+      'review-report-ban',
       'report',
       'setupverification',
       'config',
@@ -72,6 +73,19 @@ describe('CommandHandler command catalog (unit)', () => {
       .filter((command) => command.textSize > DISCORD_APPLICATION_COMMAND_TEXT_LIMIT);
 
     expect(oversizedCommands).toEqual([]);
+  });
+
+  it('registers the bounded uncertain-ban review command', () => {
+    const { handler } = buildHandler();
+    const command = (handler as any).commands.find(
+      (entry: any) => entry.name === 'review-report-ban'
+    );
+    expect(command.default_member_permissions).toBe(PermissionFlagsBits.BanMembers.toString());
+    expect(command.options.map((option: any) => [option.name, option.required])).toEqual([
+      ['operation', true],
+      ['reason', true],
+    ]);
+    expect(command.options[1].max_length).toBe(1000);
   });
 
   it('registers /report without default moderation permissions', () => {

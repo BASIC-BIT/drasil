@@ -11,14 +11,17 @@ export type ObservedBanResult =
   | { status: 'banned' }
   | { status: 'already_handled' }
   | { status: 'banned_updates_pending'; operationId: string }
-  | { status: 'ban_outcome_unknown'; operationId: string };
+  | { status: 'ban_outcome_unknown'; operationId: string }
+  | { status: 'ban_reviewed_no_current_ban'; operationId: string };
 export function parseObservedBanResult(value: unknown): ObservedBanResult | null {
   if (!value || typeof value !== 'object') return null;
   const result = value as Record<string, unknown>;
   if (result.status === 'banned' || result.status === 'already_handled')
     return { status: result.status };
   if (
-    (result.status === 'banned_updates_pending' || result.status === 'ban_outcome_unknown') &&
+    (result.status === 'banned_updates_pending' ||
+      result.status === 'ban_outcome_unknown' ||
+      result.status === 'ban_reviewed_no_current_ban') &&
     typeof result.operationId === 'string'
   )
     return { status: result.status, operationId: result.operationId };
@@ -336,7 +339,10 @@ const operationResultFormatters: Partial<
 function formatOperationResult(result: OperationResultRecord): string | null {
   const ban = parseObservedBanResult(result.observed_ban_result);
   if (ban?.status === 'banned_updates_pending') return 'Banned. Report updates are still pending.';
-  if (ban?.status === 'ban_outcome_unknown') return 'Ban outcome needs review.';
+  if (ban?.status === 'ban_outcome_unknown')
+    return `Ban outcome needs review. Operation: ${ban.operationId}. Use /review-report-ban operation:${ban.operationId} reason:<review reason> if no current ban exists.`;
+  if (ban?.status === 'ban_reviewed_no_current_ban')
+    return 'Reviewed: no current ban, historical outcome uncertain. Matching claims released.';
   if (ban?.status === 'banned') return 'Banned.';
   if (ban?.status === 'already_handled') return 'Already handled.';
   const actionType = typeof result.action_type === 'string' ? result.action_type : null;

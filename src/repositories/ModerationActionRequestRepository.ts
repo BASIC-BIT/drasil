@@ -13,7 +13,21 @@ export function getReportBanAttemptToken(request: ModerationActionRequest): stri
   return typeof value === 'string' ? value : undefined;
 }
 
+export interface ReportBanReviewDisposition {
+  operationId: string;
+  attemptToken: string;
+  updatedAt: Date;
+  serverId: string;
+  actorId: string;
+  reason: string;
+  banAbsentCheckedAt: Date;
+}
+
 export interface IModerationActionRequestRepository {
+  reviewUncertainReportBan(
+    input: ReportBanReviewDisposition
+  ): Promise<ModerationActionRequest | null>;
+  claimReportBanCompletionAnalytics(id: string, attemptToken: string): Promise<boolean>;
   enqueue(data: ModerationActionRequestCreate): Promise<ModerationActionRequest>;
   findById(id: string): Promise<ModerationActionRequest | null>;
   claimReportBanReconciliation(now: Date): Promise<ModerationActionRequest | null>;
@@ -408,6 +422,107 @@ export class ModerationActionRequestRepository implements IModerationActionReque
     );
   }
 
+  private async releaseReportBanClaims(
+    transaction: Prisma.TransactionClient,
+    current: ModerationActionRequest
+  ): Promise<void> {
+    const id = current.id;
+    const metadata = (current.metadata ?? {}) as Prisma.JsonObject;
+    const cases = Array.isArray(metadata.report_ban_cases) ? metadata.report_ban_cases : [];
+    await transaction.$executeRaw`
+        UPDATE verification_events v SET
+          case_kind = (original->>'case_kind')::case_kind,
+          attention_state = (original->>'attention_state')::case_attention_state,
+          containment_status = (original->>'containment_status')::case_containment_status,
+          quarantine_attempt_id = null, quarantine_lease_renewed_at = null,
+          metadata = coalesce(nullif(v.metadata, 'null'::jsonb), '{}'::jsonb) - 'report_ban_enforcement_operation_id',
+          parked_at = (original->>'parked_at')::timestamptz, parked_by = original->>'parked_by', updated_at = now()
+        FROM jsonb_array_elements(${JSON.stringify(cases)}::jsonb) original
+        WHERE v.id::text = original->>'id' AND v.status = 'pending' AND v.containment_status = 'in_progress'
+          AND v.quarantine_attempt_id = ${String(metadata.report_ban_attempt_id ?? '')}
+      `;
+    await transaction.$executeRaw`
+        UPDATE detection_events SET metadata = metadata - 'observed_action' - 'observed_action_by' - 'observed_action_at' - 'report_ban_operation_id'
+        WHERE id = ${current.detection_event_id}::uuid AND metadata->>'report_ban_operation_id' = ${id} AND metadata->>'observed_action' = 'ban'`;
+    if (current.report_intake_id)
+      await transaction.$executeRaw`
+        UPDATE report_intakes SET metadata = metadata - 'report_ban_operation_id', updated_at = now()
+        WHERE id = ${current.report_intake_id}::uuid AND status = 'submitted' AND metadata->>'report_ban_operation_id' = ${id}`;
+  }
+
+  public async reviewUncertainReportBan(
+    input: ReportBanReviewDisposition
+  ): Promise<ModerationActionRequest | null> {
+    return this.prisma.$transaction(async (transaction) => {
+      const rows = await transaction.$queryRaw<ModerationActionRequest[]>`
+        SELECT * FROM moderation_action_requests WHERE id = ${input.operationId}::uuid FOR UPDATE`;
+      const current = rows.at(0);
+      if (
+        !current ||
+        current.server_id !== input.serverId ||
+        current.action_type !== 'ban_observed_detection'
+      )
+        return null;
+      const metadata = (current.metadata ?? {}) as Prisma.JsonObject;
+      const result = (current.result ?? {}) as Prisma.JsonObject;
+      const receipt = result.observed_ban_result as Prisma.JsonObject | undefined;
+      const history = Array.isArray(metadata.observed_ban_reviews)
+        ? metadata.observed_ban_reviews
+        : [];
+      const prior = history.at(-1) as Prisma.JsonObject | undefined;
+      if (
+        receipt?.status === 'ban_reviewed_no_current_ban' &&
+        prior?.attempt_token === input.attemptToken
+      )
+        return current;
+      if (
+        getReportBanAttemptToken(current) !== input.attemptToken ||
+        current.updated_at?.getTime() !== input.updatedAt.getTime() ||
+        metadata.report_ban_phase !== 'reconciliation_required' ||
+        metadata.report_ban_confirmed_at ||
+        receipt?.status !== 'ban_outcome_unknown' ||
+        !input.reason.trim()
+      )
+        return null;
+      if (!(await this.lockReportBanContext(transaction, current))) return null;
+      const review = {
+        operation_id: current.id,
+        attempt_token: input.attemptToken,
+        reviewed_by: input.actorId,
+        reason: input.reason.trim(),
+        reviewed_at: new Date().toISOString(),
+        ban_absent_checked_at: input.banAbsentCheckedAt.toISOString(),
+        disposition: 'no_current_ban_historical_outcome_uncertain',
+        result,
+        operation_metadata: Object.fromEntries(
+          Object.entries(metadata).filter(([key]) => key.startsWith('report_ban_'))
+        ),
+      };
+      await this.releaseReportBanClaims(transaction, current);
+      const updated = await transaction.$queryRaw<ModerationActionRequest[]>`
+        UPDATE moderation_action_requests SET status = 'failed', failed_at = now(), updated_at = now(),
+          last_error = null,
+          result = jsonb_build_object('observed_ban_result', jsonb_build_object('status', 'ban_reviewed_no_current_ban', 'operationId', ${current.id}::text)),
+          metadata = metadata || jsonb_build_object('observed_ban_reviews', ${JSON.stringify([...history, review])}::jsonb,
+            'report_ban_phase', null, 'report_ban_lease_until', null, 'report_ban_retry_at', null, 'report_ban_last_error', null,
+            'report_ban_attempt_token', gen_random_uuid()::text)
+        WHERE id = ${current.id}::uuid RETURNING *`;
+      return updated.at(0) ?? null;
+    });
+  }
+
+  public async claimReportBanCompletionAnalytics(
+    id: string,
+    attemptToken: string
+  ): Promise<boolean> {
+    const count = await this.prisma.$executeRaw`
+      UPDATE moderation_action_requests SET metadata = metadata || jsonb_build_object('report_ban_analytics_claimed_at', now()::text)
+      WHERE id = ${id}::uuid AND metadata->>'report_ban_attempt_token' = ${attemptToken}
+        AND result->'observed_ban_result'->>'status' = 'banned'
+        AND metadata->>'report_ban_analytics_claimed_at' IS NULL`;
+    return count === 1;
+  }
+
   public async releaseReportBanPreparation(
     id: string,
     expectedPhase: 'preparing' | 'enforcement_started',
@@ -426,26 +541,7 @@ export class ModerationActionRequestRepository implements IModerationActionReque
         !metadata.report_ban_phase && current.status === ModerationActionRequestStatus.FAILED;
       if (metadata.report_ban_phase !== expectedPhase && !failedPreparation) return current;
       await this.lockReportBanContext(transaction, current);
-      const cases = Array.isArray(metadata.report_ban_cases) ? metadata.report_ban_cases : [];
-      await transaction.$executeRaw`
-        UPDATE verification_events v SET
-          case_kind = (original->>'case_kind')::case_kind,
-          attention_state = (original->>'attention_state')::case_attention_state,
-          containment_status = (original->>'containment_status')::case_containment_status,
-          quarantine_attempt_id = null, quarantine_lease_renewed_at = null,
-          metadata = coalesce(nullif(v.metadata, 'null'::jsonb), '{}'::jsonb) - 'report_ban_enforcement_operation_id',
-          parked_at = (original->>'parked_at')::timestamptz, parked_by = original->>'parked_by', updated_at = now()
-        FROM jsonb_array_elements(${JSON.stringify(cases)}::jsonb) original
-        WHERE v.id::text = original->>'id' AND v.status = 'pending' AND v.containment_status = 'in_progress'
-          AND v.quarantine_attempt_id = ${String(metadata.report_ban_attempt_id ?? '')}
-      `;
-      await transaction.$executeRaw`
-        UPDATE detection_events SET metadata = metadata - 'observed_action' - 'observed_action_by' - 'observed_action_at' - 'report_ban_operation_id'
-        WHERE id = ${current.detection_event_id}::uuid AND metadata->>'report_ban_operation_id' = ${id} AND metadata->>'observed_action' = 'ban'`;
-      if (current.report_intake_id)
-        await transaction.$executeRaw`
-        UPDATE report_intakes SET metadata = metadata - 'report_ban_operation_id', updated_at = now()
-        WHERE id = ${current.report_intake_id}::uuid AND status = 'submitted' AND metadata->>'report_ban_operation_id' = ${id}`;
+      await this.releaseReportBanClaims(transaction, current);
       const updated = await transaction.$queryRaw<ModerationActionRequest[]>`
         UPDATE moderation_action_requests SET status = 'failed', failed_at = now(), updated_at = now(),
           last_error = 'Ban was not applied. Preparation released.',

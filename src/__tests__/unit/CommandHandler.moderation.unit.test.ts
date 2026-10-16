@@ -23,6 +23,57 @@ const confirmLastSlashCommand = async (interaction: any): Promise<void> => {
 };
 
 describe('CommandHandler moderation commands (unit)', () => {
+  it('offers actor-bound confirmation for reviewing an uncertain report ban', async () => {
+    const { handler, securityActionService } = buildHandler();
+    const interaction = {
+      commandName: 'review-report-ban',
+      guild: { id: 'guild-1' },
+      user: { id: 'moderator' },
+      options: {
+        getString: jest.fn((name) =>
+          name === 'operation' ? 'operation-1' : 'Reviewed audit trail'
+        ),
+      },
+      reply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+    await handler.handleSlashCommand(interaction);
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining('historical outcome remains uncertain'),
+        components: expect.any(Array),
+      })
+    );
+    expect(securityActionService.reviewUncertainReportBan).not.toHaveBeenCalled();
+    await confirmLastSlashCommand(interaction);
+    expect(securityActionService.reviewUncertainReportBan).toHaveBeenCalledWith(
+      interaction.guild,
+      expect.objectContaining({ attemptToken: 'attempt-1' }),
+      interaction.user,
+      'Reviewed audit trail'
+    );
+  });
+
+  it('does not offer a review confirmation when current permission is rejected', async () => {
+    const { handler } = buildHandler({
+      prepareReportBanReview: jest
+        .fn()
+        .mockRejectedValue(new Error('Ban Members permission is required.')),
+    });
+    const interaction = {
+      commandName: 'review-report-ban',
+      guild: { id: 'guild-1' },
+      user: { id: 'actor' },
+      options: { getString: () => 'value' },
+      reply: jest.fn().mockResolvedValue(undefined),
+    } as any;
+    await handler.handleSlashCommand(interaction);
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: 'Ban Members permission is required.',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
   it('handles /audit integrity as a read-only ephemeral report', async () => {
     const auditGuild = jest.fn().mockResolvedValue({
       guildId: 'guild-1',

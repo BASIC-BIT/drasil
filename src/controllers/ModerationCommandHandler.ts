@@ -51,6 +51,58 @@ export class ModerationCommandHandler {
     private readonly caseThreadClosureSweepService?: ICaseThreadClosureSweepService
   ) {}
 
+  public async handleReviewReportBanCommand(
+    interaction: ChatInputCommandInteraction
+  ): Promise<void> {
+    const guild = interaction.guild;
+    if (!guild) {
+      await this.replyGuildInstallRequired(interaction);
+      return;
+    }
+    const operationId = interaction.options.getString('operation', true);
+    const reason = interaction.options.getString('reason', true).trim();
+    try {
+      if (!reason) throw new Error('A review reason is required.');
+      const reference = await this.securityActionService.prepareReportBanReview(
+        guild,
+        operationId,
+        interaction.user
+      );
+      await requestSlashCommandConfirmation(interaction, {
+        message: `Review operation ${operationId} for user ${reference.targetUserId}? If no current ban exists, release its claims. The historical outcome remains uncertain. This does not ban or unban anyone. Reason: ${reason}`,
+        confirmLabel: 'Record Review',
+        confirmStyle: ButtonStyle.Primary,
+        execute: async (button) => {
+          await button.update({
+            content: 'Checking current ban and operation ownership...',
+            components: [],
+          });
+          try {
+            await this.securityActionService.reviewUncertainReportBan(
+              guild,
+              reference,
+              interaction.user,
+              reason
+            );
+            await button.editReply({
+              content:
+                'Review recorded: no current ban, historical outcome uncertain. Matching claims released. Any later ban requires a new explicit action.',
+            });
+          } catch (error) {
+            await button.editReply({
+              content: error instanceof Error ? error.message : 'Could not record review.',
+            });
+          }
+        },
+      });
+    } catch (error) {
+      await interaction.reply({
+        content: error instanceof Error ? error.message : 'Could not prepare review.',
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+  }
+
   public async handleBanCommand(interaction: ChatInputCommandInteraction): Promise<void> {
     const targetUser = interaction.options.getUser('user');
     if (!targetUser) {

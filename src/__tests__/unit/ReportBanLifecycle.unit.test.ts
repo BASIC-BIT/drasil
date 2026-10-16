@@ -100,6 +100,7 @@ async function fixture() {
     outcomes,
     queue as never
   );
+  const analytics = { captureUserEvent: jest.fn().mockResolvedValue(undefined) };
   const evidence = new ModerationEvidenceService(detections);
   const security = new SecurityActionService(
     notifications as never,
@@ -113,7 +114,7 @@ async function fixture() {
     moderation,
     client,
     undefined,
-    undefined,
+    analytics as never,
     queue as never,
     undefined,
     undefined,
@@ -183,6 +184,7 @@ async function fixture() {
       {} as never
     );
   return {
+    analytics,
     detections,
     reports,
     requests,
@@ -215,6 +217,47 @@ async function fixture() {
 }
 
 describe('report-bound observed bans with real services', () => {
+  it.each([false, true])(
+    'tracks durable observed ban completion once (by ID: %s)',
+    async (byId) => {
+      const f = await fixture();
+      expect(await f.execute(byId)).toEqual({ status: 'banned' });
+      await f.security.reconcileReportBan((await f.requests.findById(f.request.id))!);
+      expect(f.analytics.captureUserEvent).toHaveBeenCalledTimes(1);
+      expect(f.analytics.captureUserEvent).toHaveBeenCalledWith(
+        'guild',
+        'target',
+        'observed detection action completed',
+        expect.objectContaining({
+          action_type: 'ban',
+          ...(byId ? { source_detail: 'ban_by_id' } : {}),
+        }),
+        { moderatorId: 'moderator', detectionEventId: f.detection.id }
+      );
+    }
+  );
+
+  it('waits for completed cleanup before best-effort analytics', async () => {
+    const f = await fixture();
+    const finalize = f.moderation.finalizeObservedBan.bind(f.moderation);
+    jest
+      .spyOn(f.moderation, 'finalizeObservedBan')
+      .mockRejectedValueOnce(new Error('cleanup failed'))
+      .mockImplementation(finalize);
+    expect(await f.execute()).toMatchObject({ status: 'banned_updates_pending' });
+    expect(f.analytics.captureUserEvent).not.toHaveBeenCalled();
+    f.analytics.captureUserEvent.mockRejectedValueOnce(new Error('analytics offline'));
+    expect(await f.security.reconcileReportBan((await f.requests.findById(f.request.id))!)).toEqual(
+      { status: 'banned' }
+    );
+    expect((await f.requests.findById(f.request.id))?.result).toMatchObject({
+      observed_ban_result: { status: 'banned' },
+    });
+    await f.security.reconcileReportBan((await f.requests.findById(f.request.id))!);
+    expect(f.analytics.captureUserEvent).toHaveBeenCalledTimes(1);
+    expect(f.ban).toHaveBeenCalledTimes(1);
+  });
+
   it.each([false, true])(
     'persists evidence before enforcement, retains audit links, and creates no case (by ID: %s)',
     async (byId) => {
@@ -400,6 +443,7 @@ describe('report-bound observed bans with real services', () => {
         status: present ? 'banned' : 'ban_outcome_unknown',
       });
       expect(f.ban).toHaveBeenCalledTimes(1);
+      if (!present) expect(f.analytics.captureUserEvent).not.toHaveBeenCalled();
       if (!present)
         expect((await f.reports.findById(f.report.id))?.metadata).toHaveProperty(
           'report_ban_operation_id',

@@ -30,8 +30,10 @@ export function fixtureReportBanRequest(
         : status === 'banned_updates_pending'
           ? 'Banned. Report updates are still pending.'
           : status === 'ban_outcome_unknown'
-            ? 'Ban outcome needs review.'
-            : 'Ban queued for Drasil.',
+            ? `Ban outcome needs review. Operation: ${id}. Use /review-report-ban operation:${id} reason:<review reason> if no current ban exists.`
+            : status === 'ban_reviewed_no_current_ban'
+              ? 'Reviewed: no current ban, historical outcome uncertain. Matching claims released.'
+              : 'Ban queued for Drasil.',
     status: status === 'queued' ? 'queued' : status === 'banned' ? 'completed' : 'failed',
     targetUserId,
     updatedAt: timestamp,

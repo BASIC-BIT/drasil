@@ -96,3 +96,13 @@ Update task checkboxes as work completes. One PR links the issue and contains al
 ## Plan review
 
 The user approved one PR with subagent implementation on October 15. Execute task-by-task with fresh implementation and review subagents, then review the combined branch. No further execution-method approval is needed.
+
+## External review recycle: bounded completion
+
+[AGENT] External GitHub feedback adds one operator recovery command, protects legacy review threads during repair, and restores completion analytics. The report Ban flow remains on Discord and web. `/review-report-ban operation:<operation-id> reason:<review reason>` uses the existing Discord confirmation helper; receipts supply the operation ID. It records a reviewed no-current-ban disposition while retaining historical uncertainty, releases only the matching claims, and requires a fresh explicit action for any later ban. No new approval decision, schema, dependency or enforcement path is introduced.
+
+- Serialize legacy repair and promotion on the existing case setup key. A repair of `report_review` is a safe no-op; a waiting promotion reevaluates persisted state. Cover both overlap orders and the direct delayed-repair caller.
+- Recheck Ban Members permission and an explicit Discord Unknown Ban response. Fence review with the operation, server, target, attempt token and captured request version. Hold request/report/detection/sorted-case locks while appending review history and releasing matching claims. Rotate the token to fence paused owners. Preserve newer case/member state and history through an explicit retry.
+- Parse `ban_reviewed_no_current_ban` receipts and restore available report controls. Keep a fresh unknown attempt blocked until its own review. Cover command catalog/routing/confirmation and actual Postgres concurrency, idempotence and audit behavior.
+- Claim observed detection completion analytics once after durable success, including reconciliation. Keep the existing member/by-ID event bindings and best-effort behavior. Cover partial, unknown, repeated completion and analytics failure.
+- Run affected unit/web/real-DB regressions, source checks, metrics and the full local gate. Keep external runtime and post-push CI evidence separate.

@@ -298,7 +298,14 @@ describe('moderationActionRequestDataAdapter', () => {
 });
 it.each([
   ['banned_updates_pending', 'Banned. Report updates are still pending.'],
-  ['ban_outcome_unknown', 'Ban outcome needs review.'],
+  [
+    'ban_outcome_unknown',
+    'Ban outcome needs review. Operation: request-1. Use /review-report-ban operation:request-1 reason:<review reason> if no current ban exists.',
+  ],
+  [
+    'ban_reviewed_no_current_ban',
+    'Reviewed: no current ban, historical outcome uncertain. Matching claims released.',
+  ],
 ])('parses the durable %s report ban receipt', (status, message) => {
   expect(
     parseModerationActionRequestRow({

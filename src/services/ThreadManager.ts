@@ -1003,7 +1003,19 @@ export class ThreadManager implements IThreadManager {
     promoteReportReview = false
   ): Promise<VerificationSetupResult> {
     const existing = this.verificationSetups.get(verificationEvent.id);
-    if (existing) return existing;
+    if (existing) {
+      const result = await existing;
+      if (
+        !promoteReportReview ||
+        (result.metadata as Record<string, unknown> | null)?.thread_type !==
+          REPORT_REVIEW_THREAD_TYPE
+      )
+        return result;
+      // A skipped legacy repair cannot satisfy a promotion. Re-read after its owner exits.
+      if (this.verificationSetups.get(verificationEvent.id) === existing)
+        this.verificationSetups.delete(verificationEvent.id);
+      return this.coordinateVerificationSetup(member, verificationEvent, true);
+    }
     const setup = Promise.resolve().then(async (): Promise<VerificationSetupResult> => {
       const latest = Object.assign(
         verificationEvent,
@@ -1014,6 +1026,18 @@ export class ThreadManager implements IThreadManager {
         typeof latest.metadata === 'object' &&
         !Array.isArray(latest.metadata) &&
         latest.metadata[VERIFICATION_THREAD_TYPE_METADATA_KEY] === REPORT_REVIEW_THREAD_TYPE;
+      if (isReportReview && !promoteReportReview)
+        return {
+          metadata: latest.metadata,
+          thread: null,
+          repair: {
+            threadId: latest.thread_id,
+            threadCreated: false,
+            userAdded: false,
+            promptSent: false,
+            promptAlreadyPresent: false,
+          },
+        };
       if (latest.thread_id && !(promoteReportReview && isReportReview))
         return this.repairVerificationThreadUnlocked(member, latest);
       const thread = await this.createVerificationThreadUnlocked(member, latest);
@@ -1033,7 +1057,8 @@ export class ThreadManager implements IThreadManager {
     try {
       return await setup;
     } finally {
-      this.verificationSetups.delete(verificationEvent.id);
+      if (this.verificationSetups.get(verificationEvent.id) === setup)
+        this.verificationSetups.delete(verificationEvent.id);
     }
   }
 

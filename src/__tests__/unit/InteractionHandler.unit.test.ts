@@ -306,6 +306,8 @@ describe('InteractionHandler (unit)', () => {
       recordMemberLeftGuild: jest.fn().mockResolvedValue(0),
     };
     securityActionService = {
+      prepareReportBanReview: jest.fn(),
+      reviewUncertainReportBan: jest.fn(),
       reconcileReportBan: jest.fn().mockResolvedValue({ status: 'banned' }),
       handleSuspiciousMessage: jest.fn().mockResolvedValue(true),
       handleSuspiciousJoin: jest.fn().mockResolvedValue(true),
@@ -2692,7 +2694,9 @@ describe('InteractionHandler (unit)', () => {
             })
           );
           expect(interaction.reply).toHaveBeenCalledWith(
-            expect.objectContaining({ content: 'Ban queued for <@user-1>.' })
+            expect.objectContaining({
+              content: expect.stringContaining('Ban queued for <@user-1>. Operation:'),
+            })
           );
         } else expect(requests.enqueue).not.toHaveBeenCalled();
         expect(securityActionService.banObservedDetection).not.toHaveBeenCalled();
@@ -2772,7 +2776,9 @@ describe('InteractionHandler (unit)', () => {
             })
           );
           expect(interaction.reply).toHaveBeenCalledWith(
-            expect.objectContaining({ content: 'Ban queued for <@user-1>.' })
+            expect.objectContaining({
+              content: expect.stringContaining('Ban queued for <@user-1>. Operation:'),
+            })
           );
         } else expect(requests.enqueue).not.toHaveBeenCalled();
         expect(securityActionService.banObservedDetection).not.toHaveBeenCalled();

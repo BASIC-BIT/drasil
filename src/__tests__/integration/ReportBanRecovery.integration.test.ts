@@ -32,7 +32,7 @@ import { ServerRepository } from '../../repositories/ServerRepository';
 import { UserRepository } from '../../repositories/UserRepository';
 import { VerificationEventRepository } from '../../repositories/VerificationEventRepository';
 
-async function fixture() {
+async function fixture(withReport = true) {
   const prisma = getPrismaClient();
   const detections = new DetectionEventsRepository(prisma);
   const reports = new ReportIntakeRepository(prisma);
@@ -76,7 +76,9 @@ async function fixture() {
     ban,
   } as unknown as GuildMember;
   (guild.members.fetch as jest.Mock).mockImplementation(async (id) =>
-    id === moderator.id ? { permissions: { has: () => true } } : member
+    (typeof id === 'object' ? id.user : id) === moderator.id
+      ? { permissions: { has: () => true } }
+      : member
   );
   const notifications = {
     markObservedDetectionActionTaken: jest.fn().mockResolvedValue(true),
@@ -109,6 +111,7 @@ async function fixture() {
     outcomes,
     queue as never
   );
+  const analytics = { captureUserEvent: jest.fn().mockResolvedValue(undefined) };
   const evidence = new ModerationEvidenceService(detections);
   const security = new SecurityActionService(
     notifications as never,
@@ -122,7 +125,7 @@ async function fixture() {
     moderation,
     client,
     undefined,
-    undefined,
+    analytics as never,
     queue as never,
     undefined,
     undefined,
@@ -146,14 +149,14 @@ async function fixture() {
     user_id: user.id,
     detection_type: DetectionType.USER_REPORT,
     confidence: 1,
-    metadata: { reportIntakeId: report.id },
+    metadata: withReport ? { reportIntakeId: report.id } : {},
   });
   const request = await requests.enqueue({
     serverId: guild.id,
     actorId: moderator.id,
     actorSurface: 'web',
     targetUserId: user.id,
-    reportIntakeId: report.id,
+    ...(withReport ? { reportIntakeId: report.id } : {}),
     detectionEventId: detection.id,
     actionType: ModerationActionRequestType.BAN_OBSERVED_DETECTION,
     idempotencyKey: 'ban:report',
@@ -194,6 +197,7 @@ async function fixture() {
       {} as never
     );
   return {
+    analytics,
     detections,
     reports,
     requests,
@@ -227,6 +231,278 @@ async function fixture() {
 
 const integration = process.env.JEST_INTEGRATION === '1' ? describe : describe.skip;
 integration('report-ban stale worker recovery with real services and Postgres', () => {
+  async function uncertain(withReport = true) {
+    const f = await fixture(withReport);
+    const event = await f.cases.createFromDetection(
+      f.detection.id,
+      'guild',
+      'target',
+      VerificationStatus.PENDING
+    );
+    f.ban.mockRejectedValue(new Error('socket closed'));
+    const result = await f.execute();
+    expect(result.status).toBe('ban_outcome_unknown');
+    await f.requests.complete(
+      f.request.id,
+      { observed_ban_result: result },
+      getReportBanAttemptToken(f.request)
+    );
+    f.banFetch.mockRejectedValue({ code: 10026 });
+    const reference = await f.security.prepareReportBanReview(f.guild, f.request.id, f.moderator);
+    return { ...f, event, reference };
+  }
+
+  it('reviews a detection-only observed ban without requiring or changing a report', async () => {
+    const f = await uncertain(false);
+    expect(f.request.report_intake_id).toBeNull();
+    const reportBefore = await f.reports.findById(f.report.id);
+    await f.security.reviewUncertainReportBan(
+      f.guild,
+      f.reference,
+      f.moderator,
+      'Reviewed absence'
+    );
+    expect((await f.requests.findById(f.request.id))?.result).toMatchObject({
+      observed_ban_result: { status: 'ban_reviewed_no_current_ban' },
+    });
+    expect((await f.detections.findById(f.detection.id))?.metadata).not.toHaveProperty(
+      'observed_action'
+    );
+    expect((await f.cases.findById(f.event.id))?.quarantine_attempt_id).toBeNull();
+    expect(await f.reports.findById(f.report.id)).toEqual(reportBefore);
+    expect(f.ban).toHaveBeenCalledTimes(1);
+    expect(await f.actionRepo.getActionHistory('target', 'guild')).toHaveLength(0);
+  });
+
+  it('reviews absence without enforcement, retains history, and requires a new review for a fresh uncertain attempt', async () => {
+    const f = await uncertain();
+    const beforeMember = await f.members.findByServerAndUser('guild', 'target');
+    await f.security.reviewUncertainReportBan(
+      f.guild,
+      f.reference,
+      f.moderator,
+      'Reviewed audit trail'
+    );
+    await f.security.reviewUncertainReportBan(f.guild, f.reference, f.moderator, 'Repeated review');
+    const reviewed = (await f.requests.findById(f.request.id))!;
+    expect(reviewed.result).toMatchObject({
+      observed_ban_result: { status: 'ban_reviewed_no_current_ban' },
+    });
+    expect(reviewed.metadata).toMatchObject({
+      report_ban_phase: null,
+      observed_ban_reviews: [
+        expect.objectContaining({
+          attempt_token: f.reference.attemptToken,
+          reviewed_by: 'moderator',
+          reason: 'Reviewed audit trail',
+          disposition: 'no_current_ban_historical_outcome_uncertain',
+          result: {
+            observed_ban_result: { status: 'ban_outcome_unknown', operationId: f.request.id },
+          },
+        }),
+      ],
+    });
+    expect((reviewed.metadata as Record<string, unknown>).observed_ban_reviews).toHaveLength(1);
+    expect((await f.reports.findById(f.report.id))?.metadata).not.toHaveProperty(
+      'report_ban_operation_id'
+    );
+    expect((await f.detections.findById(f.detection.id))?.metadata).not.toHaveProperty(
+      'observed_action'
+    );
+    expect(await f.cases.findById(f.event.id)).toMatchObject({
+      status: 'pending',
+      quarantine_attempt_id: null,
+      containment_status: f.event.containment_status,
+    });
+    expect(await f.members.findByServerAndUser('guild', 'target')).toEqual(beforeMember);
+    expect(await f.actionRepo.getActionHistory('target', 'guild')).toHaveLength(0);
+    expect(f.ban).toHaveBeenCalledTimes(1);
+    const retry = await f.requests.enqueue({
+      serverId: 'guild',
+      actorId: 'moderator',
+      actorSurface: 'discord',
+      targetUserId: 'target',
+      detectionEventId: f.detection.id,
+      reportIntakeId: f.report.id,
+      actionType: ModerationActionRequestType.BAN_OBSERVED_DETECTION,
+      idempotencyKey: 'ban:report',
+      metadata: { reason: 'New decision' },
+    });
+    expect(getReportBanAttemptToken(retry)).not.toBe(f.reference.attemptToken);
+    const retryResult = await f.security.banObservedDetection(
+      f.member,
+      f.detection.id,
+      f.moderator,
+      'New decision',
+      retry
+    );
+    expect(retryResult.status).toBe('ban_outcome_unknown');
+    await f.requests.complete(
+      retry.id,
+      { observed_ban_result: retryResult },
+      getReportBanAttemptToken(retry)
+    );
+    await expect(
+      f.security.reviewUncertainReportBan(f.guild, f.reference, f.moderator, 'Old acknowledgment')
+    ).rejects.toThrow('operation changed');
+    expect((await f.requests.findById(retry.id))?.metadata).toMatchObject({
+      report_ban_phase: 'reconciliation_required',
+    });
+    expect((await f.reports.findById(f.report.id))?.metadata).toHaveProperty(
+      'report_ban_operation_id',
+      retry.id
+    );
+    expect(f.ban).toHaveBeenCalledTimes(2);
+  });
+
+  it('retains a different reviewer audit separately from a later successful ban and analytics', async () => {
+    const f = await uncertain();
+    const reviewer = { id: 'reviewer', username: 'reviewer' } as User;
+    (f.guild.members.fetch as jest.Mock).mockResolvedValue({ permissions: { has: () => true } });
+    await f.security.reviewUncertainReportBan(f.guild, f.reference, reviewer, 'Reviewed absence');
+    expect(
+      await getPrismaClient().users.findUnique({ where: { discord_id: reviewer.id } })
+    ).not.toBeNull();
+    const retry = await f.requests.enqueue({
+      serverId: 'guild',
+      actorId: 'moderator',
+      actorSurface: 'discord',
+      targetUserId: 'target',
+      detectionEventId: f.detection.id,
+      reportIntakeId: f.report.id,
+      actionType: ModerationActionRequestType.BAN_OBSERVED_DETECTION,
+      idempotencyKey: 'ban:report',
+      metadata: { reason: 'New confirmed decision' },
+    });
+    f.ban.mockResolvedValue(undefined);
+    expect(
+      await f.security.banObservedDetection(
+        f.member,
+        f.detection.id,
+        f.moderator,
+        'New confirmed decision',
+        retry
+      )
+    ).toEqual({ status: 'banned' });
+    const completed = (await f.requests.findById(retry.id))!;
+    expect(completed.metadata).toMatchObject({
+      observed_ban_reviews: [
+        expect.objectContaining({
+          reviewed_by: 'reviewer',
+          attempt_token: f.reference.attemptToken,
+        }),
+      ],
+    });
+    expect(await f.actionRepo.getActionHistory('target', 'guild')).toEqual([
+      expect.objectContaining({ action_type: 'ban', admin_id: 'moderator' }),
+    ]);
+    expect(await f.outcomeRepo.findByUserAndServer('target', 'guild')).toHaveLength(1);
+    expect(f.analytics.captureUserEvent).toHaveBeenCalledTimes(1);
+    expect(f.ban).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['present', 'permission', 'operation', 'version', 'timeout', 'confirmed'])(
+    'rejects no-current-ban review after %s changes',
+    async (change) => {
+      const f = await uncertain();
+      if (change === 'present') f.banFetch.mockResolvedValue({ user: f.user });
+      if (change === 'permission')
+        (f.guild.members.fetch as jest.Mock).mockResolvedValue({
+          permissions: { has: () => false },
+        });
+      if (change === 'operation') f.reference.targetUserId = 'other-user';
+      if (change === 'version') await f.requests.heartbeat(f.request.id, f.reference.attemptToken);
+      if (change === 'confirmed')
+        await f.requests.mergeMetadata(
+          f.request.id,
+          {
+            report_ban_phase: 'discord_confirmed',
+            report_ban_confirmed_at: new Date().toISOString(),
+          },
+          f.reference.attemptToken
+        );
+      if (change === 'timeout') f.banFetch.mockRejectedValue(new Error('timeout'));
+      await expect(
+        f.security.reviewUncertainReportBan(f.guild, f.reference, f.moderator, 'Review')
+      ).rejects.toThrow();
+      expect((await f.requests.findById(f.request.id))?.metadata).toMatchObject({
+        report_ban_phase: change === 'confirmed' ? 'discord_confirmed' : 'reconciliation_required',
+      });
+      expect(f.ban).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('fences paused reconciliation and preserves newer case ownership and member state', async () => {
+    const f = await uncertain();
+    const stale = (await f.requests.findById(f.request.id))!;
+    await getPrismaClient().verification_events.update({
+      where: { id: f.event.id },
+      data: { quarantine_attempt_id: 'new-owner' },
+    });
+    await f.members.upsertMember('guild', 'target', {
+      verification_status: VerificationStatus.VERIFIED,
+      last_status_change: new Date(Date.now() + 60000),
+    });
+    let reached!: () => void;
+    let resume!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    const paused = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    f.banFetch.mockImplementationOnce(async () => {
+      reached();
+      await paused;
+      return { user: f.user };
+    });
+    const reconciling = f.security.reconcileReportBan(stale).catch((error: unknown) => error);
+    await entered;
+    await f.security.reviewUncertainReportBan(
+      f.guild,
+      f.reference,
+      f.moderator,
+      'No current ban at review'
+    );
+    resume();
+    expect(await reconciling).toMatchObject({
+      message: expect.stringContaining('ownership changed'),
+    });
+    await f.requests.complete(
+      f.request.id,
+      { observed_ban_result: { status: 'banned' } },
+      f.reference.attemptToken
+    );
+    expect((await f.requests.findById(f.request.id))?.result).toMatchObject({
+      observed_ban_result: { status: 'ban_reviewed_no_current_ban' },
+    });
+    expect(await f.cases.findById(f.event.id)).toMatchObject({
+      quarantine_attempt_id: 'new-owner',
+      status: 'pending',
+    });
+    expect(await f.members.findByServerAndUser('guild', 'target')).toMatchObject({
+      verification_status: 'verified',
+    });
+    expect(await f.actionRepo.getActionHistory('target', 'guild')).toHaveLength(0);
+    expect(f.ban).toHaveBeenCalledTimes(1);
+  });
+
+  it('claims successful completion analytics only once across repository instances', async () => {
+    const f = await fixture();
+    await f.requests.complete(
+      f.request.id,
+      { observed_ban_result: { status: 'banned' } },
+      getReportBanAttemptToken(f.request)
+    );
+    const second = new ModerationActionRequestRepository(getPrismaClient());
+    const claims = await Promise.all(
+      [f.requests, second].map((repo) =>
+        repo.claimReportBanCompletionAnalytics(f.request.id, getReportBanAttemptToken(f.request)!)
+      )
+    );
+    expect(claims.filter(Boolean)).toHaveLength(1);
+  });
+
   it('fails a stale phase-less owner and fences its late continuation before explicit retry', async () => {
     const f = await fixture();
     const claimed = (await f.requests.claimNext())!;

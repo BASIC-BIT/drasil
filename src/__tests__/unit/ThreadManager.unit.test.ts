@@ -1,3 +1,4 @@
+import { SecurityActionService } from '../../services/SecurityActionService';
 import {
   ChannelType,
   Client,
@@ -1176,6 +1177,86 @@ describe('ThreadManager (unit)', () => {
       expect(channel.threads.create).toHaveBeenCalledTimes(1);
       expect(reviewThread.members.add).not.toHaveBeenCalled();
       expect(reviewThread.send).not.toHaveBeenCalled();
+    });
+
+    it.each(['repair-first', 'promotion-first', 'repair-only'])(
+      'keeps legacy review private during %s setup',
+      async (order) => {
+        const event = await createCase({ thread_type: 'report_review' });
+        const reviewThread = buildThread('review-thread');
+        await verificationEventRepository.update(event.id, { thread_id: reviewThread.id });
+        event.thread_id = reviewThread.id;
+        channel.threads.fetch!.mockResolvedValue(reviewThread);
+        const entered = deferred<void>();
+        const resume = deferred<void>();
+        const find = verificationEventRepository.findById.bind(verificationEventRepository);
+        jest.spyOn(verificationEventRepository, 'findById').mockImplementationOnce(async (id) => {
+          entered.resolve();
+          await resume.promise;
+          return find(id);
+        });
+        const service = manager();
+        const member = buildMember('guild-1', 'user-1');
+        const first =
+          order === 'promotion-first'
+            ? service.createVerificationThread(member, { ...event })
+            : service.repairVerificationThread(member, { ...event });
+        await entered.promise;
+        const second =
+          order === 'repair-only'
+            ? Promise.resolve(null)
+            : order === 'promotion-first'
+              ? service.repairVerificationThread(member, { ...event })
+              : service.createVerificationThread(member, { ...event });
+        resume.resolve();
+        await Promise.all([first, second]);
+        expect(reviewThread.members.add).not.toHaveBeenCalled();
+        expect(reviewThread.send).not.toHaveBeenCalled();
+        expect(channel.threads.create).toHaveBeenCalledTimes(order === 'repair-only' ? 0 : 1);
+        expect(thread.send).toHaveBeenCalledTimes(order === 'repair-only' ? 0 : 1);
+        expect((await find(event.id))?.thread_id).toBe(
+          order === 'repair-only' ? 'review-thread' : 'thread-1'
+        );
+      }
+    );
+
+    it('keeps the direct delayed-repair caller from exposing a legacy thread', async () => {
+      const event = await createCase({
+        thread_type: 'report_review',
+        action_failures: [
+          { action: 'thread', message: 'Promotion failed', at: new Date().toISOString() },
+        ],
+      });
+      const reviewThread = buildThread('review-thread');
+      await verificationEventRepository.update(event.id, { thread_id: reviewThread.id });
+      channel.threads.fetch!.mockResolvedValue(reviewThread);
+      const service = new SecurityActionService(
+        {} as never,
+        {} as never,
+        serverMemberRepository,
+        verificationEventRepository,
+        userRepository,
+        serverRepository,
+        {} as never,
+        manager(),
+        {} as never,
+        {} as Client
+      );
+      const error = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+      try {
+        await service['runDelayedThreadRepair'](buildMember('guild-1', 'user-1'), event.id, {
+          label: 'SUSPICIOUS',
+          confidence: 0.9,
+          reasons: [],
+          triggerSource: DetectionType.USER_REPORT,
+          triggerContent: '',
+        });
+      } finally {
+        error.mockRestore();
+      }
+      expect(reviewThread.members.add).not.toHaveBeenCalled();
+      expect(reviewThread.send).not.toHaveBeenCalled();
+      expect(channel.threads.create).not.toHaveBeenCalled();
     });
 
     it('creates a missing thread during repair without waiting on its own setup promise', async () => {
