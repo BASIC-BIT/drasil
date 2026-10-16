@@ -1880,6 +1880,228 @@ integration('report-ban stale worker recovery with real services and Postgres', 
     return { ...f, event, reference };
   }
 
+  it.each(['observation-first', 'review-first'])(
+    'retains delivered bans across uncertain review ownership handoff: %s',
+    async (ordering) => {
+      const f = await uncertain();
+      const observedAt = new Date();
+      let entered!: () => void, resume!: () => void;
+      const reached = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        resume = resolve;
+      });
+      const review = f.requests.reviewUncertainReportBan.bind(f.requests);
+      jest.spyOn(f.requests, 'reviewUncertainReportBan').mockImplementation(async (input) => {
+        if (ordering === 'observation-first') {
+          entered();
+          await gate;
+          return review(input);
+        }
+        return getPrismaClient().$transaction(
+          async (transaction) => {
+            const client = new Proxy(transaction, {
+              get(target, property) {
+                return property === '$transaction'
+                  ? // eslint-disable-next-line no-unused-vars -- Callback type only.
+                    (callback: (_value: typeof transaction) => Promise<unknown>) =>
+                      callback(transaction)
+                  : Reflect.get(target, property);
+              },
+            }) as PrismaClient;
+            const result = await new ModerationActionRequestRepository(
+              client
+            ).reviewUncertainReportBan(input);
+            entered();
+            await gate;
+            return result;
+          },
+          { timeout: 15000 }
+        );
+      });
+      const reviewing = f.security
+        .reviewUncertainReportBan(f.guild, f.reference, f.moderator, 'No ban at lookup')
+        .then(
+          () => null,
+          (error: unknown) => error
+        );
+      await reached;
+      f.banFetch.mockResolvedValue({ user: f.user });
+      const observing = f.moderation.recordObservedDiscordBan(f.guild, f.user, {
+        source: ModerationOutcomeSource.UNKNOWN_EXTERNAL,
+        sourceDetail: 'guildBanAdd',
+        occurredAt: observedAt,
+      });
+      try {
+        if (ordering === 'observation-first') {
+          expect(await observing).toBe(0);
+          resume();
+          expect(await reviewing).toBeInstanceOf(Error);
+          const held = (await f.requests.findById(f.request.id))!;
+          expect(held.metadata).toMatchObject({
+            report_ban_phase: 'reconciliation_required',
+            report_ban_observed_ban: {
+              source: 'unknown_external',
+              source_detail: 'guildBanAdd',
+              occurred_at: observedAt.toISOString(),
+              attempt_token: f.reference.attemptToken,
+              membership_joined_at: f.member.joinedAt!.toISOString(),
+              uncertain_result: { observed_ban_result: { status: 'ban_outcome_unknown' } },
+            },
+          });
+          expect((held.metadata as Prisma.JsonObject).report_ban_confirmed_at).toBeUndefined();
+          expect(await f.security.reconcileReportBan(held)).toEqual({ status: 'banned' });
+        } else {
+          // The actual observer has read the still-owned case before waiting on review's lock.
+          const observationState = { finished: false };
+          void observing.then(() => {
+            observationState.finished = true;
+          });
+          const deadline = Date.now() + 10000;
+          while (!observationState.finished) {
+            const waiting = await getPrismaClient().$queryRaw<{ count: bigint }[]>`
+              SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()
+                AND wait_event_type = 'Lock' AND query LIKE '%moderation_action_requests%'`;
+            if (Number(waiting[0].count)) break;
+            if (Date.now() > deadline) throw new Error('Observer did not reach request lock');
+            await new Promise<void>((resolve) => setImmediate(resolve));
+          }
+          resume();
+          expect(await reviewing).toBeNull();
+          expect(await observing).toBe(1);
+          expect((await f.requests.findById(f.request.id))?.metadata).not.toHaveProperty(
+            'report_ban_observed_ban'
+          );
+          expect((await f.cases.findById(f.event.id))?.metadata).not.toHaveProperty(
+            'report_ban_enforcement_operation_id'
+          );
+        }
+        expect((await f.cases.findById(f.event.id))?.status).toBe('banned');
+        expect(f.ban).toHaveBeenCalledTimes(1);
+      } finally {
+        resume();
+        await Promise.all([reviewing, observing]);
+      }
+    }
+  );
+
+  it.each(['newer-attempt', 'newer-revision', 'newer-membership'])(
+    'preserves newer state when a delivered ban waits on review: %s',
+    async (change) => {
+      const f = await uncertain();
+      const observedAt = new Date();
+      let entered!: () => void, resume!: () => void;
+      const reached = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        resume = resolve;
+      });
+      const find = f.cases.findByUserAndServer.bind(f.cases);
+      jest.spyOn(f.cases, 'findByUserAndServer').mockImplementationOnce(async (...args) => {
+        const snapshot = await find(...args);
+        entered();
+        await gate;
+        return snapshot;
+      });
+      const observing = f.moderation.recordObservedDiscordBan(f.guild, f.user, {
+        source: ModerationOutcomeSource.UNKNOWN_EXTERNAL,
+        occurredAt: observedAt,
+      });
+      await reached;
+      const newJoin = new Date(observedAt.getTime() + 1000);
+      try {
+        if (change === 'newer-attempt') {
+          await getPrismaClient().moderation_action_requests.update({
+            where: { id: f.request.id },
+            data: {
+              metadata: {
+                ...((await f.requests.findById(f.request.id))!.metadata as Prisma.JsonObject),
+                report_ban_attempt_token: 'new-attempt',
+                report_ban_attempt_id: 'report-ban:new-attempt',
+              },
+            },
+          });
+          await getPrismaClient().verification_events.update({
+            where: { id: f.event.id },
+            data: {
+              quarantine_attempt_id: 'report-ban:new-attempt',
+            },
+          });
+        } else if (change === 'newer-revision') {
+          await getPrismaClient().verification_events.update({
+            where: { id: f.event.id },
+            data: {
+              case_revision: { increment: 1 },
+            },
+          });
+        } else {
+          await f.security.reviewUncertainReportBan(
+            f.guild,
+            f.reference,
+            f.moderator,
+            'Absent before delivered event'
+          );
+          await f.members.upsertMember('guild', 'target', {
+            join_date: newJoin,
+            verification_status: VerificationStatus.VERIFIED,
+            last_status_change: newJoin,
+          });
+        }
+        resume();
+        expect(await observing).toBe(change === 'newer-membership' ? 1 : 0);
+        const request = (await f.requests.findById(f.request.id))!;
+        expect(request.metadata).not.toHaveProperty('report_ban_observed_ban');
+        if (change === 'newer-attempt')
+          expect(getReportBanAttemptToken(request)).toBe('new-attempt');
+        if (change === 'newer-revision')
+          expect(await f.cases.findById(f.event.id)).toMatchObject({
+            status: 'pending',
+            case_revision: 1,
+          });
+        if (change === 'newer-membership')
+          expect(await f.members.findByServerAndUser('guild', 'target')).toMatchObject({
+            join_date: newJoin,
+            verification_status: 'verified',
+            last_status_change: newJoin,
+          });
+        expect(f.ban).toHaveBeenCalledTimes(1);
+      } finally {
+        resume();
+        await observing;
+      }
+    }
+  );
+
+  it('retains delivered evidence when a fresh later review confirms absence', async () => {
+    const f = await uncertain();
+    await f.moderation.recordObservedDiscordBan(f.guild, f.user, {
+      source: ModerationOutcomeSource.UNKNOWN_EXTERNAL,
+      sourceDetail: 'guildBanAdd',
+    });
+    const reference = await f.security.prepareReportBanReview(f.guild, f.request.id, f.moderator);
+    expect(reference.observedBanId).toBeDefined();
+    await f.security.reviewUncertainReportBan(
+      f.guild,
+      reference,
+      f.moderator,
+      'Ban subsequently removed'
+    );
+    const stored = (await f.requests.findById(f.request.id))!;
+    expect(stored.metadata).toMatchObject({
+      observed_ban_reviews: [
+        {
+          operation_metadata: {
+            report_ban_observed_ban: { id: reference.observedBanId, source: 'unknown_external' },
+          },
+          result: { observed_ban_result: { status: 'ban_outcome_unknown' } },
+        },
+      ],
+    });
+    expect(f.ban).toHaveBeenCalledTimes(1);
+  });
+
   it('reviews a detection-only observed ban without requiring or changing a report', async () => {
     const f = await uncertain(false);
     expect(f.request.report_intake_id).toBeNull();

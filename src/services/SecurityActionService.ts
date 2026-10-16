@@ -133,6 +133,7 @@ export type ObservedBanResult =
   | { status: 'banned_updates_pending'; operationId: string }
   | { status: 'ban_outcome_unknown'; operationId: string };
 export interface ReportBanReviewReference {
+  observedBanId?: string;
   operationId: string;
   attemptToken: string;
   updatedAt: Date;
@@ -3846,6 +3847,8 @@ export class SecurityActionService implements ISecurityActionService {
       attemptToken,
       updatedAt: request.updated_at,
       targetUserId: request.target_user_id,
+      observedBanId:
+        this.readString(this.metadataToRecord(metadata.report_ban_observed_ban).id) ?? undefined,
     };
   }
 
@@ -3875,13 +3878,14 @@ export class SecurityActionService implements ISecurityActionService {
     }
     if (!absent)
       throw new Error('A current ban exists. Allow confirmed-ban reconciliation to finish.');
+    const banAbsentCheckedAt = new Date();
     await this.userRepository.getOrCreateUser(moderator.id, moderator.username);
     const reviewed = await this.actionRequests?.reviewUncertainReportBan({
       ...reference,
       serverId: guild.id,
       actorId: moderator.id,
       reason,
-      banAbsentCheckedAt: new Date(),
+      banAbsentCheckedAt,
     });
     if (!reviewed)
       throw new Error('The operation changed. Re-run the review command for its current state.');

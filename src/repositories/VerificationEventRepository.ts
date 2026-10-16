@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { injectable, inject } from 'inversify';
 import {
   case_attention_state,
@@ -1634,6 +1635,110 @@ export class VerificationEventRepository implements IVerificationEventRepository
     }
   }
 
+  private async resolveObservedReportBan(
+    id: string,
+    data: Partial<VerificationEvent>,
+    updateData: Prisma.verification_eventsUpdateInput
+  ): Promise<VerificationEvent | null> {
+    return this.prisma.$transaction(async (transaction) => {
+      const binding = await transaction.verification_events.findUnique({ where: { id } });
+      if (!binding) return null;
+      // The gateway can precede HTTP confirmation and adoption of a late case.
+      const operations = await transaction.$queryRaw<
+        Array<{
+          id: string;
+          metadata: Prisma.JsonObject;
+          result: Prisma.JsonObject;
+          requested_at: Date | null;
+        }>
+      >`
+            SELECT id, metadata, result, requested_at FROM moderation_action_requests
+            WHERE server_id = ${binding.server_id} AND target_user_id = ${binding.user_id}
+              AND action_type = 'ban_observed_detection'
+              AND metadata->>'report_ban_phase' IN ('preparing', 'enforcement_started', 'discord_confirmed', 'reconciliation_required')
+            ORDER BY id FOR UPDATE`;
+      const rows = await transaction.$queryRaw<VerificationEvent[]>`
+            SELECT * FROM verification_events WHERE id = ${id}::uuid FOR UPDATE`;
+      const current = rows.at(0);
+      if (
+        !current ||
+        current.status !== VerificationStatus.PENDING ||
+        (data.case_revision !== undefined && current.case_revision !== data.case_revision) ||
+        (current.quarantine_attempt_id &&
+          current.quarantine_attempt_id !== data.quarantine_attempt_id) ||
+        (data.resolved_at && current.created_at > data.resolved_at)
+      )
+        return null;
+      const owners = operations.filter((operation) =>
+        this.activeReportBanMayOwnCase(operation.metadata, current)
+      );
+      // Save delivered gateway evidence before deferring to the operation. Review takes
+      // this same request lock first, so either it sees the observation or we see release.
+      if (data.status === VerificationStatus.BANNED && data.resolved_at) {
+        for (const operation of owners) {
+          if (operation.requested_at && operation.requested_at > data.resolved_at) continue;
+          const prior = operation.metadata.report_ban_observed_ban as Prisma.JsonObject | undefined;
+          const evidence = (data.metadata ?? {}) as Prisma.JsonObject;
+          const observation = {
+            id: randomUUID(),
+            attempt_token: operation.metadata.report_ban_attempt_token,
+            occurred_at: data.resolved_at.toISOString(),
+            source: evidence.moderation_outcome_source ?? null,
+            source_detail: evidence.source_detail ?? null,
+            actor_id: evidence.moderation_outcome_actor_id ?? null,
+            audit_log_entry_id: evidence.audit_log_entry_id ?? null,
+            membership_joined_at: operation.metadata.report_ban_membership_joined_at ?? null,
+            case_id: current.id,
+            case_revision: current.case_revision,
+            uncertain_result: prior?.uncertain_result ?? operation.result,
+          };
+          await transaction.$executeRaw`
+                UPDATE moderation_action_requests SET metadata = metadata ||
+                  jsonb_build_object('report_ban_observed_ban', ${JSON.stringify(observation)}::jsonb), updated_at = clock_timestamp()
+                WHERE id = ${operation.id}::uuid`;
+        }
+      }
+      if (
+        owners.length ||
+        (current.quarantine_attempt_id?.startsWith(REPORT_BAN_TERMINAL_ATTEMPT_PREFIX) &&
+          (current.metadata as Record<string, unknown> | null)?.report_ban_enforcement_operation_id)
+      )
+        return null;
+      // A review may have released ownership while this observer waited. Keep its
+      // current metadata instead of copying the stale operation claim back onto the case.
+      updateData.metadata = {
+        ...((current.metadata ?? {}) as Prisma.JsonObject),
+        ...Object.fromEntries(
+          Object.entries((data.metadata ?? {}) as Prisma.JsonObject).filter(([key]) =>
+            [
+              'source_detail',
+              'audit_log_entry_id',
+              'moderation_outcome_source',
+              'moderation_outcome_actor_id',
+            ].includes(key)
+          )
+        ),
+      };
+      return (await transaction.verification_events.update({
+        where: { id },
+        data: {
+          status: updateData.status,
+          resolved_at: updateData.resolved_at,
+          resolved_by: updateData.resolved_by,
+          notes: updateData.notes,
+          attention_state: updateData.attention_state,
+          containment_status: updateData.containment_status,
+          quarantine_attempt_id: null,
+          quarantine_lease_renewed_at: null,
+          parked_at: null,
+          parked_by: null,
+          metadata: updateData.metadata,
+          updated_at: updateData.updated_at,
+        },
+      })) as VerificationEvent;
+    });
+  }
+
   async update(
     id: string,
     data: Partial<VerificationEvent>,
@@ -1712,35 +1817,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
         data.status === VerificationStatus.KICKED ||
         data.status === VerificationStatus.CLOSED_NO_ACTION;
       if (isResolution && options.deferReportBanEnforcement) {
-        return this.prisma.$transaction(async (transaction) => {
-          const binding = await transaction.verification_events.findUnique({ where: { id } });
-          if (!binding) return null;
-          // The gateway can precede HTTP confirmation and adoption of a late case.
-          const operations = await transaction.$queryRaw<Array<{ metadata: Prisma.JsonObject }>>`
-            SELECT metadata FROM moderation_action_requests
-            WHERE server_id = ${binding.server_id} AND target_user_id = ${binding.user_id}
-              AND action_type = 'ban_observed_detection'
-              AND metadata->>'report_ban_phase' IN ('preparing', 'enforcement_started', 'discord_confirmed', 'reconciliation_required')
-            ORDER BY id FOR UPDATE`;
-          const rows = await transaction.$queryRaw<VerificationEvent[]>`
-            SELECT * FROM verification_events WHERE id = ${id}::uuid FOR UPDATE`;
-          const current = rows.at(0);
-          if (
-            !current ||
-            current.status !== VerificationStatus.PENDING ||
-            operations.some((operation) =>
-              this.activeReportBanMayOwnCase(operation.metadata, current)
-            ) ||
-            (current.quarantine_attempt_id?.startsWith(REPORT_BAN_TERMINAL_ATTEMPT_PREFIX) &&
-              (current.metadata as Record<string, unknown> | null)
-                ?.report_ban_enforcement_operation_id)
-          )
-            return null;
-          return (await transaction.verification_events.update({
-            where: { id },
-            data: updateData,
-          })) as VerificationEvent;
-        });
+        return this.resolveObservedReportBan(id, data, updateData);
       }
       if (isResolution && options.expectedQuarantineAttemptId) {
         const updated = await this.prisma.verification_events.updateMany({

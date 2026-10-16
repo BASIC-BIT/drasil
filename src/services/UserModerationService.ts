@@ -2934,6 +2934,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       const resolvedAt = options.occurredAt ?? new Date();
       await this.clearDiscordPendingScreeningState(guild.id, user.id, resolvedAt);
 
+      const membership = await this.serverMemberRepository.findByServerAndUser(guild.id, user.id);
       const verificationEvents = await this.verificationEventRepository.findByUserAndServer(
         user.id,
         guild.id
@@ -2942,12 +2943,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         (event) => event.status === VerificationStatus.PENDING
       );
       const pendingVerificationEvents = allPendingVerificationEvents.filter(
-        (event) =>
-          !this.getActiveModerationOperation(event.metadata) &&
-          !(
-            event.quarantine_attempt_id?.startsWith(REPORT_BAN_TERMINAL_ATTEMPT_PREFIX) &&
-            this.metadataToRecord(event.metadata).report_ban_enforcement_operation_id
-          )
+        (event) => !this.getActiveModerationOperation(event.metadata)
       );
       if (pendingVerificationEvents.length === 0) {
         if (allPendingVerificationEvents.length > 0) {
@@ -3002,17 +2998,19 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       }
 
       if (resolvedEvents.length === 0) return 0;
-      await this.serverMemberRepository.upsertMember(guild.id, user.id, {
-        verification_status: VerificationStatus.BANNED,
-        case_role_active: false,
-        last_status_change: new Date(),
-      });
-      await this.tryAbandonRoleQuarantine(
+      const currentMembership = await this.serverMemberRepository.markBannedIfNotNewer(
         guild.id,
         user.id,
-        'observed_discord_ban',
-        options.actorId ?? null
+        resolvedAt,
+        membership?.join_date ?? null
       );
+      if (currentMembership)
+        await this.tryAbandonRoleQuarantine(
+          guild.id,
+          user.id,
+          'observed_discord_ban',
+          options.actorId ?? null
+        );
 
       for (const resolvedEvent of resolvedEvents) {
         await this.finalizeExternallyResolvedVerificationEvent(

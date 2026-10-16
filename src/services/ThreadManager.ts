@@ -900,20 +900,30 @@ export class ThreadManager implements IThreadManager {
     expectedThreadId = event.thread_id
   ): Promise<void> {
     const latest = await this.verificationEventRepository.findById(event.id);
-    if (latest) Object.assign(event, latest);
-    if (
+    const superseded =
       !latest ||
       latest.status !== VerificationStatus.PENDING ||
-      latest.thread_id !== expectedThreadId
-    )
-      throw new VerificationSetupSuperseded('Verification setup was superseded.');
+      latest.thread_id !== expectedThreadId ||
+      latest.case_revision !== event.case_revision;
+    if (latest) Object.assign(event, latest);
+    if (superseded) throw new VerificationSetupSuperseded('Verification setup was superseded.');
   }
 
   private async retireVerificationSetup(
+    event: Pick<VerificationEvent, 'id' | 'case_revision'>,
     thread: ThreadChannel,
     addedMemberId?: string
   ): Promise<void> {
+    const isCurrentPendingThread = async (): Promise<boolean> => {
+      const latest = await this.verificationEventRepository.findById(event.id);
+      return Boolean(
+        latest?.status === VerificationStatus.PENDING &&
+        latest.thread_id === thread.id &&
+        latest.case_revision >= event.case_revision
+      );
+    };
     try {
+      if (await isCurrentPendingThread()) return;
       if (addedMemberId) {
         try {
           await thread.members.remove(addedMemberId);
@@ -922,7 +932,10 @@ export class ThreadManager implements IThreadManager {
         }
       }
 
-      await this.setThreadArchiveAndLockState(thread, true, true);
+      if (await isCurrentPendingThread()) return;
+      await thread.setLocked(true);
+      if (await isCurrentPendingThread()) return;
+      await thread.setArchived(true);
     } catch (error) {
       if (String(getDiscordErrorCode(error)) !== '10003') throw error;
     }
@@ -1059,7 +1072,7 @@ export class ThreadManager implements IThreadManager {
           if (!['10003', '10008'].includes(String(getDiscordErrorCode(deleteError))))
             throw deleteError;
         } finally {
-          await this.retireVerificationSetup(thread);
+          await this.retireVerificationSetup(verificationEvent, thread);
         }
       }
       throw error;
@@ -1271,7 +1284,11 @@ export class ThreadManager implements IThreadManager {
     } catch (error) {
       if (error instanceof VerificationSetupSuperseded) {
         if (ownedThread)
-          await this.retireVerificationSetup(ownedThread, userAdded ? member.id : undefined);
+          await this.retireVerificationSetup(
+            verificationEvent,
+            ownedThread,
+            userAdded ? member.id : undefined
+          );
         throw error;
       }
       console.error('Failed to create verification thread:', error);
@@ -1339,7 +1356,11 @@ export class ThreadManager implements IThreadManager {
       };
     } catch (error) {
       if (error instanceof VerificationSetupSuperseded)
-        await this.retireVerificationSetup(thread, newlyAdded ? member.id : undefined);
+        await this.retireVerificationSetup(
+          verificationEvent,
+          thread,
+          newlyAdded ? member.id : undefined
+        );
       throw error;
     }
   }
@@ -1938,13 +1959,28 @@ export class ThreadManager implements IThreadManager {
    */
   async reopenVerificationThread(verificationEvent: VerificationEvent): Promise<boolean> {
     try {
+      // Finish any already-started retirement before restoring this revision's access.
+      await this.verificationSetups.get(verificationEvent.id);
+      await this.requirePendingVerificationSetup(verificationEvent);
       let reopenedMainThread = false;
 
       if (verificationEvent.thread_id) {
         const thread = await this.fetchStoredThread(verificationEvent);
         if (thread) {
-          await this.setThreadArchiveAndLockState(thread, false, false);
-          reopenedMainThread = true;
+          try {
+            await this.requirePendingVerificationSetup(verificationEvent, thread.id);
+            await thread.setArchived(false);
+            await this.requirePendingVerificationSetup(verificationEvent, thread.id);
+            await thread.setLocked(false);
+            await this.requirePendingVerificationSetup(verificationEvent, thread.id);
+            await thread.members.add(verificationEvent.user_id);
+            await this.requirePendingVerificationSetup(verificationEvent, thread.id);
+            reopenedMainThread = true;
+          } catch (error) {
+            if (error instanceof VerificationSetupSuperseded)
+              await this.retireVerificationSetup(verificationEvent, thread);
+            throw error;
+          }
         }
       }
 

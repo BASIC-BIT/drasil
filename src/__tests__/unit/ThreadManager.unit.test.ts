@@ -1222,6 +1222,115 @@ describe('ThreadManager (unit)', () => {
       }
     );
 
+    it.each([
+      'before-retirement',
+      'remove',
+      'lock',
+      'archive',
+      'preexisting',
+      'replacement',
+      'later-terminal',
+    ])('keeps the reopened case usable across obsolete retirement: %s', async (stage) => {
+      const event = await createCase({ retained: true });
+      const entered = deferred<void>();
+      const resume = deferred<void>();
+      let present = stage === 'preexisting';
+      Object.assign(thread, { archived: false, locked: false });
+      (thread.members.fetch as jest.Mock).mockImplementation(async () =>
+        present ? { id: 'user-1' } : null
+      );
+      (thread.members.add as jest.Mock).mockImplementation(async () => {
+        present = true;
+      });
+      (thread.members.remove as jest.Mock).mockImplementation(async () => {
+        if (stage === 'remove') {
+          entered.resolve();
+          await resume.promise;
+        }
+        present = false;
+      });
+      thread.setLocked.mockImplementation(async (locked) => {
+        if (locked && stage === 'lock') {
+          entered.resolve();
+          await resume.promise;
+        }
+        Object.assign(thread, { locked });
+        return thread;
+      });
+      thread.setArchived.mockImplementation(async (archived) => {
+        if (archived && !['remove', 'lock'].includes(stage)) {
+          entered.resolve();
+          await resume.promise;
+        }
+        Object.assign(thread, { archived });
+        return thread;
+      });
+      // Resolve after membership was added, so setup owns only that addition.
+      (thread.messages.fetch as jest.Mock).mockImplementationOnce(async () => {
+        await verificationEventRepository.update(event.id, {
+          status: VerificationStatus.VERIFIED,
+        });
+        return new Map();
+      });
+      if (stage === 'before-retirement') {
+        const find = verificationEventRepository.findById.bind(verificationEventRepository);
+        let paused = false;
+        jest.spyOn(verificationEventRepository, 'findById').mockImplementation(async (id) => {
+          const snapshot = await find(id);
+          if (!paused && snapshot?.status === VerificationStatus.VERIFIED) {
+            paused = true;
+            entered.resolve();
+            await resume.promise;
+          }
+          return snapshot;
+        });
+      }
+      const service = manager();
+      const repairing = service.repairVerificationThread(buildMember('guild-1', 'user-1'), event);
+      await entered.promise;
+      const reopened = (await verificationEventRepository.reopen(event.id))!;
+      const replacement = buildThread('replacement');
+      if (stage === 'replacement') {
+        Object.assign(
+          reopened,
+          await verificationEventRepository.setThreadIdentity(
+            event.id,
+            replacement.id,
+            'verification'
+          )
+        );
+        (channel.threads.fetch as jest.Mock).mockImplementation(async (id) =>
+          id === replacement.id ? replacement : thread
+        );
+      }
+      const reopening = service.reopenVerificationThread(reopened);
+      // Let reopen reach its awaited Discord effect or the setup owner barrier.
+      await new Promise((resolve) => setImmediate(resolve));
+      if (stage === 'later-terminal')
+        await verificationEventRepository.update(event.id, { status: VerificationStatus.BANNED });
+      resume.resolve();
+      await Promise.all([repairing, reopening]);
+      expect(await verificationEventRepository.findById(event.id)).toMatchObject({
+        case_revision: 1,
+        status: stage === 'later-terminal' ? 'banned' : 'pending',
+        thread_id: stage === 'replacement' ? replacement.id : thread.id,
+        metadata: { retained: true },
+      });
+      if (stage === 'replacement') {
+        expect(replacement.setArchived).toHaveBeenCalledWith(false);
+        expect(replacement.setLocked).toHaveBeenCalledWith(false);
+      } else if (stage === 'later-terminal') {
+        expect(thread.archived).toBe(true);
+        expect(thread.locked).toBe(true);
+      } else {
+        expect(thread.archived).toBe(false);
+        expect(thread.locked).toBe(false);
+        expect(present).toBe(true);
+      }
+      if (stage === 'preexisting') expect(thread.members.remove).not.toHaveBeenCalled();
+      expect(channel.threads.create).not.toHaveBeenCalled();
+    });
+
     it('recovers a sent prompt after its metadata write fails', async () => {
       const event = await createCase();
       thread.send.mockResolvedValueOnce({ id: 'saved-prompt' } as never);
@@ -2134,10 +2243,16 @@ describe('ThreadManager (unit)', () => {
       serverMemberRepository
     );
 
-    const event = buildVerificationEvent({
+    const created = await verificationEventRepository.createFromDetection(
+      null,
+      'guild-1',
+      'user-1',
+      VerificationStatus.PENDING
+    );
+    const event = (await verificationEventRepository.update(created.id, {
       thread_id: 'thread-1',
       private_evidence_thread_id: 'evidence-thread-1',
-    });
+    }))!;
 
     const result = await manager.reopenVerificationThread(event);
 

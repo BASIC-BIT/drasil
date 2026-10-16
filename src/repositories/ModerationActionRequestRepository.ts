@@ -51,6 +51,7 @@ export interface ReportBanReviewDisposition {
   actorId: string;
   reason: string;
   banAbsentCheckedAt: Date;
+  observedBanId?: string;
 }
 
 export interface IModerationActionRequestRepository {
@@ -644,6 +645,8 @@ export class ModerationActionRequestRepository implements IModerationActionReque
       if (
         getReportBanAttemptToken(current) !== input.attemptToken ||
         current.updated_at?.getTime() !== input.updatedAt.getTime() ||
+        (metadata.report_ban_observed_ban as Prisma.JsonObject | undefined)?.id !==
+          input.observedBanId ||
         metadata.report_ban_phase !== 'reconciliation_required' ||
         metadata.report_ban_confirmed_at ||
         receipt?.status !== 'ban_outcome_unknown' ||
