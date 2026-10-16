@@ -14,6 +14,8 @@ const baseReportRow = {
   updated_at: new Date('2026-06-02T00:00:00.000Z'),
   closed_at: null,
   latest_detection_id: 'det-1',
+  latest_detection_user_id: 'user-1',
+  latest_detection_handled: false,
   latest_case_id: null,
 };
 
@@ -54,6 +56,7 @@ describe('reportDetailDataAdapter', () => {
       allowedActions: [
         'open_report_thread',
         'open_case',
+        'ban_user',
         'mark_actioned',
         'dismiss_no_action',
         'mark_false_positive',
@@ -103,4 +106,33 @@ describe('reportDetailDataAdapter', () => {
       'mark_false_positive',
     ]);
   });
+});
+
+it.each([
+  { confirmed_target_user_id: null },
+  { latest_detection_id: null },
+  { status: 'actioned' as const },
+  { metadata: { report_ban_operation_id: 'operation-1' } },
+])('withholds ban for unavailable reports: %j', (changes) => {
+  expect(parseReportDetailRows({ ...baseReportRow, ...changes }, []).allowedActions).not.toContain(
+    'ban_user'
+  );
+});
+
+it('allows a direct ban to resolve an existing case through the same operation', () => {
+  expect(
+    parseReportDetailRows({ ...baseReportRow, latest_case_id: 'case-1' }, []).allowedActions
+  ).toEqual(['open_report_thread', 'ban_user']);
+});
+
+it('keeps handled detection and case links while withholding another ban', () => {
+  const row = { ...baseReportRow, latest_case_id: 'case-1', latest_detection_handled: true };
+  const detail = parseReportDetailRows(row, []);
+  expect(detail.latestDetectionId).toBe('det-1');
+  expect(detail.latestCaseId).toBe('case-1');
+  expect(detail.allowedActions).toEqual(['open_report_thread']);
+});
+it('withholds a ban when the latest linked detection belongs to a different target', () => {
+  const row = { ...baseReportRow, latest_detection_user_id: 'different-user' };
+  expect(parseReportDetailRows(row, []).allowedActions).not.toContain('ban_user');
 });

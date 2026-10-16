@@ -1,3 +1,4 @@
+import { readFixtureReportBan } from './reportBanFixtures';
 import {
   reportQueueItemSchema,
   sortReportQueueItems,
@@ -90,6 +91,15 @@ function resolveAllowedActions(row: ReportQueueRow): ReportQueueAction[] {
   if (row.thread_id) {
     actions.push('open_report_thread');
   }
+  const metadata = row.metadata;
+  if (
+    metadata &&
+    typeof metadata === 'object' &&
+    'report_ban_operation_id' in metadata &&
+    metadata.report_ban_operation_id
+  )
+    return actions;
+  if (row.status !== 'submitted') return actions;
   if (!row.latest_case_id && row.confirmed_target_user_id && row.latest_detection_id) {
     actions.push('open_case');
   }
@@ -333,11 +343,17 @@ export class PostgresReportQueueDataAdapter implements ReportQueueDataAdapter {
 
 export class FixtureReportQueueDataAdapter implements ReportQueueDataAdapter {
   public async listSubmittedReports(): Promise<ReportQueueItem[]> {
-    return sortReportQueueItems(fixtureSubmittedReports());
+    const request = await readFixtureReportBan();
+    return sortReportQueueItems(
+      fixtureSubmittedReports().filter(
+        (report) =>
+          request?.observedBanResult?.status !== 'banned' || request.reportIntakeId !== report.id
+      )
+    );
   }
 
   public async countClosedReports(): Promise<number> {
-    return 4;
+    return (await readFixtureReportBan())?.observedBanResult?.status === 'banned' ? 5 : 4;
   }
 
   public canOpenSubmittedReportCase(): boolean {

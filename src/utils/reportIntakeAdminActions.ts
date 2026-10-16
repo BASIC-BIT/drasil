@@ -4,6 +4,7 @@ const DISCORD_CUSTOM_ID_MAX_LENGTH = 100;
 
 const ACTION_TO_CODE = {
   menu: 'm',
+  ban: 'b',
   close: 'c',
   confirm_close: 'cc',
   cancel: 'x',
@@ -25,6 +26,10 @@ export interface ParsedReportIntakeAdminActionCustomId {
 
 export function buildReportIntakeAdminActionsCustomId(intakeId: string): string {
   return buildReportIntakeAdminActionCustomId('menu', intakeId);
+}
+
+export function buildReportIntakeAdminBanCustomId(intakeId: string): string {
+  return buildReportIntakeAdminActionCustomId('ban', intakeId);
 }
 
 export function buildReportIntakeAdminCloseCustomId(intakeId: string): string {

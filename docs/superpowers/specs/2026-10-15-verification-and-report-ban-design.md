@@ -4,7 +4,7 @@
 
 Fix duplicate verification prompts and stale member-departure controls. Let moderators ban directly from a submitted report in both the Discord intake-thread menu and the web report detail page, without first opening a case. Preserve the same available evidence and moderation audit information.
 
-The user selected both Discord and web. The existing Discord report-alert Ban action remains part of the same workflow. No code, merge, deployment, historical repair, or live Discord edit has been performed by this work.
+The user selected both Discord and web. The existing Discord report-alert Ban action remains part of the same workflow. All four tasks are implemented locally on the shared feature branch. Combined branch review and PR completion remain pending. No merge, deployment, historical repair, or live Discord edit has been performed by this work.
 
 ## Moderator experience
 
@@ -43,7 +43,7 @@ Extract one evidence collector for case setup and direct report bans. Store the 
 
 Evidence persistence must succeed before enforcement. Optional data that cannot be fetched is recorded as unavailable; do not invent history, require a new model analysis, or prevent a ban solely because an optional enrichment is absent. Retained context remains subject to existing retention. A departed member's missing live profile fields cannot be reconstructed reliably.
 
-Both surfaces use the existing observed-ban service and its action claim, rather than duplicating enforcement logic. A queued request carries the report ID and expected detection/target. At worker execution, atomically claim that exact submitted report before collecting evidence. All competing close/open-case/target-change paths must honor the claim and return a busy result. A report closed before the claim cancels the queued ban; a close after the claim is rejected until completion or reconciliation. Revalidate the claim immediately before enforcement. Repeated clicks execute one destructive operation.
+Both surfaces use the existing observed-ban service and its action claim, rather than duplicating enforcement logic. A queued request carries the report ID and expected detection/target. Its request ID identifies the operation. The database mints a fresh internal attempt token for each safe retry; preparation and claims require the current token and a successful compare-and-swap transition. Neither entry point supplies that token. At worker execution, atomically claim that exact submitted report before collecting evidence. All competing close/open-case/target-change paths must honor the claim and return a busy result. A report closed before the claim cancels the queued ban; a close after the claim is rejected until completion or reconciliation. Revalidate the claim immediately before enforcement. Repeated clicks execute one destructive operation.
 
 Use a structured outcome with `banned`, `already_handled`, `banned_updates_pending`, and `ban_outcome_unknown` variants. Pre-enforcement failures report a failed request and release the preparation claim. After confirmed enforcement, retain the operation identity and finish only idempotent audit/report cleanup. An interrupted send with no confirmed outcome is reconciliation-required. If Discord confirms the ban, finish cleanup; otherwise show "Ban outcome needs review." Never automatically resend an uncertain enforcement action or turn an audit failure into a generic retryable ban failure.
 

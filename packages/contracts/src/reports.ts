@@ -10,6 +10,7 @@ export const reportQueueStatusSchema = z.enum([
 export const reportQueueActionSchema = z.enum([
   'open_report_thread',
   'open_case',
+  'ban_user',
   'mark_actioned',
   'dismiss_no_action',
   'mark_false_positive',
@@ -64,6 +65,7 @@ export const reportEvidenceItemSchema = z.object({
 });
 
 export const reportDetailSchema = z.object({
+  targetDisplayName: z.string().nullable().default(null),
   id: z.string(),
   guildId: z.string(),
   reporterId: z.string(),

@@ -181,3 +181,10 @@ it('keeps a claimed report busy in the SQL close and case-open paths', async () 
   ).toMatchObject({ status: 'busy' });
   expect(db.query).toHaveBeenCalledTimes(3);
 });
+
+it('suppresses competing report closure and case actions while a report ban owns the report', () => {
+  expect(
+    parseReportQueueRow({ ...baseRow, metadata: { report_ban_operation_id: 'operation-1' } })
+      .allowedActions
+  ).toEqual(['open_report_thread']);
+});

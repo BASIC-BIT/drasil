@@ -57,7 +57,9 @@ export function fixtureSubmittedReports(): ReportQueueItem[] {
 export const fixtureReportDetails: ReportDetail[] = [
   {
     ...fixtureReportQueueItems[0],
+    allowedActions: [...fixtureReportQueueItems[0].allowedActions, 'ban_user'],
     closedAt: null,
+    targetDisplayName: 'Reported member',
     evidence: [
       {
         id: 'report-evidence-1',
@@ -93,7 +95,9 @@ export const fixtureReportDetails: ReportDetail[] = [
   },
   {
     ...fixtureReportQueueItems[1],
+    allowedActions: [...fixtureReportQueueItems[1].allowedActions, 'ban_user'],
     closedAt: null,
+    targetDisplayName: 'Reported member',
     evidence: [
       {
         id: 'report-evidence-4',

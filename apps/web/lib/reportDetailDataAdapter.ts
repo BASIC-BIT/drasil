@@ -1,3 +1,4 @@
+import { readFixtureReportBan } from './reportBanFixtures';
 import {
   reportDetailSchema,
   type ReportDetail,
@@ -29,7 +30,10 @@ interface ReportDetailRow {
   updated_at: unknown;
   closed_at: unknown;
   latest_detection_id: string | null;
+  latest_detection_user_id: string | null;
+  latest_detection_handled: boolean;
   latest_case_id: string | null;
+  target_display_name?: string | null;
 }
 
 interface ReportEvidenceRow {
@@ -96,19 +100,21 @@ function readUrl(value: unknown): string | null {
 }
 
 function resolveAllowedActions(row: ReportDetailRow): ReportQueueAction[] {
-  const actions: ReportQueueAction[] = [];
-  if (row.thread_id) {
-    actions.push('open_report_thread');
-  }
-  if (row.latest_case_id) {
+  const actions: ReportQueueAction[] = row.thread_id ? ['open_report_thread'] : [];
+  if (row.status !== 'submitted' || metadataToRecord(row.metadata).report_ban_operation_id)
     return actions;
+  const detectionMatchesTarget = row.latest_detection_user_id === row.confirmed_target_user_id;
+  if (
+    row.confirmed_target_user_id &&
+    row.latest_detection_id &&
+    !row.latest_detection_handled &&
+    detectionMatchesTarget
+  ) {
+    if (!row.latest_case_id) actions.push('open_case');
+    actions.push('ban_user');
   }
-  if (row.status === 'submitted' && row.confirmed_target_user_id && row.latest_detection_id) {
-    actions.push('open_case');
-  }
-  if (row.status === 'submitted') {
+  if (!row.latest_case_id)
     actions.push('mark_actioned', 'dismiss_no_action', 'mark_false_positive');
-  }
   return actions;
 }
 
@@ -151,6 +157,7 @@ export function parseReportDetailRows(
     guildId: row.server_id,
     reporterId: row.reporter_id,
     targetUserId: row.confirmed_target_user_id,
+    targetDisplayName: row.target_display_name ?? null,
     status: row.status,
     summary: row.summary,
     summarySource: resolveReportSummarySource(row.summary, row.metadata),
@@ -177,14 +184,18 @@ export class PostgresReportDetailDataAdapter implements ReportDetailDataAdapter 
          ri.summary,
          ri.metadata,
          ri.confirmed_target_user_id,
+         target.username as target_display_name,
          ri.created_at,
          ri.updated_at,
          ri.closed_at,
          de.id as latest_detection_id,
+         de.user_id as latest_detection_user_id,
+         coalesce(de.metadata, '{}'::jsonb) ? 'observed_action' as latest_detection_handled,
          de.latest_verification_event_id as latest_case_id
        from report_intakes ri
+       left join users target on target.discord_id = ri.confirmed_target_user_id
        left join lateral (
-         select id, latest_verification_event_id
+         select id, user_id, metadata, latest_verification_event_id
          from detection_events
          where server_id = ri.server_id
            and metadata ->> 'reportIntakeId' = ri.id::text
@@ -213,7 +224,21 @@ export class PostgresReportDetailDataAdapter implements ReportDetailDataAdapter 
 
 export class FixtureReportDetailDataAdapter implements ReportDetailDataAdapter {
   public async getReportDetail(_guildId: string, reportId: string): Promise<ReportDetail | null> {
-    return fixtureReportDetail(reportId);
+    const detail = fixtureReportDetail(reportId);
+    const request = await readFixtureReportBan();
+    if (
+      detail &&
+      request?.reportIntakeId === reportId &&
+      request.observedBanResult?.status === 'banned'
+    ) {
+      return {
+        ...detail,
+        status: 'actioned',
+        closedAt: request.completedAt,
+        allowedActions: ['open_report_thread'],
+      };
+    }
+    return detail;
   }
 }
 

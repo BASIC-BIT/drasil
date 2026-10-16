@@ -1,3 +1,6 @@
+import { InboxActionForm, type InboxStateAction } from '@/components/inbox/InboxActionForm';
+import { blocksBanResubmission } from '@/lib/inboxActionReceipts';
+import type { ModerationActionRequestSummary } from '@/lib/moderationActionRequestDataAdapter';
 import type { ReportDetail, ReportEvidenceItem, ReportQueueAction } from '@drasil/contracts';
 import { AccountControl } from '@/components/AccountControl';
 import { ThemeToggle } from '@/components/ThemeToggle';
@@ -17,6 +20,10 @@ type CloseReportAction = (
 type OpenReportCaseAction = (guildId: string, reportId: string) => Promise<void>;
 
 interface ReportDetailViewProps {
+  readonly banReportAction?: InboxStateAction;
+  readonly banRequest?: ModerationActionRequestSummary | null;
+  readonly banUnavailableReason?: string | null;
+  readonly banRequiresReason?: boolean;
   readonly canOpenReportCases: boolean;
   readonly closeReportAction: CloseReportAction;
   readonly detail: ReportDetail;
@@ -27,6 +34,7 @@ interface ReportDetailViewProps {
 }
 
 const actionLabels: Record<ReportQueueAction, string> = {
+  ban_user: 'Ban',
   dismiss_no_action: 'Dismiss No Action',
   mark_actioned: 'Mark Actioned',
   mark_false_positive: 'False Positive',
@@ -123,6 +131,69 @@ function ReportActions({
   );
 }
 
+function ReportBanControl({
+  detail,
+  action,
+  request,
+  unavailableReason,
+  requiresReason,
+}: {
+  readonly detail: ReportDetail;
+  readonly action?: InboxStateAction;
+  readonly request?: ModerationActionRequestSummary | null;
+  readonly unavailableReason?: string | null;
+  readonly requiresReason?: boolean;
+}) {
+  if (request && blocksBanResubmission(request)) {
+    return (
+      <InboxActionForm
+        action={action ?? (async () => ({ status: 'idle', requestId: null, message: null }))}
+        buttonLabel="Confirm Ban"
+        durableRequest={request}
+        hideSubmitButton
+      />
+    );
+  }
+  const reason =
+    unavailableReason ??
+    (!detail.allowedActions.includes('ban_user')
+      ? detail.status !== 'submitted'
+        ? 'This report has already been handled.'
+        : !detail.targetUserId
+          ? 'Confirm the report target before banning.'
+          : 'This report is unavailable for a ban. Refresh the report.'
+      : !action
+        ? 'Report bans are unavailable in this environment.'
+        : null);
+  if (reason || !action) return <p className="muted">Ban unavailable: {reason}</p>;
+  return (
+    <details className="destructive-action" id="report-ban">
+      <summary className="button secondary compact-button destructive-summary">Ban</summary>
+      <InboxActionForm
+        action={action}
+        buttonLabel="Confirm Ban"
+        durableRequest={request}
+        buttonClassName="button compact-button danger-button"
+        formClassName="destructive-action-panel"
+      >
+        <p>
+          Ban {detail.targetDisplayName ?? 'reported user'} ({detail.targetUserId}) from this
+          server? This also bans by ID if the member has left.
+        </p>
+        <input name="confirmedTargetUserId" type="hidden" value={detail.targetUserId ?? ''} />
+        <label className="field destructive-reason">
+          <span>Ban reason{requiresReason ? '' : ' (optional)'}</span>
+          <textarea name="reason" maxLength={500} required={requiresReason} rows={3} />
+        </label>
+        <label className="checkbox-field destructive-confirm">
+          <input name="confirmAction" required type="checkbox" />
+          <span>Confirm Ban for {detail.targetUserId}</span>
+        </label>
+      </InboxActionForm>
+    </details>
+  );
+}
+
 function EvidenceRow({ item }: { readonly item: ReportEvidenceItem }) {
   return (
     <article className="case-card stack">
@@ -163,6 +234,10 @@ function EvidenceRow({ item }: { readonly item: ReportEvidenceItem }) {
 }
 
 export function ReportDetailView({
+  banReportAction,
+  banRequest,
+  banUnavailableReason,
+  banRequiresReason,
   canOpenReportCases,
   closeReportAction,
   detail,
@@ -245,6 +320,13 @@ export function ReportDetailView({
             <strong>{formatUtc(detail.updatedAt)}</strong>
           </div>
         </div>
+        <ReportBanControl
+          detail={detail}
+          action={banReportAction}
+          request={banRequest}
+          unavailableReason={banUnavailableReason}
+          requiresReason={banRequiresReason}
+        />
         <ReportActions
           canOpenReportCases={canOpenReportCases}
           closeReportAction={closeReportAction}

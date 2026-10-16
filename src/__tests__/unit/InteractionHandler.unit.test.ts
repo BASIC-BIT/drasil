@@ -2703,6 +2703,151 @@ describe('InteractionHandler (unit)', () => {
     }
   );
 
+  it.each(['submitted', 'dismissed', 'foreign', 'changed', 'busy'])(
+    'accepts the intake-menu modal by ID and rejects %s stale state',
+    async (state) => {
+      enableModeratorBanActions();
+      const requests = { enqueue: jest.fn().mockResolvedValue({ id: 'request-1' }) };
+      const detections = {
+        findById: jest.fn().mockResolvedValue({
+          id: 'det-1',
+          server_id: 'guild-1',
+          user_id: 'user-1',
+          metadata: { reportIntakeId: 'report-1' },
+        }),
+      };
+      Object.assign(detections, { findByReportIntakeId: detections.findById });
+      const reports = {
+        findById: jest.fn().mockResolvedValue({
+          id: 'report-1',
+          server_id: state === 'foreign' ? 'other-guild' : 'guild-1',
+          status: state === 'dismissed' ? 'dismissed' : 'submitted',
+          confirmed_target_user_id: state === 'changed' ? 'other-user' : 'user-1',
+          metadata: state === 'busy' ? { report_ban_operation_id: 'other-operation' } : {},
+        }),
+      };
+      const handler = new InteractionHandler(
+        client,
+        notificationManager,
+        userModerationService,
+        securityActionService,
+        configService,
+        verificationEventRepository,
+        threadManager,
+        adminActionRepository,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        detections as never,
+        undefined,
+        undefined,
+        requests as never,
+        reports as never
+      );
+      const interaction = {
+        customId: 'report_ban:report-1:user-1',
+        guildId: 'guild-1',
+        user: { id: 'admin-1' },
+        fields: { getTextInputValue: () => 'Confirmed spam' },
+        reply: jest.fn().mockResolvedValue(undefined),
+        followUp: jest.fn(),
+        replied: false,
+        deferred: false,
+      } as unknown as ModalSubmitInteraction;
+      grantOnlyBanMembersPermission(interaction);
+      const errors = jest.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        await handler.handleModalSubmit(interaction);
+        if (state === 'submitted') {
+          expect(requests.enqueue).toHaveBeenCalledWith(
+            expect.objectContaining({
+              actionType: 'ban_observed_detection',
+              targetUserId: 'user-1',
+              detectionEventId: 'det-1',
+              reportIntakeId: 'report-1',
+              metadata: { reason: 'Confirmed spam', requested_action: 'ban_user' },
+            })
+          );
+          expect(interaction.reply).toHaveBeenCalledWith(
+            expect.objectContaining({ content: 'Ban queued for <@user-1>.' })
+          );
+        } else expect(requests.enqueue).not.toHaveBeenCalled();
+        expect(securityActionService.banObservedDetection).not.toHaveBeenCalled();
+        expect(errors).toHaveBeenCalledTimes(state === 'submitted' ? 0 : 1);
+      } finally {
+        errors.mockRestore();
+      }
+    }
+  );
+
+  it.each(['submitted', 'changed', 'dismissed', 'reporter', 'foreign', 'busy'])(
+    'opens a report-bound ban confirmation only for an eligible moderator: %s',
+    async (state) => {
+      enableModeratorBanActions();
+      const detections = {
+        findByReportIntakeId: jest.fn().mockResolvedValue({
+          id: 'det-1',
+          server_id: 'guild-1',
+          user_id: state === 'changed' ? 'other' : 'user-1',
+          metadata: { reportIntakeId: 'report-1' },
+        }),
+      };
+      const reports = {
+        findById: jest.fn().mockResolvedValue({
+          id: 'report-1',
+          server_id: state === 'foreign' ? 'other' : 'guild-1',
+          reporter_id: 'reporter-1',
+          thread_id: 'channel-1',
+          status: state === 'dismissed' ? 'dismissed' : 'submitted',
+          confirmed_target_user_id: 'user-1',
+          metadata: state === 'busy' ? { report_ban_operation_id: 'operation-1' } : {},
+        }),
+      };
+      const handler = new InteractionHandler(
+        client,
+        notificationManager,
+        userModerationService,
+        securityActionService,
+        configService,
+        verificationEventRepository,
+        threadManager,
+        adminActionRepository,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        detections as never,
+        undefined,
+        undefined,
+        undefined,
+        reports as never
+      );
+      const interaction = buildInteraction('report_intake_admin:b:report-1', 'guild-1', {
+        id: state === 'reporter' ? 'reporter-1' : 'admin-1',
+      } as User);
+      Object.assign(client, {
+        users: {
+          fetch: jest.fn().mockResolvedValue({ id: 'user-1', username: 'Reported member' }),
+        },
+      });
+      Object.assign(interaction, { channelId: 'channel-1' });
+      if (state !== 'reporter') grantOnlyBanMembersPermission(interaction);
+      await handler.handleButtonInteraction(interaction);
+      if (state === 'submitted') {
+        expect(interaction.showModal).toHaveBeenCalledTimes(1);
+        const modal = (interaction.showModal as jest.Mock).mock.calls[0][0].toJSON();
+        expect(modal.custom_id).toBe('report_ban:report-1:user-1');
+        expect(JSON.stringify(modal)).toContain('user-1');
+      } else expect(interaction.showModal).not.toHaveBeenCalled();
+      expect(securityActionService.banObservedDetection).not.toHaveBeenCalled();
+    }
+  );
+
   it('shows observed ban modal using configured reason policy', async () => {
     (configService.getServerConfig as jest.Mock).mockResolvedValue({
       settings: {

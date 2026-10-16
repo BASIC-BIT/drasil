@@ -1,3 +1,4 @@
+import { readFixtureReportBan } from './reportBanFixtures';
 import { inboxModerationActionRequestTypes } from './inboxActionRequestTypes';
 import type {
   ModerationActionRequestActionType,
@@ -587,7 +588,9 @@ export class FixtureModerationActionRequestDataAdapter implements ModerationActi
     guildId: string,
     recentLimit = 8
   ): Promise<ModerationActionRequestSummary[]> {
-    return this.listRecentRequests(guildId, recentLimit);
+    const reportBan = await readFixtureReportBan();
+    const requests = await this.listRecentRequests(guildId, recentLimit);
+    return reportBan ? [reportBan, ...requests] : requests;
   }
 
   public async listRecentRequests(
