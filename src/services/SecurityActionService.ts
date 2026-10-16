@@ -4135,7 +4135,7 @@ export class SecurityActionService implements ISecurityActionService {
     try {
       const guild = await this.client.guilds.fetch(request.server_id);
       const moderator = await this.client.users.fetch(request.actor_id);
-      if (!confirmed) await guild.bans.fetch(request.target_user_id);
+      if (!confirmed) await guild.bans.fetch({ user: request.target_user_id, force: true });
       confirmed = true;
       const current = await this.saveBanPhase(request, {
         report_ban_phase: 'discord_confirmed',

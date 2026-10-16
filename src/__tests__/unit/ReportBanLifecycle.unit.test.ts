@@ -421,11 +421,38 @@ describe('report-bound observed bans with real services', () => {
       operationId: f.request.id,
     });
     const current = (await f.requests.findById(f.request.id))!;
+    f.banFetch.mockRejectedValue({ code: 10026 });
     expect(await f.security.reconcileReportBan(current)).toEqual({ status: 'banned' });
+    expect(f.banFetch).not.toHaveBeenCalled();
     expect((await f.cases.findById(event.id))?.status).toBe(VerificationStatus.BANNED);
     expect(f.ban).toHaveBeenCalledTimes(1);
     expect(f.threads.resolveVerificationThread).toHaveBeenCalled();
     expect(f.threads.createVerificationThread).not.toHaveBeenCalled();
+  });
+
+  it('keeps an uncertain send unknown when a cached prior ban is absent from Discord', async () => {
+    const f = await fixture();
+    f.ban.mockRejectedValueOnce(new Error('socket closed'));
+    expect(await f.execute()).toMatchObject({ status: 'ban_outcome_unknown' });
+    const cachedPriorBan = { user: f.user };
+    f.banFetch.mockImplementation(async (options) => {
+      if (typeof options === 'object' && options.force) throw { code: 10026 };
+      return cachedPriorBan;
+    });
+    expect(await f.security.reconcileReportBan((await f.requests.findById(f.request.id))!)).toEqual(
+      {
+        status: 'ban_outcome_unknown',
+        operationId: f.request.id,
+      }
+    );
+    expect(f.banFetch).toHaveBeenCalledWith({ user: 'target', force: true });
+    const current = (await f.requests.findById(f.request.id))!;
+    expect(current.metadata).toMatchObject({ report_ban_phase: 'reconciliation_required' });
+    expect(current.metadata).not.toHaveProperty('report_ban_confirmed_at');
+    expect((await f.reports.findById(f.report.id))?.status).toBe('submitted');
+    expect(await f.actions.getActionsForUser('guild', 'target')).toHaveLength(0);
+    expect(f.analytics.captureUserEvent).not.toHaveBeenCalled();
+    expect(f.ban).toHaveBeenCalledTimes(1);
   });
 
   it.each([false, true])(
