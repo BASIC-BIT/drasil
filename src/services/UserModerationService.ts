@@ -36,6 +36,8 @@ import { IModerationQueueService } from './ModerationQueueService';
 import {
   IRoleQuarantineService,
   RoleQuarantineApplyResult,
+  RoleQuarantineAppliedEffects,
+  RoleQuarantineApplyError,
   RoleRestorationFence,
   RoleQuarantineRestoreResult,
 } from './RoleQuarantineService';
@@ -532,7 +534,11 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     member: GuildMember,
     verificationEvent: VerificationEvent,
     moderator?: User
-  ): Promise<{ verificationEvent: VerificationEvent; metadata: Record<string, unknown> | null }> {
+  ): Promise<{
+    verificationEvent: VerificationEvent;
+    metadata: Record<string, unknown> | null;
+    appliedEffects?: RoleQuarantineAppliedEffects;
+  }> {
     if (!this.roleQuarantineService) {
       return { verificationEvent, metadata: null };
     }
@@ -555,6 +561,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
           metadata
         ),
         metadata,
+        appliedEffects: result.appliedEffects,
       };
     } catch (error) {
       console.error(
@@ -563,6 +570,8 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       );
       return {
         verificationEvent: await this.recordRoleQuarantineFailure(verificationEvent, error),
+        appliedEffects:
+          error instanceof RoleQuarantineApplyError ? error.result.appliedEffects : undefined,
         metadata: {
           status: 'failed',
           message: this.formatError(error),
@@ -576,7 +585,8 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     member: GuildMember,
     verificationEvent: VerificationEvent | null,
     moderator?: User,
-    fence?: RoleRestorationFence
+    fence?: RoleRestorationFence,
+    appliedEffects?: RoleQuarantineAppliedEffects
   ): Promise<{
     verificationEvent: VerificationEvent | null;
     metadata: Record<string, unknown> | null;
@@ -586,9 +596,16 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     }
 
     try {
-      const result = fence
-        ? await this.roleQuarantineService.restoreMemberRoles(member, moderator, fence)
-        : await this.roleQuarantineService.restoreMemberRoles(member, moderator);
+      const result = appliedEffects
+        ? await this.roleQuarantineService.restoreMemberRoles(
+            member,
+            moderator,
+            fence,
+            appliedEffects
+          )
+        : fence
+          ? await this.roleQuarantineService.restoreMemberRoles(member, moderator, fence)
+          : await this.roleQuarantineService.restoreMemberRoles(member, moderator);
       const metadata = this.buildRoleQuarantineRestoreMetadata(result);
       if (!metadata || !verificationEvent) {
         return { verificationEvent, metadata };
@@ -1040,11 +1057,18 @@ export class UserModerationService implements IUserModerationService, ICombinedB
    */
   public async applyCaseRole(member: GuildMember, moderator?: User): Promise<boolean> {
     try {
+      const applicationStartedAt = new Date();
+      const membership = await this.serverMemberRepository.findByServerAndUser(
+        member.guild.id,
+        member.id
+      );
+      const joinedAt = member.joinedAt ?? membership?.join_date ?? null;
       let verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
         member.id,
         member.guild.id
       );
       let roleQuarantineMetadata: Record<string, unknown> | null = null;
+      let quarantineEffects: RoleQuarantineAppliedEffects | undefined;
 
       if (!verificationEvent) {
         console.warn(`ApplyCaseRole called for ${member.user.tag} but no active case was found.`);
@@ -1061,6 +1085,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         );
         verificationEvent = quarantineResult.verificationEvent;
         roleQuarantineMetadata = quarantineResult.metadata;
+        quarantineEffects = quarantineResult.appliedEffects;
       }
 
       const rollbackRoleQuarantine = async (): Promise<void> => {
@@ -1076,12 +1101,6 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         verificationEvent = rollbackResult.verificationEvent ?? verificationEvent;
       };
 
-      const applicationStartedAt = new Date();
-      const membership = await this.serverMemberRepository.findByServerAndUser(
-        member.guild.id,
-        member.id
-      );
-      const joinedAt = member.joinedAt ?? membership?.join_date ?? null;
       let roleId: string | null = null;
       let roleAssigned: boolean;
       try {
@@ -1115,7 +1134,8 @@ export class UserModerationService implements IUserModerationService, ICombinedB
             completion,
             roleId,
             roleQuarantineMetadata,
-            moderator
+            moderator,
+            quarantineEffects
           );
       } else {
         await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
@@ -1140,7 +1160,8 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     completion: CaseRoleApplicationCompletion,
     roleId: string,
     quarantineMetadata: Record<string, unknown> | null,
-    moderator?: User
+    moderator?: User,
+    quarantineEffects?: RoleQuarantineAppliedEffects
   ): Promise<void> {
     const sameMembership = async (): Promise<GuildMember | null> => {
       try {
@@ -1175,10 +1196,16 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       await retainNewerRestriction();
       return;
     }
-    if (this.shouldRollbackRoleQuarantine(quarantineMetadata)) {
-      const restored = await this.tryRestoreRoleQuarantine(current, event, moderator, {
-        canRestoreRole: canRelease,
-      });
+    if (quarantineEffects || this.shouldRollbackRoleQuarantine(quarantineMetadata)) {
+      const restored = await this.tryRestoreRoleQuarantine(
+        current,
+        event,
+        moderator,
+        {
+          canRestoreRole: canRelease,
+        },
+        quarantineEffects
+      );
       if (!(await canRelease())) await retainNewerRestriction();
       if (
         restored.metadata?.status === 'failed' ||

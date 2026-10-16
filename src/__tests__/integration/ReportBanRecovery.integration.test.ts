@@ -3,9 +3,13 @@ import { RoleQuarantineSnapshotRepository } from '../../repositories/RoleQuarant
 import { Pool } from 'pg';
 import { insertModerationActionRequestWithReceipt } from '../../../apps/web/lib/moderationActionRequestQueue';
 jest.mock('../../../apps/web/lib/setupDataAdapter', () => ({ getPostgresPool: jest.fn() }));
-import { IRoleQuarantineService } from '../../services/RoleQuarantineService';
+import { MessageContextRepository } from '../../repositories/MessageContextRepository';
+import {
+  RoleQuarantineService,
+  IRoleQuarantineService,
+} from '../../services/RoleQuarantineService';
 import { NotificationManager } from '../../services/NotificationManager';
-import { Client, EmbedBuilder, Guild, GuildMember, User } from 'discord.js';
+import { Client, EmbedBuilder, Guild, GuildMember, Role, User } from 'discord.js';
 import { SecurityActionService } from '../../services/SecurityActionService';
 import { UserModerationService } from '../../services/UserModerationService';
 import { AdminActionService } from '../../services/AdminActionService';
@@ -128,7 +132,8 @@ async function fixture(withReport = true, quarantine?: IRoleQuarantineService) {
     quarantine
   );
   const analytics = { captureUserEvent: jest.fn().mockResolvedValue(undefined) };
-  const evidence = new ModerationEvidenceService(detections);
+  const contexts = new MessageContextRepository(prisma);
+  const evidence = new ModerationEvidenceService(detections, contexts);
   const security = new SecurityActionService(
     notifications as never,
     detections,
@@ -236,6 +241,7 @@ async function fixture(withReport = true, quarantine?: IRoleQuarantineService) {
     queue,
     moderation,
     evidence,
+    contexts,
     security,
     report,
     detection,
@@ -247,6 +253,239 @@ async function fixture(withReport = true, quarantine?: IRoleQuarantineService) {
 
 const integration = process.env.JEST_INTEGRATION === '1' ? describe : describe.skip;
 integration('report-ban stale worker recovery with real services and Postgres', () => {
+  it.each(
+    ['fetch', 'send', 'archive'].flatMap((boundary) =>
+      ['deleted', 'permission', 'network'].map((failure) => ({ boundary, failure }))
+    )
+  )('handles a missing report thread at $boundary: $failure', async ({ boundary, failure }) => {
+    const f = await fixture();
+    await getPrismaClient().report_intakes.update({
+      where: { id: f.report.id },
+      data: { thread_id: 'report-thread' },
+    });
+    const thread = {
+      isThread: () => true,
+      archived: false,
+      send: jest.fn().mockResolvedValue({ id: 'closeout' }),
+      setArchived: jest.fn().mockResolvedValue(undefined),
+    };
+    (f.client.channels.fetch as jest.Mock).mockResolvedValue(thread);
+    const error =
+      failure === 'deleted'
+        ? { code: 10003 }
+        : failure === 'permission'
+          ? { code: 50013 }
+          : new Error('thread fetch timed out');
+    if (boundary === 'fetch') (f.client.channels.fetch as jest.Mock).mockRejectedValue(error);
+    else if (boundary === 'send') thread.send.mockRejectedValue(error);
+    else thread.setArchived.mockRejectedValue(error);
+    const result = await f.execute();
+    if (failure === 'deleted') expect(result).toEqual({ status: 'banned' });
+    else {
+      expect(result).toMatchObject({ status: 'banned_updates_pending' });
+      (f.client.channels.fetch as jest.Mock).mockResolvedValue(thread);
+      thread.send.mockResolvedValue({ id: 'closeout' });
+      thread.setArchived.mockResolvedValue(undefined);
+      expect(
+        await f.security.reconcileReportBan((await f.requests.findById(f.request.id))!)
+      ).toEqual({ status: 'banned' });
+    }
+    expect(await f.actionRepo.getActionHistory('target', 'guild')).toHaveLength(1);
+    expect((await f.reports.findById(f.report.id))?.status).toBe('actioned');
+    expect((await f.requests.findById(f.request.id))?.status).toBe('completed');
+    expect(f.ban).toHaveBeenCalledTimes(1);
+  });
+  it.each(['revoked', 'departed', 'failure', 'allowed'])(
+    'forces fresh queued ban actor permission: %s',
+    async (state) => {
+      const f = await fixture();
+      (f.guild.members.fetch as jest.Mock).mockImplementation(async (input) => {
+        const id = typeof input === 'object' ? input.user : input;
+        if (id !== 'moderator') return f.member;
+        if (typeof input === 'string' || !input.force) return { permissions: { has: () => true } };
+        if (state === 'departed') throw { code: 10007 };
+        if (state === 'failure') throw new Error('member fetch unavailable');
+        return { permissions: { has: () => state === 'allowed' } };
+      });
+      await f.worker().processPendingRequests();
+      expect(f.ban).toHaveBeenCalledTimes(state === 'allowed' ? 1 : 0);
+      expect((await f.requests.findById(f.request.id))?.status).toBe(
+        state === 'allowed' ? 'completed' : 'failed'
+      );
+      expect(await f.actionRepo.getActionHistory('target', 'guild')).toHaveLength(
+        state === 'allowed' ? 1 : 0
+      );
+    }
+  );
+  it('persists only message references after source context expires', async () => {
+    const f = await fixture();
+    const expiry = new Date(Date.now() + 60_000);
+    await f.contexts.recordMessage({
+      serverId: 'guild',
+      userId: 'target',
+      messageId: 'source-message',
+      channelId: 'source-channel',
+      contentPreview: 'ephemeral private preview',
+      contentFeatures: { tokens: ['ephemeral-feature'] },
+      createdAt: new Date(),
+      expiresAt: expiry,
+    });
+    const transient = await f.evidence.capture({
+      guildId: 'guild',
+      userId: 'target',
+      member: null,
+    });
+    expect(transient.recent_messages[0].content_preview).toBe('ephemeral private preview');
+    expect(await f.execute()).toEqual({ status: 'banned' });
+    await f.contexts.pruneExpired(new Date(expiry.getTime() + 1));
+    expect(await f.contexts.findRecentByServerAndUser('guild', 'target')).toEqual([]);
+    const stored = (await f.detections.findById(f.detection.id))!;
+    const durable = JSON.stringify([
+      stored,
+      await f.requests.findById(f.request.id),
+      await f.actionRepo.getActionHistory('target', 'guild'),
+      await f.outcomeRepo.findByUserAndServer('target', 'guild'),
+      await f.cases.findByUserAndServer('target', 'guild'),
+      await f.reports.findById(f.report.id),
+    ]);
+    expect(durable).not.toContain('ephemeral private preview');
+    expect(durable).not.toContain('ephemeral-feature');
+    expect(stored.metadata).toMatchObject({
+      moderation_evidence: {
+        recent_messages: [
+          expect.objectContaining({ message_id: 'source-message', channel_id: 'source-channel' }),
+        ],
+      },
+    });
+  });
+  it.each([
+    'released',
+    'restore-failure',
+    'other-pending',
+    'active-ban',
+    'later-join',
+    'new-owner-during-restore',
+    'later-join-during-restore',
+  ])(
+    'compensates actual quarantine removal after verification already restored the snapshot: %s',
+    async (state) => {
+      const snapshots = new RoleQuarantineSnapshotRepository(getPrismaClient());
+      const quarantine = new RoleQuarantineService(
+        {
+          getServerConfig: jest.fn().mockResolvedValue({
+            guild_id: 'guild',
+            case_role_id: 'case-role',
+            settings: { role_quarantine_mode: 'on' },
+          }),
+        } as never,
+        snapshots
+      );
+      const f = await fixture(true, quarantine);
+      const role = {
+        id: 'community-role',
+        name: 'Community',
+        managed: false,
+        tags: {},
+        permissions: { has: () => false },
+      } as unknown as Role;
+      const cache = new Map([[role.id, role]]);
+      const caseRole = { id: 'case-role' } as Role;
+      f.roles.assignCaseRole.mockImplementation(async () => {
+        cache.set(caseRole.id, caseRole);
+        return true;
+      });
+      f.roles.removeCaseRole.mockImplementation(async () => {
+        cache.delete(caseRole.id);
+        return true;
+      });
+      const bot = { roles: { highest: { comparePositionTo: () => 100 } } };
+      Object.assign(f.guild, {
+        roles: { cache, fetch: jest.fn(async (id) => (id === role.id ? role : null)) },
+      });
+      Object.assign(f.guild.members, { me: bot, fetchMe: jest.fn().mockResolvedValue(bot) });
+      let reached!: () => void;
+      let resume!: () => void;
+      const paused = new Promise<void>((resolve) => {
+        reached = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        resume = resolve;
+      });
+      Object.assign(f.member, {
+        roles: {
+          cache,
+          remove: jest.fn(async (removed: Role) => {
+            reached();
+            await gate;
+            cache.delete(removed.id);
+          }),
+          add: jest.fn(async (added: Role) => {
+            if (state === 'restore-failure') throw new Error('role add denied');
+            cache.set(added.id, added);
+            if (state === 'new-owner-during-restore')
+              await f.cases.createFromDetection(
+                null,
+                'guild',
+                'target',
+                VerificationStatus.PENDING
+              );
+            if (state === 'later-join-during-restore')
+              (f.guild.members.fetch as jest.Mock).mockResolvedValue({
+                ...f.member,
+                joinedAt: new Date(),
+              });
+          }),
+        },
+      });
+      await f.members.upsertMember('guild', 'target', {
+        join_date: f.member.joinedAt!,
+        verification_status: VerificationStatus.PENDING,
+        case_role_active: false,
+      });
+      const event = await f.cases.createFromDetection(
+        f.detection.id,
+        'guild',
+        'target',
+        VerificationStatus.PENDING
+      );
+      const applying = f.moderation
+        .applyCaseRole(f.member, f.moderator)
+        .catch((error: unknown) => error);
+      await paused;
+      try {
+        await f.moderation.verifyUser(f.member, f.moderator);
+        expect(await snapshots.findActiveByServerAndUser('guild', 'target')).toBeNull();
+        if (state === 'other-pending')
+          await f.cases.createFromDetection(null, 'guild', 'target', VerificationStatus.PENDING);
+        if (state === 'active-ban')
+          await getPrismaClient().moderation_action_requests.update({
+            where: { id: f.request.id },
+            data: { metadata: { report_ban_phase: 'enforcement_started' } },
+          });
+        if (state === 'later-join')
+          await f.members.upsertMember('guild', 'target', { join_date: new Date() });
+      } finally {
+        resume();
+      }
+      const result = await applying;
+      if (state === 'restore-failure') expect(result).toBeInstanceOf(Error);
+      else expect(result).toBe(true);
+      expect(cache.has(role.id)).toBe(['released', 'later-join-during-restore'].includes(state));
+      expect(cache.has(caseRole.id)).toBe(
+        ['other-pending', 'active-ban', 'later-join', 'new-owner-during-restore'].includes(state)
+      );
+      const snapshotRows = await getPrismaClient().role_quarantine_snapshots.findMany({
+        where: { verification_event_id: event.id },
+      });
+      expect(snapshotRows).toHaveLength(1);
+      expect(snapshotRows[0].status).toBe('restored');
+      expect((await f.cases.findById(event.id))?.status).toBe('verified');
+      expect(await f.members.findByServerAndUser('guild', 'target')).toMatchObject({
+        verification_status: 'verified',
+        case_role_active: false,
+      });
+    }
+  );
   it.each([
     'fetch-deleted',
     'edit-deleted',

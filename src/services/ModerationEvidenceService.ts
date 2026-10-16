@@ -32,6 +32,40 @@ export interface ModerationEvidenceSnapshot {
   recent_messages: MessageContext[];
   unavailable_sources: string[];
 }
+export interface StoredMessageReference {
+  message_id: string;
+  channel_id: string | null;
+  created_at: Date;
+  observed_at: Date;
+  expires_at: Date;
+}
+export interface StoredModerationEvidenceSnapshot extends Omit<
+  ModerationEvidenceSnapshot,
+  'recent_messages'
+> {
+  recent_messages: StoredMessageReference[];
+}
+
+/** Context previews expire at their source; durable evidence keeps only references. */
+export function toStoredModerationEvidence(
+  snapshot: ModerationEvidenceSnapshot
+): StoredModerationEvidenceSnapshot {
+  return {
+    captured_at: snapshot.captured_at,
+    profile_assets: snapshot.profile_assets,
+    profile_image_description: snapshot.profile_image_description,
+    detection_history: snapshot.detection_history,
+    unavailable_sources: snapshot.unavailable_sources,
+    recent_messages: snapshot.recent_messages.map((message) => ({
+      message_id: message.message_id,
+      channel_id: message.channel_id,
+      created_at: message.created_at,
+      observed_at: message.observed_at,
+      expires_at: message.expires_at,
+    })),
+  };
+}
+
 @injectable()
 export class ModerationEvidenceService {
   constructor(

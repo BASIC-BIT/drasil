@@ -12,7 +12,11 @@ import {
 } from '../observability/langfuse';
 import { hashIdentifier } from '../observability/hash';
 import { injectable, inject, optional } from 'inversify';
-import { ModerationEvidenceService, ProfileAssetSnapshot } from './ModerationEvidenceService';
+import {
+  ModerationEvidenceService,
+  ProfileAssetSnapshot,
+  toStoredModerationEvidence,
+} from './ModerationEvidenceService';
 import {
   GuildMember,
   Guild,
@@ -3977,7 +3981,7 @@ export class SecurityActionService implements ISecurityActionService {
       const evidence = await this.evidenceService.capture({ guildId: guild.id, userId, member });
       if (
         !(await this.detectionEventsRepository.patchMetadata(detection.id, {
-          moderation_evidence: evidence,
+          moderation_evidence: toStoredModerationEvidence(evidence),
           report_ban_operation_id: request.id,
         }))
       )
@@ -4277,19 +4281,25 @@ export class SecurityActionService implements ISecurityActionService {
     request: ModerationActionRequest
   ): Promise<void> {
     if (!report.thread_id) return;
-    const channel = await this.client.channels.fetch(report.thread_id);
-    if (!channel) return;
-    if (!channel.isThread()) throw new Error('Linked report channel is not a thread.');
-    if (channel.archived) return;
-    const metadata = this.metadataToRecord(request.metadata);
-    if (!metadata.report_ban_closeout_message_id) {
-      const message = await channel.send({
-        content: this.buildReportIntakeReviewCloseoutMessage(ReportIntakeStatus.ACTIONED),
-        allowedMentions: { parse: [] },
-      });
-      await this.saveBanPhase(request, { report_ban_closeout_message_id: message.id });
+    try {
+      const channel = await this.client.channels.fetch(report.thread_id);
+      if (!channel) return;
+      if (!channel.isThread()) throw new Error('Linked report channel is not a thread.');
+      if (channel.archived) return;
+      const metadata = this.metadataToRecord(request.metadata);
+      if (!metadata.report_ban_closeout_message_id) {
+        const message = await channel.send({
+          content: this.buildReportIntakeReviewCloseoutMessage(ReportIntakeStatus.ACTIONED),
+          allowedMentions: { parse: [] },
+        });
+        await this.saveBanPhase(request, { report_ban_closeout_message_id: message.id });
+      }
+      await channel.setArchived(true, 'Report intake reviewed');
+    } catch (error) {
+      if (typeof error === 'object' && error !== null && 'code' in error && error.code === 10003)
+        return;
+      throw error;
     }
-    await channel.setArchived(true, 'Report intake reviewed');
   }
 
   public async dismissObservedDetection(

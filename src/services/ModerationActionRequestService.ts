@@ -700,7 +700,7 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       this.fetchModerator(request.actor_id),
     ]);
     await this.assertBotPermission(guild, PermissionFlagsBits.BanMembers, 'Ban Members');
-    const actor = await guild.members.fetch(request.actor_id);
+    const actor = await guild.members.fetch({ user: request.actor_id, force: true });
     if (!actor.permissions.has(PermissionFlagsBits.BanMembers))
       throw new Error('Moderator no longer has Ban Members permission.');
     const member = await guild.members.fetch(request.target_user_id).catch((error) => {
