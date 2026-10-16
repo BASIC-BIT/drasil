@@ -171,7 +171,12 @@ export class ModerationActionRequestRepository implements IModerationActionReque
           and (
             verification_event_id is not null
             or action_type = 'complete_setup_verification'::moderation_action_request_type
+            or action_type = 'ban_observed_detection'::moderation_action_request_type
           )
+          and (action_type <> 'ban_observed_detection' OR (
+            metadata->>'report_ban_phase' IS NULL
+            AND coalesce(result->'observed_ban_result'->>'status', '') NOT IN ('banned', 'banned_updates_pending', 'ban_outcome_unknown')
+          ))
           and action_type not in (
             'preview_account_quarantine'::moderation_action_request_type,
             'quarantine_compromised_account'::moderation_action_request_type,
@@ -279,6 +284,15 @@ export class ModerationActionRequestRepository implements IModerationActionReque
         !(await this.ownsPreparedCases(transaction, current, patch))
       )
         return current;
+      if (patch.report_ban_phase === 'enforcement_started') {
+        // The request and case locks are held. Observers can resolve preparation, but
+        // once enforcement starts only this durable operation owns case completion.
+        await transaction.$executeRaw`
+          UPDATE verification_events SET metadata = coalesce(nullif(metadata, 'null'::jsonb), '{}'::jsonb) ||
+            jsonb_build_object('report_ban_enforcement_operation_id', ${id}::text)
+          WHERE id::text = ANY(${(patch.report_ban_case_ids ?? []) as string[]}::text[])
+            AND quarantine_attempt_id = ${String(metadata.report_ban_attempt_id)}`;
+      }
       const ownedPatch = this.ownedReportBanPatch(metadata, patch);
       const updated = await transaction.$queryRaw<ModerationActionRequest[]>`
         UPDATE moderation_action_requests SET metadata = coalesce(metadata, '{}'::jsonb) || ${JSON.stringify(ownedPatch)}::jsonb, updated_at = now()
@@ -419,6 +433,7 @@ export class ModerationActionRequestRepository implements IModerationActionReque
           attention_state = (original->>'attention_state')::case_attention_state,
           containment_status = (original->>'containment_status')::case_containment_status,
           quarantine_attempt_id = null, quarantine_lease_renewed_at = null,
+          metadata = coalesce(nullif(v.metadata, 'null'::jsonb), '{}'::jsonb) - 'report_ban_enforcement_operation_id',
           parked_at = (original->>'parked_at')::timestamptz, parked_by = original->>'parked_by', updated_at = now()
         FROM jsonb_array_elements(${JSON.stringify(cases)}::jsonb) original
         WHERE v.id::text = original->>'id' AND v.status = 'pending' AND v.containment_status = 'in_progress'

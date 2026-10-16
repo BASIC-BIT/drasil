@@ -468,13 +468,9 @@ export class NotificationManager implements INotificationManager {
         return false;
       }
 
-      const message = await notificationChannel.messages
-        .fetch(metadata.observed_notification_message_id)
-        .catch(() => null);
-      if (!message) {
-        return false;
-      }
-
+      const message = await notificationChannel.messages.fetch(
+        metadata.observed_notification_message_id
+      );
       if (!message.embeds.length) {
         await message.edit({ allowedMentions: { parse: [] }, components: [] });
         return false;
@@ -508,6 +504,9 @@ export class NotificationManager implements INotificationManager {
       });
       return true;
     } catch (error) {
+      // A deleted presentation needs no further update; ambiguous failures stay retryable.
+      if (typeof error === 'object' && error !== null && 'code' in error && error.code === 10008)
+        return true;
       console.error('Failed to mark observed detection action:', error);
       return false;
     }

@@ -41,6 +41,7 @@ import {
   CASE_ROLE_RELEASE_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_LEASE_MS,
   CASE_TERMINAL_ACTION_ATTEMPT_PREFIX,
+  REPORT_BAN_TERMINAL_ATTEMPT_PREFIX,
   isCaseRoleReleaseLeaseActive,
   isCaseTerminalActionAttempt,
 } from '../utils/caseRoleRelease';
@@ -157,6 +158,7 @@ export interface ObservedBanFinalization {
   caseIds: string[];
   attemptId: string;
   confirmedAt: Date;
+  targetSnapshot: Partial<Record<string, string>>;
   reportId: string | null;
 }
 export interface ICombinedBanLifecycleService {
@@ -1802,7 +1804,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
   ): Promise<void> {
     const pendingVerificationEvents = await this.getPendingVerificationEvents(member);
     const attemptId = lifecycle
-      ? `${CASE_TERMINAL_ACTION_ATTEMPT_PREFIX}${lifecycle.operationId}:${lifecycle.attemptToken}`
+      ? `${REPORT_BAN_TERMINAL_ATTEMPT_PREFIX}${lifecycle.operationId}:${lifecycle.attemptToken}`
       : undefined;
     if (lifecycle && attemptId) await lifecycle.prepare(pendingVerificationEvents, attemptId);
     const terminalClaim = await this.claimPendingTerminalActions(
@@ -1841,7 +1843,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       (event) => event.status === VerificationStatus.PENDING
     );
     const attemptId = lifecycle
-      ? `${CASE_TERMINAL_ACTION_ATTEMPT_PREFIX}${lifecycle.operationId}:${lifecycle.attemptToken}`
+      ? `${REPORT_BAN_TERMINAL_ATTEMPT_PREFIX}${lifecycle.operationId}:${lifecycle.attemptToken}`
       : undefined;
     if (lifecycle && attemptId) await lifecycle.prepare(pendingEvents, attemptId);
     const terminalClaim = await this.claimPendingTerminalActions(
@@ -1872,13 +1874,19 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     moderator: User,
     input: ObservedBanFinalization
   ): Promise<void> {
-    const bannedUser = (await guild.bans.fetch(userId)).user;
+    const snapshot = input.targetSnapshot;
+    const outcomeMetadata = {
+      report_ban_operation_id: input.operationId,
+      report_intake_id: input.reportId,
+      discord_confirmed_at: input.confirmedAt.toISOString(),
+      user_snapshot: snapshot,
+    };
     const target: ModerationTarget = {
       guildId: guild.id,
       userId,
-      userTag: bannedUser.tag,
-      username: bannedUser.username,
-      accountCreatedAt: this.getUserAccountCreatedAt(bannedUser),
+      userTag: snapshot.tag ?? userId,
+      username: snapshot.username ?? null,
+      accountCreatedAt: snapshot.account_created_at ? new Date(snapshot.account_created_at) : null,
     };
     const events: VerificationEvent[] = [];
     for (const id of input.caseIds) {
@@ -1902,24 +1910,17 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         moderator,
         input.confirmedAt,
         input.reason,
-        this.withUserSnapshot(
-          {
-            report_ban_operation_id: input.operationId,
-            report_intake_id: input.reportId,
-            discord_confirmed_at: input.confirmedAt.toISOString(),
-          },
-          bannedUser
-        ),
+        outcomeMetadata as VerificationEvent['metadata'],
         true
       );
       events.push(completed[0].event);
     }
-    await this.serverMemberRepository.upsertMember(guild.id, userId, {
-      verification_status: VerificationStatus.BANNED,
-      case_role_active: false,
-      last_status_change: input.confirmedAt,
-    });
-    if (this.roleQuarantineService)
+    const currentMembership = await this.serverMemberRepository.markBannedIfNotNewer(
+      guild.id,
+      userId,
+      input.confirmedAt
+    );
+    if (currentMembership && this.roleQuarantineService)
       await this.roleQuarantineService.abandonActiveSnapshot(
         guild.id,
         userId,
@@ -1976,14 +1977,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
           previous_status: event ? VerificationStatus.PENDING : null,
           new_status: VerificationStatus.BANNED,
           notes: input.reason,
-          metadata: this.buildOutcomeMetadata(
-            {
-              report_ban_operation_id: input.operationId,
-              report_intake_id: input.reportId,
-              discord_confirmed_at: input.confirmedAt.toISOString(),
-            },
-            bannedUser
-          ) as Prisma.JsonObject,
+          metadata: outcomeMetadata as Prisma.JsonObject,
         });
       }
       if (!this.moderationOutcomeService)
@@ -2005,14 +1999,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
             detectionEventId: input.detectionEventId,
             occurredAt: input.confirmedAt,
             recordWithoutVerificationEvent: true,
-            metadata: this.buildOutcomeMetadata(
-              {
-                report_ban_operation_id: input.operationId,
-                report_intake_id: input.reportId,
-                discord_confirmed_at: input.confirmedAt.toISOString(),
-              },
-              bannedUser
-            ),
+            metadata: outcomeMetadata,
           }
         );
       }
@@ -2836,7 +2823,12 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         (event) => event.status === VerificationStatus.PENDING
       );
       const pendingVerificationEvents = allPendingVerificationEvents.filter(
-        (event) => !this.getActiveModerationOperation(event.metadata)
+        (event) =>
+          !this.getActiveModerationOperation(event.metadata) &&
+          !(
+            event.quarantine_attempt_id?.startsWith(REPORT_BAN_TERMINAL_ATTEMPT_PREFIX) &&
+            this.metadataToRecord(event.metadata).report_ban_enforcement_operation_id
+          )
       );
       if (pendingVerificationEvents.length === 0) {
         if (allPendingVerificationEvents.length > 0) {
@@ -2884,14 +2876,13 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         const updatedEvent = await this.verificationEventRepository.update(
           pendingEvent.id,
           eventToUpdate,
-          { allowQuarantineOverride: true }
+          { allowQuarantineOverride: true, deferReportBanEnforcement: true }
         );
-        if (!updatedEvent) {
-          throw new Error(`Failed to record observed Discord ban for case ${pendingEvent.id}.`);
-        }
+        if (!updatedEvent) continue;
         resolvedEvents.push({ event: updatedEvent, previousStatus });
       }
 
+      if (resolvedEvents.length === 0) return 0;
       await this.serverMemberRepository.upsertMember(guild.id, user.id, {
         verification_status: VerificationStatus.BANNED,
         case_role_active: false,

@@ -2,6 +2,7 @@ export const CASE_ROLE_RELEASE_ATTEMPT_PREFIX = 'case-role-release:';
 export const CASE_ROLE_RELEASE_RECONCILIATION_ATTEMPT_PREFIX = 'case-role-release-reconciliation:';
 export const CASE_ATTENTION_ATTEMPT_PREFIX = 'case-attention:';
 export const CASE_TERMINAL_ACTION_ATTEMPT_PREFIX = 'case-terminal-action:';
+export const REPORT_BAN_TERMINAL_ATTEMPT_PREFIX = `${CASE_TERMINAL_ACTION_ATTEMPT_PREFIX}report-ban:`;
 export const CAPTCHA_FINALIZATION_ATTEMPT_PREFIX = 'captcha-finalization:';
 export const CAPTCHA_PRESENTATION_ATTEMPT_PREFIX = 'captcha-presentation:';
 export const CASE_ROLE_RELEASE_LEASE_MS = 5 * 60 * 1000;

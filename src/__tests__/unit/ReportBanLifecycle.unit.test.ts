@@ -594,7 +594,7 @@ describe('report-bound observed bans with real services', () => {
     });
     expect(f.ban).toHaveBeenCalledTimes(1);
   });
-  it.each(['fetch_failure', 'edit_failure', 'absent'])(
+  it.each(['fetch_failure', 'edit_failure', 'deleted', 'deleted_during_edit', 'absent'])(
     'uses the actual observed notification contract: %s',
     async (mode) => {
       const f = await fixture();
@@ -618,6 +618,12 @@ describe('report-bound observed bans with real services', () => {
       };
       if (mode === 'fetch_failure')
         channel.messages.fetch.mockRejectedValue(new Error('fetch denied'));
+      if (mode === 'deleted') channel.messages.fetch.mockRejectedValue({ code: 10008 });
+      if (mode === 'deleted_during_edit')
+        channel.messages.fetch.mockResolvedValue({
+          embeds: [new EmbedBuilder().setTitle('Observed')],
+          edit: jest.fn().mockRejectedValue({ code: 10008 }),
+        });
       const routed = manager as unknown as {
         getModerationNotificationChannel: () => Promise<unknown>;
         getStoredNotificationChannel: () => Promise<unknown>;
@@ -630,10 +636,14 @@ describe('report-bound observed bans with real services', () => {
       const error = jest.spyOn(console, 'error').mockImplementation(() => {});
       try {
         expect(await f.execute()).toMatchObject({
-          status: mode === 'absent' ? 'banned' : 'banned_updates_pending',
+          status: ['absent', 'deleted', 'deleted_during_edit'].includes(mode)
+            ? 'banned'
+            : 'banned_updates_pending',
         });
         expect((await f.requests.findById(f.request.id))?.metadata).toMatchObject({
-          report_ban_phase: mode === 'absent' ? null : 'discord_confirmed',
+          report_ban_phase: ['absent', 'deleted', 'deleted_during_edit'].includes(mode)
+            ? null
+            : 'discord_confirmed',
         });
         expect(f.ban).toHaveBeenCalledTimes(1);
         if (mode === 'edit_failure') expect(error).toHaveBeenCalled();

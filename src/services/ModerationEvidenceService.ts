@@ -89,7 +89,7 @@ export class ModerationEvidenceService {
     for (const event of history) {
       const metadata = event.metadata as Record<string, unknown> | null;
       const stored = metadata?.moderation_evidence as ModerationEvidenceSnapshot | undefined;
-      if (stored?.profile_image_description) {
+      if (stored?.profile_image_description && this.matchingAssets(assets, stored.profile_assets)) {
         description = stored.profile_image_description;
         break;
       }
@@ -105,6 +105,12 @@ export class ModerationEvidenceService {
           ?.profile_image_description as Record<string, unknown> | undefined;
         if (
           stored &&
+          this.matchingAssets(
+            assets,
+            (event.metadata as Record<string, unknown> | null)?.profile_assets as
+              | ProfileAssetSnapshot
+              | undefined
+          ) &&
           typeof stored.summary === 'string' &&
           typeof stored.analyzed_image_count === 'number' &&
           typeof stored.model === 'string' &&
@@ -153,6 +159,20 @@ export class ModerationEvidenceService {
       unavailable_sources: unavailable,
     };
   }
+  private matchingAssets(
+    current: ProfileAssetSnapshot | null,
+    stored?: ProfileAssetSnapshot | null
+  ): boolean {
+    if (!current || !stored || (!current.avatar_url && !current.banner_url)) return false;
+    return (
+      current.avatar_url === stored.avatar_url &&
+      current.banner_url === stored.banner_url &&
+      current.avatar_hash === stored.avatar_hash &&
+      current.guild_avatar_hash === stored.guild_avatar_hash &&
+      current.banner_hash === stored.banner_hash
+    );
+  }
+
   private async buildProfileAssetSnapshot(member: GuildMember): Promise<ProfileAssetSnapshot> {
     const user = await member.client.users
       .fetch(member.id, { force: true })

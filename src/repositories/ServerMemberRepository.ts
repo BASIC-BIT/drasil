@@ -27,6 +27,7 @@ export interface IServerMemberRepository {
     userId: string,
     data: Partial<ServerMember>
   ): Promise<ServerMember>;
+  markBannedIfNotNewer(serverId: string, userId: string, confirmedAt: Date): Promise<boolean>;
   markVerifiedIfNoPendingCase(
     serverId: string,
     userId: string,
@@ -118,9 +119,31 @@ export class ServerMemberRepository implements IServerMemberRepository {
     }
   }
 
-  /**
-   * Create or update a server member
-   */
+  // Historical cleanup must not overwrite a newer moderation decision or membership.
+  async markBannedIfNotNewer(
+    serverId: string,
+    userId: string,
+    confirmedAt: Date
+  ): Promise<boolean> {
+    const result = await this.prisma.server_members.updateMany({
+      where: {
+        server_id: serverId,
+        user_id: userId,
+        AND: [
+          { OR: [{ last_status_change: null }, { last_status_change: { lte: confirmedAt } }] },
+          { OR: [{ join_date: null }, { join_date: { lte: confirmedAt } }] },
+        ],
+      },
+      data: {
+        verification_status: VerificationStatus.BANNED,
+        case_role_active: false,
+        last_status_change: confirmedAt,
+      },
+    });
+    return result.count === 1;
+  }
+
+  /** Create or update a server member. */
   async upsertMember(
     serverId: string,
     userId: string,

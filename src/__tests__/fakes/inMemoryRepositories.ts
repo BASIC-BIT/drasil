@@ -62,6 +62,7 @@ import {
 } from '../../utils/detectionResponseSettings';
 import {
   CAPTCHA_FINALIZATION_ATTEMPT_PREFIX,
+  REPORT_BAN_TERMINAL_ATTEMPT_PREFIX,
   isCaseRoleReleaseRecoveryAttempt,
   isCaptchaPresentationAttempt,
 } from '../../utils/caseRoleRelease';
@@ -595,6 +596,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
           event.containment_status === CaseContainmentStatus.IN_PROGRESS &&
           event.quarantine_attempt_id !== null &&
           event.quarantine_attempt_id !== undefined &&
+          !event.quarantine_attempt_id.startsWith(REPORT_BAN_TERMINAL_ATTEMPT_PREFIX) &&
           (isCaptchaPresentationAttempt(event.quarantine_attempt_id) ||
             (event.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
               !isCaseRoleReleaseRecoveryAttempt(event.quarantine_attempt_id))) &&
@@ -1282,6 +1284,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
         event.status === VerificationStatus.PENDING &&
         event.containment_status === CaseContainmentStatus.IN_PROGRESS &&
         event.quarantine_attempt_id === attemptId &&
+        !attemptId.startsWith(REPORT_BAN_TERMINAL_ATTEMPT_PREFIX) &&
         (event.quarantine_lease_renewed_at === null ||
           event.quarantine_lease_renewed_at === undefined ||
           event.quarantine_lease_renewed_at <= staleBefore)
@@ -1439,6 +1442,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     options: {
       touchUpdatedAt?: boolean;
       allowQuarantineOverride?: boolean;
+      deferReportBanEnforcement?: boolean;
       preservePendingCaseState?: boolean;
       expectedQuarantineAttemptId?: string;
     } = {}
@@ -1449,6 +1453,14 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     }
 
     const existing = this.events[eventIndex];
+    if (
+      options.deferReportBanEnforcement &&
+      (existing.status !== VerificationStatus.PENDING ||
+        (existing.quarantine_attempt_id?.startsWith(REPORT_BAN_TERMINAL_ATTEMPT_PREFIX) &&
+          (existing.metadata as Record<string, unknown> | null)
+            ?.report_ban_enforcement_operation_id))
+    )
+      return null;
     if (
       options.expectedQuarantineAttemptId !== undefined &&
       (existing.status !== VerificationStatus.PENDING ||
@@ -2033,6 +2045,25 @@ export class InMemoryServerMemberRepository implements IServerMemberRepository {
     return member ? { ...member } : null;
   }
 
+  async markBannedIfNotNewer(
+    serverId: string,
+    userId: string,
+    confirmedAt: Date
+  ): Promise<boolean> {
+    const member = await this.findByServerAndUser(serverId, userId);
+    if (
+      !member ||
+      (member.last_status_change && member.last_status_change > confirmedAt) ||
+      (member.join_date && member.join_date > confirmedAt)
+    )
+      return false;
+    await this.upsertMember(serverId, userId, {
+      verification_status: VerificationStatus.BANNED,
+      case_role_active: false,
+      last_status_change: confirmedAt,
+    });
+    return true;
+  }
   async upsertMember(
     serverId: string,
     userId: string,

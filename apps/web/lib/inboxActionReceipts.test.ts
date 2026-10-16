@@ -169,7 +169,7 @@ describe('inboxActionReceipts', () => {
 });
 import { blocksBanResubmission } from './inboxActionReceipts';
 it.each(['banned_updates_pending', 'ban_outcome_unknown'] as const)(
-  'keeps completed %s receipts active and blocks another ban',
+  'keeps completed %s receipts without fast polling and blocks another ban',
   (status) => {
     const request = buildRequest({
       status: 'completed',
@@ -177,7 +177,7 @@ it.each(['banned_updates_pending', 'ban_outcome_unknown'] as const)(
       reportIntakeId: 'report-1',
       observedBanResult: { status, operationId: 'request-1' },
     });
-    expect(hasActiveInboxActionRequests([request])).toBe(true);
+    expect(hasActiveInboxActionRequests([request])).toBe(false);
     expect(blocksBanResubmission(request)).toBe(true);
   }
 );

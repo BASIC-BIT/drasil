@@ -26,6 +26,7 @@ import {
   CASE_ROLE_RELEASE_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_RECONCILIATION_ATTEMPT_PREFIX,
   CASE_TERMINAL_ACTION_ATTEMPT_PREFIX,
+  REPORT_BAN_TERMINAL_ATTEMPT_PREFIX,
 } from '../utils/caseRoleRelease';
 
 export interface VerificationReleaseCompletion {
@@ -198,6 +199,7 @@ export interface IVerificationEventRepository {
       touchUpdatedAt?: boolean;
       /** Only for persisting a Discord ban or kick that has already succeeded. */
       allowQuarantineOverride?: boolean;
+      deferReportBanEnforcement?: boolean;
       /** Only for rolling back a failed Discord action to an exact prior pending state. */
       preservePendingCaseState?: boolean;
       /** Requires an exact terminal-action claim before persisting a Discord side effect. */
@@ -1087,6 +1089,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
             status: VerificationStatus.PENDING,
             containment_status: CaseContainmentStatus.IN_PROGRESS,
             quarantine_attempt_id: attemptId,
+            NOT: { quarantine_attempt_id: { startsWith: REPORT_BAN_TERMINAL_ATTEMPT_PREFIX } },
             OR: [
               { quarantine_lease_renewed_at: null },
               { quarantine_lease_renewed_at: { lte: staleBefore } },
@@ -1355,6 +1358,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
           status: VerificationStatus.PENDING,
           containment_status: CaseContainmentStatus.IN_PROGRESS,
           quarantine_attempt_id: { not: null },
+          NOT: { quarantine_attempt_id: { startsWith: REPORT_BAN_TERMINAL_ATTEMPT_PREFIX } },
           AND: [
             {
               OR: [
@@ -1570,6 +1574,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
     options: {
       touchUpdatedAt?: boolean;
       allowQuarantineOverride?: boolean;
+      deferReportBanEnforcement?: boolean;
       preservePendingCaseState?: boolean;
       expectedQuarantineAttemptId?: string;
     } = {}
@@ -1640,6 +1645,25 @@ export class VerificationEventRepository implements IVerificationEventRepository
         data.status === VerificationStatus.BANNED ||
         data.status === VerificationStatus.KICKED ||
         data.status === VerificationStatus.CLOSED_NO_ACTION;
+      if (isResolution && options.deferReportBanEnforcement) {
+        return this.prisma.$transaction(async (transaction) => {
+          const rows = await transaction.$queryRaw<VerificationEvent[]>`
+            SELECT * FROM verification_events WHERE id = ${id}::uuid FOR UPDATE`;
+          const current = rows.at(0);
+          if (
+            !current ||
+            current.status !== VerificationStatus.PENDING ||
+            (current.quarantine_attempt_id?.startsWith(REPORT_BAN_TERMINAL_ATTEMPT_PREFIX) &&
+              (current.metadata as Record<string, unknown> | null)
+                ?.report_ban_enforcement_operation_id)
+          )
+            return null;
+          return (await transaction.verification_events.update({
+            where: { id },
+            data: updateData,
+          })) as VerificationEvent;
+        });
+      }
       if (isResolution && options.expectedQuarantineAttemptId) {
         const updated = await this.prisma.verification_events.updateMany({
           where: {

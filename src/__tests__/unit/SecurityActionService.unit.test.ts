@@ -728,6 +728,52 @@ describe('SecurityActionService (unit)', () => {
     }
   );
 
+  it('clears an old case image description when current-image enrichment is unavailable', async () => {
+    const member = buildMember('guild-evidence', 'target');
+    const detection = await detectionEventsRepository.create({
+      server_id: member.guild.id,
+      user_id: member.id,
+      detection_type: DetectionType.USER_REPORT,
+      confidence: 1,
+    });
+    const event = await verificationEventRepository.createFromDetection(
+      detection.id,
+      member.guild.id,
+      member.id,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.patchMetadata(event.id, {
+      profile_assets: { avatar_url: 'https://example.test/previous.png' },
+      profile_image_description: {
+        summary: 'Previous avatar',
+        analyzed_image_count: 1,
+        model: 'stored',
+        prompt_version: 'v1',
+        is_fallback: false,
+      },
+    });
+    gptService.describeProfileImages.mockRejectedValueOnce(new Error('description unavailable'));
+    const service = buildService() as unknown as {
+      sendCaseEvidenceBundle: SecurityActionService['sendCaseEvidenceBundle'];
+    };
+    await service.sendCaseEvidenceBundle(
+      { send: jest.fn().mockResolvedValue({ id: 'evidence' }) } as never,
+      member,
+      event,
+      {
+        label: 'SUSPICIOUS',
+        confidence: 1,
+        reasons: [],
+        triggerSource: DetectionType.USER_REPORT,
+        triggerContent: 'Report evidence',
+      }
+    );
+    expect((await verificationEventRepository.findById(event.id))?.metadata).toMatchObject({
+      profile_image_description: null,
+      profile_assets: { avatar_url: member.displayAvatarURL({ size: 256 }) },
+    });
+  });
+
   it('captures the visible server avatar for case evidence and skips invalid image lengths', async () => {
     const guildId = 'guild-avatar-evidence';
     const userId = 'user-avatar-evidence';

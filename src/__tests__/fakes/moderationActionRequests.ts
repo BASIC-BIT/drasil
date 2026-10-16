@@ -133,6 +133,21 @@ export class InMemoryModerationActionRequestRepository implements IModerationAct
     )
       return row;
     if (current.report_ban_phase && patch.report_ban_phase === 'preparing') return row;
+    if (patch.report_ban_phase === 'enforcement_started' && this.banContext) {
+      const ids = (patch.report_ban_case_ids ?? []) as string[];
+      for (const caseId of ids) {
+        const event = await this.banContext.cases.findById(caseId);
+        if (
+          event?.status !== 'pending' ||
+          event.quarantine_attempt_id !== current.report_ban_attempt_id
+        )
+          return row;
+      }
+      for (const caseId of ids)
+        await this.banContext.cases.patchMetadata(caseId, {
+          report_ban_enforcement_operation_id: id,
+        });
+    }
     patch = { ...patch };
     delete patch.report_ban_attempt_token;
     if (current.report_ban_confirmed_at) delete patch.report_ban_confirmed_at;
@@ -228,6 +243,9 @@ export class InMemoryModerationActionRequestRepository implements IModerationAct
           event?.status === 'pending' &&
           event.quarantine_attempt_id === metadata.report_ban_attempt_id
         ) {
+          await context.cases.patchMetadata(event.id, {
+            report_ban_enforcement_operation_id: null,
+          });
           await context.cases.updateQuarantineAttempt(
             event.id,
             String(metadata.report_ban_attempt_id),

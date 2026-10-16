@@ -105,13 +105,7 @@ export function findMessageCleanupActionRequest(
 export function hasActiveInboxActionRequests(
   requests: readonly ModerationActionRequestSummary[]
 ): boolean {
-  return requests.some(
-    (request) =>
-      request.status === 'queued' ||
-      request.status === 'processing' ||
-      request.observedBanResult?.status === 'banned_updates_pending' ||
-      request.observedBanResult?.status === 'ban_outcome_unknown'
-  );
+  return requests.some((request) => request.status === 'queued' || request.status === 'processing');
 }
 
 export function reconcileLocalInboxActionRequestIds(

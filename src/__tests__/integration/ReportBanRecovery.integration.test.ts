@@ -1,3 +1,5 @@
+import { CaseRoleReleaseReconciliationService } from '../../services/CaseRoleReleaseReconciliationService';
+import { RoleQuarantineSnapshotRepository } from '../../repositories/RoleQuarantineSnapshotRepository';
 import { Pool } from 'pg';
 import { insertModerationActionRequestWithReceipt } from '../../../apps/web/lib/moderationActionRequestQueue';
 jest.mock('../../../apps/web/lib/setupDataAdapter', () => ({ getPostgresPool: jest.fn() }));
@@ -9,6 +11,8 @@ import { ModerationOutcomeService } from '../../services/ModerationOutcomeServic
 import { ModerationActionRequestService } from '../../services/ModerationActionRequestService';
 import { ModerationEvidenceService } from '../../services/ModerationEvidenceService';
 import {
+  CaseKind,
+  ModerationOutcomeSource,
   DetectionType,
   ModerationActionRequestType,
   ReportIntakeStatus,
@@ -46,6 +50,7 @@ async function fixture() {
     username: 'target',
     tag: 'target#0001',
     createdTimestamp: 1,
+    displayAvatarURL: () => 'https://example.test/avatar.png',
   } as User;
   const moderator = { id: 'moderator' } as User;
   const ban = jest.fn().mockResolvedValue(undefined);
@@ -59,7 +64,7 @@ async function fixture() {
     },
   } as unknown as Guild;
   const client = {
-    guilds: { fetch: jest.fn().mockResolvedValue(guild) },
+    guilds: { fetch: jest.fn().mockResolvedValue(guild), cache: new Map() },
     users: { fetch: jest.fn().mockResolvedValue(moderator) },
     channels: { fetch: jest.fn() },
   } as unknown as Client;
@@ -87,6 +92,7 @@ async function fixture() {
   };
   const roles = { assignCaseRole: jest.fn() };
   const queue = {
+    deletePendingScreeningMember: jest.fn().mockResolvedValue(undefined),
     deleteObservedAlertMirror: jest.fn().mockResolvedValue(undefined),
     deleteReportThreadAttention: jest.fn().mockResolvedValue(undefined),
     deleteCaseMirror: jest.fn().mockResolvedValue(undefined),
@@ -221,6 +227,191 @@ async function fixture() {
 
 const integration = process.env.JEST_INTEGRATION === '1' ? describe : describe.skip;
 integration('report-ban stale worker recovery with real services and Postgres', () => {
+  it('fails a stale phase-less owner and fences its late continuation before explicit retry', async () => {
+    const f = await fixture();
+    const claimed = (await f.requests.claimNext())!;
+    expect(claimed.status).toBe('processing');
+    await getPrismaClient().moderation_action_requests.update({
+      where: { id: claimed.id },
+      data: { updated_at: new Date(Date.now() - 16 * 60_000) },
+    });
+    // A fresh worker observes the crash boundary before any preparation was saved.
+    await f.worker().processPendingRequests();
+    expect((await f.requests.findById(claimed.id))?.status).toBe('failed');
+    await expect(
+      f.security.banObservedDetection(
+        f.member,
+        f.detection.id,
+        f.moderator,
+        'Confirmed spam',
+        claimed
+      )
+    ).rejects.toThrow();
+    expect(f.ban).not.toHaveBeenCalled();
+    const retry = await f.requests.enqueue({
+      serverId: 'guild',
+      actorId: 'moderator',
+      actorSurface: 'web',
+      targetUserId: 'target',
+      reportIntakeId: f.report.id,
+      detectionEventId: f.detection.id,
+      actionType: ModerationActionRequestType.BAN_OBSERVED_DETECTION,
+      idempotencyKey: f.request.idempotency_key,
+      metadata: { reason: 'Confirmed spam' },
+    });
+    expect(getReportBanAttemptToken(retry)).not.toBe(getReportBanAttemptToken(claimed));
+    await expect(
+      f.security.banObservedDetection(
+        f.member,
+        f.detection.id,
+        f.moderator,
+        'Confirmed spam',
+        claimed
+      )
+    ).rejects.toThrow();
+    await f.worker().processPendingRequests();
+    expect(f.ban).toHaveBeenCalledTimes(1);
+    expect((await f.requests.findById(claimed.id))?.status).toBe('completed');
+  });
+  it.each(['expiry', 'observer', 'preparing observer', 'unban'])(
+    'preserves report-ban ownership and historical cleanup across %s',
+    async (boundary) => {
+      const f = await fixture();
+      const event = await f.cases.createFromDetection(
+        f.detection.id,
+        'guild',
+        'target',
+        VerificationStatus.PENDING
+      );
+      await f.cases.update(event.id, { case_kind: CaseKind.COMPROMISED_ACCOUNT });
+      let reached!: () => void;
+      let resume!: () => void;
+      const paused = new Promise<void>((resolve) => {
+        reached = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        resume = resolve;
+      });
+      if (boundary === 'preparing observer') {
+        const merge = f.requests.mergeMetadata.bind(f.requests);
+        jest.spyOn(f.requests, 'mergeMetadata').mockImplementation(async (...args) => {
+          if (args[1].report_ban_phase === 'enforcement_started') {
+            reached();
+            await gate;
+          }
+          return merge(...args);
+        });
+      } else {
+        f.ban.mockImplementationOnce(async () => {
+          reached();
+          await gate;
+        });
+      }
+      const executing = f.execute().catch((error: unknown) => error);
+      await paused;
+      const owned = (await f.cases.findById(event.id))!;
+      if (boundary === 'expiry') {
+        const expiry = new CaseRoleReleaseReconciliationService(
+          f.client,
+          f.cases,
+          f.roles as never,
+          new RoleQuarantineSnapshotRepository(getPrismaClient()),
+          {} as never,
+          {} as never,
+          {} as never,
+          f.notifications as never,
+          f.queue as never
+        );
+        await expiry.runOnce(new Date(Date.now() + 6 * 60_000));
+        expect((await f.cases.findById(event.id))?.quarantine_attempt_id).toBe(
+          owned.quarantine_attempt_id
+        );
+        expect(
+          await f.cases.recoverExpiredQuarantineAttempt(
+            event.id,
+            owned.quarantine_attempt_id!,
+            new Date(Date.now() + 6 * 60_000),
+            {}
+          )
+        ).toBeNull();
+      }
+      if (boundary.includes('observer')) {
+        const observed = await f.moderation.recordObservedDiscordBan(f.guild, f.user, {
+          source: ModerationOutcomeSource.UNKNOWN_EXTERNAL,
+          sourceDetail: 'guildBanAdd',
+        });
+        expect(observed).toBe(boundary === 'preparing observer' ? 1 : 0);
+        if (boundary === 'observer') {
+          // Exercise the mutation fence even when the observer read a pre-enforcement snapshot.
+          expect(
+            await f.cases.update(
+              event.id,
+              { status: VerificationStatus.BANNED, metadata: {} },
+              { allowQuarantineOverride: true, deferReportBanEnforcement: true }
+            )
+          ).toBeNull();
+        }
+      }
+      if (boundary === 'unban') {
+        jest
+          .spyOn(f.moderation, 'finalizeObservedBan')
+          .mockRejectedValueOnce(new Error('cleanup interrupted'));
+      }
+      resume();
+      const result = await executing;
+      if (boundary === 'preparing observer') {
+        expect(result).toBeInstanceOf(Error);
+        expect(f.ban).not.toHaveBeenCalled();
+        expect(await f.outcomeRepo.findByUserAndServer('target', 'guild')).toMatchObject([
+          { source: 'unknown_external' },
+        ]);
+        return;
+      }
+      if (boundary === 'unban') {
+        expect(result).toMatchObject({ status: 'banned_updates_pending' });
+        f.banFetch.mockRejectedValue({ code: 10026, message: 'Unknown Ban' });
+        const rejoinedAt = new Date(Date.now() + 1000);
+        await f.members.upsertMember('guild', 'target', {
+          verification_status: VerificationStatus.VERIFIED,
+          case_role_active: false,
+          last_status_change: rejoinedAt,
+          join_date: rejoinedAt,
+        });
+        await f.requests.mergeMetadata(
+          f.request.id,
+          {
+            report_ban_lease_until: new Date(0).toISOString(),
+            report_ban_retry_at: new Date(0).toISOString(),
+          },
+          getReportBanAttemptToken(f.request)
+        );
+        await f.worker().processPendingRequests();
+        expect(await f.members.findByServerAndUser('guild', 'target')).toMatchObject({
+          verification_status: 'verified',
+          last_status_change: rejoinedAt,
+          join_date: rejoinedAt,
+        });
+      } else expect(result).toEqual({ status: 'banned' });
+      expect(await f.requests.findById(f.request.id)).toMatchObject({
+        status: 'completed',
+        result: { observed_ban_result: { status: 'banned' } },
+        metadata: { report_ban_phase: null },
+      });
+      expect((await f.cases.findById(event.id))?.status).toBe('banned');
+      expect(await f.actionRepo.getActionHistory('target', 'guild')).toHaveLength(1);
+      expect(await f.outcomeRepo.findByUserAndServer('target', 'guild')).toMatchObject([
+        { source: 'drasil' },
+      ]);
+      expect(f.ban).toHaveBeenCalledTimes(1);
+      expect((await f.actionRepo.getActionHistory('target', 'guild'))[0].metadata).toMatchObject({
+        user_snapshot: {
+          id: 'target',
+          username: 'target',
+          avatar_url: 'https://example.test/avatar.png',
+        },
+      });
+    }
+  );
   it.each(['action', 'outcome'])(
     'does not duplicate %s or regress a successful takeover when the old worker resumes',
     async (boundary) => {

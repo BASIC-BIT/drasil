@@ -1074,12 +1074,9 @@ export class SecurityActionService implements ISecurityActionService {
           const profileImageDescription = snapshot.profile_image_description;
           const metadata = {
             profile_assets: profileAssets,
-            ...(profileImageDescription
-              ? {
-                  profile_image_description:
-                    this.serializeProfileImageDescription(profileImageDescription),
-                }
-              : {}),
+            profile_image_description: profileImageDescription
+              ? this.serializeProfileImageDescription(profileImageDescription)
+              : null,
             evidence_bundle: {
               posted_at: new Date().toISOString(),
               recent_message_count: recentMessages.length,
@@ -3882,6 +3879,26 @@ export class SecurityActionService implements ISecurityActionService {
         }))
       )
         throw new Error('Could not persist moderation evidence.');
+      const targetUser = member?.user ?? (await this.client.users.fetch(userId).catch(() => null));
+      const targetAvatarUrl =
+        targetUser?.id === userId ? (targetUser as Partial<User>).displayAvatarURL?.() : undefined;
+      current = await this.saveBanPhase(current, {
+        report_ban_target_snapshot: {
+          id: userId,
+          ...(targetUser?.id === userId
+            ? {
+                tag: targetUser.tag,
+                username: targetUser.username,
+                ...(targetAvatarUrl ? { avatar_url: targetAvatarUrl } : {}),
+                ...(Number.isFinite(targetUser.createdTimestamp)
+                  ? {
+                      account_created_at: new Date(targetUser.createdTimestamp).toISOString(),
+                    }
+                  : {}),
+              }
+            : {}),
+        },
+      });
       const lifecycle = {
         operationId: request.id,
         attemptToken,
@@ -4023,7 +4040,7 @@ export class SecurityActionService implements ISecurityActionService {
     try {
       const guild = await this.client.guilds.fetch(request.server_id);
       const moderator = await this.client.users.fetch(request.actor_id);
-      await guild.bans.fetch(request.target_user_id);
+      if (!confirmed) await guild.bans.fetch(request.target_user_id);
       confirmed = true;
       const current = await this.saveBanPhase(request, {
         report_ban_phase: 'discord_confirmed',
@@ -4063,6 +4080,9 @@ export class SecurityActionService implements ISecurityActionService {
         : cases.map((event) => event.id),
       attemptId: String(metadata.report_ban_attempt_id),
       confirmedAt: new Date(String(metadata.report_ban_confirmed_at)),
+      targetSnapshot: (metadata.report_ban_target_snapshot ?? {
+        id: request.target_user_id,
+      }) as Record<string, string>,
     });
     const detection = await this.detectionEventsRepository.findById(request.detection_event_id);
     if (
