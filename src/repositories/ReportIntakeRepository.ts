@@ -28,6 +28,7 @@ export interface ReportBanClaim {
   targetUserId: string;
   detectionEventId: string;
   operationId: string;
+  attemptToken?: string;
 }
 export interface IReportIntakeRepository {
   claimBan(input: ReportBanClaim): Promise<ReportIntake | null>;
@@ -76,6 +77,16 @@ export class ReportIntakeRepository implements IReportIntakeRepository {
 
   async claimBan(input: ReportBanClaim): Promise<ReportIntake | null> {
     return this.prisma.$transaction(async (transaction) => {
+      const owner = await transaction.$queryRaw<
+        Array<{ token: string | null; phase: string | null }>
+      >`
+        SELECT metadata->>'report_ban_attempt_token' AS token, metadata->>'report_ban_phase' AS phase FROM moderation_action_requests WHERE id::text = ${input.operationId} FOR UPDATE`;
+      if (
+        !owner.length ||
+        owner[0].phase !== 'preparing' ||
+        owner[0].token !== (input.attemptToken ?? null)
+      )
+        return null;
       // Match case opening's report-first lock order before checking the detection claim.
       await transaction.$queryRaw`select id from report_intakes where id = ${input.reportId}::uuid for update`;
       const rows = await transaction.$queryRaw<ReportIntake[]>`

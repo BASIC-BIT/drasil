@@ -113,7 +113,7 @@ export async function insertModerationActionRequestWithReceipt(
        $8::uuid,
        $9::uuid,
        $10,
-       $11::jsonb
+       $11::jsonb || CASE WHEN $2 = 'ban_observed_detection' THEN jsonb_build_object('report_ban_attempt_token', gen_random_uuid()::text) ELSE '{}'::jsonb END
      )
        on conflict (idempotency_key) do update
        set status = case
@@ -134,17 +134,21 @@ export async function insertModerationActionRequestWithReceipt(
               then moderation_action_requests.actor_surface
             else excluded.actor_surface
           end,
-          metadata = coalesce(moderation_action_requests.metadata, '{}'::jsonb) || excluded.metadata,
+          result = CASE WHEN moderation_action_requests.action_type = 'ban_observed_detection' AND moderation_action_requests.status = 'failed' THEN '{}'::jsonb ELSE moderation_action_requests.result END,
+          metadata = CASE WHEN moderation_action_requests.action_type = 'ban_observed_detection' AND moderation_action_requests.status = 'failed'
+            THEN (SELECT coalesce(jsonb_object_agg(key, value), '{}'::jsonb) FROM jsonb_each(coalesce(moderation_action_requests.metadata, '{}'::jsonb)) WHERE key !~ '^report_ban_') || excluded.metadata
+            ELSE coalesce(moderation_action_requests.metadata, '{}'::jsonb) || (excluded.metadata - 'report_ban_attempt_token') END,
          message_deletion_job_id = coalesce(
            moderation_action_requests.message_deletion_job_id,
            excluded.message_deletion_job_id
           )
-       where moderation_action_requests.status = 'failed'
+       where (moderation_action_requests.status = 'failed'
           or (
             moderation_action_requests.status = 'queued'
             and moderation_action_requests.action_type <>
               'apply_captcha_pass'::moderation_action_request_type
           )
+       ) AND NOT (moderation_action_requests.action_type = 'ban_observed_detection' AND (moderation_action_requests.metadata->>'report_ban_phase' IS NOT NULL OR coalesce(moderation_action_requests.result->'observed_ban_result'->>'status', '') IN ('banned', 'banned_updates_pending', 'ban_outcome_unknown')))
        returning
          id::text,
          message_deletion_job_id::text as "messageDeletionJobId",

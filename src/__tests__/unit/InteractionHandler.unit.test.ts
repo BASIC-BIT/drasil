@@ -2678,22 +2678,28 @@ describe('InteractionHandler (unit)', () => {
         deferred: false,
       } as unknown as ModalSubmitInteraction;
       grantOnlyBanMembersPermission(interaction);
-      await handler.handleModalSubmit(interaction);
-      if (state === 'submitted') {
-        expect(requests.enqueue).toHaveBeenCalledWith(
-          expect.objectContaining({
-            actionType: 'ban_observed_detection',
-            targetUserId: 'user-1',
-            detectionEventId: 'det-1',
-            reportIntakeId: 'report-1',
-            metadata: { reason: 'Confirmed spam', requested_action: 'ban_user' },
-          })
-        );
-        expect(interaction.reply).toHaveBeenCalledWith(
-          expect.objectContaining({ content: 'Ban queued for <@user-1>.' })
-        );
-      } else expect(requests.enqueue).not.toHaveBeenCalled();
-      expect(securityActionService.banObservedDetection).not.toHaveBeenCalled();
+      const errors = jest.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        await handler.handleModalSubmit(interaction);
+        if (state === 'submitted') {
+          expect(requests.enqueue).toHaveBeenCalledWith(
+            expect.objectContaining({
+              actionType: 'ban_observed_detection',
+              targetUserId: 'user-1',
+              detectionEventId: 'det-1',
+              reportIntakeId: 'report-1',
+              metadata: { reason: 'Confirmed spam', requested_action: 'ban_user' },
+            })
+          );
+          expect(interaction.reply).toHaveBeenCalledWith(
+            expect.objectContaining({ content: 'Ban queued for <@user-1>.' })
+          );
+        } else expect(requests.enqueue).not.toHaveBeenCalled();
+        expect(securityActionService.banObservedDetection).not.toHaveBeenCalled();
+        expect(errors).toHaveBeenCalledTimes(state === 'submitted' ? 0 : 1);
+      } finally {
+        errors.mockRestore();
+      }
     }
   );
 

@@ -8,19 +8,37 @@ import {
   ModerationActionRequestStatus,
 } from './types';
 
+export function getReportBanAttemptToken(request: ModerationActionRequest): string | undefined {
+  const value = (request.metadata as Record<string, unknown> | null)?.report_ban_attempt_token;
+  return typeof value === 'string' ? value : undefined;
+}
+
 export interface IModerationActionRequestRepository {
   enqueue(data: ModerationActionRequestCreate): Promise<ModerationActionRequest>;
   findById(id: string): Promise<ModerationActionRequest | null>;
   claimReportBanReconciliation(now: Date): Promise<ModerationActionRequest | null>;
   releaseReportBanPreparation(
     id: string,
-    expectedPhase: 'preparing' | 'enforcement_started'
+    expectedPhase: 'preparing' | 'enforcement_started',
+    expectedAttemptToken?: string
   ): Promise<ModerationActionRequest | null>;
   claimNext(): Promise<ModerationActionRequest | null>;
-  heartbeat(id: string): Promise<ModerationActionRequest | null>;
-  mergeMetadata(id: string, metadata: Prisma.JsonObject): Promise<ModerationActionRequest | null>;
-  complete(id: string, result?: Prisma.JsonValue | null): Promise<ModerationActionRequest | null>;
-  fail(id: string, error: string): Promise<ModerationActionRequest | null>;
+  heartbeat(id: string, expectedAttemptToken?: string): Promise<ModerationActionRequest | null>;
+  mergeMetadata(
+    id: string,
+    metadata: Prisma.JsonObject,
+    expectedAttemptToken?: string
+  ): Promise<ModerationActionRequest | null>;
+  complete(
+    id: string,
+    result?: Prisma.JsonValue | null,
+    expectedAttemptToken?: string
+  ): Promise<ModerationActionRequest | null>;
+  fail(
+    id: string,
+    error: string,
+    expectedAttemptToken?: string
+  ): Promise<ModerationActionRequest | null>;
 }
 
 @injectable()
@@ -72,7 +90,7 @@ export class ModerationActionRequestRepository implements IModerationActionReque
           ${data.verificationEventId ?? null}::uuid,
           ${data.messageDeletionJobId ?? null}::uuid,
           ${data.idempotencyKey},
-          ${metadata}::jsonb
+          ${metadata}::jsonb || CASE WHEN ${data.actionType} = 'ban_observed_detection' THEN jsonb_build_object('report_ban_attempt_token', gen_random_uuid()::text) ELSE '{}'::jsonb END
         )
         on conflict (idempotency_key) do update
         set status = case
@@ -97,13 +115,20 @@ export class ModerationActionRequestRepository implements IModerationActionReque
               moderation_action_requests.message_deletion_job_id,
               excluded.message_deletion_job_id
             ),
-            metadata = coalesce(moderation_action_requests.metadata, '{}'::jsonb) || excluded.metadata
+            result = CASE WHEN moderation_action_requests.action_type = 'ban_observed_detection' AND moderation_action_requests.status = 'failed' THEN '{}'::jsonb ELSE moderation_action_requests.result END,
+            metadata = CASE WHEN moderation_action_requests.action_type = 'ban_observed_detection' AND moderation_action_requests.status = 'failed'
+              THEN (SELECT coalesce(jsonb_object_agg(key, value), '{}'::jsonb) FROM jsonb_each(coalesce(moderation_action_requests.metadata, '{}'::jsonb)) WHERE key !~ '^report_ban_') || excluded.metadata
+              ELSE coalesce(moderation_action_requests.metadata, '{}'::jsonb) || (excluded.metadata - 'report_ban_attempt_token') END
+        WHERE NOT (moderation_action_requests.action_type = 'ban_observed_detection' AND (moderation_action_requests.metadata->>'report_ban_phase' IS NOT NULL OR coalesce(moderation_action_requests.result->'observed_ban_result'->>'status', '') IN ('banned', 'banned_updates_pending', 'ban_outcome_unknown')))
         returning *
       `;
-      if (!rows[0]) {
-        throw new Error('Failed to enqueue moderation action request.');
-      }
-      return rows[0];
+      const request =
+        rows.at(0) ??
+        (await this.prisma.moderation_action_requests.findUnique({
+          where: { idempotency_key: data.idempotencyKey },
+        }));
+      if (!request) throw new Error('Failed to enqueue moderation action request.');
+      return request as ModerationActionRequest;
     } catch (error) {
       this.handleError(error, 'enqueueModerationActionRequest');
     }
@@ -160,6 +185,7 @@ export class ModerationActionRequestRepository implements IModerationActionReque
         update moderation_action_requests
         set status = 'processing'::moderation_action_request_status,
             attempts = attempts + 1,
+            metadata = CASE WHEN action_type = 'ban_observed_detection' THEN coalesce(metadata, '{}'::jsonb) || jsonb_build_object('report_ban_attempt_token', coalesce(metadata->>'report_ban_attempt_token', gen_random_uuid()::text)) ELSE metadata END,
             started_at = now(),
             updated_at = now()
         where id = (
@@ -192,17 +218,21 @@ export class ModerationActionRequestRepository implements IModerationActionReque
     }
   }
 
-  public async heartbeat(id: string): Promise<ModerationActionRequest | null> {
+  public async heartbeat(
+    id: string,
+    expectedAttemptToken?: string
+  ): Promise<ModerationActionRequest | null> {
     try {
       const rows = await this.prisma.$queryRaw<ModerationActionRequest[]>`
         update moderation_action_requests
         set updated_at = now(),
             metadata = case when metadata->>'report_ban_phase' is not null then metadata || jsonb_build_object('report_ban_lease_until', (now() + interval '15 minutes')::text) else metadata end
         where id = ${id}::uuid
+          AND (action_type <> 'ban_observed_detection' OR metadata->>'report_ban_attempt_token' IS NOT DISTINCT FROM ${expectedAttemptToken ?? null}::text)
           and (status = 'processing'::moderation_action_request_status or metadata->>'report_ban_phase' is not null)
         returning *
       `;
-      return rows[0] ?? null;
+      return rows.at(0) ?? (await this.findById(id));
     } catch (error) {
       this.handleError(error, 'heartbeatModerationActionRequest');
     }
@@ -210,11 +240,12 @@ export class ModerationActionRequestRepository implements IModerationActionReque
 
   public async mergeMetadata(
     id: string,
-    metadata: Prisma.JsonObject
+    metadata: Prisma.JsonObject,
+    expectedAttemptToken?: string
   ): Promise<ModerationActionRequest | null> {
     try {
       if (Object.keys(metadata).some((key) => key.startsWith('report_ban_'))) {
-        return await this.mergeReportBanMetadata(id, metadata);
+        return await this.mergeReportBanMetadata(id, metadata, expectedAttemptToken);
       }
       const rows = await this.prisma.$queryRaw<ModerationActionRequest[]>`
         update moderation_action_requests
@@ -231,7 +262,8 @@ export class ModerationActionRequestRepository implements IModerationActionReque
 
   private async mergeReportBanMetadata(
     id: string,
-    patch: Prisma.JsonObject
+    patch: Prisma.JsonObject,
+    expectedAttemptToken?: string
   ): Promise<ModerationActionRequest | null> {
     return this.prisma.$transaction(async (transaction) => {
       const rows = await transaction.$queryRaw<
@@ -239,55 +271,88 @@ export class ModerationActionRequestRepository implements IModerationActionReque
       >`SELECT * FROM moderation_action_requests WHERE id = ${id}::uuid FOR UPDATE`;
       const current = rows.at(0);
       if (!current) return null;
+      if (getReportBanAttemptToken(current) !== expectedAttemptToken) return current;
       const metadata = (current.metadata ?? {}) as Prisma.JsonObject;
-      const result = (current.result ?? {}) as Prisma.JsonObject;
-      const receipt = result.observed_ban_result as Prisma.JsonObject | undefined;
-      if (receipt?.status === 'banned' && patch.report_ban_phase !== null) return current;
-      const phase = metadata.report_ban_phase;
-      const next = patch.report_ban_phase;
-      if (current.status === ModerationActionRequestStatus.FAILED && !phase) return current;
-      if (phase === 'discord_confirmed' && next && next !== 'discord_confirmed') return current;
-      if (phase && phase !== 'preparing' && next === 'preparing') return current;
-      if (next === 'enforcement_started') {
-        if (phase !== 'preparing') return current;
-        // Every boundary mutation takes request, report, detection, then sorted case locks.
-        const owned = await this.lockReportBanContext(transaction, current);
-        const candidates = Array.isArray(metadata.report_ban_cases)
-          ? (metadata.report_ban_cases as Prisma.JsonObject[])
-          : [];
-        const acquired = Array.isArray(patch.report_ban_case_ids) ? patch.report_ban_case_ids : [];
-        if (
-          !owned ||
-          candidates.length !== acquired.length ||
-          candidates.some((event) => !acquired.includes(String(event.id)))
-        )
-          return current;
-        const cases = await transaction.verification_events.findMany({
-          where: { id: { in: acquired as string[] } },
-        });
-        if (
-          cases.length !== acquired.length ||
-          cases.some(
-            (event) =>
-              event.status !== 'pending' ||
-              event.containment_status !== 'in_progress' ||
-              event.quarantine_attempt_id !== metadata.report_ban_attempt_id
-          )
-        )
-          return current;
-      }
-      const ownedPatch = { ...patch };
-      if (metadata.report_ban_confirmed_at) delete ownedPatch.report_ban_confirmed_at;
-      if (phase && phase !== 'preparing') {
-        delete ownedPatch.report_ban_cases;
-        delete ownedPatch.report_ban_case_ids;
-        delete ownedPatch.report_ban_attempt_id;
-      }
+      if (!this.canAdvanceReportBanPhase(current, patch)) return current;
+      if (
+        patch.report_ban_phase === 'enforcement_started' &&
+        !(await this.ownsPreparedCases(transaction, current, patch))
+      )
+        return current;
+      const ownedPatch = this.ownedReportBanPatch(metadata, patch);
       const updated = await transaction.$queryRaw<ModerationActionRequest[]>`
         UPDATE moderation_action_requests SET metadata = coalesce(metadata, '{}'::jsonb) || ${JSON.stringify(ownedPatch)}::jsonb, updated_at = now()
         WHERE id = ${id}::uuid RETURNING *`;
       return updated[0] ?? null;
     });
+  }
+
+  private canAdvanceReportBanPhase(
+    current: ModerationActionRequest,
+    patch: Prisma.JsonObject
+  ): boolean {
+    const metadata = (current.metadata ?? {}) as Prisma.JsonObject;
+    const receipt = ((current.result ?? {}) as Prisma.JsonObject).observed_ban_result as
+      | Prisma.JsonObject
+      | undefined;
+    const phase = metadata.report_ban_phase;
+    const next = patch.report_ban_phase;
+    if (receipt?.status === 'banned' && next !== null) return false;
+    if (current.status === ModerationActionRequestStatus.FAILED && !phase) return false;
+    if (phase === 'discord_confirmed' && next && next !== 'discord_confirmed') return false;
+    if (phase && next === 'preparing') return false;
+    return next !== 'enforcement_started' || phase === 'preparing';
+  }
+
+  private ownedReportBanPatch(
+    metadata: Prisma.JsonObject,
+    patch: Prisma.JsonObject
+  ): Prisma.JsonObject {
+    const owned = { ...patch };
+    delete owned.report_ban_attempt_token;
+    if (metadata.report_ban_confirmed_at) delete owned.report_ban_confirmed_at;
+    if (metadata.report_ban_phase && metadata.report_ban_phase !== 'preparing') {
+      for (const key of [
+        'report_ban_cases',
+        'report_ban_case_ids',
+        'report_ban_attempt_id',
+        'report_ban_preparation_id',
+        'report_ban_enforcement_id',
+      ])
+        delete owned[key];
+    }
+    return owned;
+  }
+
+  private async ownsPreparedCases(
+    transaction: Prisma.TransactionClient,
+    current: ModerationActionRequest,
+    patch: Prisma.JsonObject
+  ): Promise<boolean> {
+    // Request lock is held; acquire report, detection, then sorted case locks.
+    if (!(await this.lockReportBanContext(transaction, current))) return false;
+    const metadata = (current.metadata ?? {}) as Prisma.JsonObject;
+    const candidates = Array.isArray(metadata.report_ban_cases)
+      ? (metadata.report_ban_cases as Prisma.JsonObject[])
+      : [];
+    const acquired = Array.isArray(patch.report_ban_case_ids) ? patch.report_ban_case_ids : [];
+    if (
+      candidates.length !== acquired.length ||
+      candidates.some((event) => !acquired.includes(String(event.id)))
+    )
+      return false;
+    const cases = await transaction.verification_events.findMany({
+      where: { id: { in: acquired as string[] } },
+    });
+    return (
+      cases.length === acquired.length &&
+      cases.every(
+        (event) =>
+          event.status === 'pending' &&
+          event.containment_status === 'in_progress' &&
+          event.quarantine_attempt_id === metadata.report_ban_attempt_id
+      )
+    );
   }
 
   private async lockReportBanContext(
@@ -331,7 +396,8 @@ export class ModerationActionRequestRepository implements IModerationActionReque
 
   public async releaseReportBanPreparation(
     id: string,
-    expectedPhase: 'preparing' | 'enforcement_started'
+    expectedPhase: 'preparing' | 'enforcement_started',
+    expectedAttemptToken?: string
   ): Promise<ModerationActionRequest | null> {
     return this.prisma.$transaction(async (transaction) => {
       const rows = await transaction.$queryRaw<
@@ -339,6 +405,7 @@ export class ModerationActionRequestRepository implements IModerationActionReque
       >`SELECT * FROM moderation_action_requests WHERE id = ${id}::uuid FOR UPDATE`;
       const current = rows.at(0);
       if (!current) return null;
+      if (getReportBanAttemptToken(current) !== expectedAttemptToken) return current;
       const metadata = (current.metadata ?? {}) as Prisma.JsonObject;
       // A failed preparation may still have a late-acquired guard from its paused owner.
       const failedPreparation =
@@ -375,7 +442,8 @@ export class ModerationActionRequestRepository implements IModerationActionReque
 
   public async complete(
     id: string,
-    result: Prisma.JsonValue | null = {}
+    result: Prisma.JsonValue | null = {},
+    expectedAttemptToken?: string
   ): Promise<ModerationActionRequest | null> {
     try {
       const rows = await this.prisma.$queryRaw<ModerationActionRequest[]>`
@@ -386,6 +454,7 @@ export class ModerationActionRequestRepository implements IModerationActionReque
             last_error = null,
             result = CASE WHEN action_type = 'ban_observed_detection' AND metadata->>'report_ban_phase' = 'discord_confirmed' AND ${JSON.stringify(result ?? {})}::jsonb->'observed_ban_result'->>'status' = 'ban_outcome_unknown' THEN jsonb_set(${JSON.stringify(result ?? {})}::jsonb, '{observed_ban_result,status}', '"banned_updates_pending"'::jsonb) ELSE ${JSON.stringify(result ?? {})}::jsonb END
         where id = ${id}::uuid
+          AND (action_type <> 'ban_observed_detection' OR metadata->>'report_ban_attempt_token' IS NOT DISTINCT FROM ${expectedAttemptToken ?? null}::text)
           AND NOT (action_type = 'ban_observed_detection' AND coalesce(result->'observed_ban_result'->>'status', '') = 'banned')
           AND NOT (action_type = 'ban_observed_detection' AND coalesce(result->'observed_ban_result'->>'status', '') = 'banned_updates_pending' AND ${JSON.stringify(result ?? {})}::jsonb->'observed_ban_result'->>'status' = 'ban_outcome_unknown')
         returning *
@@ -396,7 +465,11 @@ export class ModerationActionRequestRepository implements IModerationActionReque
     }
   }
 
-  public async fail(id: string, errorMessage: string): Promise<ModerationActionRequest | null> {
+  public async fail(
+    id: string,
+    errorMessage: string,
+    expectedAttemptToken?: string
+  ): Promise<ModerationActionRequest | null> {
     try {
       const rows = await this.prisma.$queryRaw<ModerationActionRequest[]>`
         update moderation_action_requests
@@ -405,6 +478,7 @@ export class ModerationActionRequestRepository implements IModerationActionReque
             updated_at = now(),
             last_error = ${errorMessage}
         where id = ${id}::uuid
+          AND (action_type <> 'ban_observed_detection' OR metadata->>'report_ban_attempt_token' IS NOT DISTINCT FROM ${expectedAttemptToken ?? null}::text)
           AND NOT (action_type = 'ban_observed_detection' AND (metadata->>'report_ban_phase' IS NOT NULL OR coalesce(result->'observed_ban_result'->>'status', '') IN ('banned', 'banned_updates_pending', 'ban_outcome_unknown')))
         returning *
       `;

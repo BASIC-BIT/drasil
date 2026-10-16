@@ -1,3 +1,6 @@
+import { Pool } from 'pg';
+import { insertModerationActionRequestWithReceipt } from '../../../apps/web/lib/moderationActionRequestQueue';
+jest.mock('../../../apps/web/lib/setupDataAdapter', () => ({ getPostgresPool: jest.fn() }));
 import { Client, Guild, GuildMember, User } from 'discord.js';
 import { SecurityActionService } from '../../services/SecurityActionService';
 import { UserModerationService } from '../../services/UserModerationService';
@@ -12,7 +15,10 @@ import {
   VerificationStatus,
 } from '../../repositories/types';
 import { getPrismaClient } from '../testDb';
-import { ModerationActionRequestRepository } from '../../repositories/ModerationActionRequestRepository';
+import {
+  getReportBanAttemptToken,
+  ModerationActionRequestRepository,
+} from '../../repositories/ModerationActionRequestRepository';
 import { AdminActionRepository } from '../../repositories/AdminActionRepository';
 import { DetectionEventsRepository } from '../../repositories/DetectionEventsRepository';
 import { ModerationOutcomeRepository } from '../../repositories/ModerationOutcomeRepository';
@@ -252,8 +258,12 @@ integration('report-ban stale worker recovery with real services and Postgres', 
       const success = (await f.requests.findById(f.request.id))!;
       resume();
       const stale = await old;
-      await f.requests.complete(f.request.id, { observed_ban_result: stale });
-      await f.requests.fail(f.request.id, 'stale failure');
+      await f.requests.complete(
+        f.request.id,
+        { observed_ban_result: stale },
+        getReportBanAttemptToken(f.request)
+      );
+      await f.requests.fail(f.request.id, 'stale failure', getReportBanAttemptToken(f.request));
       expect(await f.actionRepo.getActionHistory('target', 'guild')).toHaveLength(1);
       expect(await f.outcomeRepo.findByUserAndServer('target', 'guild')).toHaveLength(1);
       expect(await f.requests.findById(f.request.id)).toMatchObject({
@@ -286,12 +296,13 @@ integration('report-ban stale worker recovery with real services and Postgres', 
       resume = resolve;
     });
     const merge = f.requests.mergeMetadata.bind(f.requests);
-    jest.spyOn(f.requests, 'mergeMetadata').mockImplementation(async (id, patch) => {
+    jest.spyOn(f.requests, 'mergeMetadata').mockImplementation(async (...args) => {
+      const patch = args[1];
       if (patch.report_ban_phase === 'enforcement_started') {
         reached();
         await gate;
       }
-      return merge(id, patch);
+      return merge(...args);
     });
     const old = f.execute();
     await paused;
@@ -346,12 +357,13 @@ integration('report-ban stale worker recovery with real services and Postgres', 
       continueEnforcement = resolve;
     });
     const merge = f.requests.mergeMetadata.bind(f.requests);
-    jest.spyOn(f.requests, 'mergeMetadata').mockImplementation(async (id, patch) => {
+    jest.spyOn(f.requests, 'mergeMetadata').mockImplementation(async (...args) => {
+      const patch = args[1];
       if (patch.report_ban_phase === 'enforcement_started') {
         prepared();
         await enforcementGate;
       }
-      return merge(id, patch);
+      return merge(...args);
     });
     const old = f.execute();
     await preparing;
@@ -361,12 +373,16 @@ integration('report-ban stale worker recovery with real services and Postgres', 
     const release = f.requests.releaseReportBanPreparation.bind(f.requests);
     jest
       .spyOn(f.requests, 'releaseReportBanPreparation')
-      .mockImplementationOnce(async (id, phase) => {
+      .mockImplementationOnce(async (...args) => {
         reached();
         await gate;
-        return release(id, phase);
+        return release(...args);
       });
-    const staleRelease = f.requests.releaseReportBanPreparation(f.request.id, 'preparing');
+    const staleRelease = f.requests.releaseReportBanPreparation(
+      f.request.id,
+      'preparing',
+      getReportBanAttemptToken(f.request)
+    );
     await paused;
     continueEnforcement();
     expect(await old).toEqual({ status: 'banned' });
@@ -387,4 +403,209 @@ integration('report-ban stale worker recovery with real services and Postgres', 
     );
     expect(f.ban).toHaveBeenCalledTimes(1);
   });
+  it.each([
+    ['bot', 'enforcement'],
+    ['web', 'enforcement'],
+    ['bot', 'terminal claim'],
+    ['web', 'terminal claim'],
+  ])('fences paused preparation from an ordinary %s retry at %s', async (surface, pausePoint) => {
+    const f = await fixture();
+    const event = await f.cases.createFromDetection(
+      f.detection.id,
+      'guild',
+      'target',
+      VerificationStatus.PENDING
+    );
+    let reached!: () => void;
+    let resumeA!: () => void;
+    let resumeB!: () => void;
+    const pausedA = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    const gateA = new Promise<void>((resolve) => {
+      resumeA = resolve;
+    });
+    let bReached!: () => void;
+    const pausedB = new Promise<void>((resolve) => {
+      bReached = resolve;
+    });
+    const gateB = new Promise<void>((resolve) => {
+      resumeB = resolve;
+    });
+    const merge = f.requests.mergeMetadata.bind(f.requests);
+    let transitions = 0;
+    jest.spyOn(f.requests, 'mergeMetadata').mockImplementation(async (...args) => {
+      if (pausePoint === 'enforcement' && args[1].report_ban_phase === 'enforcement_started') {
+        transitions++;
+        if (transitions === 1) {
+          reached();
+          await gateA;
+        } else {
+          bReached();
+          await gateB;
+        }
+      }
+      return merge(...args);
+    });
+    if (pausePoint === 'terminal claim') {
+      const claim = f.cases.claimTerminalActions.bind(f.cases);
+      let claims = 0;
+      jest.spyOn(f.cases, 'claimTerminalActions').mockImplementation(async (...args) => {
+        claims++;
+        if (claims === 1) {
+          reached();
+          await gateA;
+        } else {
+          bReached();
+          await gateB;
+        }
+        return claim(...args);
+      });
+    }
+    try {
+      const old = f.execute().then(
+        (value) => value,
+        (error) => error as Error
+      );
+      await Promise.race([
+        pausedA,
+        old.then((value) => {
+          throw new Error(`A ended before pause: ${String(value)}`);
+        }),
+      ]);
+      const oldSnapshot = (await f.requests.findById(f.request.id))!;
+      await f.security.reconcileReportBan(oldSnapshot);
+      const input = {
+        serverId: 'guild',
+        targetUserId: 'target',
+        actorId: 'moderator',
+        actorSurface: surface,
+        actionType: 'ban_observed_detection' as const,
+        reportIntakeId: f.report.id,
+        detectionEventId: f.detection.id,
+        idempotencyKey: f.request.idempotency_key,
+        metadata: { reason: 'Confirmed spam' },
+      };
+      if (surface === 'web') {
+        const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
+        try {
+          await insertModerationActionRequestWithReceipt(pool, input);
+        } finally {
+          await pool.end();
+        }
+      } else
+        await f.requests.enqueue({
+          ...input,
+          actionType: ModerationActionRequestType.BAN_OBSERVED_DETECTION,
+        });
+      const retry = (await f.requests.claimNext())!;
+      expect(retry.id).toBe(f.request.id);
+      const newer = f.security.banObservedDetection(
+        f.member,
+        f.detection.id,
+        f.moderator,
+        'Confirmed spam',
+        retry
+      );
+      await Promise.race([
+        pausedB,
+        newer.then((value) => {
+          throw new Error(`B ended before pause: ${JSON.stringify(value)}`);
+        }),
+      ]);
+      const token = (oldSnapshot.metadata as Record<string, unknown>)
+        .report_ban_attempt_token as string;
+      const activeBefore = (await f.requests.findById(retry.id))!;
+      await f.requests.releaseReportBanPreparation(retry.id, 'preparing', token);
+      await f.requests.complete(retry.id, { observed_ban_result: { status: 'banned' } }, token);
+      await f.requests.fail(retry.id, 'stale failure', token);
+      await f.requests.heartbeat(retry.id, token);
+      expect(await f.requests.findById(retry.id)).toEqual(activeBefore);
+      expect((await f.reports.findById(f.report.id))?.metadata).toHaveProperty(
+        'report_ban_operation_id',
+        retry.id
+      );
+      expect((await f.detections.findById(f.detection.id))?.metadata).toHaveProperty(
+        'observed_action',
+        'ban'
+      );
+      expect((await f.cases.findById(event.id))?.quarantine_attempt_id).toBe(
+        pausePoint === 'terminal claim'
+          ? null
+          : (activeBefore.metadata as Record<string, unknown>).report_ban_attempt_id
+      );
+      resumeA();
+      expect(await old).toBeInstanceOf(Error);
+      const active = (await f.requests.findById(retry.id))!;
+      expect(active.metadata).toMatchObject({ report_ban_phase: 'preparing' });
+      expect(f.ban).not.toHaveBeenCalled();
+      resumeB();
+      expect(await newer).toEqual({ status: 'banned' });
+      expect(f.ban).toHaveBeenCalledTimes(1);
+      expect(await f.actionRepo.getActionHistory('target', 'guild')).toHaveLength(1);
+      expect(await f.outcomeRepo.findByUserAndServer('target', 'guild')).toHaveLength(1);
+      expect((await f.cases.findById(event.id))?.status).toBe('banned');
+      expect((await f.reports.findById(f.report.id))?.status).toBe('actioned');
+      expect(await f.requests.findById(retry.id)).toMatchObject({
+        status: 'completed',
+        metadata: { report_ban_phase: null },
+        result: { observed_ban_result: { status: 'banned' } },
+      });
+    } finally {
+      resumeA();
+      resumeB();
+    }
+  });
+
+  it.each(['bot', 'web'])(
+    'retains uncertain failed %s requests instead of rotating the attempt',
+    async (surface) => {
+      const f = await fixture();
+      const input = {
+        serverId: 'guild',
+        targetUserId: 'target',
+        actorId: 'moderator',
+        actorSurface: surface,
+        actionType: 'ban_observed_detection' as const,
+        reportIntakeId: f.report.id,
+        detectionEventId: f.detection.id,
+        idempotencyKey: f.request.idempotency_key,
+      };
+      for (const [phase, status] of [
+        ['enforcement_started', null],
+        ['discord_confirmed', null],
+        ['reconciliation_required', null],
+        [null, 'ban_outcome_unknown'],
+        [null, 'banned_updates_pending'],
+      ]) {
+        const seeded = await getPrismaClient().moderation_action_requests.update({
+          where: { id: f.request.id },
+          data: {
+            status: 'failed',
+            metadata: { ...(f.request.metadata as object), report_ban_phase: phase },
+            result: status ? { observed_ban_result: { status, operationId: f.request.id } } : {},
+          },
+        });
+        if (surface === 'web') {
+          const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
+          try {
+            await insertModerationActionRequestWithReceipt(pool, input);
+          } finally {
+            await pool.end();
+          }
+        } else
+          await f.requests.enqueue({
+            ...input,
+            actionType: ModerationActionRequestType.BAN_OBSERVED_DETECTION,
+          });
+        expect(await f.requests.findById(f.request.id)).toMatchObject({
+          status: 'failed',
+          metadata: seeded.metadata,
+          result: seeded.result,
+        });
+        expect(await f.requests.claimNext()).toBeNull();
+      }
+      expect(f.ban).not.toHaveBeenCalled();
+    }
+  );
 });

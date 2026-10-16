@@ -423,6 +423,23 @@ export class DetectionEventsRepository implements IDetectionEventsRepository {
         `;
         return rows[0] ?? null;
       };
+      const operationId = metadata.report_ban_operation_id;
+      if (metadata.observed_action === 'ban' && typeof operationId === 'string') {
+        return await this.prisma.$transaction(async (transaction) => {
+          const owner = await transaction.$queryRaw<
+            Array<{ token: string | null; phase: string | null }>
+          >`
+            SELECT metadata->>'report_ban_attempt_token' AS token, metadata->>'report_ban_phase' AS phase
+            FROM moderation_action_requests WHERE id::text = ${operationId} FOR UPDATE`;
+          if (
+            !owner.length ||
+            owner[0].token !== metadata.report_ban_attempt_token ||
+            owner[0].phase !== 'preparing'
+          )
+            return null;
+          return claim(transaction);
+        });
+      }
       if (!openingCase) return await claim(this.prisma);
       return await this.prisma.$transaction(async (transaction) => {
         // Serialize with claimBan, then read its committed marker in the next statement.

@@ -1,4 +1,8 @@
-import { IModerationActionRequestRepository } from '../repositories/ModerationActionRequestRepository';
+import { randomUUID } from 'crypto';
+import {
+  getReportBanAttemptToken,
+  IModerationActionRequestRepository,
+} from '../repositories/ModerationActionRequestRepository';
 import { getReportConfirmationMessageIds } from './ReportIntakeService';
 import { context, ROOT_CONTEXT } from '@opentelemetry/api';
 import {
@@ -1885,10 +1889,13 @@ export class SecurityActionService implements ISecurityActionService {
     detectionEvent: DetectionEvent,
     moderator: User,
     actionType: AdminActionType,
-    operationId?: string
+    operationId?: string,
+    attemptToken?: string
   ): Promise<DetectionEvent | null> {
     const metadata: Record<string, unknown> = {
-      ...(operationId ? { report_ban_operation_id: operationId } : {}),
+      ...(operationId
+        ? { report_ban_operation_id: operationId, report_ban_attempt_token: attemptToken }
+        : {}),
       observed_action: actionType,
       observed_action_by: moderator.id,
       observed_action_at: new Date().toISOString(),
@@ -3778,14 +3785,23 @@ export class SecurityActionService implements ISecurityActionService {
   ): Promise<ModerationActionRequest> {
     const saved = await this.actionRequests?.mergeMetadata(
       request.id,
-      patch as import('../db/prisma').Prisma.JsonObject
+      patch as import('../db/prisma').Prisma.JsonObject,
+      getReportBanAttemptToken(request)
     );
     if (!saved) throw new Error('Could not persist report ban operation.');
     if (
       (patch.report_ban_phase === 'preparing' ||
         patch.report_ban_phase === 'enforcement_started') &&
-      this.metadataToRecord(saved.metadata).report_ban_phase !== patch.report_ban_phase
+      (this.metadataToRecord(saved.metadata).report_ban_phase !== patch.report_ban_phase ||
+        (patch.report_ban_phase === 'preparing' &&
+          this.metadataToRecord(saved.metadata).report_ban_preparation_id !==
+            patch.report_ban_preparation_id) ||
+        (patch.report_ban_phase === 'enforcement_started' &&
+          this.metadataToRecord(saved.metadata).report_ban_enforcement_id !==
+            patch.report_ban_enforcement_id))
     )
+      throw new Error('Report ban preparation ownership changed.');
+    if (getReportBanAttemptToken(saved) !== getReportBanAttemptToken(request))
       throw new Error('Report ban preparation ownership changed.');
     return saved;
   }
@@ -3793,7 +3809,11 @@ export class SecurityActionService implements ISecurityActionService {
   private async releaseBanPreparation(request: ModerationActionRequest): Promise<void> {
     const phase = this.metadataToRecord(request.metadata).report_ban_phase;
     if (phase !== 'preparing' && phase !== 'enforcement_started') return;
-    const released = await this.actionRequests?.releaseReportBanPreparation(request.id, phase);
+    const released = await this.actionRequests?.releaseReportBanPreparation(
+      request.id,
+      phase,
+      getReportBanAttemptToken(request)
+    );
     if (!released) throw new Error('Could not release report ban preparation.');
   }
 
@@ -3819,8 +3839,11 @@ export class SecurityActionService implements ISecurityActionService {
     if ((request.report_intake_id ?? undefined) !== reportId)
       throw new Error('Report binding changed before ban.');
     if (this.hasObservedAction(detection)) return { status: 'already_handled' };
+    const attemptToken = getReportBanAttemptToken(request);
+    if (!attemptToken) throw new Error('Report ban attempt identity is missing.');
     let current = await this.saveBanPhase(request, {
       report_ban_phase: 'preparing',
+      report_ban_preparation_id: randomUUID(),
       report_ban_reason: reason,
       report_ban_lease_until: new Date(Date.now() + 15 * 60_000).toISOString(),
     });
@@ -3835,6 +3858,7 @@ export class SecurityActionService implements ISecurityActionService {
           targetUserId: userId,
           detectionEventId,
           operationId: request.id,
+          attemptToken,
         });
         if (!report) throw new Error('Report is no longer available for this ban.');
       }
@@ -3842,7 +3866,8 @@ export class SecurityActionService implements ISecurityActionService {
         detection,
         moderator,
         AdminActionType.BAN,
-        request.id
+        request.id,
+        attemptToken
       );
       if (!claimedDetection) {
         await this.releaseBanPreparation(current);
@@ -3859,6 +3884,7 @@ export class SecurityActionService implements ISecurityActionService {
         throw new Error('Could not persist moderation evidence.');
       const lifecycle = {
         operationId: request.id,
+        attemptToken,
         prepare: async (cases: VerificationEvent[], attemptId: string): Promise<void> => {
           current = await this.saveBanPhase(current, {
             report_ban_cases: cases.map((event) => ({
@@ -3908,6 +3934,7 @@ export class SecurityActionService implements ISecurityActionService {
             throw new Error('Acquired case set changed before enforcement.');
           current = await this.saveBanPhase(current, {
             report_ban_phase: 'enforcement_started',
+            report_ban_enforcement_id: randomUUID(),
             report_ban_case_ids: acquiredCases.map((event) => event.id),
           });
           enforcement.started = true;
@@ -3987,7 +4014,8 @@ export class SecurityActionService implements ISecurityActionService {
       await this.releaseBanPreparation(request);
       await this.actionRequests.fail(
         request.id,
-        'Worker interrupted before enforcement. No ban was sent.'
+        'Worker interrupted before enforcement. No ban was sent.',
+        getReportBanAttemptToken(request)
       );
       return { status: 'already_handled' };
     }
@@ -4036,12 +4064,18 @@ export class SecurityActionService implements ISecurityActionService {
       attemptId: String(metadata.report_ban_attempt_id),
       confirmedAt: new Date(String(metadata.report_ban_confirmed_at)),
     });
-    await this.notificationManager.markObservedDetectionActionTaken(
-      request.detection_event_id,
-      'banned this user',
-      moderator,
-      AdminActionType.BAN
-    );
+    const detection = await this.detectionEventsRepository.findById(request.detection_event_id);
+    if (
+      this.readString(this.metadataToRecord(detection?.metadata).observed_notification_message_id)
+    ) {
+      const updated = await this.notificationManager.markObservedDetectionActionTaken(
+        request.detection_event_id,
+        'banned this user',
+        moderator,
+        AdminActionType.BAN
+      );
+      if (!updated) throw new Error('Existing observed notification update is incomplete.');
+    }
     await this.moderationQueueService?.deleteObservedAlertMirror(request.detection_event_id);
     if (request.report_intake_id) {
       const report = await this.reportIntakeRepository?.updateBan(
@@ -4062,13 +4096,17 @@ export class SecurityActionService implements ISecurityActionService {
       if (prompts.length) await this.threadManager.retireReportConfirmationPrompts(report, prompts);
       await this.closeReportBanThread(report, request);
     }
-    const completed = await this.actionRequests.complete(request.id, {
-      action_type: request.action_type,
-      observed_ban_result: { status: 'banned' },
-      report_intake_id: request.report_intake_id,
-      detection_event_id: request.detection_event_id,
-      target_user_id: request.target_user_id,
-    });
+    const completed = await this.actionRequests.complete(
+      request.id,
+      {
+        action_type: request.action_type,
+        observed_ban_result: { status: 'banned' },
+        report_intake_id: request.report_intake_id,
+        detection_event_id: request.detection_event_id,
+        target_user_id: request.target_user_id,
+      },
+      getReportBanAttemptToken(request)
+    );
     if (!completed) throw new Error('Could not persist completed ban receipt.');
     await this.saveBanPhase(request, {
       report_ban_phase: null,

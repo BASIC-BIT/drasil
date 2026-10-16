@@ -2,7 +2,11 @@ import { IVerificationEventRepository } from '../../repositories/VerificationEve
 import { IReportIntakeRepository } from '../../repositories/ReportIntakeRepository';
 import { IDetectionEventsRepository } from '../../repositories/DetectionEventsRepository';
 import { Prisma } from '../../db/prisma';
-import { IModerationActionRequestRepository } from '../../repositories/ModerationActionRequestRepository';
+import { randomUUID } from 'crypto';
+import {
+  getReportBanAttemptToken,
+  IModerationActionRequestRepository,
+} from '../../repositories/ModerationActionRequestRepository';
 import {
   ModerationActionRequest,
   ModerationActionRequestCreate,
@@ -21,7 +25,31 @@ export class InMemoryModerationActionRequestRepository implements IModerationAct
     const existing = [...this.rows.values()].find(
       (row) => row.idempotency_key === input.idempotencyKey
     );
-    if (existing) return existing;
+    if (existing) {
+      if (
+        existing.status !== ModerationActionRequestStatus.FAILED ||
+        (existing.metadata as Prisma.JsonObject).report_ban_phase ||
+        (existing.result as Prisma.JsonObject).observed_ban_result
+      )
+        return existing;
+      const metadata = Object.fromEntries(
+        Object.entries(existing.metadata as Prisma.JsonObject).filter(
+          ([key]) => !key.startsWith('report_ban_')
+        )
+      );
+      const retry = {
+        ...existing,
+        status: ModerationActionRequestStatus.QUEUED,
+        result: {},
+        metadata: {
+          ...metadata,
+          ...((input.metadata ?? {}) as Prisma.JsonObject),
+          report_ban_attempt_token: randomUUID(),
+        },
+      } as ModerationActionRequest;
+      this.rows.set(existing.id, retry);
+      return retry;
+    }
     const row: ModerationActionRequest = {
       id: `request-${this.rows.size + 1}`,
       server_id: input.serverId,
@@ -35,7 +63,12 @@ export class InMemoryModerationActionRequestRepository implements IModerationAct
       message_deletion_job_id: null,
       idempotency_key: input.idempotencyKey,
       status: ModerationActionRequestStatus.QUEUED,
-      metadata: (input.metadata as Prisma.JsonValue) ?? {},
+      metadata: {
+        ...((input.metadata ?? {}) as Prisma.JsonObject),
+        ...(input.actionType === 'ban_observed_detection'
+          ? { report_ban_attempt_token: randomUUID() }
+          : {}),
+      } as Prisma.JsonValue,
       result: {},
       requested_at: new Date(),
       updated_at: new Date(),
@@ -71,10 +104,16 @@ export class InMemoryModerationActionRequestRepository implements IModerationAct
   }
   async mergeMetadata(
     id: string,
-    patch: Prisma.JsonObject
+    patch: Prisma.JsonObject,
+    expectedAttemptToken?: string
   ): Promise<ModerationActionRequest | null> {
     const row = this.rows.get(id);
     if (!row) return null;
+    if (
+      row.action_type === 'ban_observed_detection' &&
+      getReportBanAttemptToken(row) !== expectedAttemptToken
+    )
+      return row;
     const current = row.metadata as Prisma.JsonObject;
     const receipt = (row.result as Prisma.JsonObject).observed_ban_result as
       | Prisma.JsonObject
@@ -93,7 +132,9 @@ export class InMemoryModerationActionRequestRepository implements IModerationAct
       current.report_ban_phase !== 'preparing'
     )
       return row;
+    if (current.report_ban_phase && patch.report_ban_phase === 'preparing') return row;
     patch = { ...patch };
+    delete patch.report_ban_attempt_token;
     if (current.report_ban_confirmed_at) delete patch.report_ban_confirmed_at;
     const next = {
       ...row,
@@ -105,10 +146,16 @@ export class InMemoryModerationActionRequestRepository implements IModerationAct
   }
   async complete(
     id: string,
-    result: Prisma.JsonValue = {}
+    result: Prisma.JsonValue = {},
+    expectedAttemptToken?: string
   ): Promise<ModerationActionRequest | null> {
     const row = this.rows.get(id);
     if (!row) return null;
+    if (
+      row.action_type === 'ban_observed_detection' &&
+      getReportBanAttemptToken(row) !== expectedAttemptToken
+    )
+      return row;
     const receipt = (row.result as Prisma.JsonObject).observed_ban_result as
       | Prisma.JsonObject
       | undefined;
@@ -130,9 +177,18 @@ export class InMemoryModerationActionRequestRepository implements IModerationAct
     this.rows.set(id, next);
     return next;
   }
-  async fail(id: string, error: string): Promise<ModerationActionRequest | null> {
+  async fail(
+    id: string,
+    error: string,
+    expectedAttemptToken?: string
+  ): Promise<ModerationActionRequest | null> {
     const row = this.rows.get(id);
     if (!row) return null;
+    if (
+      row.action_type === 'ban_observed_detection' &&
+      getReportBanAttemptToken(row) !== expectedAttemptToken
+    )
+      return row;
     const receipt = (row.result as Prisma.JsonObject).observed_ban_result as
       | Prisma.JsonObject
       | undefined;
@@ -147,10 +203,16 @@ export class InMemoryModerationActionRequestRepository implements IModerationAct
   }
   async releaseReportBanPreparation(
     id: string,
-    expectedPhase: 'preparing' | 'enforcement_started'
+    expectedPhase: 'preparing' | 'enforcement_started',
+    expectedAttemptToken?: string
   ): Promise<ModerationActionRequest | null> {
     const row = this.rows.get(id);
     if (!row) return null;
+    if (
+      row.action_type === 'ban_observed_detection' &&
+      getReportBanAttemptToken(row) !== expectedAttemptToken
+    )
+      return row;
     const metadata = row.metadata as Prisma.JsonObject;
     if (
       metadata.report_ban_phase !== expectedPhase &&
@@ -210,9 +272,13 @@ export class InMemoryModerationActionRequestRepository implements IModerationAct
       );
     });
     return row
-      ? this.mergeMetadata(row.id, {
-          report_ban_lease_until: new Date(now.getTime() + 900_000).toISOString(),
-        })
+      ? this.mergeMetadata(
+          row.id,
+          {
+            report_ban_lease_until: new Date(now.getTime() + 900_000).toISOString(),
+          },
+          getReportBanAttemptToken(row)
+        )
       : null;
   }
 }

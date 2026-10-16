@@ -124,7 +124,8 @@ export interface IVerificationEventRepository {
     ids: readonly string[],
     serverId: string,
     userId: string,
-    attemptId: string
+    attemptId: string,
+    reportBanAttempt?: { operationId: string; attemptToken: string }
   ): Promise<VerificationEvent[] | null>;
   completeTerminalActions(
     completions: readonly TerminalActionCompletion[],
@@ -427,7 +428,8 @@ export class VerificationEventRepository implements IVerificationEventRepository
     ids: readonly string[],
     serverId: string,
     userId: string,
-    attemptId: string
+    attemptId: string,
+    reportBanAttempt?: { operationId: string; attemptToken: string }
   ): Promise<VerificationEvent[] | null> {
     if (!attemptId.startsWith(CASE_TERMINAL_ACTION_ATTEMPT_PREFIX) || ids.length === 0) {
       throw new RepositoryError(
@@ -436,6 +438,16 @@ export class VerificationEventRepository implements IVerificationEventRepository
     }
     try {
       return (await this.prisma.$transaction(async (transaction) => {
+        if (reportBanAttempt) {
+          const owner = await transaction.$queryRaw<
+            Array<{ token: string | null; phase: string | null }>
+          >`
+            SELECT metadata->>'report_ban_attempt_token' AS token, metadata->>'report_ban_phase' AS phase
+            FROM moderation_action_requests WHERE id = ${reportBanAttempt.operationId}::uuid FOR UPDATE`;
+          if (owner[0]?.token !== reportBanAttempt.attemptToken || owner[0]?.phase !== 'preparing')
+            return null;
+        }
+        await transaction.$queryRaw`SELECT id FROM verification_events WHERE id::text = ANY(${[...ids].sort()}::text[]) ORDER BY id FOR UPDATE`;
         const claimed = await transaction.verification_events.updateMany({
           where: {
             id: { in: [...ids] },

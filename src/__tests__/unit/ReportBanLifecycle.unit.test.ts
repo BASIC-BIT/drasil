@@ -1,4 +1,6 @@
-import { Client, Guild, GuildMember, User } from 'discord.js';
+import { getReportBanAttemptToken } from '../../repositories/ModerationActionRequestRepository';
+import { NotificationManager } from '../../services/NotificationManager';
+import { EmbedBuilder, Client, Guild, GuildMember, User } from 'discord.js';
 import { SecurityActionService } from '../../services/SecurityActionService';
 import { UserModerationService } from '../../services/UserModerationService';
 import { AdminActionService } from '../../services/AdminActionService';
@@ -326,13 +328,21 @@ describe('report-bound observed bans with real services', () => {
       status: 'banned_updates_pending',
       operationId: f.request.id,
     });
-    await f.requests.complete(f.request.id, {
-      observed_ban_result: { status: 'banned_updates_pending', operationId: f.request.id },
-    });
-    await f.requests.mergeMetadata(f.request.id, {
-      report_ban_retry_at: new Date(0).toISOString(),
-      report_ban_lease_until: new Date(0).toISOString(),
-    });
+    await f.requests.complete(
+      f.request.id,
+      {
+        observed_ban_result: { status: 'banned_updates_pending', operationId: f.request.id },
+      },
+      getReportBanAttemptToken(f.request)
+    );
+    await f.requests.mergeMetadata(
+      f.request.id,
+      {
+        report_ban_retry_at: new Date(0).toISOString(),
+        report_ban_lease_until: new Date(0).toISOString(),
+      },
+      getReportBanAttemptToken(f.request)
+    );
     expect(await f.worker().processPendingRequests()).toBe(0);
     expect((await f.requests.findById(f.request.id))?.result).toMatchObject({
       observed_ban_result: { status: 'banned' },
@@ -426,12 +436,13 @@ describe('report-bound observed bans with real services', () => {
     const ready = new Promise<void>((resolve) => {
       reached = resolve;
     });
-    jest.spyOn(f.requests, 'mergeMetadata').mockImplementation(async (id, patch) => {
+    jest.spyOn(f.requests, 'mergeMetadata').mockImplementation(async (...args) => {
+      const patch = args[1];
       if (patch.report_ban_phase === 'enforcement_started') {
         reached();
         return new Promise(() => {});
       }
-      return write(id, patch);
+      return write(...args);
     });
     void f.execute();
     await ready;
@@ -537,10 +548,11 @@ describe('report-bound observed bans with real services', () => {
       VerificationStatus.PENDING
     );
     const save = f.requests.mergeMetadata.bind(f.requests);
-    jest.spyOn(f.requests, 'mergeMetadata').mockImplementation(async (id, patch) => {
+    jest.spyOn(f.requests, 'mergeMetadata').mockImplementation(async (...args) => {
+      const patch = args[1];
       if (patch.report_ban_phase === 'enforcement_started')
         throw new Error('owned context unavailable');
-      return save(id, patch);
+      return save(...args);
     });
     await expect(f.execute()).rejects.toThrow('owned context unavailable');
     expect(f.ban).not.toHaveBeenCalled();
@@ -581,5 +593,73 @@ describe('report-bound observed bans with real services', () => {
       operationId: f.request.id,
     });
     expect(f.ban).toHaveBeenCalledTimes(1);
+  });
+  it.each(['fetch_failure', 'edit_failure', 'absent'])(
+    'uses the actual observed notification contract: %s',
+    async (mode) => {
+      const f = await fixture();
+      if (mode !== 'absent')
+        await f.detections.patchMetadata(f.detection.id, {
+          observed_notification_message_id: 'message',
+          observed_notification_channel_id: 'channel',
+        });
+      const manager = new NotificationManager(
+        f.client,
+        { getServerConfig: jest.fn().mockResolvedValue({ settings: {} }) } as never,
+        f.detections
+      );
+      const channel = {
+        messages: {
+          fetch: jest.fn().mockResolvedValue({
+            embeds: [new EmbedBuilder().setTitle('Observed')],
+            edit: jest.fn().mockRejectedValue(new Error('edit denied')),
+          }),
+        },
+      };
+      if (mode === 'fetch_failure')
+        channel.messages.fetch.mockRejectedValue(new Error('fetch denied'));
+      const routed = manager as unknown as {
+        getModerationNotificationChannel: () => Promise<unknown>;
+        getStoredNotificationChannel: () => Promise<unknown>;
+      };
+      jest.spyOn(routed, 'getModerationNotificationChannel').mockResolvedValue(channel);
+      jest.spyOn(routed, 'getStoredNotificationChannel').mockResolvedValue(channel);
+      f.notifications.markObservedDetectionActionTaken.mockImplementation(
+        manager.markObservedDetectionActionTaken.bind(manager)
+      );
+      const error = jest.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        expect(await f.execute()).toMatchObject({
+          status: mode === 'absent' ? 'banned' : 'banned_updates_pending',
+        });
+        expect((await f.requests.findById(f.request.id))?.metadata).toMatchObject({
+          report_ban_phase: mode === 'absent' ? null : 'discord_confirmed',
+        });
+        expect(f.ban).toHaveBeenCalledTimes(1);
+        if (mode === 'edit_failure') expect(error).toHaveBeenCalled();
+      } finally {
+        error.mockRestore();
+      }
+    }
+  );
+  it('completes a linked case with no optional notification using the actual notification contract', async () => {
+    const f = await fixture();
+    await f.cases.createFromDetection(
+      f.detection.id,
+      'guild',
+      'target',
+      VerificationStatus.PENDING
+    );
+    const manager = new NotificationManager(f.client, {} as never, f.detections);
+    f.notifications.updateNotificationButtons.mockImplementation(
+      manager.updateNotificationButtons.bind(manager)
+    );
+    expect(await f.execute()).toEqual({ status: 'banned' });
+    expect(await f.actionRepo.getActionHistory('target', 'guild')).toHaveLength(1);
+    expect(await f.outcomeRepo.findByUserAndServer('target', 'guild')).toHaveLength(1);
+    expect((await f.reports.findById(f.report.id))?.status).toBe('actioned');
+    expect((await f.requests.findById(f.request.id))?.result).toMatchObject({
+      observed_ban_result: { status: 'banned' },
+    });
   });
 });

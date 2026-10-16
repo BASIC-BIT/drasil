@@ -1,7 +1,10 @@
 import { getPrismaClient } from '../testDb';
 import { DetectionEventsRepository } from '../../repositories/DetectionEventsRepository';
 import { ReportIntakeRepository } from '../../repositories/ReportIntakeRepository';
-import { ModerationActionRequestRepository } from '../../repositories/ModerationActionRequestRepository';
+import {
+  getReportBanAttemptToken,
+  ModerationActionRequestRepository,
+} from '../../repositories/ModerationActionRequestRepository';
 import { ServerRepository } from '../../repositories/ServerRepository';
 import { UserRepository } from '../../repositories/UserRepository';
 import {
@@ -44,12 +47,15 @@ integration('report ban claims and reconciliation (Postgres)', () => {
       detectionEventId: detection.id,
       idempotencyKey: 'report-ban',
     });
+    const attemptToken = getReportBanAttemptToken(request)!;
+    await requests.mergeMetadata(request.id, { report_ban_phase: 'preparing' }, attemptToken);
     const claim = {
       reportId: report.id,
       serverId: 'guild',
       targetUserId: 'target',
       detectionEventId: detection.id,
       operationId: request.id,
+      attemptToken,
     };
     return { prisma, reports, detections, requests, report, detection, request, claim };
   }
@@ -97,14 +103,22 @@ integration('report ban claims and reconciliation (Postgres)', () => {
   it('leases completed pending receipts once, respects retry time, and recovers an expired lease', async () => {
     const f = await fixture();
     const due = new Date('2026-10-15T12:00:00Z');
-    await f.requests.mergeMetadata(f.request.id, {
-      report_ban_phase: 'discord_confirmed',
-      report_ban_retry_at: due.toISOString(),
-      report_ban_lease_until: due.toISOString(),
-    });
-    await f.requests.complete(f.request.id, {
-      observed_ban_result: { status: 'banned_updates_pending', operationId: f.request.id },
-    });
+    await f.requests.mergeMetadata(
+      f.request.id,
+      {
+        report_ban_phase: 'discord_confirmed',
+        report_ban_retry_at: due.toISOString(),
+        report_ban_lease_until: due.toISOString(),
+      },
+      f.claim.attemptToken
+    );
+    await f.requests.complete(
+      f.request.id,
+      {
+        observed_ban_result: { status: 'banned_updates_pending', operationId: f.request.id },
+      },
+      f.claim.attemptToken
+    );
     expect(await f.requests.claimReportBanReconciliation(new Date(due.getTime() - 1))).toBeNull();
     const claims = await Promise.all([
       f.requests.claimReportBanReconciliation(due),
@@ -142,6 +156,7 @@ integration('report ban claims and reconciliation (Postgres)', () => {
       observed_action: 'ban',
       observed_action_by: 'moderator',
       report_ban_operation_id: f.request.id,
+      report_ban_attempt_token: f.claim.attemptToken,
     });
     expect(
       await f.detections.releaseObservedAction(f.detection.id, 'ban', 'moderator', 'other')

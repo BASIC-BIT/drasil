@@ -148,6 +148,7 @@ export interface ObservedBanLifecycle {
   prepare(cases: VerificationEvent[], attemptId: string): Promise<void>;
   beforeEnforcement(cases: VerificationEvent[], attemptId: string | null): Promise<void>;
   operationId: string;
+  attemptToken: string;
 }
 export interface ObservedBanFinalization {
   operationId: string;
@@ -706,7 +707,8 @@ export class UserModerationService implements IUserModerationService, ICombinedB
 
   private async claimPendingTerminalActions(
     events: readonly VerificationEvent[],
-    ownedAttemptId?: string
+    ownedAttemptId?: string,
+    reportBanAttempt?: { operationId: string; attemptToken: string }
   ): Promise<{
     events: VerificationEvent[];
     originalEvents: VerificationEvent[];
@@ -723,7 +725,8 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       events.map((event) => event.id),
       firstEvent.server_id,
       firstEvent.user_id,
-      attemptId
+      attemptId,
+      reportBanAttempt
     );
     if (!claimedEvents) {
       throw new Error(
@@ -1799,12 +1802,15 @@ export class UserModerationService implements IUserModerationService, ICombinedB
   ): Promise<void> {
     const pendingVerificationEvents = await this.getPendingVerificationEvents(member);
     const attemptId = lifecycle
-      ? `${CASE_TERMINAL_ACTION_ATTEMPT_PREFIX}${lifecycle.operationId}`
+      ? `${CASE_TERMINAL_ACTION_ATTEMPT_PREFIX}${lifecycle.operationId}:${lifecycle.attemptToken}`
       : undefined;
     if (lifecycle && attemptId) await lifecycle.prepare(pendingVerificationEvents, attemptId);
     const terminalClaim = await this.claimPendingTerminalActions(
       pendingVerificationEvents,
-      attemptId
+      attemptId,
+      lifecycle
+        ? { operationId: lifecycle.operationId, attemptToken: lifecycle.attemptToken }
+        : undefined
     );
     const auditReason = reason.trim().slice(0, DISCORD_AUDIT_LOG_REASON_MAX_LENGTH);
     try {
@@ -1835,10 +1841,16 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       (event) => event.status === VerificationStatus.PENDING
     );
     const attemptId = lifecycle
-      ? `${CASE_TERMINAL_ACTION_ATTEMPT_PREFIX}${lifecycle.operationId}`
+      ? `${CASE_TERMINAL_ACTION_ATTEMPT_PREFIX}${lifecycle.operationId}:${lifecycle.attemptToken}`
       : undefined;
     if (lifecycle && attemptId) await lifecycle.prepare(pendingEvents, attemptId);
-    const terminalClaim = await this.claimPendingTerminalActions(pendingEvents, attemptId);
+    const terminalClaim = await this.claimPendingTerminalActions(
+      pendingEvents,
+      attemptId,
+      lifecycle
+        ? { operationId: lifecycle.operationId, attemptToken: lifecycle.attemptToken }
+        : undefined
+    );
     const auditReason = reason.trim().slice(0, DISCORD_AUDIT_LOG_REASON_MAX_LENGTH);
     try {
       await lifecycle?.beforeEnforcement(terminalClaim.events, terminalClaim.attemptId);
@@ -1941,7 +1953,8 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         );
         if (!logged) throw new Error('Linked ban case notification update is incomplete.');
       }
-      await this.notificationManager.updateNotificationButtons(event, VerificationStatus.BANNED);
+      if (event.notification_message_id)
+        await this.notificationManager.updateNotificationButtons(event, VerificationStatus.BANNED);
       await this.moderationQueueService?.deleteCaseMirror(event.id);
       await this.moderationQueueService?.deleteCaseAttention(event.id);
     }
