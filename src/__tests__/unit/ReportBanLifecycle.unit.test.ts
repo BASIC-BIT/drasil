@@ -696,11 +696,9 @@ describe('report-bound observed bans with real services', () => {
           edit: jest.fn().mockRejectedValue({ code: 10008 }),
         });
       const routed = manager as unknown as {
-        getModerationNotificationChannel: () => Promise<unknown>;
-        getStoredNotificationChannel: () => Promise<unknown>;
+        getExistingNotificationChannel: () => Promise<unknown>;
       };
-      jest.spyOn(routed, 'getModerationNotificationChannel').mockResolvedValue(channel);
-      jest.spyOn(routed, 'getStoredNotificationChannel').mockResolvedValue(channel);
+      jest.spyOn(routed, 'getExistingNotificationChannel').mockResolvedValue(channel);
       f.notifications.markObservedDetectionActionTaken.mockImplementation(
         manager.markObservedDetectionActionTaken.bind(manager)
       );

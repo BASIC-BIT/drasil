@@ -136,3 +136,12 @@ Four validated findings complete the existing contracts. Setup starts before qua
 - Project recent-message references explicitly before storing report-ban evidence. Persist message/channel IDs and timestamps only. Keep transient previews for case rendering and leave report-submitted evidence unchanged. Prove source pruning leaves no new content copy in detection, request, audit, outcome, case or report metadata.
 - Force the worker's actor membership fetch before the Ban Members check. Prove a stale cached grant cannot authorize a revoked, departed or unavailable actor, and retain the fresh allowed path.
 - Run genuine focused RED/GREEN, the affected serial database suites, covering units, build, lint, format and metrics. Preserve separate hosted CI and production evidence.
+
+## Recovery follow-up: notification provenance and explicit retry after undo
+
+Deleted notification channels must retire their existing presentations. An undone dismissal must allow a fresh explicit Ban when the earlier queued Ban completed as a no-op. These fixes preserve the approved moderation flow and need no new product decision.
+
+- Resolve existing stored notification channels directly. Use configured fallback only without a stored ID, preserving explicit 10003/10008 retirement in observed completion and both case cleanup helpers. Keep null, wrong guild/type, configuration, permission and network failures pending; preserve creation behavior.
+- Add one shared reset predicate within each existing bot/web enqueue statement. Require completed `already_handled`, matching immutable bindings, no phase/enforcement/confirmation evidence and an eligible detection with its optional report. Reset attempt state, preserve review history and mint a server token once. Use nonlocking eligibility reads; worker authorization and ownership claims remain the enforcement boundary.
+- Prove actual dismiss, queued no-op, undo and concurrent explicit retry through both SQL implementations, with and without a report. Cover protected receipts, ownership and binding changes, stale-token rejection and a dismissal that wins before worker execution. Prove real notification resolution closes the durable audit/report/request with one ban, while ambiguous failures recover without enforcement.
+- Run affected serial Postgres, unit and web queue tests, build, lint, format and metrics. Keep the local commit separate from exact-head hosted CI and final readiness review.

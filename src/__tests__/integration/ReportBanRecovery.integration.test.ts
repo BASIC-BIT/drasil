@@ -9,7 +9,7 @@ import {
   IRoleQuarantineService,
 } from '../../services/RoleQuarantineService';
 import { NotificationManager } from '../../services/NotificationManager';
-import { Client, EmbedBuilder, Guild, GuildMember, Role, User } from 'discord.js';
+import { ChannelType, Client, EmbedBuilder, Guild, GuildMember, Role, User } from 'discord.js';
 import { SecurityActionService } from '../../services/SecurityActionService';
 import { UserModerationService } from '../../services/UserModerationService';
 import { AdminActionService } from '../../services/AdminActionService';
@@ -17,10 +17,12 @@ import { ModerationOutcomeService } from '../../services/ModerationOutcomeServic
 import { ModerationActionRequestService } from '../../services/ModerationActionRequestService';
 import { ModerationEvidenceService } from '../../services/ModerationEvidenceService';
 import {
+  AdminActionType,
   CaseKind,
   ModerationOutcomeSource,
   DetectionType,
   ModerationActionRequestType,
+  ModerationActionRequestCreate,
   ReportIntakeStatus,
   VerificationStatus,
 } from '../../repositories/types';
@@ -89,6 +91,7 @@ async function fixture(withReport = true, quarantine?: IRoleQuarantineService) {
   );
   const notifications = {
     markObservedDetectionActionTaken: jest.fn().mockResolvedValue(true),
+    restoreObservedDetectionActions: jest.fn().mockResolvedValue(true),
     updateNotificationButtons: jest.fn().mockResolvedValue(undefined),
     logActionToMessage: jest.fn().mockResolvedValue(true),
     upsertSuspiciousUserNotification: jest
@@ -113,6 +116,7 @@ async function fixture(withReport = true, quarantine?: IRoleQuarantineService) {
   };
   const queue = {
     upsertCaseMirror: jest.fn().mockResolvedValue(undefined),
+    upsertObservedAlertMirror: jest.fn().mockResolvedValue(undefined),
     deletePendingScreeningMember: jest.fn().mockResolvedValue(undefined),
     deleteObservedAlertMirror: jest.fn().mockResolvedValue(undefined),
     deleteReportThreadAttention: jest.fn().mockResolvedValue(undefined),
@@ -253,6 +257,398 @@ async function fixture(withReport = true, quarantine?: IRoleQuarantineService) {
 
 const integration = process.env.JEST_INTEGRATION === '1' ? describe : describe.skip;
 integration('report-ban stale worker recovery with real services and Postgres', () => {
+  it.each(
+    ['observed', 'case'].flatMap((path) =>
+      [
+        'stored-deleted',
+        'stored-fallback-deleted',
+        'unknown-config',
+        'configured-deleted',
+        'stored-valid-unconfigured',
+        'stored-valid-changed',
+        'stored-null',
+        'stored-wrong-guild',
+        'stored-wrong-type',
+        'stored-permission',
+        'stored-network',
+        'no-channel',
+      ].map((mode) => ({
+        path,
+        mode,
+      }))
+    )
+  )('resolves existing notification provenance: $path $mode', async ({ path, mode }) => {
+    const f = await fixture();
+    const stored = mode.startsWith('stored') ? 'stored-channel' : null;
+    if (path === 'observed')
+      await f.detections.patchMetadata(f.detection.id, {
+        observed_notification_message_id: 'notice',
+        observed_notification_channel_id: stored,
+      });
+    else {
+      const event = await f.cases.createFromDetection(
+        f.detection.id,
+        'guild',
+        'target',
+        VerificationStatus.PENDING
+      );
+      await f.cases.update(event.id, {
+        notification_message_id: 'notice',
+        notification_channel_id: stored,
+      });
+    }
+    const fetchMessage = jest.fn().mockResolvedValue({
+      embeds: [new EmbedBuilder().setTitle('Notice')],
+      edit: jest.fn().mockResolvedValue(undefined),
+    });
+    const channel = {
+      id: 'stored-channel',
+      type: ChannelType.GuildText,
+      guildId: 'guild',
+      messages: { fetch: fetchMessage },
+    };
+    (f.client.channels.fetch as jest.Mock).mockImplementation(async () => {
+      if (mode.endsWith('deleted')) throw { code: 10003 };
+      if (mode === 'stored-null') return null;
+      if (mode === 'stored-wrong-guild') return { ...channel, guildId: 'other-guild' };
+      if (mode === 'stored-wrong-type') return { ...channel, type: ChannelType.DM };
+      if (mode === 'stored-permission') throw { code: 50013 };
+      if (mode === 'stored-network') throw new Error('channel lookup timeout');
+      return channel;
+    });
+    const config = {
+      getServerConfig: jest.fn().mockResolvedValue({
+        settings: ['configured-deleted', 'stored-valid-changed'].includes(mode)
+          ? { observed_detection_notification_channel_id: 'configured-channel' }
+          : {},
+      }),
+      getAdminChannel: jest
+        .fn()
+        .mockResolvedValue(mode === 'stored-fallback-deleted' ? channel : undefined),
+    };
+    if (mode === 'unknown-config')
+      config.getServerConfig.mockRejectedValue(new Error('config lookup failed'));
+    const manager = new NotificationManager(f.client, config as never, f.detections);
+    f.notifications.markObservedDetectionActionTaken.mockImplementation(
+      manager.markObservedDetectionActionTaken.bind(manager)
+    );
+    f.notifications.logActionToMessage.mockImplementation(manager.logActionToMessage.bind(manager));
+    f.notifications.updateNotificationButtons.mockImplementation(
+      manager.updateNotificationButtons.bind(manager)
+    );
+    const result = await f.execute();
+    if (mode.endsWith('deleted') || mode.startsWith('stored-valid'))
+      expect(result).toEqual({ status: 'banned' });
+    else {
+      expect(result).toMatchObject({ status: 'banned_updates_pending' });
+      expect((await f.requests.findById(f.request.id))?.metadata).toMatchObject({
+        report_ban_phase: 'discord_confirmed',
+      });
+      (f.client.channels.fetch as jest.Mock).mockResolvedValue(channel);
+      config.getAdminChannel.mockResolvedValue(channel as never);
+      config.getServerConfig.mockResolvedValue({ settings: {} });
+      expect(
+        await f.security.reconcileReportBan((await f.requests.findById(f.request.id))!)
+      ).toEqual({ status: 'banned' });
+    }
+    expect((await f.requests.findById(f.request.id))?.status).toBe('completed');
+    expect((await f.reports.findById(f.report.id))?.status).toBe('actioned');
+    expect(f.ban).toHaveBeenCalledTimes(1);
+    expect(
+      (await f.actionRepo.getActionHistory('target', 'guild')).filter(
+        (action) => action.action_type === 'ban'
+      )
+    ).toHaveLength(1);
+    if (stored) expect(config.getAdminChannel).not.toHaveBeenCalled();
+    if (mode.endsWith('deleted')) expect(fetchMessage).not.toHaveBeenCalled();
+  });
+  it.each(
+    ['bot', 'web'].flatMap((surface) =>
+      [true, false].map((withReport) => ({ surface, withReport }))
+    )
+  )(
+    'explicitly requeues an undone dismissal after its queued ban no-op: $surface report=$withReport',
+    async ({ surface, withReport }) => {
+      const f = await fixture(withReport);
+      expect(
+        await f.security.dismissObservedDetection(
+          'guild',
+          'target',
+          f.detection.id,
+          f.moderator,
+          AdminActionType.DISMISS
+        )
+      ).toBe(true);
+      await f.worker().processPendingRequests();
+      const completed = (await f.requests.findById(f.request.id))!;
+      expect(completed).toMatchObject({
+        status: 'completed',
+        result: { observed_ban_result: { status: 'already_handled' } },
+      });
+      expect(f.ban).not.toHaveBeenCalled();
+      expect(
+        await f.security.undoObservedDetectionAction('guild', 'target', f.detection.id, f.moderator)
+      ).toBe(AdminActionType.DISMISS);
+      expect((await f.reports.findById(f.report.id))?.status).toBe('submitted');
+      const input = {
+        serverId: 'guild',
+        targetUserId: 'target',
+        actorId: 'new-moderator',
+        actorSurface: 'web',
+        detectionEventId: f.detection.id,
+        reportIntakeId: withReport ? f.report.id : undefined,
+        idempotencyKey: f.request.idempotency_key,
+        actionType: ModerationActionRequestType.BAN_OBSERVED_DETECTION,
+        metadata: {
+          reason: 'Fresh explicit decision',
+          report_ban_attempt_token: 'untrusted-token',
+          observed_ban_reviews: [],
+        },
+      };
+      await new UserRepository(getPrismaClient()).getOrCreateUser('new-moderator');
+      (f.guild.members.fetch as jest.Mock).mockImplementation(async (input) =>
+        (typeof input === 'object' ? input.user : input) === 'target'
+          ? f.member
+          : { permissions: { has: () => true } }
+      );
+      (f.client.users.fetch as jest.Mock).mockImplementation(async (id) => ({ id }));
+      await getPrismaClient().moderation_action_requests.update({
+        where: { id: f.request.id },
+        data: {
+          metadata: {
+            ...(completed.metadata as Record<string, never>),
+            observed_ban_reviews: [{ reason: 'retained review' }],
+          },
+        },
+      });
+      const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
+      try {
+        const requeue = () =>
+          surface === 'bot'
+            ? f.requests.enqueue(input)
+            : insertModerationActionRequestWithReceipt(pool, input);
+        const [receipt] = await Promise.all([requeue(), requeue()]);
+        expect(receipt.status).toBe('queued');
+        const fresh = (await f.requests.findById(f.request.id))!;
+        expect(getReportBanAttemptToken(fresh)).not.toBe(getReportBanAttemptToken(completed));
+        expect(getReportBanAttemptToken(fresh)).not.toBe('untrusted-token');
+        expect(fresh).toMatchObject({
+          actor_id: 'new-moderator',
+          result: {},
+          completed_at: null,
+          started_at: null,
+          attempts: 0,
+          metadata: {
+            reason: 'Fresh explicit decision',
+            observed_ban_reviews: [{ reason: 'retained review' }],
+          },
+        });
+        await requeue();
+        expect(getReportBanAttemptToken((await f.requests.findById(fresh.id))!)).toBe(
+          getReportBanAttemptToken(fresh)
+        );
+        await f.requests.complete(
+          fresh.id,
+          { observed_ban_result: { status: 'banned' } },
+          getReportBanAttemptToken(completed)
+        );
+        expect((await f.requests.findById(fresh.id))?.status).toBe('queued');
+        await f.worker().processPendingRequests();
+        expect(f.ban).toHaveBeenCalledTimes(1);
+        expect((await f.requests.findById(fresh.id))?.result).toMatchObject({
+          observed_ban_result: { status: 'banned' },
+        });
+        expect(
+          (await f.actionRepo.getActionHistory('target', 'guild')).filter(
+            (action) => action.action_type === 'ban'
+          )
+        ).toHaveLength(1);
+      } finally {
+        await pool.end();
+      }
+    }
+  );
+  it.each(
+    ['bot', 'web'].flatMap((surface) =>
+      [
+        'banned',
+        'banned_updates_pending',
+        'ban_outcome_unknown',
+        'nonexact-receipt',
+        'processing',
+        'phase',
+        'enforcement',
+        'enforcement-operation',
+        'confirmation',
+        'handled',
+        'detection-owned',
+        'dismissed',
+        'report-owned',
+        'changed-report-target',
+        'changed-target',
+        'changed-server',
+        'changed-detection',
+        'changed-report',
+        'changed-action',
+      ].map((guard) => ({ surface, guard }))
+    )
+  )('preserves a protected no-op retry: $surface $guard', async ({ surface, guard }) => {
+    const f = await fixture();
+    await f.requests.complete(
+      f.request.id,
+      { observed_ban_result: { status: 'already_handled' } },
+      getReportBanAttemptToken(f.request)
+    );
+    const input: ModerationActionRequestCreate & { metadata: Record<string, string> } = {
+      serverId: 'guild',
+      actorId: 'moderator',
+      actorSurface: 'web',
+      targetUserId: 'target',
+      actionType: ModerationActionRequestType.BAN_OBSERVED_DETECTION,
+      detectionEventId: f.detection.id,
+      reportIntakeId: f.report.id,
+      idempotencyKey: f.request.idempotency_key,
+      metadata: { reason: 'Must not replace protected request' },
+    };
+    const prisma = getPrismaClient();
+    if (
+      ['banned', 'banned_updates_pending', 'ban_outcome_unknown', 'nonexact-receipt'].includes(
+        guard
+      )
+    )
+      await prisma.moderation_action_requests.update({
+        where: { id: f.request.id },
+        data: {
+          result: {
+            observed_ban_result:
+              guard === 'nonexact-receipt'
+                ? { status: 'already_handled', enforcement: true }
+                : { status: guard },
+          },
+        },
+      });
+    if (guard === 'processing')
+      await prisma.moderation_action_requests.update({
+        where: { id: f.request.id },
+        data: { status: 'processing' },
+      });
+    const marker = {
+      phase: 'report_ban_phase',
+      enforcement: 'report_ban_enforcement_id',
+      'enforcement-operation': 'report_ban_enforcement_operation_id',
+      confirmation: 'report_ban_confirmed_at',
+    }[guard];
+    if (marker)
+      await prisma.moderation_action_requests.update({
+        where: { id: f.request.id },
+        data: {
+          metadata: {
+            ...(f.request.metadata as Record<string, never>),
+            [marker]: marker === 'report_ban_phase' ? 'preparing' : 'existing-evidence',
+          },
+        },
+      });
+    if (guard === 'handled')
+      await f.detections.patchMetadata(f.detection.id, { observed_action: { action: 'dismiss' } });
+    if (guard === 'detection-owned')
+      await f.detections.patchMetadata(f.detection.id, {
+        report_ban_operation_id: 'other-operation',
+      });
+    if (guard === 'dismissed')
+      await prisma.report_intakes.update({
+        where: { id: f.report.id },
+        data: { status: 'dismissed' },
+      });
+    if (guard === 'report-owned')
+      await prisma.report_intakes.update({
+        where: { id: f.report.id },
+        data: { metadata: { report_ban_operation_id: 'other-operation' } },
+      });
+    if (guard === 'changed-report-target')
+      await prisma.report_intakes.update({
+        where: { id: f.report.id },
+        data: { confirmed_target_user_id: 'reporter' },
+      });
+    if (guard === 'changed-target') input.targetUserId = 'reporter';
+    if (guard === 'changed-server') {
+      await new ServerRepository(prisma).getOrCreateServer('other-guild');
+      input.serverId = 'other-guild';
+    }
+    if (guard === 'changed-detection')
+      input.detectionEventId = (
+        await f.detections.create({
+          server_id: 'guild',
+          user_id: 'target',
+          detection_type: DetectionType.USER_REPORT,
+          confidence: 1,
+          metadata: { reportIntakeId: f.report.id },
+        })
+      ).id;
+    if (guard === 'changed-report') input.reportIntakeId = undefined;
+    if (guard === 'changed-action')
+      input.actionType = ModerationActionRequestType.OPEN_CASE_FROM_OBSERVED_DETECTION;
+    const before = await f.requests.findById(f.request.id);
+    const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
+    try {
+      if (surface === 'bot') await f.requests.enqueue(input);
+      else await insertModerationActionRequestWithReceipt(pool, input);
+      expect(await f.requests.findById(f.request.id)).toEqual(before);
+      expect(f.ban).not.toHaveBeenCalled();
+    } finally {
+      await pool.end();
+    }
+  });
+  it.each(['bot', 'web'])(
+    'stops a stale explicit retry when dismissal wins before the worker claim: %s',
+    async (surface) => {
+      const f = await fixture();
+      const dismiss = () =>
+        f.security.dismissObservedDetection(
+          'guild',
+          'target',
+          f.detection.id,
+          f.moderator,
+          AdminActionType.DISMISS
+        );
+      expect(await dismiss()).toBe(true);
+      await f.worker().processPendingRequests();
+      expect(
+        await f.security.undoObservedDetectionAction('guild', 'target', f.detection.id, f.moderator)
+      ).toBe(AdminActionType.DISMISS);
+      const input = {
+        serverId: 'guild',
+        actorId: 'moderator',
+        actorSurface: 'web',
+        targetUserId: 'target',
+        actionType: ModerationActionRequestType.BAN_OBSERVED_DETECTION,
+        detectionEventId: f.detection.id,
+        reportIntakeId: f.report.id,
+        idempotencyKey: f.request.idempotency_key,
+      };
+      const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
+      try {
+        const queued =
+          surface === 'bot'
+            ? await f.requests.enqueue(input)
+            : await insertModerationActionRequestWithReceipt(pool, input);
+        expect(queued.status).toBe('queued');
+        expect(await dismiss()).toBe(true);
+        await f.worker().processPendingRequests();
+        expect(f.ban).not.toHaveBeenCalled();
+        expect((await f.requests.findById(f.request.id))?.result).toMatchObject({
+          observed_ban_result: { status: 'already_handled' },
+        });
+        expect((await f.reports.findById(f.report.id))?.status).toBe('dismissed');
+        expect(
+          (await f.actionRepo.getActionHistory('target', 'guild')).filter(
+            (action) => action.action_type === 'ban'
+          )
+        ).toHaveLength(0);
+      } finally {
+        await pool.end();
+      }
+    }
+  );
   it.each(
     ['fetch', 'send', 'archive'].flatMap((boundary) =>
       ['deleted', 'permission', 'network'].map((failure) => ({ boundary, failure }))
@@ -526,13 +922,9 @@ integration('report-ban stale worker recovery with real services and Postgres', 
       edit.mockResolvedValueOnce(undefined).mockRejectedValue(failure);
     else edit.mockRejectedValue(failure);
     const routed = manager as unknown as {
-      getModerationNotificationChannel: () => Promise<unknown>;
-      getStoredNotificationChannel: () => Promise<unknown>;
+      getExistingNotificationChannel: () => Promise<unknown>;
     };
-    jest
-      .spyOn(routed, 'getModerationNotificationChannel')
-      .mockResolvedValue({ messages: { fetch } });
-    jest.spyOn(routed, 'getStoredNotificationChannel').mockResolvedValue({ messages: { fetch } });
+    jest.spyOn(routed, 'getExistingNotificationChannel').mockResolvedValue({ messages: { fetch } });
     f.notifications.logActionToMessage.mockImplementation(manager.logActionToMessage.bind(manager));
     f.notifications.updateNotificationButtons.mockImplementation(
       manager.updateNotificationButtons.bind(manager)
