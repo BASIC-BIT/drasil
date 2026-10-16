@@ -401,8 +401,7 @@ export function parseModerationActionRequestRow(
   const observedBanResult: ObservedBanResult | null =
     parsedBan ??
     (row.action_type === 'ban_observed_detection' &&
-    metadata.report_ban_phase &&
-    metadata.report_ban_phase !== 'preparing'
+    ['discord_confirmed', 'reconciliation_required'].includes(String(metadata.report_ban_phase))
       ? {
           status:
             metadata.report_ban_phase === 'discord_confirmed'

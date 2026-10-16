@@ -490,6 +490,8 @@ export class ModerationActionRequestRepository implements IModerationActionReque
       const savedIds = Array.isArray(metadata.report_ban_case_ids)
         ? (metadata.report_ban_case_ids as string[])
         : [];
+      // An admission may have begun before this request existed. Wait for its insert before discovery.
+      await transaction.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${JSON.stringify(['report-ban-case-admission', current.server_id, current.target_user_id])}, 0))`;
       const candidates = await transaction.verification_events.findMany({
         where: {
           server_id: current.server_id,

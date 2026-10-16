@@ -52,7 +52,10 @@ import {
   VerificationEvent,
   VerificationStatus,
 } from '../repositories/types';
-import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
+import {
+  IVerificationEventRepository,
+  VerificationCaseAdmissionSupersededError,
+} from '../repositories/VerificationEventRepository';
 import { IServerRepository } from '../repositories/ServerRepository';
 import { IUserRepository } from '../repositories/UserRepository';
 import {
@@ -1033,6 +1036,8 @@ export class SecurityActionService implements ISecurityActionService {
         )
       : await this.threadManager.createVerificationThread(member, verificationEvent);
 
+    if (!thread && verificationEvent.status !== VerificationStatus.PENDING)
+      return verificationEvent;
     if (!thread) {
       const threadKind = useReportReviewThread ? 'report review thread' : 'verification thread';
       throw new Error(`Failed to create ${threadKind} for ${member.user.tag}`);
@@ -2530,13 +2535,19 @@ export class SecurityActionService implements ISecurityActionService {
         `No active verification found for user ${member.user.tag}. Creating new verification event.`
       );
 
-      let newVerificationEvent = await this.verificationEventRepository.createFromDetection(
-        detectionEventId,
-        member.guild.id,
-        member.id,
-        VerificationStatus.PENDING,
-        { user_snapshot: this.buildUserSnapshot(member) }
-      );
+      let newVerificationEvent: VerificationEvent;
+      try {
+        newVerificationEvent = await this.verificationEventRepository.createFromDetection(
+          detectionEventId,
+          member.guild.id,
+          member.id,
+          VerificationStatus.PENDING,
+          { user_snapshot: this.buildUserSnapshot(member) }
+        );
+      } catch (error) {
+        if (error instanceof VerificationCaseAdmissionSupersededError) return true;
+        throw error;
+      }
       const linkedDetectionEvent = await this.detectionEventsRepository.linkToVerificationEvent(
         detectionEventId,
         newVerificationEvent.id

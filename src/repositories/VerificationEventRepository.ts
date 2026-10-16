@@ -66,6 +66,8 @@ export interface CaptchaPresentationClaimInput {
   attemptId: string;
 }
 
+export class VerificationCaseAdmissionSupersededError extends Error {}
+
 class VerificationReleaseConflictError extends Error {}
 class TerminalActionClaimConflictError extends Error {}
 
@@ -186,12 +188,13 @@ export interface IVerificationEventRepository {
     id: string,
     threadId: string,
     threadType: 'verification' | 'report_review',
-    metadataPatch?: Record<string, unknown>
+    metadataPatch?: Record<string, unknown>,
+    expectedPendingThreadId?: string | null
   ): Promise<VerificationEvent | null>;
   patchMetadata(
     id: string,
     patch: Record<string, unknown>,
-    options?: { touchUpdatedAt?: boolean }
+    options?: { touchUpdatedAt?: boolean; expectedPendingThreadId?: string }
   ): Promise<VerificationEvent | null>;
   update(
     id: string,
@@ -1499,6 +1502,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
     status: VerificationStatus,
     metadata?: VerificationEvent['metadata']
   ): Promise<VerificationEvent> {
+    const admissionAt = new Date();
     try {
       if (!serverId || !userId) {
         throw new RepositoryError(
@@ -1506,19 +1510,51 @@ export class VerificationEventRepository implements IVerificationEventRepository
         );
       }
 
-      const newEventData: Prisma.verification_eventsCreateInput = {
-        servers: { connect: { guild_id: serverId } },
-        users: { connect: { discord_id: userId } },
-        detection_events_verification_events_detection_event_idTodetection_events: detectionEventId
-          ? { connect: { id: detectionEventId } }
-          : undefined,
-        status: status as verification_status, // Cast to Prisma enum
-        metadata: metadata ?? Prisma.JsonNull,
-        // created_at, updated_at handled by default
-      };
+      const created = await this.prisma.$transaction(async (transaction) => {
+        // Request locks precede the target fence and case insert. Adoption uses the same order.
+        if (status === VerificationStatus.PENDING) {
+          await transaction.$queryRaw`
+            SELECT id FROM moderation_action_requests
+            WHERE server_id = ${serverId} AND target_user_id = ${userId}
+              AND action_type = 'ban_observed_detection'
+            ORDER BY id FOR UPDATE`;
+          await transaction.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${JSON.stringify(['report-ban-case-admission', serverId, userId])}, 0))`;
+          // A request can appear after the first read and finish before we acquire the fence.
+          // Read its committed confirmation without reversing the request-before-target lock order.
+          const requests = await transaction.$queryRaw<{ metadata: Prisma.JsonObject | null }[]>`
+            SELECT metadata FROM moderation_action_requests
+            WHERE server_id = ${serverId} AND target_user_id = ${userId}
+              AND action_type = 'ban_observed_detection'`;
+          const joinedAt = (metadata as Prisma.JsonObject | null)?.user_snapshot as
+            | Prisma.JsonObject
+            | undefined;
+          for (const request of requests) {
+            const confirmed = request.metadata?.report_ban_confirmed_at;
+            const expectedJoin = request.metadata?.report_ban_membership_joined_at;
+            if (
+              typeof confirmed === 'string' &&
+              admissionAt <= new Date(confirmed) &&
+              typeof expectedJoin === 'string' &&
+              typeof joinedAt?.joined_at === 'string' &&
+              Number.isFinite(Date.parse(expectedJoin)) &&
+              Date.parse(expectedJoin) === Date.parse(joinedAt.joined_at)
+            )
+              throw new VerificationCaseAdmissionSupersededError(
+                'Confirmed ban superseded this case admission.'
+              );
+          }
+        }
+        const newEventData: Prisma.verification_eventsCreateInput = {
+          servers: { connect: { guild_id: serverId } },
+          users: { connect: { discord_id: userId } },
+          detection_events_verification_events_detection_event_idTodetection_events:
+            detectionEventId ? { connect: { id: detectionEventId } } : undefined,
+          status: status as verification_status, // Cast to Prisma enum
+          metadata: metadata ?? Prisma.JsonNull,
+          created_at: admissionAt,
+        };
 
-      const created = await this.prisma.verification_events.create({
-        data: newEventData,
+        return await transaction.verification_events.create({ data: newEventData });
       });
 
       // Update the related detection event if applicable
@@ -1539,8 +1575,9 @@ export class VerificationEventRepository implements IVerificationEventRepository
         }
       }
 
-      return created as VerificationEvent; // Cast needed if type differs
+      return created as VerificationEvent;
     } catch (error) {
+      if (error instanceof VerificationCaseAdmissionSupersededError) throw error;
       this.handleError(error, 'createFromDetection');
     }
   }
@@ -1554,7 +1591,8 @@ export class VerificationEventRepository implements IVerificationEventRepository
     id: string,
     threadId: string,
     threadType: 'verification' | 'report_review',
-    metadataPatch: Record<string, unknown> = {}
+    metadataPatch: Record<string, unknown> = {},
+    expectedPendingThreadId?: string | null
   ): Promise<VerificationEvent | null> {
     try {
       const rows = await this.prisma.$queryRaw<VerificationEvent[]>`
@@ -1565,7 +1603,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
           ELSE '{}'::jsonb
         END || ${JSON.stringify({ ...metadataPatch, thread_type: threadType })}::jsonb,
         updated_at = now()
-        WHERE id = ${id}::uuid
+        WHERE id = ${id}::uuid AND (${expectedPendingThreadId === undefined} OR (status = 'pending' AND thread_id IS NOT DISTINCT FROM ${expectedPendingThreadId ?? null}))
         RETURNING *
       `;
       return rows[0] ?? null;
@@ -1577,7 +1615,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
   async patchMetadata(
     id: string,
     patch: Record<string, unknown>,
-    options: { touchUpdatedAt?: boolean } = {}
+    options: { touchUpdatedAt?: boolean; expectedPendingThreadId?: string } = {}
   ): Promise<VerificationEvent | null> {
     try {
       const rows = await this.prisma.$queryRaw<VerificationEvent[]>`
@@ -1587,7 +1625,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
           ELSE '{}'::jsonb
         END || ${JSON.stringify(patch)}::jsonb,
         updated_at = CASE WHEN ${options.touchUpdatedAt !== false} THEN now() ELSE updated_at END
-        WHERE id = ${id}::uuid
+        WHERE id = ${id}::uuid AND (${options.expectedPendingThreadId === undefined} OR (status = 'pending' AND thread_id = ${options.expectedPendingThreadId ?? null}))
         RETURNING *
       `;
       return rows[0] ?? null;

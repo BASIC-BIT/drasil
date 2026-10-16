@@ -1398,11 +1398,17 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     id: string,
     threadId: string,
     threadType: 'verification' | 'report_review',
-    metadataPatch: Record<string, unknown> = {}
+    metadataPatch: Record<string, unknown> = {},
+    expectedPendingThreadId?: string | null
   ): Promise<VerificationEvent | null> {
     const eventIndex = this.events.findIndex((event) => event.id === id);
     if (eventIndex === -1) return null;
     const event = this.events[eventIndex];
+    if (
+      expectedPendingThreadId !== undefined &&
+      (event.status !== VerificationStatus.PENDING || event.thread_id !== expectedPendingThreadId)
+    )
+      return null;
     const metadata =
       event.metadata && typeof event.metadata === 'object' && !Array.isArray(event.metadata)
         ? event.metadata
@@ -1422,11 +1428,17 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
   async patchMetadata(
     id: string,
     patch: Record<string, unknown>,
-    options: { touchUpdatedAt?: boolean } = {}
+    options: { touchUpdatedAt?: boolean; expectedPendingThreadId?: string } = {}
   ): Promise<VerificationEvent | null> {
     const eventIndex = this.events.findIndex((event) => event.id === id);
     if (eventIndex === -1) return null;
     const event = this.events[eventIndex];
+    if (
+      options.expectedPendingThreadId !== undefined &&
+      (event.status !== VerificationStatus.PENDING ||
+        event.thread_id !== options.expectedPendingThreadId)
+    )
+      return null;
     const metadata =
       event.metadata && typeof event.metadata === 'object' && !Array.isArray(event.metadata)
         ? event.metadata

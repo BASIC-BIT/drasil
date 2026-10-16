@@ -1,3 +1,4 @@
+import { Prisma, PrismaClient } from '../../db/prisma';
 import { CaseRoleReleaseReconciliationService } from '../../services/CaseRoleReleaseReconciliationService';
 import { RoleQuarantineSnapshotRepository } from '../../repositories/RoleQuarantineSnapshotRepository';
 import { Pool } from 'pg';
@@ -1145,6 +1146,347 @@ integration('report-ban stale worker recovery with real services and Postgres', 
         case_role_active: false,
       });
   });
+  it.each([true, false])(
+    'serializes an uncommitted automatic case admission before confirmed cleanup (request exists=%s)',
+    async (requestExists) => {
+      const f = await fixture();
+      if (!requestExists)
+        await getPrismaClient().moderation_action_requests.delete({ where: { id: f.request.id } });
+      let enterBan!: () => void,
+        releaseBan!: () => void,
+        inserted!: () => void,
+        commit!: () => void;
+      const banEntered = new Promise<void>((resolve) => {
+        enterBan = resolve;
+      });
+      const banGate = new Promise<void>((resolve) => {
+        releaseBan = resolve;
+      });
+      const insertEntered = new Promise<void>((resolve) => {
+        inserted = resolve;
+      });
+      const commitGate = new Promise<void>((resolve) => {
+        commit = resolve;
+      });
+      f.ban.mockImplementation(async () => {
+        enterBan();
+        await banGate;
+      });
+      jest.spyOn(f.cases, 'createFromDetection').mockImplementation(async (...args) =>
+        getPrismaClient().$transaction(
+          async (transaction) => {
+            const client = new Proxy(transaction, {
+              get(target, property) {
+                return property === '$transaction'
+                  ? // eslint-disable-next-line no-unused-vars -- Callback type only.
+                    (callback: (_value: typeof transaction) => Promise<unknown>) =>
+                      callback(transaction)
+                  : Reflect.get(target, property);
+              },
+            }) as PrismaClient;
+            const event = await new VerificationEventRepository(client).createFromDetection(
+              ...args
+            );
+            inserted();
+            await commitGate;
+            return event;
+          },
+          { timeout: 15000 }
+        )
+      );
+      const executionState = { finished: false };
+      let execution: ReturnType<typeof f.execute> | undefined;
+      const startExecution = () => {
+        execution = f.execute().finally(() => {
+          executionState.finished = true;
+        });
+      };
+      if (requestExists) {
+        startExecution();
+        await banEntered;
+      }
+      const setup = f.security.handleSuspiciousMessage(f.member, {
+        label: 'SUSPICIOUS',
+        confidence: 0.9,
+        reasons: ['Suspicious content'],
+        triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+        triggerContent: 'Suspicious content',
+      });
+      try {
+        await insertEntered;
+        if (!requestExists) {
+          Object.assign(
+            f.request,
+            await f.requests.enqueue({
+              serverId: 'guild',
+              actorId: 'moderator',
+              actorSurface: 'web',
+              targetUserId: 'target',
+              reportIntakeId: f.report.id,
+              detectionEventId: f.detection.id,
+              actionType: ModerationActionRequestType.BAN_OBSERVED_DETECTION,
+              idempotencyKey: 'ban:report',
+              metadata: { reason: 'Confirmed spam' },
+            })
+          );
+          startExecution();
+          await banEntered;
+        }
+        releaseBan();
+        // Wait for the real database lock, or the old implementation's incorrect completion.
+        const deadline = Date.now() + 10000;
+        while (!executionState.finished) {
+          const waiting = await getPrismaClient().$queryRaw<
+            { count: bigint }[]
+          >`SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND (query LIKE '%moderation_action_requests%' OR query LIKE '%pg_advisory_xact_lock%')`;
+          if (Number(waiting[0].count) > 0) break;
+          if (Date.now() > deadline)
+            throw new Error('Neither confirmation lock nor completion observed');
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        }
+        commit();
+        expect(await setup).toBe(true);
+        expect(await execution).toEqual({ status: 'banned' });
+        const events = await f.cases.findByUserAndServer('target', 'guild');
+        expect(events).toHaveLength(1);
+        expect(events[0]).toMatchObject({
+          status: 'banned',
+          metadata: { report_ban_operation_id: f.request.id },
+        });
+        expect((await f.requests.findById(f.request.id))?.metadata).toMatchObject({
+          report_ban_case_ids: [events[0].id],
+        });
+        expect(f.ban).toHaveBeenCalledTimes(1);
+        expect(await f.actionRepo.getActionHistory('target', 'guild')).toHaveLength(1);
+      } finally {
+        commit();
+        releaseBan();
+        await Promise.all([setup, execution]);
+      }
+    }
+  );
+
+  it('rejects an admission that saw no request before confirmed cleanup wins the target fence', async () => {
+    const f = await fixture();
+    const prisma = getPrismaClient();
+    await prisma.moderation_action_requests.delete({ where: { id: f.request.id } });
+    let reached!: () => void, release!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const client = new Proxy(prisma, {
+      get(target, property) {
+        if (property === '$transaction')
+          // eslint-disable-next-line no-unused-vars -- Callback type only.
+          return (callback: (_transaction: Prisma.TransactionClient) => Promise<unknown>) =>
+            prisma.$transaction(
+              (transaction) =>
+                callback(
+                  new Proxy(transaction, {
+                    get(inner, key) {
+                      if (key === '$executeRaw')
+                        return async (...args: Parameters<typeof transaction.$executeRaw>) => {
+                          reached();
+                          await gate;
+                          return transaction.$executeRaw(...args);
+                        };
+                      return Reflect.get(inner, key);
+                    },
+                  })
+                ),
+              { timeout: 15000 }
+            );
+        return Reflect.get(target, property);
+      },
+    });
+    jest
+      .spyOn(f.cases, 'createFromDetection')
+      .mockImplementation((...args) =>
+        new VerificationEventRepository(client).createFromDetection(...args)
+      );
+    const setup = f.security.handleSuspiciousMessage(f.member, {
+      label: 'SUSPICIOUS',
+      confidence: 0.9,
+      reasons: ['Suspicious content'],
+      triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+      triggerContent: 'Suspicious content',
+    });
+    try {
+      await entered;
+      Object.assign(
+        f.request,
+        await f.requests.enqueue({
+          serverId: 'guild',
+          actorId: 'moderator',
+          actorSurface: 'web',
+          targetUserId: 'target',
+          reportIntakeId: f.report.id,
+          detectionEventId: f.detection.id,
+          actionType: ModerationActionRequestType.BAN_OBSERVED_DETECTION,
+          idempotencyKey: 'ban:report',
+          metadata: { reason: 'Confirmed spam' },
+        })
+      );
+      expect(await f.execute()).toEqual({ status: 'banned' });
+      release();
+      expect(await setup).toBe(true);
+      expect(await f.cases.findByUserAndServer('target', 'guild')).toHaveLength(0);
+      expect(f.roles.assignCaseRole).not.toHaveBeenCalled();
+      expect(f.threads.createVerificationThread).not.toHaveBeenCalled();
+      expect(f.ban).toHaveBeenCalledTimes(1);
+      expect(await f.actionRepo.getActionHistory('target', 'guild')).toHaveLength(1);
+    } finally {
+      release();
+      await setup;
+    }
+  });
+
+  it.each([false, true])(
+    'bounds admission when confirmation wins the request lock (new membership=%s)',
+    async (newerMembership) => {
+      const f = await fixture();
+      let enterBan!: () => void, releaseBan!: () => void;
+      const banEntered = new Promise<void>((resolve) => {
+        enterBan = resolve;
+      });
+      const banGate = new Promise<void>((resolve) => {
+        releaseBan = resolve;
+      });
+      f.ban.mockImplementation(async () => {
+        enterBan();
+        await banGate;
+      });
+      let admissionStarted!: () => void, releaseAdmission!: () => void;
+      const admissionEntered = new Promise<void>((resolve) => {
+        admissionStarted = resolve;
+      });
+      const admissionGate = new Promise<void>((resolve) => {
+        releaseAdmission = resolve;
+      });
+      const prisma = getPrismaClient();
+      const admissionClient = new Proxy(prisma, {
+        get(target, property) {
+          if (property === '$transaction')
+            return async (callback: Parameters<PrismaClient['$transaction']>[0]) => {
+              admissionStarted();
+              await admissionGate;
+              return prisma.$transaction(callback as never);
+            };
+          return Reflect.get(target, property);
+        },
+      });
+      jest
+        .spyOn(f.cases, 'createFromDetection')
+        .mockImplementation((...args) =>
+          new VerificationEventRepository(admissionClient).createFromDetection(...args)
+        );
+      const execution = f.execute();
+      await banEntered;
+      const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
+      const lock = await pool.connect();
+      let setup: Promise<boolean> | undefined;
+      const waitForLocks = async (minimum: number) => {
+        const deadline = Date.now() + 10000;
+        for (;;) {
+          const result = await pool.query(
+            "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%moderation_action_requests%'"
+          );
+          if (Number(result.rows[0].count) >= minimum) return;
+          if (Date.now() > deadline) throw new Error('Expected request lock wait did not occur');
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        }
+      };
+      try {
+        await lock.query('BEGIN');
+        await lock.query('SELECT id FROM moderation_action_requests WHERE id = $1 FOR UPDATE', [
+          f.request.id,
+        ]);
+        if (newerMembership)
+          Object.assign(f.member, { joinedAt: new Date('2025-02-01T00:00:00Z') });
+        setup = f.security.handleSuspiciousMessage(f.member, {
+          label: 'SUSPICIOUS',
+          confidence: 0.9,
+          reasons: ['Suspicious content'],
+          triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+          triggerContent: 'Suspicious content',
+        });
+        await admissionEntered;
+        releaseBan();
+        await waitForLocks(1);
+        releaseAdmission();
+        await waitForLocks(2);
+        await lock.query('COMMIT');
+        expect(await setup).toBe(true);
+        expect(await execution).toEqual({ status: 'banned' });
+        const events = await f.cases.findByUserAndServer('target', 'guild');
+        expect(events).toHaveLength(newerMembership ? 1 : 0);
+        if (newerMembership) expect(events[0].status).toBe('pending');
+        else {
+          expect(f.roles.assignCaseRole).not.toHaveBeenCalled();
+          expect(f.threads.createVerificationThread).not.toHaveBeenCalled();
+        }
+        expect(f.ban).toHaveBeenCalledTimes(1);
+        expect(await f.actionRepo.getActionHistory('target', 'guild')).toHaveLength(1);
+        expect((await f.requests.findById(f.request.id))?.status).toBe('completed');
+      } finally {
+        await lock.query('ROLLBACK');
+        lock.release();
+        releaseBan();
+        releaseAdmission();
+        await Promise.all([setup, execution]);
+        await pool.end();
+      }
+    }
+  );
+  it('preserves genuinely post-confirmation admissions and guards pending thread writes', async () => {
+    const f = await fixture();
+    expect(await f.execute()).toEqual({ status: 'banned' });
+    const confirmedAt = String(
+      ((await f.requests.findById(f.request.id))!.metadata as Record<string, unknown>)
+        .report_ban_confirmed_at
+    );
+    while (Date.now() <= Date.parse(confirmedAt))
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    const event = await f.cases.createFromDetection(
+      null,
+      'guild',
+      'target',
+      VerificationStatus.PENDING,
+      { user_snapshot: { joined_at: f.member.joinedAt!.toISOString() } }
+    );
+    expect(event.status).toBe('pending');
+    expect(event.created_at > new Date(confirmedAt)).toBe(true);
+    expect(
+      await f.cases.setThreadIdentity(event.id, 'original', 'verification', {}, null)
+    ).not.toBeNull();
+    expect(
+      await f.cases.setThreadIdentity(event.id, 'replacement', 'verification', {}, null)
+    ).toBeNull();
+    await f.cases.update(event.id, {
+      status: VerificationStatus.VERIFIED,
+      metadata: { retained: true },
+    });
+    expect(
+      await f.cases.setThreadIdentity(event.id, 'replacement', 'verification', {}, 'original')
+    ).toBeNull();
+    expect(
+      await f.cases.patchMetadata(
+        event.id,
+        { initial_verification_prompt_message_id: 'late-prompt' },
+        { expectedPendingThreadId: 'original' }
+      )
+    ).toBeNull();
+    expect(await f.cases.findById(event.id)).toMatchObject({
+      status: 'verified',
+      thread_id: 'original',
+      metadata: { retained: true },
+    });
+    expect(f.ban).toHaveBeenCalledTimes(1);
+  });
+
   it.each(['http-first', 'observer-first'])(
     'adopts an independent automatic case during paused enforcement (%s)',
     async (ordering) => {

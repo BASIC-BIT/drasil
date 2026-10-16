@@ -96,6 +96,7 @@ const buildThread = (id = 'thread-1'): jest.Mocked<ThreadChannel> =>
     url: `https://discord.com/channels/${id}`,
     members: {
       add: jest.fn().mockResolvedValue(undefined),
+      remove: jest.fn().mockResolvedValue(undefined),
       fetch: jest.fn().mockResolvedValue({ id: 'user-1' }),
     },
     send: jest.fn().mockResolvedValue({ id: 'message-1' }),
@@ -729,12 +730,27 @@ describe('ThreadManager (unit)', () => {
           {
             author: { id: 'bot-1', bot: true },
             id: 'message-1',
+            channelId: thread.id,
+            guildId: 'guild-1',
+            type: 0,
+            embeds: [],
+            attachments: new Collection(),
             content: renderVerificationPromptTemplate(DEFAULT_VERIFICATION_PROMPT_TEMPLATE, {
               userMention: '<@user-1>',
               serverName: 'Test Guild',
             }),
             components: [
-              { type: 1, components: [{ type: 2, customId: 'admin_actions:m:c:user-1' }] },
+              {
+                type: 1,
+                components: [
+                  {
+                    type: 2,
+                    customId: 'admin_actions:m:c:user-1',
+                    style: 1,
+                    label: 'Admin Actions',
+                  },
+                ],
+              },
             ],
           },
         ],
@@ -981,16 +997,26 @@ describe('ThreadManager (unit)', () => {
     });
 
     it.each(['admin_actions:m:c:user-1', 'admin_actions:menu:case:user-1'])(
-      'recovers the shipped unbound prompt %s only with its rendered template',
+      'recovers the shipped unbound prompt %s with its complete button shape',
       async (customId) => {
         const event = await createCase();
-        const message = prompt(
-          customId,
-          renderVerificationPromptTemplate(DEFAULT_VERIFICATION_PROMPT_TEMPLATE, {
-            userMention: '<@user-1>',
-            serverName: 'Test Guild',
-          })
-        );
+        const message = {
+          ...prompt(
+            customId,
+            renderVerificationPromptTemplate(DEFAULT_VERIFICATION_PROMPT_TEMPLATE, {
+              userMention: '<@user-1>',
+              serverName: 'Test Guild',
+            })
+          ),
+          channelId: thread.id,
+          guildId: 'guild-1',
+          type: 0,
+          embeds: [],
+          attachments: new Collection(),
+          components: [
+            { type: 1, components: [{ type: 2, customId, label: 'Admin Actions', style: 1 }] },
+          ],
+        };
         (thread.messages.fetch as jest.Mock).mockResolvedValueOnce(
           new Map([[message.id, message]])
         );
@@ -1002,6 +1028,197 @@ describe('ThreadManager (unit)', () => {
         expect((await verificationEventRepository.findById(event.id))?.metadata).toMatchObject({
           initial_verification_prompt_message_id: 'saved-prompt',
         });
+      }
+    );
+
+    it.each(['changed', 'unavailable'])(
+      'recovers the complete shipped legacy prompt with %s config',
+      async (mode) => {
+        const event = await createCase();
+        const message = {
+          ...prompt('admin_actions:m:c:user-1', 'Historical custom wording for <@user-1>'),
+          channelId: thread.id,
+          guildId: 'guild-1',
+          type: 0,
+          embeds: [],
+          attachments: new Collection(),
+          components: [
+            {
+              type: 1,
+              components: [
+                { type: 2, customId: 'admin_actions:m:c:user-1', label: 'Admin Actions', style: 1 },
+              ],
+            },
+          ],
+        };
+        if (mode === 'unavailable')
+          (configService.getServerConfig as jest.Mock).mockRejectedValue(
+            new Error('config unavailable')
+          );
+        else
+          (configService.getServerConfig as jest.Mock).mockResolvedValue({
+            settings: { verification_prompt_template: 'New prompt for {userMention}' },
+          });
+        (thread.messages.fetch as jest.Mock).mockResolvedValueOnce(
+          new Map([[message.id, message]])
+        );
+        expect(
+          (await manager().repairVerificationThread(buildMember('guild-1', 'user-1'), event))
+            .promptAlreadyPresent
+        ).toBe(true);
+        expect(thread.send).not.toHaveBeenCalled();
+        expect((await verificationEventRepository.findById(event.id))?.metadata).toMatchObject({
+          initial_verification_prompt_message_id: message.id,
+        });
+      }
+    );
+    it.each([
+      'secondary',
+      'multiple-buttons',
+      'evidence',
+      'wrong-bot',
+      'wrong-member',
+      'wrong-thread',
+      'review-thread',
+    ])('rejects an unsupported historical prompt shape: %s', async (variant) => {
+      const event = await createCase(
+        variant === 'review-thread' ? { thread_type: 'report_review' } : {}
+      );
+      const button = {
+        type: 2,
+        customId:
+          variant === 'wrong-member'
+            ? 'admin_actions:m:c:someone-else'
+            : 'admin_actions:m:c:user-1',
+        label: variant === 'secondary' ? 'Other Actions' : 'Admin Actions',
+        style: variant === 'secondary' ? 2 : 1,
+      };
+      const message = {
+        id: 'historical',
+        author: { id: variant === 'wrong-bot' ? 'other-bot' : 'bot-1' },
+        channelId: variant === 'wrong-thread' ? 'other-thread' : thread.id,
+        guildId: 'guild-1',
+        type: 0,
+        content: 'Historical custom prompt',
+        embeds: variant === 'evidence' ? [{}] : [],
+        attachments: new Collection(),
+        components: [
+          { type: 1, components: variant === 'multiple-buttons' ? [button, button] : [button] },
+        ],
+      };
+      (thread.messages.fetch as jest.Mock).mockResolvedValueOnce(new Map([[message.id, message]]));
+      const result = await manager().repairVerificationThread(
+        buildMember('guild-1', 'user-1'),
+        event
+      );
+      expect(result.promptAlreadyPresent).toBe(false);
+      expect(thread.send).toHaveBeenCalledTimes(variant === 'review-thread' ? 0 : 1);
+      expect((await verificationEventRepository.findById(event.id))?.metadata).not.toMatchObject({
+        initial_verification_prompt_message_id: 'historical',
+      });
+    });
+    it('preserves a newer thread identity while retiring its late created thread', async () => {
+      const event = await verificationEventRepository.createFromDetection(
+        null,
+        'guild-1',
+        'user-1',
+        VerificationStatus.PENDING
+      );
+      channel.threads.create.mockImplementationOnce(async () => {
+        await verificationEventRepository.setThreadIdentity(
+          event.id,
+          'newer-thread',
+          'verification',
+          { retained: true }
+        );
+        return thread;
+      });
+      expect(
+        await manager().createVerificationThread(buildMember('guild-1', 'user-1'), event)
+      ).toBeNull();
+      expect((await verificationEventRepository.findById(event.id))?.thread_id).toBe(
+        'newer-thread'
+      );
+      expect(thread.members.add).not.toHaveBeenCalled();
+      expect(thread.send).not.toHaveBeenCalled();
+      expect(thread.setArchived).toHaveBeenCalledWith(true);
+    });
+    it('surfaces failed retirement of an exact late prompt', async () => {
+      const event = await createCase();
+      const deletion = jest.fn().mockRejectedValue(new Error('delete unavailable'));
+      thread.send.mockImplementationOnce(async () => {
+        await verificationEventRepository.update(event.id, { status: VerificationStatus.VERIFIED });
+        return { id: 'late-prompt', delete: deletion } as never;
+      });
+      await expect(
+        manager().repairVerificationThread(buildMember('guild-1', 'user-1'), event)
+      ).rejects.toThrow('delete unavailable');
+      expect(thread.setArchived).toHaveBeenCalledWith(true);
+      expect(thread.setLocked).toHaveBeenCalledWith(true);
+      expect((await verificationEventRepository.findById(event.id))?.status).toBe('verified');
+    });
+
+    it.each(['routing', 'repair-unarchive', 'repair-add', 'repair-add-absent', 'send'])(
+      'retires setup when resolution wins during %s',
+      async (stage) => {
+        const event =
+          stage === 'routing'
+            ? await verificationEventRepository.createFromDetection(
+                null,
+                'guild-1',
+                'user-1',
+                VerificationStatus.PENDING
+              )
+            : await createCase();
+        const resolve = () =>
+          verificationEventRepository.update(event.id, {
+            status: VerificationStatus.VERIFIED,
+            metadata: { retained: 'terminal' },
+          });
+        const service = manager();
+        const deletion = jest.fn().mockResolvedValue(undefined);
+        if (stage === 'routing')
+          jest
+            .spyOn(
+              service as unknown as { addCaseResponderMembers: () => Promise<unknown> },
+              'addCaseResponderMembers'
+            )
+            .mockImplementation(async () => {
+              await resolve();
+              return { addedUserIds: [], warnings: [] };
+            });
+        if (stage === 'repair-unarchive') {
+          Object.assign(thread, { archived: true });
+          thread.setArchived.mockImplementationOnce(async () => {
+            await resolve();
+            return thread;
+          });
+        }
+        if (stage === 'repair-add-absent')
+          (thread.members.fetch as jest.Mock).mockResolvedValueOnce(null);
+        if (stage === 'repair-add' || stage === 'repair-add-absent')
+          (thread.members.add as jest.Mock).mockImplementationOnce(resolve);
+        if (stage === 'send')
+          thread.send.mockImplementationOnce(async () => {
+            await resolve();
+            return { id: 'late-prompt', delete: deletion } as never;
+          });
+        if (stage === 'routing')
+          await service.createVerificationThread(buildMember('guild-1', 'user-1'), event);
+        else await service.repairVerificationThread(buildMember('guild-1', 'user-1'), event);
+        if (stage === 'repair-add-absent')
+          expect(thread.members.remove).toHaveBeenCalledWith('user-1');
+        if (stage === 'repair-add') expect(thread.members.remove).not.toHaveBeenCalled();
+        if (stage === 'send') expect(deletion).toHaveBeenCalledTimes(1);
+        else expect(thread.send).not.toHaveBeenCalled();
+        expect(thread.setLocked).toHaveBeenCalledWith(true);
+        expect(thread.setArchived).toHaveBeenCalledWith(true);
+        expect((await verificationEventRepository.findById(event.id))?.metadata).toMatchObject({
+          retained: 'terminal',
+        });
+        expect((await verificationEventRepository.findById(event.id))?.metadata).not.toHaveProperty(
+          'initial_verification_prompt_message_id'
+        );
       }
     );
 
@@ -1109,9 +1326,12 @@ describe('ThreadManager (unit)', () => {
         metadata: {
           member_left: true,
           reminder_count: 2,
-          initial_verification_prompt_message_id: 'message-1',
         },
       });
+      expect(thread.send).not.toHaveBeenCalled();
+      expect(thread.setLocked).toHaveBeenCalledWith(true);
+      expect(thread.setArchived).toHaveBeenCalledWith(true);
+      expect(thread.members.remove).toHaveBeenCalledWith('user-1');
     });
 
     it.each([false, true])(
