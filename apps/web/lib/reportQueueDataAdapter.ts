@@ -60,6 +60,8 @@ interface ReportQueueRow {
   updated_at: unknown;
   evidence_count: string | number | null;
   latest_detection_id: string | null;
+  latest_detection_user_id: string | null;
+  latest_detection_handled: boolean;
   latest_case_id: string | null;
 }
 
@@ -102,6 +104,14 @@ function resolveAllowedActions(row: ReportQueueRow): ReportQueueAction[] {
   if (row.status !== 'submitted') return actions;
   if (!row.latest_case_id && row.confirmed_target_user_id && row.latest_detection_id) {
     actions.push('open_case');
+  }
+  if (
+    row.confirmed_target_user_id &&
+    row.latest_detection_id &&
+    !row.latest_detection_handled &&
+    row.latest_detection_user_id === row.confirmed_target_user_id
+  ) {
+    actions.push('ban_user');
   }
   actions.push('mark_actioned', 'dismiss_no_action', 'mark_false_positive');
   return actions;
@@ -277,6 +287,8 @@ export class PostgresReportQueueDataAdapter implements ReportQueueDataAdapter {
          ri.updated_at,
          coalesce(ev.evidence_count, 0)::text as evidence_count,
          de.id as latest_detection_id,
+         de.user_id as latest_detection_user_id,
+         coalesce(de.metadata, '{}'::jsonb) ? 'observed_action' as latest_detection_handled,
          de.latest_verification_event_id as latest_case_id
        from report_intakes ri
        left join lateral (
@@ -285,7 +297,7 @@ export class PostgresReportQueueDataAdapter implements ReportQueueDataAdapter {
          where rie.intake_id = ri.id
        ) ev on true
        left join lateral (
-         select id, latest_verification_event_id
+         select id, user_id, metadata, latest_verification_event_id
          from detection_events
          where server_id = ri.server_id
            and metadata ->> 'reportIntakeId' = ri.id::text
