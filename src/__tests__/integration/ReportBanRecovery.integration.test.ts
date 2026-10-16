@@ -3,7 +3,9 @@ import { RoleQuarantineSnapshotRepository } from '../../repositories/RoleQuarant
 import { Pool } from 'pg';
 import { insertModerationActionRequestWithReceipt } from '../../../apps/web/lib/moderationActionRequestQueue';
 jest.mock('../../../apps/web/lib/setupDataAdapter', () => ({ getPostgresPool: jest.fn() }));
-import { Client, Guild, GuildMember, User } from 'discord.js';
+import { IRoleQuarantineService } from '../../services/RoleQuarantineService';
+import { NotificationManager } from '../../services/NotificationManager';
+import { Client, EmbedBuilder, Guild, GuildMember, User } from 'discord.js';
 import { SecurityActionService } from '../../services/SecurityActionService';
 import { UserModerationService } from '../../services/UserModerationService';
 import { AdminActionService } from '../../services/AdminActionService';
@@ -32,7 +34,7 @@ import { ServerRepository } from '../../repositories/ServerRepository';
 import { UserRepository } from '../../repositories/UserRepository';
 import { VerificationEventRepository } from '../../repositories/VerificationEventRepository';
 
-async function fixture(withReport = true) {
+async function fixture(withReport = true, quarantine?: IRoleQuarantineService) {
   const prisma = getPrismaClient();
   const detections = new DetectionEventsRepository(prisma);
   const reports = new ReportIntakeRepository(prisma);
@@ -100,7 +102,11 @@ async function fixture(withReport = true) {
     createReportReviewThread: jest.fn(),
     retireReportConfirmationPrompts: jest.fn().mockResolvedValue(undefined),
   };
-  const roles = { assignCaseRole: jest.fn().mockResolvedValue(true) };
+  const roles = {
+    getCaseRoleId: jest.fn().mockResolvedValue('case-role'),
+    assignCaseRole: jest.fn().mockResolvedValue(true),
+    removeCaseRole: jest.fn().mockResolvedValue(true),
+  };
   const queue = {
     upsertCaseMirror: jest.fn().mockResolvedValue(undefined),
     deletePendingScreeningMember: jest.fn().mockResolvedValue(undefined),
@@ -118,7 +124,8 @@ async function fixture(withReport = true) {
     threads as never,
     undefined,
     outcomes,
-    queue as never
+    queue as never,
+    quarantine
   );
   const analytics = { captureUserEvent: jest.fn().mockResolvedValue(undefined) };
   const evidence = new ModerationEvidenceService(detections);
@@ -240,6 +247,273 @@ async function fixture(withReport = true) {
 
 const integration = process.env.JEST_INTEGRATION === '1' ? describe : describe.skip;
 integration('report-ban stale worker recovery with real services and Postgres', () => {
+  it.each([
+    'fetch-deleted',
+    'edit-deleted',
+    'button-deleted',
+    'fetch-transient',
+    'edit-transient',
+    'button-transient',
+    'fetch-ambiguous',
+    'edit-ambiguous',
+    'button-ambiguous',
+  ])('closes a linked case through actual notification handling: %s', async (mode) => {
+    const f = await fixture();
+    const event = await f.cases.createFromDetection(
+      f.detection.id,
+      'guild',
+      'target',
+      VerificationStatus.PENDING
+    );
+    await f.cases.update(event.id, {
+      notification_message_id: 'notice',
+      notification_channel_id: 'admin',
+    });
+    const manager = new NotificationManager(
+      f.client,
+      { getServerConfig: jest.fn().mockResolvedValue({ settings: {} }) } as never,
+      f.detections
+    );
+    const edit = jest.fn().mockResolvedValue(undefined);
+    const message = { embeds: [new EmbedBuilder().setTitle('Case')], edit };
+    const fetch = jest.fn().mockResolvedValue(message);
+    const failure = mode.endsWith('deleted')
+      ? { code: 10008 }
+      : mode.endsWith('ambiguous')
+        ? new Error('connection timed out')
+        : { code: 50013 };
+    if (mode.startsWith('fetch')) fetch.mockRejectedValue(failure);
+    else if (mode.startsWith('button'))
+      edit.mockResolvedValueOnce(undefined).mockRejectedValue(failure);
+    else edit.mockRejectedValue(failure);
+    const routed = manager as unknown as {
+      getModerationNotificationChannel: () => Promise<unknown>;
+      getStoredNotificationChannel: () => Promise<unknown>;
+    };
+    jest
+      .spyOn(routed, 'getModerationNotificationChannel')
+      .mockResolvedValue({ messages: { fetch } });
+    jest.spyOn(routed, 'getStoredNotificationChannel').mockResolvedValue({ messages: { fetch } });
+    f.notifications.logActionToMessage.mockImplementation(manager.logActionToMessage.bind(manager));
+    f.notifications.updateNotificationButtons.mockImplementation(
+      manager.updateNotificationButtons.bind(manager)
+    );
+    const result = await f.execute();
+    if (!mode.endsWith('deleted')) {
+      expect(result).toMatchObject({ status: 'banned_updates_pending' });
+      expect(await f.actionRepo.getActionHistory('target', 'guild')).toHaveLength(0);
+      fetch.mockResolvedValue(message);
+      edit.mockResolvedValue(undefined);
+      const stored = (await f.requests.findById(f.request.id))!;
+      expect(await f.security.reconcileReportBan(stored)).toEqual({ status: 'banned' });
+    } else expect(result).toEqual({ status: 'banned' });
+    expect((await f.cases.findById(event.id))?.status).toBe('banned');
+    expect(await f.actionRepo.getActionHistory('target', 'guild')).toHaveLength(1);
+    expect(await f.outcomeRepo.findByUserAndServer('target', 'guild')).toHaveLength(1);
+    expect((await f.reports.findById(f.report.id))?.status).toBe('actioned');
+    expect(f.queue.deleteCaseMirror).toHaveBeenCalledWith(event.id);
+    expect(f.ban).toHaveBeenCalledTimes(1);
+  });
+  it('removes obsolete successful role work after moderator verification wins', async () => {
+    const f = await fixture();
+    await f.members.upsertMember('guild', 'target', {
+      join_date: f.member.joinedAt!,
+      verification_status: VerificationStatus.PENDING,
+      case_role_active: false,
+    });
+    const event = await f.cases.createFromDetection(
+      f.detection.id,
+      'guild',
+      'target',
+      VerificationStatus.PENDING
+    );
+    let reached!: () => void;
+    let resume!: () => void;
+    const paused = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    let restricted = false;
+    f.roles.assignCaseRole.mockImplementation(async () => {
+      reached();
+      await gate;
+      restricted = true;
+      return true;
+    });
+    f.roles.removeCaseRole.mockImplementation(async () => {
+      restricted = false;
+      return true;
+    });
+    const applying = f.moderation.applyCaseRole(f.member, f.moderator);
+    await paused;
+    try {
+      expect(await f.moderation.verifyUser(f.member, f.moderator)).toBe(true);
+    } finally {
+      resume();
+    }
+    await applying;
+    expect(restricted).toBe(false);
+    expect((await f.cases.findById(event.id))?.status).toBe('verified');
+    expect(await f.members.findByServerAndUser('guild', 'target')).toMatchObject({
+      verification_status: 'verified',
+      case_role_active: false,
+    });
+  });
+  it.each([
+    'configured-role-changed',
+    'other-pending-case',
+    'active-ban',
+    'terminal-ban',
+    'later-join',
+    'discord-later-join',
+    'newer-restriction',
+    'remove-failure',
+    'quarantine',
+    'quarantine-failure',
+    'restriction-during-removal',
+    'restriction-during-restoration',
+  ])('bounds superseded role compensation: %s', async (mode) => {
+    const restore = jest.fn().mockResolvedValue({
+      status: 'no_active_snapshot',
+      snapshotId: null,
+      attemptedRoleIds: [],
+      restoredRoleIds: [],
+      skippedRoles: [],
+      failedRestores: [],
+    });
+    const quarantine = {
+      quarantineMember: jest.fn().mockResolvedValue({
+        status: 'quarantined',
+        mode: 'enforce',
+        snapshotId: 'snapshot',
+        originalRoleIds: ['privilege'],
+        plannedRoleIds: ['privilege'],
+        removedRoleIds: ['privilege'],
+        skippedRoles: [],
+        failedRemovals: [],
+      }),
+      restoreMemberRoles: restore,
+    };
+    const useQuarantine = mode.includes('quarantine') || mode.includes('restoration');
+    const f = await fixture(
+      true,
+      useQuarantine ? (quarantine as unknown as IRoleQuarantineService) : undefined
+    );
+    await f.members.upsertMember('guild', 'target', {
+      join_date: f.member.joinedAt!,
+      verification_status: VerificationStatus.PENDING,
+      case_role_active: false,
+    });
+    const event = await f.cases.createFromDetection(
+      f.detection.id,
+      'guild',
+      'target',
+      VerificationStatus.PENDING
+    );
+    let reached!: () => void;
+    let resume!: () => void;
+    const paused = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    let restricted = false;
+    f.roles.assignCaseRole.mockImplementationOnce(async () => {
+      reached();
+      await gate;
+      restricted = true;
+      return true;
+    });
+    f.roles.assignCaseRole.mockImplementation(async () => {
+      restricted = true;
+      return true;
+    });
+    f.roles.removeCaseRole.mockImplementation(async () => {
+      restricted = false;
+      return true;
+    });
+    const applying = f.moderation
+      .applyCaseRole(f.member, f.moderator)
+      .catch((error: unknown) => error);
+    await paused;
+    try {
+      await f.moderation.verifyUser(f.member, f.moderator);
+      f.roles.removeCaseRole.mockClear();
+      if (mode === 'configured-role-changed') f.roles.getCaseRoleId.mockResolvedValue('new-role');
+      if (mode === 'other-pending-case')
+        await f.cases.createFromDetection(null, 'guild', 'target', VerificationStatus.PENDING);
+      if (mode === 'active-ban')
+        await getPrismaClient().moderation_action_requests.update({
+          where: { id: f.request.id },
+          data: { metadata: { report_ban_phase: 'enforcement_started' } },
+        });
+      if (mode === 'terminal-ban') {
+        await f.cases.update(event.id, { status: VerificationStatus.BANNED });
+        await f.members.upsertMember('guild', 'target', {
+          verification_status: VerificationStatus.BANNED,
+        });
+      }
+      if (mode === 'later-join')
+        await f.members.upsertMember('guild', 'target', { join_date: new Date() });
+      if (mode === 'discord-later-join')
+        (f.guild.members.fetch as jest.Mock).mockResolvedValue({
+          ...f.member,
+          joinedAt: new Date(),
+        });
+      if (mode === 'newer-restriction')
+        await f.members.upsertMember('guild', 'target', {
+          verification_status: VerificationStatus.PENDING,
+          case_role_active: true,
+          last_status_change: new Date(),
+        });
+      if (mode === 'remove-failure') f.roles.removeCaseRole.mockResolvedValue(false);
+      if (mode === 'restriction-during-removal')
+        f.roles.removeCaseRole.mockImplementation(async () => {
+          restricted = false;
+          await f.cases.createFromDetection(null, 'guild', 'target', VerificationStatus.PENDING);
+          return true;
+        });
+      if (useQuarantine)
+        restore.mockImplementation(async (_member, _moderator, fence) => {
+          if (mode === 'quarantine-failure') throw new Error('restore denied');
+          if (mode === 'restriction-during-restoration')
+            await f.cases.createFromDetection(null, 'guild', 'target', VerificationStatus.PENDING);
+          const allowed = await fence.canRestoreRole();
+          expect(allowed).toBe(mode !== 'restriction-during-restoration');
+          return {
+            status: allowed ? 'restored' : 'held_pending_case',
+            snapshotId: 'snapshot',
+            attemptedRoleIds: ['privilege'],
+            restoredRoleIds: allowed ? ['privilege'] : [],
+            skippedRoles: [],
+            failedRestores: [],
+          };
+        });
+    } finally {
+      resume();
+    }
+    const result = await applying;
+    const fails = ['remove-failure', 'quarantine-failure'].includes(mode);
+    if (fails) expect(result).toBeInstanceOf(Error);
+    else expect(result).toBe(true);
+    const releases = ['configured-role-changed', 'quarantine', 'quarantine-failure'].includes(mode);
+    expect(restricted).toBe(!releases);
+    if (releases || fails || mode.startsWith('restriction-during'))
+      expect(f.roles.removeCaseRole).toHaveBeenCalledWith(f.member, 'case-role');
+    else expect(f.roles.removeCaseRole).not.toHaveBeenCalled();
+    expect(f.roles.assignCaseRole).toHaveBeenNthCalledWith(1, f.member, 'case-role');
+    expect((await f.cases.findById(event.id))?.status).toBe(
+      mode === 'terminal-ban' ? 'banned' : 'verified'
+    );
+    if (!['terminal-ban', 'newer-restriction'].includes(mode))
+      expect(await f.members.findByServerAndUser('guild', 'target')).toMatchObject({
+        verification_status: 'verified',
+        case_role_active: false,
+      });
+  });
   it.each(['http-first', 'observer-first'])(
     'adopts an independent automatic case during paused enforcement (%s)',
     async (ordering) => {

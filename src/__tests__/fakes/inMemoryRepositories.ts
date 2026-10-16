@@ -2070,6 +2070,22 @@ export class InMemoryServerMemberRepository implements IServerMemberRepository {
     });
     return true;
   }
+  async canReleaseSupersededCaseRole(
+    serverId: string,
+    userId: string,
+    input: CaseRoleApplicationCompletion
+  ): Promise<boolean> {
+    const member = await this.findByServerAndUser(serverId, userId);
+    return Boolean(
+      input.joinedAt &&
+      member?.join_date?.getTime() === input.joinedAt.getTime() &&
+      !member.case_role_active &&
+      (member.verification_status === VerificationStatus.VERIFIED ||
+        member.verification_status === VerificationStatus.CLOSED_NO_ACTION) &&
+      member.last_status_change &&
+      member.last_status_change >= input.startedAt
+    );
+  }
   async markBannedIfNotNewer(
     serverId: string,
     userId: string,

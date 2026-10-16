@@ -59,6 +59,7 @@ describeIntegration('UserModerationService (integration)', () => {
       serverRepository
     );
     roleManager = {
+      getCaseRoleId: jest.fn().mockResolvedValue('case-role'),
       assignCaseRole: jest.fn().mockResolvedValue(true),
       removeCaseRole: jest.fn().mockResolvedValue(true),
     };

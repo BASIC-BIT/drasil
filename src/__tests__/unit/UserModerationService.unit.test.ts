@@ -116,6 +116,7 @@ describe('UserModerationService (unit)', () => {
       userRepository
     );
     roleManager = {
+      getCaseRoleId: jest.fn().mockResolvedValue('case-role'),
       assignCaseRole: jest.fn().mockResolvedValue(true),
       removeCaseRole: jest.fn().mockResolvedValue(true),
     };

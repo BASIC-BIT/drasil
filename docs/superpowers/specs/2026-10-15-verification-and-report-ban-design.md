@@ -84,3 +84,9 @@ The user confirmed both surfaces and selected one PR with subagent implementatio
 ## Engineering references
 
 The investigation and local reproductions are in the calling chat's artifact directory. Primary files are `ThreadManager.ts`, `SecurityActionService.ts`, `VerificationEventRepository.ts`, `CaseReviewReminderService.ts`, `ReportInteractionHandler.ts`, `InteractionHandler.ts`, `ReportReviewService.ts`, `ModerationActionRequestService.ts`, and the web report adapters/actions/components. The implementation plan lists exact paths and tests.
+
+## Deleted notices and superseded role setup
+
+A deleted case notification does not prevent confirmed ban cleanup from recording the audit, closing the report or clearing queue attention. Both action logging and button updates treat Discord's explicit Unknown Message response (10008) as a retired presentation, whether deletion is discovered during fetch or edit. Permission, network and ambiguous failures keep cleanup pending without repeating enforcement.
+
+A role assignment that finishes after verification or Close No Action must honor that resolution. Capture the configured role once and pass that exact ID to assignment and any cleanup. Release it only when the case and member still require release, the captured membership matches both the database and a fresh Discord fetch, and no pending case or active report-ban operation owns a restriction. Recheck after removal and retain the role if a new restriction arrived. Restore applicable quarantine roles through the existing restoration fence; propagate removal or restoration failures. Unknown or later membership remains untouched. This compensation does not rewrite the winning member decision or change successful-role timestamp ordering.

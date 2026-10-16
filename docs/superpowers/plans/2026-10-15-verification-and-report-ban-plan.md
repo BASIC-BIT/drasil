@@ -118,3 +118,11 @@ The two confirmed review findings affect existing flows. Report Ban now accepts 
 - Verify the actual notification menu-to-enqueue path and channel changes. Use real services and serial disposable Postgres tests for a paused ban plus automatic case creation, observer-first and HTTP-first ordering, interrupted cleanup, stale attempts, competing ownership, unknown membership, later joins before and after confirmation, post-confirmation cases and delayed role completion. Preserve previously owned-case and historical-cleanup coverage.
 
 The cost is conservative pending cleanup when membership evidence is missing or another operation owns an eligible case. Such cases require review; the worker never guesses membership or repeats uncertain enforcement.
+
+## External closeout: deleted notices and superseded role setup
+
+Two delayed review findings require bounded completion of the existing lifecycle. Deleted case notices must stop blocking durable ban cleanup. A successful case-role assignment must release its obsolete restriction when moderator verification wins during the assignment. These changes preserve the approved flow and require no new product decision.
+
+- Retire explicit Discord 10008 errors in case action logging and button updates, for fetch and edit. Keep permission and ambiguous failures retryable. Prove actual notification services finish case audit, report and queue cleanup with one ban; prove retries recover transient failures without enforcement.
+- Capture the actual configured role ID once and pass it into assignment. When guarded persistence rejects completion, check the current resolved case, member release state, known membership, pending cases and active report-ban ownership before removing that exact role. Recheck after external work. Use the existing quarantine restoration fence and surface failures.
+- Cover actual verification during paused assignment, config changes, pending cases, active and terminal bans, later membership, newer restriction decisions, and ownership changes during removal or restoration. Run the affected recovery and moderation database suites serially, covering units, build, lint, format and metrics. Leave unchanged broad surfaces to exact-head hosted CI.

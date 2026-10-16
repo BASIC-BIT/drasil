@@ -40,6 +40,11 @@ export interface IServerMemberRepository {
     userId: string,
     input: CaseRoleApplicationCompletion
   ): Promise<boolean>;
+  canReleaseSupersededCaseRole(
+    serverId: string,
+    userId: string,
+    input: CaseRoleApplicationCompletion
+  ): Promise<boolean>;
   markBannedIfNotNewer(
     serverId: string,
     userId: string,
@@ -197,6 +202,32 @@ export class ServerMemberRepository implements IServerMemberRepository {
       });
       return updated.count === 1;
     });
+  }
+
+  async canReleaseSupersededCaseRole(
+    serverId: string,
+    userId: string,
+    input: CaseRoleApplicationCompletion
+  ): Promise<boolean> {
+    if (!input.joinedAt) return false;
+    const rows = await this.prisma.$queryRaw<Array<{ allowed: boolean }>>`
+      SELECT EXISTS (
+        SELECT 1 FROM server_members m JOIN verification_events c
+          ON c.server_id = m.server_id AND c.user_id = m.user_id
+        WHERE m.server_id = ${serverId} AND m.user_id = ${userId}
+          AND m.join_date = ${input.joinedAt} AND NOT m.case_role_active
+          AND m.verification_status IN ('verified', 'closed_no_action')
+          AND m.last_status_change >= ${input.startedAt}
+          AND c.id = ${input.caseId}::uuid AND c.status IN ('verified', 'closed_no_action')
+          AND c.resolved_at >= ${input.startedAt}
+          AND NOT EXISTS (SELECT 1 FROM verification_events pending
+            WHERE pending.server_id = m.server_id AND pending.user_id = m.user_id AND pending.status = 'pending')
+          AND NOT EXISTS (SELECT 1 FROM moderation_action_requests request
+            WHERE request.server_id = m.server_id AND request.target_user_id = m.user_id
+              AND request.action_type = 'ban_observed_detection'
+              AND request.metadata->>'report_ban_phase' IN ('preparing', 'enforcement_started', 'discord_confirmed', 'reconciliation_required'))
+      ) AS allowed`;
+    return rows[0]?.allowed === true;
   }
 
   // Historical cleanup must not overwrite a newer moderation decision or membership.

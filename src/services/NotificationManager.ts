@@ -797,6 +797,9 @@ export class NotificationManager implements INotificationManager {
       await message.edit({ allowedMentions: { parse: [] }, embeds: [updatedEmbed] });
       return true;
     } catch (error) {
+      // A deleted presentation cannot block durable moderation closeout.
+      if (typeof error === 'object' && error !== null && 'code' in error && error.code === 10008)
+        return true;
       console.error('Failed to log action to message:', error);
       return false;
     }
@@ -1559,50 +1562,59 @@ export class NotificationManager implements INotificationManager {
     verificationEvent: VerificationEvent,
     newStatus: VerificationStatus
   ): Promise<void> {
-    if (!verificationEvent.notification_message_id) {
-      throw new Error('No notification message ID found for verification event');
+    try {
+      if (!verificationEvent.notification_message_id) {
+        throw new Error('No notification message ID found for verification event');
+      }
+
+      const message = await this.getMessageForVerificationEvent(verificationEvent);
+      const messageEmbeds = (message as { embeds?: Message['embeds'] }).embeds ?? [];
+      const updatedEmbed = messageEmbeds.length > 0 ? EmbedBuilder.from(messageEmbeds[0]) : null;
+
+      if (updatedEmbed) {
+        this.presentationBuilder.upsertResolvedCasePresentation(
+          updatedEmbed,
+          verificationEvent,
+          newStatus
+        );
+        this.presentationBuilder.upsertVerificationActionFailureField(
+          updatedEmbed,
+          verificationEvent
+        );
+        this.presentationBuilder.upsertAccountQuarantinePresentation(
+          updatedEmbed,
+          verificationEvent
+        );
+      }
+
+      const serverConfig = await this.configService
+        .getServerConfig(verificationEvent.server_id)
+        .catch(() => null);
+      const responseSettings = serverConfig
+        ? getDetectionResponseSettings(serverConfig.settings)
+        : null;
+
+      await message.edit({
+        allowedMentions: { parse: [] },
+        components: this.presentationBuilder.createAdminNotificationActionRows(
+          verificationEvent.user_id,
+          {
+            guildId: verificationEvent.server_id,
+            verificationEventId: verificationEvent.id,
+            verificationStatus: newStatus,
+            caseKind: verificationEvent.case_kind,
+            caseMembershipState: this.presentationBuilder.getCaseMembershipState(verificationEvent),
+            caseAttentionState: verificationEvent.attention_state,
+            includeBanAction: responseSettings?.moderatorBanActionEnabled ?? true,
+          }
+        ),
+        ...(updatedEmbed ? { embeds: [updatedEmbed] } : {}),
+      });
+    } catch (error) {
+      if (typeof error === 'object' && error !== null && 'code' in error && error.code === 10008)
+        return;
+      throw error;
     }
-
-    const message = await this.getMessageForVerificationEvent(verificationEvent);
-    const messageEmbeds = (message as { embeds?: Message['embeds'] }).embeds ?? [];
-    const updatedEmbed = messageEmbeds.length > 0 ? EmbedBuilder.from(messageEmbeds[0]) : null;
-
-    if (updatedEmbed) {
-      this.presentationBuilder.upsertResolvedCasePresentation(
-        updatedEmbed,
-        verificationEvent,
-        newStatus
-      );
-      this.presentationBuilder.upsertVerificationActionFailureField(
-        updatedEmbed,
-        verificationEvent
-      );
-      this.presentationBuilder.upsertAccountQuarantinePresentation(updatedEmbed, verificationEvent);
-    }
-
-    const serverConfig = await this.configService
-      .getServerConfig(verificationEvent.server_id)
-      .catch(() => null);
-    const responseSettings = serverConfig
-      ? getDetectionResponseSettings(serverConfig.settings)
-      : null;
-
-    await message.edit({
-      allowedMentions: { parse: [] },
-      components: this.presentationBuilder.createAdminNotificationActionRows(
-        verificationEvent.user_id,
-        {
-          guildId: verificationEvent.server_id,
-          verificationEventId: verificationEvent.id,
-          verificationStatus: newStatus,
-          caseKind: verificationEvent.case_kind,
-          caseMembershipState: this.presentationBuilder.getCaseMembershipState(verificationEvent),
-          caseAttentionState: verificationEvent.attention_state,
-          includeBanAction: responseSettings?.moderatorBanActionEnabled ?? true,
-        }
-      ),
-      ...(updatedEmbed ? { embeds: [updatedEmbed] } : {}),
-    });
   }
 
   public async updateCaptchaChallengePresentation(

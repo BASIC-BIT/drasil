@@ -7,6 +7,7 @@ import { IConfigService } from '../config/ConfigService';
  * Interface for the RoleManager
  */
 export interface IRoleManager {
+  getCaseRoleId(guildId: string): Promise<string | null>;
   /**
    * Assigns the case role to a guild member
    * @param member The guild member receiving the case role
@@ -32,6 +33,11 @@ export class RoleManager implements IRoleManager {
 
   constructor(@inject(TYPES.ConfigService) configService: IConfigService) {
     this.configService = configService;
+  }
+
+  /** Resolve once when assignment and compensation must use the same role. */
+  public async getCaseRoleId(guildId: string): Promise<string | null> {
+    return (await this.configService.getCaseRole(guildId))?.id ?? null;
   }
 
   /**

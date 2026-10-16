@@ -3,7 +3,10 @@ import { Guild, GuildMember, PartialGuildMember, User } from 'discord.js';
 import { injectable, inject, optional } from 'inversify';
 import { Prisma } from '../db/prisma';
 import { TYPES } from '../di/symbols';
-import { IServerMemberRepository } from '../repositories/ServerMemberRepository';
+import {
+  CaseRoleApplicationCompletion,
+  IServerMemberRepository,
+} from '../repositories/ServerMemberRepository';
 import { INotificationManager } from './NotificationManager';
 import { IRoleManager } from './RoleManager';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
@@ -1078,9 +1081,12 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         member.guild.id,
         member.id
       );
+      const joinedAt = member.joinedAt ?? membership?.join_date ?? null;
+      let roleId: string | null = null;
       let roleAssigned: boolean;
       try {
-        roleAssigned = await this.roleManager.assignCaseRole(member);
+        roleId = await this.roleManager.getCaseRoleId(member.guild.id);
+        roleAssigned = roleId ? await this.roleManager.assignCaseRole(member, roleId) : false;
       } catch (assignError) {
         await rollbackRoleQuarantine();
         throw assignError;
@@ -1091,12 +1097,26 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       }
 
       if (verificationEvent) {
-        await this.serverMemberRepository.completeCaseRoleApplication(member.guild.id, member.id, {
+        const completion = {
           caseId: verificationEvent.id,
-          joinedAt: member.joinedAt ?? membership?.join_date ?? null,
+          joinedAt,
           startedAt: applicationStartedAt,
           moderatorId: moderator?.id,
-        });
+        };
+        const completed = await this.serverMemberRepository.completeCaseRoleApplication(
+          member.guild.id,
+          member.id,
+          completion
+        );
+        if (!completed && roleId)
+          await this.releaseSupersededCaseRole(
+            member,
+            verificationEvent,
+            completion,
+            roleId,
+            roleQuarantineMetadata,
+            moderator
+          );
       } else {
         await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
           case_role_active: true,
@@ -1111,6 +1131,62 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     } catch (error) {
       console.error(`Failed to apply case role to ${member.user.tag}:`, error);
       throw error;
+    }
+  }
+
+  private async releaseSupersededCaseRole(
+    member: GuildMember,
+    event: VerificationEvent,
+    completion: CaseRoleApplicationCompletion,
+    roleId: string,
+    quarantineMetadata: Record<string, unknown> | null,
+    moderator?: User
+  ): Promise<void> {
+    const sameMembership = async (): Promise<GuildMember | null> => {
+      try {
+        const current = await member.guild.members.fetch({ user: member.id, force: true });
+        return completion.joinedAt && current.joinedAt?.getTime() === completion.joinedAt.getTime()
+          ? current
+          : null;
+      } catch (error) {
+        if (typeof error === 'object' && error !== null && 'code' in error && error.code === 10007)
+          return null;
+        throw error;
+      }
+    };
+    const canRelease = async (): Promise<boolean> =>
+      (await this.serverMemberRepository.canReleaseSupersededCaseRole(
+        member.guild.id,
+        member.id,
+        completion
+      )) && Boolean(await sameMembership());
+    const retainNewerRestriction = async (): Promise<void> => {
+      const current = await sameMembership();
+      if (current && !(await this.roleManager.assignCaseRole(current, roleId)))
+        throw new Error('Failed to retain newer case restriction');
+    };
+    if (!(await canRelease())) return;
+    const current = await sameMembership();
+    if (!current) return;
+    if (!(await this.roleManager.removeCaseRole(current, roleId)))
+      throw new Error('Failed to remove superseded case role');
+    // A new restriction can win while Discord processes removal. Keep its role.
+    if (!(await canRelease())) {
+      await retainNewerRestriction();
+      return;
+    }
+    if (this.shouldRollbackRoleQuarantine(quarantineMetadata)) {
+      const restored = await this.tryRestoreRoleQuarantine(current, event, moderator, {
+        canRestoreRole: canRelease,
+      });
+      if (!(await canRelease())) await retainNewerRestriction();
+      if (
+        restored.metadata?.status === 'failed' ||
+        restored.metadata?.status === 'partially_restored' ||
+        Number(restored.metadata?.failed_restore_count ?? 0) > 0
+      ) {
+        throw new Error('Failed to restore roles after superseded case setup');
+      }
     }
   }
 
