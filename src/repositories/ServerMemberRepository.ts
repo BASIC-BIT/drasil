@@ -150,19 +150,25 @@ export class ServerMemberRepository implements IServerMemberRepository {
           AND action_type = 'ban_observed_detection'
           AND metadata->>'report_ban_phase' IN ('preparing', 'enforcement_started', 'discord_confirmed', 'reconciliation_required')
         ORDER BY id FOR UPDATE`;
-      if (
-        operations.some(({ metadata }) => {
-          if (metadata.report_ban_phase === 'preparing') return false;
-          const joinedAt = metadata.report_ban_membership_joined_at;
-          return (
-            typeof joinedAt !== 'string' ||
-            !Number.isFinite(Date.parse(joinedAt)) ||
-            !input.joinedAt ||
-            Date.parse(joinedAt) === input.joinedAt.getTime()
-          );
-        })
-      )
-        return false;
+      // Order successful role work by setup start, never after a confirmed ban.
+      let statusChangedAt = input.startedAt;
+      for (const { metadata } of operations) {
+        if (metadata.report_ban_phase === 'preparing') continue;
+        const joinedAt = metadata.report_ban_membership_joined_at;
+        if (
+          input.joinedAt &&
+          typeof joinedAt === 'string' &&
+          Number.isFinite(Date.parse(joinedAt)) &&
+          Date.parse(joinedAt) !== input.joinedAt.getTime()
+        )
+          continue;
+        const confirmedAt =
+          typeof metadata.report_ban_confirmed_at === 'string'
+            ? Date.parse(metadata.report_ban_confirmed_at)
+            : NaN;
+        if (Number.isFinite(confirmedAt) && confirmedAt < statusChangedAt.getTime())
+          statusChangedAt = new Date(confirmedAt);
+      }
       const cases = await transaction.$queryRaw<
         Array<{ status: string; quarantine_attempt_id: string | null }>
       >`
@@ -180,12 +186,12 @@ export class ServerMemberRepository implements IServerMemberRepository {
           user_id: userId,
           join_date: input.joinedAt,
           verification_status: { not: 'banned' },
-          OR: [{ last_status_change: null }, { last_status_change: { lte: input.startedAt } }],
+          OR: [{ last_status_change: null }, { last_status_change: { lte: statusChangedAt } }],
         },
         data: {
           case_role_active: true,
           verification_status: 'pending',
-          last_status_change: new Date(),
+          last_status_change: statusChangedAt,
           updated_by: input.moderatorId,
         },
       });

@@ -2065,7 +2065,7 @@ export class InMemoryServerMemberRepository implements IServerMemberRepository {
     await this.upsertMember(serverId, userId, {
       case_role_active: true,
       verification_status: VerificationStatus.PENDING,
-      last_status_change: new Date(),
+      last_status_change: input.startedAt,
       updated_by: input.moderatorId,
     });
     return true;

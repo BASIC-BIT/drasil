@@ -309,6 +309,114 @@ integration('report-ban stale worker recovery with real services and Postgres', 
     }
   );
 
+  it('retains successful case role state when an in-flight ban is rejected', async () => {
+    const f = await fixture();
+    await f.members.upsertMember('guild', 'target', {
+      verification_status: VerificationStatus.VERIFIED,
+      case_role_active: false,
+      join_date: f.member.joinedAt,
+      last_status_change: new Date('2025-01-02T00:00:00Z'),
+    });
+    let sending!: () => void, rejectBan!: () => void;
+    const sent = new Promise<void>((resolve) => {
+      sending = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      rejectBan = resolve;
+    });
+    f.ban.mockImplementation(async () => {
+      sending();
+      await gate;
+      throw Object.assign(new Error('Missing permissions'), { code: 50013 });
+    });
+    const execution = f.execute().catch((error: unknown) => error);
+    try {
+      await sent;
+      await f.security.handleSuspiciousMessage(f.member, {
+        label: 'SUSPICIOUS',
+        confidence: 0.9,
+        reasons: ['Suspicious content'],
+        triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+        triggerContent: 'Suspicious content',
+      });
+      expect((await f.requests.findById(f.request.id))?.metadata).toMatchObject({
+        report_ban_phase: 'enforcement_started',
+      });
+      expect(f.roles.assignCaseRole).toHaveBeenCalledTimes(1);
+      rejectBan();
+      expect(await execution).toMatchObject({ code: 50013 });
+      expect((await f.cases.findByUserAndServer('target', 'guild'))[0].status).toBe('pending');
+      expect(await f.members.findByServerAndUser('guild', 'target')).toMatchObject({
+        verification_status: 'pending',
+        case_role_active: true,
+      });
+      expect((await f.requests.findById(f.request.id))?.metadata).toMatchObject({
+        report_ban_phase: null,
+      });
+      expect(await f.actionRepo.getActionHistory('target', 'guild')).toHaveLength(0);
+      expect(f.ban).toHaveBeenCalledTimes(1);
+    } finally {
+      rejectBan();
+      await execution;
+    }
+  });
+
+  it.each(['same-membership', 'newer-decision', 'later-join'])(
+    'orders role setup started after confirmation against %s',
+    async (state) => {
+      const f = await fixture();
+      await f.members.upsertMember('guild', 'target', {
+        verification_status: VerificationStatus.VERIFIED,
+        case_role_active: false,
+        join_date: f.member.joinedAt,
+        last_status_change: new Date('2025-01-02T00:00:00Z'),
+      });
+      f.ban.mockImplementation(async () => {
+        await f.cases.createFromDetection(null, 'guild', 'target', VerificationStatus.PENDING, {
+          user_snapshot: { joined_at: f.member.joinedAt!.toISOString() },
+        });
+      });
+      const adopt = f.requests.adoptConfirmedReportBanCases.bind(f.requests);
+      jest.spyOn(f.requests, 'adoptConfirmedReportBanCases').mockImplementation(async (...args) => {
+        const request = (await f.requests.findById(f.request.id))!;
+        const confirmedAt = new Date(
+          String((request.metadata as Record<string, unknown>).report_ban_confirmed_at)
+        );
+        // Start role work strictly after the persisted confirmation boundary.
+        while (Date.now() <= confirmedAt.getTime())
+          await new Promise((resolve) => setTimeout(resolve, 1));
+        if (state !== 'same-membership')
+          await f.members.upsertMember('guild', 'target', {
+            verification_status: VerificationStatus.VERIFIED,
+            case_role_active: false,
+            last_status_change: new Date(confirmedAt.getTime() + 1),
+            ...(state === 'later-join' ? { join_date: new Date(confirmedAt.getTime() + 1) } : {}),
+          });
+        await f.moderation.applyCaseRole(f.member);
+        const membership = (await f.members.findByServerAndUser('guild', 'target'))!;
+        if (state === 'same-membership') {
+          expect(membership).toMatchObject({
+            verification_status: 'pending',
+            case_role_active: true,
+          });
+          expect(membership.last_status_change).toEqual(confirmedAt);
+        } else
+          expect(membership).toMatchObject({
+            verification_status: 'verified',
+            case_role_active: false,
+          });
+        return adopt(...args);
+      });
+      expect(await f.execute()).toEqual({ status: 'banned' });
+      expect(await f.members.findByServerAndUser('guild', 'target')).toMatchObject({
+        verification_status: state === 'same-membership' ? 'banned' : 'verified',
+        case_role_active: false,
+      });
+      expect(f.roles.assignCaseRole).toHaveBeenCalledTimes(1);
+      expect(f.ban).toHaveBeenCalledTimes(1);
+    }
+  );
+
   it.each(['after-cleanup', 'before-adoption'])(
     'preserves confirmed cleanup when late role assignment finishes %s',
     async (ordering) => {
