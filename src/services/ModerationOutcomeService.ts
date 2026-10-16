@@ -16,6 +16,11 @@ export interface ModerationOutcomeRecordInput extends ModerationOutcomeCreate {
 }
 
 export interface IModerationOutcomeService {
+  findOutcomesForOperation(
+    serverId: string,
+    userId: string,
+    operationId: string
+  ): Promise<ModerationOutcome[]>;
   recordOutcome(data: ModerationOutcomeRecordInput): Promise<ModerationOutcome>;
   findLatestOutcomeByType(
     serverId: string,
@@ -33,6 +38,18 @@ export class ModerationOutcomeService implements IModerationOutcomeService {
     @inject(TYPES.ServerRepository) private serverRepository: IServerRepository,
     @inject(TYPES.UserRepository) private userRepository: IUserRepository
   ) {}
+
+  async findOutcomesForOperation(
+    serverId: string,
+    userId: string,
+    operationId: string
+  ): Promise<ModerationOutcome[]> {
+    return (await this.moderationOutcomeRepository.findByUserAndServer(userId, serverId)).filter(
+      (outcome) =>
+        (outcome.metadata as Record<string, unknown> | null)?.report_ban_operation_id ===
+        operationId
+    );
+  }
 
   async recordOutcome(data: ModerationOutcomeRecordInput): Promise<ModerationOutcome> {
     await Promise.all([

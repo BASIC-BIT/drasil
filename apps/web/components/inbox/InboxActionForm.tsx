@@ -12,6 +12,7 @@ import {
   type InboxActionStatus,
 } from '@/lib/inboxActionState';
 import type { ModerationActionRequestSummary } from '@/lib/moderationActionRequestDataAdapter';
+import { blocksBanResubmission } from '@/lib/inboxActionReceipts';
 import { buildTrackedRequestUrl } from '@/lib/requestTrackingUrl';
 import { useInboxActionRequestPolling } from './InboxActionRequestPoller';
 
@@ -110,7 +111,9 @@ export function InboxActionForm({
   const status = durableApplies ? durableRequest.status : localState.status;
   const requestId = durableApplies ? durableRequest.id : localState.requestId;
   const message = durableApplies
-    ? (durableRequest.lastError ?? durableRequest.resultSummary ?? defaultMessage(status))
+    ? ((durableRequest.observedBanResult
+        ? durableRequest.resultSummary
+        : (durableRequest.lastError ?? durableRequest.resultSummary)) ?? defaultMessage(status))
     : (localState.message ?? defaultMessage(status));
   const actionInFlight = isInboxActionInFlight(status);
   const showReceipt = status !== 'idle';
@@ -149,7 +152,10 @@ export function InboxActionForm({
       {children}
       {!hideSubmitButton ? (
         <InboxSubmitButton
-          blocked={isInboxActionSubmitBlocked(status)}
+          blocked={
+            isInboxActionSubmitBlocked(status) ||
+            (durableApplies && blocksBanResubmission(durableRequest))
+          }
           buttonClassName={buttonClassName}
           buttonLabel={buttonLabel}
           pendingLabel={pendingLabel}

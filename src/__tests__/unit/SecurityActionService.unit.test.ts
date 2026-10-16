@@ -30,7 +30,11 @@ import {
   REPORT_REVIEW_THREAD_TYPE,
   VERIFICATION_THREAD_TYPE_METADATA_KEY,
 } from '../../services/ThreadManager';
-import { IUserModerationService } from '../../services/UserModerationService';
+import {
+  UserModerationService,
+  IUserModerationService,
+} from '../../services/UserModerationService';
+import { NotificationPresentationBuilder } from '../../services/NotificationPresentationBuilder';
 import { IAdminActionService } from '../../services/AdminActionService';
 import { USER_REPORT_EXTERNAL_RESPONSE_MODE_SETTING_KEY } from '../../utils/userReportSettings';
 import {
@@ -599,6 +603,177 @@ describe('SecurityActionService (unit)', () => {
     );
   });
 
+  it.each([false, true])(
+    'preserves departure during evidence collection (terminal completion: %s)',
+    async (resolveDuringDelivery) => {
+      const member = buildMember('guild-overlap', 'user-overlap');
+      notificationManager.upsertSuspiciousUserNotification.mockResolvedValue({
+        id: 'notif-1',
+        channelId: 'admin-overlap',
+      } as Message);
+      const queue = {
+        upsertCaseMirror: jest.fn().mockResolvedValue(undefined),
+        deletePendingScreeningMember: jest.fn().mockResolvedValue(undefined),
+      } as unknown as jest.Mocked<IModerationQueueService>;
+      const moderation = new UserModerationService(
+        serverMemberRepository,
+        notificationManager,
+        { getCaseRoleId: jest.fn(), assignCaseRole: jest.fn(), removeCaseRole: jest.fn() },
+        verificationEventRepository,
+        adminActionService,
+        threadManager,
+        undefined,
+        undefined,
+        queue
+      );
+      let entered!: () => void;
+      const collecting = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      let resume!: () => void;
+      const collected = new Promise<void>((resolve) => {
+        resume = resolve;
+      });
+      gptService.describeProfileImages.mockImplementationOnce(async () => {
+        entered();
+        await collected;
+        return null;
+      });
+      const service = new SecurityActionService(
+        notificationManager,
+        detectionEventsRepository,
+        serverMemberRepository,
+        verificationEventRepository,
+        userRepository,
+        serverRepository,
+        adminActionService,
+        threadManager,
+        userModerationService,
+        {} as Client,
+        gptService as any,
+        undefined,
+        queue
+      );
+      const opening = service.handleSuspiciousMessage(member, {
+        label: 'SUSPICIOUS',
+        confidence: 0.9,
+        reasons: ['Suspicious content'],
+        triggerSource: DetectionType.SUSPICIOUS_CONTENT,
+        triggerContent: 'test message',
+      });
+      await collecting;
+      const [event] = await verificationEventRepository.findByUserAndServer(
+        member.id,
+        member.guild.id
+      );
+      await verificationEventRepository.patchMetadata(event.id, {
+        support_thread_reminder: { reminderCount: 1, lastReminderAt: '2026-10-14T12:00:00Z' },
+        active_moderation_operation: { kind: 'ban', operation_id: 'operation-overlap' },
+      });
+      await verificationEventRepository.update(event.id, {
+        case_kind: CaseKind.COMPROMISED_ACCOUNT,
+        containment_status: CaseContainmentStatus.IN_PROGRESS,
+        quarantine_attempt_id: 'case-terminal-action:overlap',
+      });
+      expect(await moderation.recordMemberLeftGuild(member)).toBe(1);
+      const evidenceThread = await threadManager.createPrivateEvidenceThread.mock.results[0].value;
+      evidenceThread.send.mockImplementationOnce(async () => {
+        if (resolveDuringDelivery) {
+          await verificationEventRepository.update(
+            event.id,
+            { status: VerificationStatus.BANNED, resolved_by: 'moderator-overlap' },
+            { allowQuarantineOverride: true }
+          );
+        } else {
+          // Delivery itself can overlap a newer owned patch after evidence was saved.
+          await verificationEventRepository.patchMetadata(event.id, { delivery_overlap: true });
+        }
+        return { id: 'evidence-message-overlap' };
+      });
+      resume();
+      await expect(opening).resolves.toBe(true);
+      const latest = await verificationEventRepository.findById(event.id);
+      expect(latest).toMatchObject({
+        status: resolveDuringDelivery ? VerificationStatus.BANNED : VerificationStatus.PENDING,
+        metadata: {
+          membership_state: 'left_or_removed',
+          member_left_at: expect.any(String),
+          support_thread_reminder: { reminderCount: 1, lastReminderAt: '2026-10-14T12:00:00Z' },
+          active_moderation_operation: { kind: 'ban', operation_id: 'operation-overlap' },
+          evidence_bundle: expect.any(Object),
+        },
+      });
+      if (!resolveDuringDelivery)
+        expect(latest).toMatchObject({
+          containment_status: CaseContainmentStatus.IN_PROGRESS,
+          quarantine_attempt_id: 'case-terminal-action:overlap',
+        });
+      expect(notificationManager.upsertSuspiciousUserNotification.mock.calls.at(-1)?.[2]).toEqual(
+        latest
+      );
+      expect(queue.upsertCaseMirror.mock.calls.at(-1)?.[0]).toEqual(latest);
+      if (!resolveDuringDelivery && latest) {
+        const presentation = new NotificationPresentationBuilder();
+        const labels = presentation
+          .createAdminNotificationActionRows(member.id, {
+            verificationStatus: latest.status,
+            caseMembershipState: presentation.getCaseMembershipState(latest),
+          })
+          .flatMap((row) =>
+            row.components.map((button) => ('label' in button.data ? button.data.label : undefined))
+          );
+        expect(labels).toEqual(expect.arrayContaining(['Ban by ID...', 'Close']));
+        expect(labels).not.toContain('Verify');
+      }
+    }
+  );
+
+  it('clears an old case image description when current-image enrichment is unavailable', async () => {
+    const member = buildMember('guild-evidence', 'target');
+    const detection = await detectionEventsRepository.create({
+      server_id: member.guild.id,
+      user_id: member.id,
+      detection_type: DetectionType.USER_REPORT,
+      confidence: 1,
+    });
+    const event = await verificationEventRepository.createFromDetection(
+      detection.id,
+      member.guild.id,
+      member.id,
+      VerificationStatus.PENDING
+    );
+    await verificationEventRepository.patchMetadata(event.id, {
+      profile_assets: { avatar_url: 'https://example.test/previous.png' },
+      profile_image_description: {
+        summary: 'Previous avatar',
+        analyzed_image_count: 1,
+        model: 'stored',
+        prompt_version: 'v1',
+        is_fallback: false,
+      },
+    });
+    gptService.describeProfileImages.mockRejectedValueOnce(new Error('description unavailable'));
+    const service = buildService() as unknown as {
+      sendCaseEvidenceBundle: SecurityActionService['sendCaseEvidenceBundle'];
+    };
+    await service.sendCaseEvidenceBundle(
+      { send: jest.fn().mockResolvedValue({ id: 'evidence' }) } as never,
+      member,
+      event,
+      {
+        label: 'SUSPICIOUS',
+        confidence: 1,
+        reasons: [],
+        triggerSource: DetectionType.USER_REPORT,
+        triggerContent: 'Report evidence',
+      }
+    );
+    expect((await verificationEventRepository.findById(event.id))?.metadata).toMatchObject({
+      profile_image_description: null,
+      profile_assets: { avatar_url: member.displayAvatarURL({ size: 256 }) },
+    });
+  });
+
   it('captures the visible server avatar for case evidence and skips invalid image lengths', async () => {
     const guildId = 'guild-avatar-evidence';
     const userId = 'user-avatar-evidence';
@@ -754,7 +929,15 @@ describe('SecurityActionService (unit)', () => {
     const member = buildMember(guildId, userId);
     const message = buildMessage(guildId, 'channel-1');
     userModerationService.applyCaseRole.mockRejectedValueOnce(new Error('Missing Permissions'));
-    jest.spyOn(verificationEventRepository, 'update').mockRejectedValueOnce(new Error('DB down'));
+    const patchMetadata = verificationEventRepository.patchMetadata.bind(
+      verificationEventRepository
+    );
+    jest
+      .spyOn(verificationEventRepository, 'patchMetadata')
+      .mockImplementation(async (id, patch, options) => {
+        if ('action_failures' in patch) throw new Error('DB down');
+        return patchMetadata(id, patch, options);
+      });
 
     const detectionResult: DetectionResult = {
       label: 'SUSPICIOUS',
@@ -3531,91 +3714,6 @@ describe('SecurityActionService (unit)', () => {
     expect(notificationManager.restoreObservedDetectionActions).not.toHaveBeenCalled();
   });
 
-  it('releases an observed ban claim when the ban fails', async () => {
-    const guildId = 'guild-observed-ban-fails';
-    const userId = 'user-observed-ban-fails';
-    const moderator = { id: 'admin-observed' } as User;
-    const member = buildMember(guildId, userId);
-    const detectionEvent = await detectionEventsRepository.create({
-      server_id: guildId,
-      user_id: userId,
-      detection_type: DetectionType.SUSPICIOUS_CONTENT,
-      confidence: 0.82,
-      reasons: ['Suspicious content'],
-      detected_at: new Date(),
-    });
-    userModerationService.banUser.mockRejectedValueOnce(new Error('Missing permissions'));
-
-    await expect(
-      buildService().banObservedDetection(member, detectionEvent.id, moderator, 'Confirmed scam')
-    ).rejects.toThrow('Missing permissions');
-
-    const updatedDetection = await detectionEventsRepository.findById(detectionEvent.id);
-    expect(updatedDetection?.metadata?.observed_action).toBeUndefined();
-    expect(updatedDetection?.metadata?.observed_action_by).toBeUndefined();
-    expect(notificationManager.markObservedDetectionActionTaken).not.toHaveBeenCalled();
-  });
-
-  it('releases an observed ban claim when the ban service returns false', async () => {
-    const guildId = 'guild-observed-ban-false';
-    const userId = 'user-observed-ban-false';
-    const moderator = { id: 'admin-observed' } as User;
-    const member = buildMember(guildId, userId);
-    const detectionEvent = await detectionEventsRepository.create({
-      server_id: guildId,
-      user_id: userId,
-      detection_type: DetectionType.SUSPICIOUS_CONTENT,
-      confidence: 0.82,
-      reasons: ['Suspicious content'],
-      detected_at: new Date(),
-    });
-    userModerationService.banUser.mockResolvedValueOnce(false);
-
-    await expect(
-      buildService().banObservedDetection(member, detectionEvent.id, moderator, 'Confirmed scam')
-    ).rejects.toThrow('Failed to ban user test-user#0001');
-
-    const updatedDetection = await detectionEventsRepository.findById(detectionEvent.id);
-    expect(updatedDetection?.metadata?.observed_action).toBeUndefined();
-    expect(updatedDetection?.metadata?.observed_action_by).toBeUndefined();
-    expect(adminActionService.recordAction).not.toHaveBeenCalled();
-    expect(notificationManager.markObservedDetectionActionTaken).not.toHaveBeenCalled();
-  });
-
-  it('keeps an observed ban claim when only notification update fails after banning', async () => {
-    const guildId = 'guild-observed-ban-notify-fails';
-    const userId = 'user-observed-ban-notify-fails';
-    const moderator = { id: 'admin-observed' } as User;
-    const member = buildMember(guildId, userId);
-    const detectionEvent = await detectionEventsRepository.create({
-      server_id: guildId,
-      user_id: userId,
-      detection_type: DetectionType.SUSPICIOUS_CONTENT,
-      confidence: 0.82,
-      reasons: ['Suspicious content'],
-      detected_at: new Date(),
-    });
-    notificationManager.markObservedDetectionActionTaken.mockRejectedValueOnce(
-      new Error('Discord unavailable')
-    );
-
-    await expect(
-      buildService().banObservedDetection(member, detectionEvent.id, moderator, 'Confirmed scam')
-    ).rejects.toThrow('Discord unavailable');
-
-    const updatedDetection = await detectionEventsRepository.findById(detectionEvent.id);
-    expect(userModerationService.banUser).toHaveBeenCalledWith(
-      member,
-      'Confirmed scam',
-      moderator,
-      detectionEvent.id
-    );
-    expect(updatedDetection?.metadata).toMatchObject({
-      observed_action: AdminActionType.BAN,
-      observed_action_by: moderator.id,
-    });
-  });
-
   it('kicks an observed detection while preserving observed action provenance', async () => {
     const guildId = 'guild-observed-kick';
     const userId = 'user-observed-kick';
@@ -3877,214 +3975,6 @@ describe('SecurityActionService (unit)', () => {
       moderator,
       AdminActionType.OPEN_CASE
     );
-  });
-
-  it('bans an observed user report without creating a verification thread', async () => {
-    const guildId = 'guild-observed-report-ban';
-    const userId = 'user-observed-report-ban';
-    const moderator = { id: 'admin-observed' } as User;
-    const member = buildMember(guildId, userId);
-    const detectionEvent = await detectionEventsRepository.create({
-      server_id: guildId,
-      user_id: userId,
-      detection_type: DetectionType.USER_REPORT,
-      confidence: 1.0,
-      reasons: ['Reported by user reporter-observed. Reason: suspicious DM'],
-      detected_at: new Date(),
-      metadata: { type: 'user_report', reporterId: 'reporter-observed', content: 'suspicious DM' },
-    });
-
-    await buildService().banObservedDetection(
-      member,
-      detectionEvent.id,
-      moderator,
-      'Confirmed scam'
-    );
-
-    expect(threadManager.createReportReviewThread).not.toHaveBeenCalled();
-    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
-    expect(userModerationService.banUser).toHaveBeenCalledWith(
-      member,
-      'Confirmed scam',
-      moderator,
-      detectionEvent.id
-    );
-    expect(notificationManager.markObservedDetectionActionTaken).toHaveBeenCalledWith(
-      detectionEvent.id,
-      'banned this user',
-      moderator,
-      AdminActionType.BAN
-    );
-    expect(adminActionService.recordAction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action_type: AdminActionType.BAN,
-        detection_event_id: detectionEvent.id,
-        verification_event_id: null,
-        notes: 'Confirmed scam',
-      })
-    );
-  });
-
-  it('marks linked report intakes actioned and archives the source thread after an observed ban', async () => {
-    const guildId = 'guild-observed-report-ban-intake';
-    const userId = 'user-observed-report-ban-intake';
-    const moderator = { id: 'admin-observed' } as User;
-    const member = buildMember(guildId, userId);
-    const reportIntakeRepository = new InMemoryReportIntakeRepository();
-    const intake = await reportIntakeRepository.create({
-      serverId: guildId,
-      reporterId: 'reporter-observed',
-      threadId: 'report-thread-1',
-      status: ReportIntakeStatus.SUBMITTED,
-    });
-    const reportThread = {
-      id: 'report-thread-1',
-      archived: false,
-      isThread: jest.fn().mockReturnValue(true),
-      send: jest.fn().mockResolvedValue(undefined),
-      setArchived: jest.fn().mockResolvedValue(undefined),
-    };
-    const service = new SecurityActionService(
-      notificationManager,
-      detectionEventsRepository,
-      serverMemberRepository,
-      verificationEventRepository,
-      userRepository,
-      serverRepository,
-      adminActionService,
-      threadManager,
-      userModerationService,
-      {
-        channels: {
-          fetch: jest.fn().mockResolvedValue(reportThread),
-        },
-      } as unknown as Client,
-      gptService as any,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      reportIntakeRepository
-    );
-    const detectionEvent = await detectionEventsRepository.create({
-      server_id: guildId,
-      user_id: userId,
-      detection_type: DetectionType.USER_REPORT,
-      confidence: 1.0,
-      reasons: ['Reported by user reporter-observed. Reason: suspicious DM'],
-      detected_at: new Date(),
-      metadata: { reportIntakeId: intake.id },
-    });
-
-    const readIntake = reportIntakeRepository.findById.bind(reportIntakeRepository);
-    jest.spyOn(reportIntakeRepository, 'findById').mockImplementationOnce(async (id) => {
-      const snapshot = await readIntake(id);
-      await reportIntakeRepository.update(id, {
-        metadata: {
-          ...(snapshot?.metadata as Record<string, unknown>),
-          submitted_by: 'concurrent-worker',
-        },
-      });
-      return snapshot;
-    });
-
-    await service.banObservedDetection(member, detectionEvent.id, moderator, 'Confirmed scam');
-
-    const stored = await reportIntakeRepository.findById(intake.id);
-    expect(stored?.status).toBe(ReportIntakeStatus.ACTIONED);
-    expect(stored?.metadata).toMatchObject({
-      submitted_by: 'concurrent-worker',
-      observed_action_closed_by: moderator.id,
-      observed_action_close_reason: 'observed_ban',
-    });
-    expect(reportThread.send).toHaveBeenCalledWith({
-      content: 'Moderators have reviewed this report.',
-      allowedMentions: { parse: [] },
-    });
-    expect(reportThread.setArchived).toHaveBeenCalledWith(true, 'Report intake reviewed');
-  });
-
-  it('does not upgrade an existing report review thread when banning a user report', async () => {
-    const guildId = 'guild-observed-existing-report-ban';
-    const userId = 'user-observed-existing-report-ban';
-    const moderator = { id: 'admin-observed' } as User;
-    const reporter = { id: 'reporter-observed' } as User;
-    const member = buildMember(guildId, userId);
-    const service = buildService();
-
-    await service.handleUserReport(member, reporter, 'suspicious DM');
-    const detectionEvents = await detectionEventsRepository.findByServerAndUser(guildId, userId);
-    const reportDetection = detectionEvents.find(
-      (event) => event.detection_type === DetectionType.USER_REPORT
-    );
-    const reviewEvent = await verificationEventRepository.createFromDetection(
-      reportDetection!.id,
-      guildId,
-      userId,
-      VerificationStatus.PENDING
-    );
-    await verificationEventRepository.update(reviewEvent.id, {
-      thread_id: 'review-thread-1',
-      metadata: {
-        [VERIFICATION_THREAD_TYPE_METADATA_KEY]: REPORT_REVIEW_THREAD_TYPE,
-      },
-    });
-    threadManager.createVerificationThread.mockClear();
-
-    await service.banObservedDetection(member, reportDetection!.id, moderator, 'Confirmed scam');
-
-    expect(threadManager.createReportReviewThread).not.toHaveBeenCalled();
-    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
-    expect(userModerationService.banUser).toHaveBeenCalledWith(
-      member,
-      'Confirmed scam',
-      moderator,
-      reportDetection!.id
-    );
-    expect(adminActionService.recordAction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action_type: AdminActionType.BAN,
-        detection_event_id: reportDetection!.id,
-        verification_event_id: reviewEvent.id,
-        notes: 'Confirmed scam',
-      })
-    );
-  });
-
-  it('does not duplicate observed ban audit when ban service already records it', async () => {
-    const guildId = 'guild-observed-ban-existing-audit';
-    const userId = 'user-observed-ban-existing-audit';
-    const moderator = { id: 'admin-observed' } as User;
-    const member = buildMember(guildId, userId);
-    const detectionEvent = await detectionEventsRepository.create({
-      server_id: guildId,
-      user_id: userId,
-      detection_type: DetectionType.SUSPICIOUS_CONTENT,
-      confidence: 0.82,
-      reasons: ['Suspicious content'],
-      detected_at: new Date(),
-    });
-    await verificationEventRepository.createFromDetection(
-      detectionEvent.id,
-      guildId,
-      userId,
-      VerificationStatus.PENDING
-    );
-    adminActionService.getActionsForUser.mockResolvedValueOnce([
-      {
-        detection_event_id: detectionEvent.id,
-        action_type: AdminActionType.BAN,
-      } as any,
-    ]);
-
-    await buildService().banObservedDetection(
-      member,
-      detectionEvent.id,
-      moderator,
-      'Confirmed scam'
-    );
-
-    expect(adminActionService.recordAction).not.toHaveBeenCalled();
   });
 
   it('releases an observed open-case claim when audit fails', async () => {

@@ -1,3 +1,4 @@
+import { readFixtureReportBan } from './reportBanFixtures';
 import {
   reportQueueItemSchema,
   sortReportQueueItems,
@@ -59,6 +60,8 @@ interface ReportQueueRow {
   updated_at: unknown;
   evidence_count: string | number | null;
   latest_detection_id: string | null;
+  latest_detection_user_id: string | null;
+  latest_detection_handled: boolean;
   latest_case_id: string | null;
 }
 
@@ -90,8 +93,25 @@ function resolveAllowedActions(row: ReportQueueRow): ReportQueueAction[] {
   if (row.thread_id) {
     actions.push('open_report_thread');
   }
+  const metadata = row.metadata;
+  if (
+    metadata &&
+    typeof metadata === 'object' &&
+    'report_ban_operation_id' in metadata &&
+    metadata.report_ban_operation_id
+  )
+    return actions;
+  if (row.status !== 'submitted') return actions;
   if (!row.latest_case_id && row.confirmed_target_user_id && row.latest_detection_id) {
     actions.push('open_case');
+  }
+  if (
+    row.confirmed_target_user_id &&
+    row.latest_detection_id &&
+    !row.latest_detection_handled &&
+    row.latest_detection_user_id === row.confirmed_target_user_id
+  ) {
+    actions.push('ban_user');
   }
   actions.push('mark_actioned', 'dismiss_no_action', 'mark_false_positive');
   return actions;
@@ -136,10 +156,16 @@ class PostgresReportReviewRepository implements ReportReviewRepository {
            updated_at = $4,
            metadata = coalesce(metadata, '{}'::jsonb) || $5::jsonb
        where id = $1 and server_id = $2 and status = 'submitted'
+         and coalesce(metadata->>'report_ban_operation_id', '') = ''
        returning id, server_id, thread_id, status`,
       [input.reportId, input.serverId, input.status, input.closedAt, JSON.stringify(input.metadata)]
     );
-    return result.rows[0] ?? null;
+    if (result.rows[0]) return result.rows[0];
+    const busy = await getPostgresPool().query<ReportReviewRecord>(
+      `select id, server_id, thread_id, status, true as busy from report_intakes where id = $1 and server_id = $2 and coalesce(metadata->>'report_ban_operation_id', '') <> ''`,
+      [input.reportId, input.serverId]
+    );
+    return busy.rows[0] ?? null;
   }
 }
 
@@ -168,6 +194,7 @@ class PostgresReportOpenCaseRepository implements ReportOpenCaseRepository {
          ri.server_id,
          ri.status,
          ri.confirmed_target_user_id,
+         coalesce(ri.metadata->>'report_ban_operation_id', '') <> '' as busy,
          de.id as latest_detection_id,
          de.latest_verification_event_id as latest_case_id
        from report_intakes ri
@@ -260,6 +287,8 @@ export class PostgresReportQueueDataAdapter implements ReportQueueDataAdapter {
          ri.updated_at,
          coalesce(ev.evidence_count, 0)::text as evidence_count,
          de.id as latest_detection_id,
+         de.user_id as latest_detection_user_id,
+         coalesce(de.metadata, '{}'::jsonb) ? 'observed_action' as latest_detection_handled,
          de.latest_verification_event_id as latest_case_id
        from report_intakes ri
        left join lateral (
@@ -268,7 +297,7 @@ export class PostgresReportQueueDataAdapter implements ReportQueueDataAdapter {
          where rie.intake_id = ri.id
        ) ev on true
        left join lateral (
-         select id, latest_verification_event_id
+         select id, user_id, metadata, latest_verification_event_id
          from detection_events
          where server_id = ri.server_id
            and metadata ->> 'reportIntakeId' = ri.id::text
@@ -326,11 +355,17 @@ export class PostgresReportQueueDataAdapter implements ReportQueueDataAdapter {
 
 export class FixtureReportQueueDataAdapter implements ReportQueueDataAdapter {
   public async listSubmittedReports(): Promise<ReportQueueItem[]> {
-    return sortReportQueueItems(fixtureSubmittedReports());
+    const request = await readFixtureReportBan();
+    return sortReportQueueItems(
+      fixtureSubmittedReports().filter(
+        (report) =>
+          request?.observedBanResult?.status !== 'banned' || request.reportIntakeId !== report.id
+      )
+    );
   }
 
   public async countClosedReports(): Promise<number> {
-    return 4;
+    return (await readFixtureReportBan())?.observedBanResult?.status === 'banned' ? 5 : 4;
   }
 
   public canOpenSubmittedReportCase(): boolean {

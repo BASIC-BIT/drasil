@@ -1,5 +1,14 @@
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
+import { ModerationInboxView } from '@/components/inbox/ModerationInboxView';
+import { reportQueueItemToInboxItem } from './moderationInboxDataAdapter';
+import { parseReportDetailRows } from './reportDetailDataAdapter';
+import { initialInboxActionState } from './inboxActionState';
 import { PostgresReportQueueDataAdapter, parseReportQueueRow } from './reportQueueDataAdapter';
+
+const db = vi.hoisted(() => ({ query: vi.fn() }));
+vi.mock('./setupDataAdapter', () => ({ getPostgresPool: () => ({ query: db.query }) }));
 
 const baseRow = {
   id: 'report-1',
@@ -14,6 +23,8 @@ const baseRow = {
   updated_at: new Date('2026-06-02T00:00:00.000Z'),
   evidence_count: '3',
   latest_detection_id: 'det-1',
+  latest_detection_user_id: 'user-1',
+  latest_detection_handled: false,
   latest_case_id: null,
 };
 
@@ -36,6 +47,7 @@ describe('reportQueueDataAdapter', () => {
         allowedActions: [
           'open_report_thread',
           'open_case',
+          'ban_user',
           'mark_actioned',
           'dismiss_no_action',
           'mark_false_positive',
@@ -53,6 +65,7 @@ describe('reportQueueDataAdapter', () => {
     expect(report.stale).toBe(false);
     expect(report.allowedActions).toEqual([
       'open_report_thread',
+      'ban_user',
       'mark_actioned',
       'dismiss_no_action',
       'mark_false_positive',
@@ -149,4 +162,106 @@ describe('reportQueueDataAdapter', () => {
       serverId: 'guild-1',
     });
   });
+});
+
+it('keeps a claimed report busy in the SQL close and case-open paths', async () => {
+  db.query.mockReset();
+  db.query
+    .mockResolvedValueOnce({ rows: [] })
+    .mockResolvedValueOnce({ rows: [{ ...baseRow, busy: true }] })
+    .mockResolvedValueOnce({ rows: [{ ...baseRow, busy: true }] });
+  const adapter = new PostgresReportQueueDataAdapter();
+  expect(
+    await adapter.closeSubmittedReport({
+      guildId: 'guild-1',
+      reportId: 'report-1',
+      action: 'dismiss_no_action',
+      adminId: 'admin-1',
+    })
+  ).toBe(false);
+  expect(db.query.mock.calls[0][0]).toContain(
+    "coalesce(metadata->>'report_ban_operation_id', '') = ''"
+  );
+  expect(
+    await adapter.openCaseFromSubmittedReport({
+      guildId: 'guild-1',
+      reportId: 'report-1',
+      adminId: 'admin-1',
+    })
+  ).toMatchObject({ status: 'busy' });
+  expect(db.query).toHaveBeenCalledTimes(3);
+});
+
+it('suppresses competing report closure and case actions while a report ban owns the report', () => {
+  expect(
+    parseReportQueueRow({ ...baseRow, metadata: { report_ban_operation_id: 'operation-1' } })
+      .allowedActions
+  ).toEqual(['open_report_thread']);
+});
+
+function renderInboxReport(report: ReturnType<typeof parseReportQueueRow>): string {
+  const inboxAction = async () => initialInboxActionState;
+  return renderToStaticMarkup(
+    createElement(ModerationInboxView, {
+      acknowledgeQueueItemAction: inboxAction,
+      acknowledgeQueueItemsAction: inboxAction,
+      canOpenReportCases: true,
+      canQueueCaseActions: true,
+      closeReportAction: inboxAction,
+      guildId: 'guild-1',
+      guildName: 'Fixture Guild',
+      sessionUsername: 'Moderator',
+      items: [reportQueueItemToInboxItem(report)],
+      openReportCaseAction: inboxAction,
+      pollActionRequests: false,
+      queueCaseAction: async () => {},
+      queueInboxCaseAction: inboxAction,
+      queueObservedAlertAction: inboxAction,
+      recentActionRequests: [],
+    })
+  );
+}
+
+it.each([null, 'case-1'])(
+  'routes an eligible queue report with linked case %s to the existing ban confirmation',
+  async (caseId) => {
+    db.query.mockReset();
+    db.query.mockResolvedValueOnce({ rows: [{ ...baseRow, latest_case_id: caseId }] });
+    const [report] = await new PostgresReportQueueDataAdapter().listSubmittedReports('guild-1');
+
+    expect(report.allowedActions).toContain('ban_user');
+    const markup = renderInboxReport(report);
+    expect(markup).toMatch(
+      /href="\/admin\/guild\/guild-1\/reports\/report-1#report-ban"[^>]*>Review Ban<\/a>/
+    );
+    expect(markup).not.toContain('Confirm Ban');
+    const [sql, parameters] = db.query.mock.calls[0];
+    expect(parameters).toEqual(['guild-1']);
+    expect(sql).toContain('de.user_id as latest_detection_user_id');
+    expect(sql).toContain(
+      "coalesce(de.metadata, '{}'::jsonb) ? 'observed_action' as latest_detection_handled"
+    );
+    expect(sql).toContain('select id, user_id, metadata, latest_verification_event_id');
+    expect(sql).toContain('where server_id = ri.server_id');
+    expect(sql).toContain("metadata ->> 'reportIntakeId' = ri.id::text");
+    expect(sql).toContain("where ri.server_id = $1 and ri.status = 'submitted'");
+  }
+);
+
+it.each([
+  { metadata: { report_ban_operation_id: 'operation-1' } },
+  { latest_detection_handled: true },
+  { confirmed_target_user_id: null },
+  { latest_detection_id: null },
+  { latest_detection_user_id: null },
+  { latest_detection_user_id: 'different-user' },
+  { status: 'actioned' as const },
+])('withholds queue Review Ban with the same detail eligibility: %j', (changes) => {
+  const row = { ...baseRow, ...changes };
+  const report = parseReportQueueRow(row);
+  expect(report.allowedActions).not.toContain('ban_user');
+  expect(parseReportDetailRows({ ...row, closed_at: null }, []).allowedActions).not.toContain(
+    'ban_user'
+  );
+  expect(renderInboxReport(report)).not.toContain('Review Ban');
 });

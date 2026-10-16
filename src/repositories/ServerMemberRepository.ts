@@ -1,3 +1,4 @@
+import { CASE_TERMINAL_ACTION_ATTEMPT_PREFIX } from '../utils/caseRoleRelease';
 import { injectable, inject } from 'inversify';
 import { Prisma, PrismaClient, verification_status } from '../db/prisma';
 import { ServerMember, VerificationStatus } from './types'; // Import VerificationStatus enum
@@ -17,6 +18,13 @@ export interface VerifiedMemberStateInput {
   updatedBy: string;
 }
 
+export interface CaseRoleApplicationCompletion {
+  caseId: string;
+  joinedAt: Date | null;
+  startedAt: Date;
+  moderatorId?: string;
+}
+
 /**
  * Interface for the ServerMemberRepository (Remains the same)
  */
@@ -27,6 +35,22 @@ export interface IServerMemberRepository {
     userId: string,
     data: Partial<ServerMember>
   ): Promise<ServerMember>;
+  completeCaseRoleApplication(
+    serverId: string,
+    userId: string,
+    input: CaseRoleApplicationCompletion
+  ): Promise<boolean>;
+  canReleaseSupersededCaseRole(
+    serverId: string,
+    userId: string,
+    input: CaseRoleApplicationCompletion
+  ): Promise<boolean>;
+  markBannedIfNotNewer(
+    serverId: string,
+    userId: string,
+    confirmedAt: Date,
+    joinedAt: Date | null
+  ): Promise<boolean>;
   markVerifiedIfNoPendingCase(
     serverId: string,
     userId: string,
@@ -118,9 +142,120 @@ export class ServerMemberRepository implements IServerMemberRepository {
     }
   }
 
-  /**
-   * Create or update a server member
-   */
+  async completeCaseRoleApplication(
+    serverId: string,
+    userId: string,
+    input: CaseRoleApplicationCompletion
+  ): Promise<boolean> {
+    return this.prisma.$transaction(async (transaction) => {
+      // Role I/O can finish after confirmation but before late-case adoption.
+      const operations = await transaction.$queryRaw<Array<{ metadata: Prisma.JsonObject }>>`
+        SELECT metadata FROM moderation_action_requests
+        WHERE server_id = ${serverId} AND target_user_id = ${userId}
+          AND action_type = 'ban_observed_detection'
+          AND metadata->>'report_ban_phase' IN ('preparing', 'enforcement_started', 'discord_confirmed', 'reconciliation_required')
+        ORDER BY id FOR UPDATE`;
+      // Order successful role work by setup start, never after a confirmed ban.
+      let statusChangedAt = input.startedAt;
+      for (const { metadata } of operations) {
+        if (metadata.report_ban_phase === 'preparing') continue;
+        const joinedAt = metadata.report_ban_membership_joined_at;
+        if (
+          input.joinedAt &&
+          typeof joinedAt === 'string' &&
+          Number.isFinite(Date.parse(joinedAt)) &&
+          Date.parse(joinedAt) !== input.joinedAt.getTime()
+        )
+          continue;
+        const confirmedAt =
+          typeof metadata.report_ban_confirmed_at === 'string'
+            ? Date.parse(metadata.report_ban_confirmed_at)
+            : NaN;
+        if (Number.isFinite(confirmedAt) && confirmedAt < statusChangedAt.getTime())
+          statusChangedAt = new Date(confirmedAt);
+      }
+      const cases = await transaction.$queryRaw<
+        Array<{ status: string; quarantine_attempt_id: string | null }>
+      >`
+        SELECT status, quarantine_attempt_id FROM verification_events
+        WHERE id = ${input.caseId}::uuid AND server_id = ${serverId} AND user_id = ${userId} FOR UPDATE`;
+      const current = cases.at(0);
+      if (
+        current?.status !== 'pending' ||
+        current.quarantine_attempt_id?.startsWith(CASE_TERMINAL_ACTION_ATTEMPT_PREFIX)
+      )
+        return false;
+      const updated = await transaction.server_members.updateMany({
+        where: {
+          server_id: serverId,
+          user_id: userId,
+          join_date: input.joinedAt,
+          verification_status: { not: 'banned' },
+          OR: [{ last_status_change: null }, { last_status_change: { lte: statusChangedAt } }],
+        },
+        data: {
+          case_role_active: true,
+          verification_status: 'pending',
+          last_status_change: statusChangedAt,
+          updated_by: input.moderatorId,
+        },
+      });
+      return updated.count === 1;
+    });
+  }
+
+  async canReleaseSupersededCaseRole(
+    serverId: string,
+    userId: string,
+    input: CaseRoleApplicationCompletion
+  ): Promise<boolean> {
+    if (!input.joinedAt) return false;
+    const rows = await this.prisma.$queryRaw<Array<{ allowed: boolean }>>`
+      SELECT EXISTS (
+        SELECT 1 FROM server_members m JOIN verification_events c
+          ON c.server_id = m.server_id AND c.user_id = m.user_id
+        WHERE m.server_id = ${serverId} AND m.user_id = ${userId}
+          AND m.join_date = ${input.joinedAt} AND NOT m.case_role_active
+          AND m.verification_status IN ('verified', 'closed_no_action')
+          AND m.last_status_change >= ${input.startedAt}
+          AND c.id = ${input.caseId}::uuid AND c.status IN ('verified', 'closed_no_action')
+          AND c.resolved_at >= ${input.startedAt}
+          AND NOT EXISTS (SELECT 1 FROM verification_events pending
+            WHERE pending.server_id = m.server_id AND pending.user_id = m.user_id AND pending.status = 'pending')
+          AND NOT EXISTS (SELECT 1 FROM moderation_action_requests request
+            WHERE request.server_id = m.server_id AND request.target_user_id = m.user_id
+              AND request.action_type = 'ban_observed_detection'
+              AND request.metadata->>'report_ban_phase' IN ('preparing', 'enforcement_started', 'discord_confirmed', 'reconciliation_required'))
+      ) AS allowed`;
+    return rows[0]?.allowed === true;
+  }
+
+  // Historical cleanup must not overwrite a newer moderation decision or membership.
+  async markBannedIfNotNewer(
+    serverId: string,
+    userId: string,
+    confirmedAt: Date,
+    joinedAt: Date | null
+  ): Promise<boolean> {
+    const result = await this.prisma.server_members.updateMany({
+      where: {
+        server_id: serverId,
+        user_id: userId,
+        AND: [
+          { OR: [{ last_status_change: null }, { last_status_change: { lte: confirmedAt } }] },
+          { OR: [{ join_date: null }, { join_date: joinedAt }] },
+        ],
+      },
+      data: {
+        verification_status: VerificationStatus.BANNED,
+        case_role_active: false,
+        last_status_change: confirmedAt,
+      },
+    });
+    return result.count === 1;
+  }
+
+  /** Create or update a server member. */
   async upsertMember(
     serverId: string,
     userId: string,

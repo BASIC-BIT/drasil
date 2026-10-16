@@ -120,3 +120,14 @@ export function reconcileLocalInboxActionRequestIds(
   }
   return next.size === localRequestIds.size ? localRequestIds : next;
 }
+
+export function blocksBanResubmission(request: ModerationActionRequestSummary | null): boolean {
+  return Boolean(
+    request &&
+    (request.status === 'queued' ||
+      request.status === 'processing' ||
+      request.observedBanResult?.status === 'banned' ||
+      request.observedBanResult?.status === 'banned_updates_pending' ||
+      request.observedBanResult?.status === 'ban_outcome_unknown')
+  );
+}

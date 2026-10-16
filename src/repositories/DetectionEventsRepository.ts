@@ -32,6 +32,10 @@ export interface IDetectionEventsRepository {
     detectionEventId: string,
     verificationEventId: string
   ): Promise<DetectionEvent | null>;
+  patchMetadata(
+    detectionEventId: string,
+    patch: Record<string, unknown>
+  ): Promise<DetectionEvent | null>;
   updateMetadata(
     detectionEventId: string,
     metadata: Record<string, unknown>
@@ -48,7 +52,8 @@ export interface IDetectionEventsRepository {
   releaseObservedAction(
     detectionEventId: string,
     actionType: string,
-    adminId: string
+    adminId: string,
+    operationId?: string
   ): Promise<DetectionEvent | null>;
   clearObservedAction(
     detectionEventId: string,
@@ -338,6 +343,16 @@ export class DetectionEventsRepository implements IDetectionEventsRepository {
     }
   }
 
+  async patchMetadata(
+    detectionEventId: string,
+    patch: Record<string, unknown>
+  ): Promise<DetectionEvent | null> {
+    const rows = await this.prisma.$queryRaw<DetectionEvent[]>`
+      update detection_events set metadata = coalesce(metadata, '{}'::jsonb) || ${JSON.stringify(patch)}::jsonb
+      where id = ${detectionEventId}::uuid returning *`;
+    return rows[0] ?? null;
+  }
+
   async markExcludedFromAccounting(
     detectionEventId: string,
     metadata: Record<string, unknown>
@@ -391,14 +406,50 @@ export class DetectionEventsRepository implements IDetectionEventsRepository {
     metadata: Record<string, unknown>
   ): Promise<DetectionEvent | null> {
     try {
-      const rows = await this.prisma.$queryRaw<DetectionEvent[]>`
-        UPDATE detection_events
-        SET metadata = COALESCE(metadata, '{}'::jsonb) || ${JSON.stringify(metadata)}::jsonb
-        WHERE id = ${detectionEventId}::uuid
-          AND NOT (COALESCE(metadata, '{}'::jsonb) ? 'observed_action')
-        RETURNING *
-      `;
-      return rows[0] ?? null;
+      const openingCase = metadata.observed_action === 'open_case';
+      const claim = async (
+        transaction: Prisma.TransactionClient
+      ): Promise<DetectionEvent | null> => {
+        const rows = await transaction.$queryRaw<DetectionEvent[]>`
+          UPDATE detection_events d
+          SET metadata = COALESCE(d.metadata, '{}'::jsonb) || ${JSON.stringify(metadata)}::jsonb
+          WHERE d.id = ${detectionEventId}::uuid
+            AND NOT (COALESCE(d.metadata, '{}'::jsonb) ? 'observed_action')
+            AND (NOT ${openingCase} OR NOT EXISTS (
+              SELECT 1 FROM report_intakes r WHERE r.id::text = d.metadata->>'reportIntakeId'
+                AND coalesce(r.metadata->>'report_ban_operation_id', '') <> ''
+            ))
+          RETURNING d.*
+        `;
+        return rows[0] ?? null;
+      };
+      const operationId = metadata.report_ban_operation_id;
+      if (metadata.observed_action === 'ban' && typeof operationId === 'string') {
+        return await this.prisma.$transaction(async (transaction) => {
+          const owner = await transaction.$queryRaw<
+            Array<{ token: string | null; phase: string | null }>
+          >`
+            SELECT metadata->>'report_ban_attempt_token' AS token, metadata->>'report_ban_phase' AS phase
+            FROM moderation_action_requests WHERE id::text = ${operationId} FOR UPDATE`;
+          if (
+            !owner.length ||
+            owner[0].token !== metadata.report_ban_attempt_token ||
+            owner[0].phase !== 'preparing'
+          )
+            return null;
+          return claim(transaction);
+        });
+      }
+      if (!openingCase) return await claim(this.prisma);
+      return await this.prisma.$transaction(async (transaction) => {
+        // Serialize with claimBan, then read its committed marker in the next statement.
+        await transaction.$queryRaw`
+          SELECT r.id FROM report_intakes r JOIN detection_events d
+            ON r.id::text = d.metadata->>'reportIntakeId'
+          WHERE d.id = ${detectionEventId}::uuid FOR UPDATE OF r
+        `;
+        return claim(transaction);
+      });
     } catch (error) {
       this.handleError(error, 'claimObservedAction');
     }
@@ -407,7 +458,8 @@ export class DetectionEventsRepository implements IDetectionEventsRepository {
   async releaseObservedAction(
     detectionEventId: string,
     actionType: string,
-    adminId: string
+    adminId: string,
+    operationId?: string
   ): Promise<DetectionEvent | null> {
     try {
       const rows = await this.prisma.$queryRaw<DetectionEvent[]>`
@@ -417,6 +469,7 @@ export class DetectionEventsRepository implements IDetectionEventsRepository {
             - 'observed_action'
             - 'observed_action_by'
             - 'observed_action_at'
+            - 'report_ban_operation_id'
             - ${DETECTION_ACCOUNTING_EXCLUDED_METADATA_KEY}
             - ${DETECTION_ACCOUNTING_EXCLUSION_SCOPE_METADATA_KEY}
             - ${DETECTION_ACCOUNTING_EXCLUDED_BY_METADATA_KEY}
@@ -426,10 +479,12 @@ export class DetectionEventsRepository implements IDetectionEventsRepository {
             - 'observed_action'
             - 'observed_action_by'
             - 'observed_action_at'
+            - 'report_ban_operation_id'
         END
         WHERE id = ${detectionEventId}::uuid
           AND COALESCE(metadata, '{}'::jsonb)->>'observed_action' = ${actionType}
           AND COALESCE(metadata, '{}'::jsonb)->>'observed_action_by' = ${adminId}
+          AND (${operationId ?? null}::text is null OR metadata->>'report_ban_operation_id' = ${operationId ?? null}::text)
         RETURNING *
       `;
       return rows[0] ?? null;

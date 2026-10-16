@@ -9,8 +9,9 @@ export const reportClosureActions = [
 export type ReportClosureAction = (typeof reportClosureActions)[number];
 export type ReportReviewActionSurface = 'discord_interaction' | 'web' | 'agent' | 'mcp';
 export type ReportReviewClosureStatus = 'actioned' | 'dismissed' | 'false_positive';
-export type CloseSubmittedReportStatus = 'closed' | 'already_handled';
+export type CloseSubmittedReportStatus = 'closed' | 'already_handled' | 'busy';
 export type OpenSubmittedReportCaseStatus =
+  | 'busy'
   | 'opened'
   | 'queued'
   | 'already_handled'
@@ -37,6 +38,7 @@ export interface ReportReviewRepository {
 }
 
 export interface ReportReviewRecord {
+  readonly busy?: boolean;
   readonly id: string;
   readonly server_id: string;
   readonly thread_id: string | null;
@@ -44,6 +46,7 @@ export interface ReportReviewRecord {
 }
 
 export interface ReportOpenCaseCandidate {
+  readonly busy?: boolean;
   readonly id: string;
   readonly server_id: string;
   readonly status: string;
@@ -155,13 +158,13 @@ export class ReportReviewService {
       },
     });
 
-    if (!closed) {
+    if (!closed || closed.busy) {
       return {
         actor: input.actor,
         action: input.action,
         reportId: input.reportId,
         reportStatus,
-        status: 'already_handled',
+        status: closed?.busy ? 'busy' : 'already_handled',
         queueCleanupStatus: 'skipped',
       };
     }
@@ -194,6 +197,7 @@ export class ReportReviewService {
     if (!candidate) {
       return this.buildOpenCaseResult(input, { status: 'already_handled' });
     }
+    if (candidate.busy) return this.buildOpenCaseResult(input, { status: 'busy' });
     if (candidate.latest_case_id) {
       return this.buildOpenCaseResult(input, {
         caseId: candidate.latest_case_id,

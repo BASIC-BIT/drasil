@@ -15,6 +15,7 @@ interface ReportQueueViewProps {
 }
 
 const actionLabels: Record<ReportQueueAction, string> = {
+  ban_user: 'Ban',
   dismiss_no_action: 'Dismiss No Action',
   mark_actioned: 'Mark Actioned',
   mark_false_positive: 'False Positive',

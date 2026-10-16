@@ -97,7 +97,7 @@ describe('queueSerializedModerationActionRequestWithReceipt', () => {
     expect(insertSql).toContain('else excluded.actor_id');
     expect(insertSql).toContain('actor_surface = case');
     expect(insertSql).toContain('else excluded.actor_surface');
-    expect(insertSql).toContain("where moderation_action_requests.status = 'failed'");
+    expect(insertSql).toContain("where (moderation_action_requests.status = 'failed'");
     expect(insertSql).toContain("moderation_action_requests.status = 'queued'");
     expect(insertSql).toContain('and moderation_action_requests.action_type <>');
     expect(mocks.query).toHaveBeenLastCalledWith('commit');
@@ -124,7 +124,7 @@ describe('insertModerationActionRequestWithReceipt', () => {
     ).resolves.toEqual({ id: 'active-1', status: 'processing' });
 
     const statement = String(mocks.query.mock.calls[0]?.[0]);
-    expect(statement).toContain("where moderation_action_requests.status = 'failed'");
+    expect(statement).toContain("where (moderation_action_requests.status = 'failed'");
     expect(statement).toContain("moderation_action_requests.status = 'queued'");
     expect(statement).toContain('and moderation_action_requests.action_type <>');
     expect(statement).toContain('and not exists (select 1 from upserted)');
@@ -145,7 +145,7 @@ describe('insertModerationActionRequestWithReceipt', () => {
     ).resolves.toEqual({ id: 'active-1', status: 'queued' });
 
     const statement = String(mocks.query.mock.calls[0]?.[0]);
-    expect(statement).toContain('metadata = coalesce');
+    expect(statement).toContain("ELSE coalesce(moderation_action_requests.metadata, '{}'::jsonb)");
     expect(statement).toContain('else excluded.actor_id');
     expect(statement).toContain("moderation_action_requests.status = 'queued'");
     expect(statement).toContain('and moderation_action_requests.action_type <>');

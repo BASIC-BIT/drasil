@@ -12,6 +12,7 @@ import {
   RoleQuarantineSnapshotPurpose,
   ServerSettings,
   RoleQuarantineSnapshotStatus,
+  RoleQuarantineSnapshotUpdate,
   VerificationEvent,
 } from '../repositories/types';
 import { getManualIntakeSettings } from '../utils/manualIntakeSettings';
@@ -38,7 +39,13 @@ export type RoleQuarantineActiveCaseUpdateStatus =
   | 'no_new_roles'
   | 'enforced';
 
+export interface RoleQuarantineAppliedEffects {
+  readonly snapshot: RoleQuarantineSnapshot;
+  readonly removedRoleIds: readonly string[];
+}
+
 export interface RoleQuarantineApplyResult {
+  readonly appliedEffects?: RoleQuarantineAppliedEffects;
   readonly status: RoleQuarantineApplyStatus;
   readonly mode: RoleQuarantineMode;
   readonly purpose: RoleQuarantineSnapshotPurpose;
@@ -139,7 +146,8 @@ export interface IRoleQuarantineService {
   restoreMemberRoles(
     member: GuildMember,
     moderator?: User,
-    fence?: RoleRestorationFence
+    fence?: RoleRestorationFence,
+    appliedEffects?: RoleQuarantineAppliedEffects
   ): Promise<RoleQuarantineRestoreResult>;
   abandonActiveSnapshot(
     serverId: string,
@@ -234,12 +242,14 @@ export class RoleQuarantineService implements IRoleQuarantineService {
   public async restoreMemberRoles(
     member: GuildMember,
     moderator?: User,
-    fence?: RoleRestorationFence
+    fence?: RoleRestorationFence,
+    appliedEffects?: RoleQuarantineAppliedEffects
   ): Promise<RoleQuarantineRestoreResult> {
-    const snapshot = await this.snapshotRepository.findActiveByServerAndUser(
-      member.guild.id,
-      member.id
-    );
+    const snapshot = appliedEffects
+      ? { ...appliedEffects.snapshot, removed_role_ids: [...appliedEffects.removedRoleIds] }
+      : await this.snapshotRepository.findActiveByServerAndUser(member.guild.id, member.id);
+    if (snapshot && (snapshot.server_id !== member.guild.id || snapshot.user_id !== member.id))
+      throw new Error('Quarantine effects belong to a different member');
     if (!snapshot) {
       return {
         status: 'no_active_snapshot',
@@ -251,12 +261,18 @@ export class RoleQuarantineService implements IRoleQuarantineService {
       };
     }
 
+    // Exact late effects can outlive a restored snapshot. Never reopen or overwrite it.
+    const updateSnapshot = async (data: RoleQuarantineSnapshotUpdate): Promise<void> => {
+      if (!appliedEffects) await this.snapshotRepository.update(snapshot.id, data);
+    };
+    const joinedAt = member.joinedAt;
+
     if (
       snapshot.created_at &&
       member.joinedAt &&
       member.joinedAt.getTime() > snapshot.created_at.getTime()
     ) {
-      await this.snapshotRepository.update(snapshot.id, {
+      await updateSnapshot({
         status: RoleQuarantineSnapshotStatus.ABANDONED,
         metadata: {
           ...this.metadataToRecord(snapshot.metadata),
@@ -328,7 +344,7 @@ export class RoleQuarantineService implements IRoleQuarantineService {
       }
 
       if (fence && !(await fence.canRestoreRole())) {
-        await this.snapshotRepository.update(snapshot.id, {
+        await updateSnapshot({
           status: RoleQuarantineSnapshotStatus.ACTIVE,
           restoredRoleIds,
           failedRestores: failedRestores as unknown as Prisma.JsonValue,
@@ -367,14 +383,25 @@ export class RoleQuarantineService implements IRoleQuarantineService {
       }
       if (!canKeepRestoredRole) {
         try {
-          await member.roles.remove(role, 'Drasil role quarantine restore halted by pending case');
+          // A later membership must not inherit compensation for this operation.
+          const sameMembership =
+            !appliedEffects ||
+            (joinedAt &&
+              (
+                await member.guild.members.fetch({ user: member.id, force: true })
+              ).joinedAt?.getTime() === joinedAt.getTime());
+          if (sameMembership)
+            await member.roles.remove(
+              role,
+              'Drasil role quarantine restore halted by pending case'
+            );
         } catch (error) {
           restoredRoleIds.push(role.id);
           failedRestores.push(
             this.toRoleDetail(role, `pending-case compensation failed: ${this.formatError(error)}`)
           );
         }
-        await this.snapshotRepository.update(snapshot.id, {
+        await updateSnapshot({
           status: RoleQuarantineSnapshotStatus.ACTIVE,
           restoredRoleIds,
           failedRestores: failedRestores as unknown as Prisma.JsonValue,
@@ -408,7 +435,7 @@ export class RoleQuarantineService implements IRoleQuarantineService {
         : 'restored';
     const restoreCompleted = restoreStatus === 'restored';
 
-    await this.snapshotRepository.update(snapshot.id, {
+    await updateSnapshot({
       status: restoreCompleted
         ? RoleQuarantineSnapshotStatus.RESTORED
         : RoleQuarantineSnapshotStatus.ACTIVE,
@@ -576,7 +603,7 @@ export class RoleQuarantineService implements IRoleQuarantineService {
     ) {
       await this.verificationEventRepository.markParkedContainmentIncomplete(
         verificationEvent.id,
-        verificationEvent.metadata
+        {}
       );
     }
 
@@ -798,6 +825,7 @@ export class RoleQuarantineService implements IRoleQuarantineService {
       mode,
       purpose,
       snapshotId: snapshot.id,
+      appliedEffects: { snapshot, removedRoleIds },
       originalRoleIds,
       plannedRoleIds,
       removedRoleIds: allRemovedRoleIds,

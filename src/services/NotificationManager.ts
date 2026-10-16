@@ -451,30 +451,21 @@ export class NotificationManager implements INotificationManager {
         return false;
       }
 
-      const serverConfig = await this.configService.getServerConfig(detectionEvent.server_id);
-      const responseSettings = getDetectionResponseSettings(serverConfig.settings);
-      const fallbackChannel = await this.getModerationNotificationChannel(
+      const notificationChannel = await this.getExistingNotificationChannel(
         detectionEvent.server_id,
-        responseSettings
+        metadata.observed_notification_channel_id
       );
-      const notificationChannel = fallbackChannel
-        ? await this.getStoredNotificationChannel(
-            detectionEvent.server_id,
-            metadata.observed_notification_channel_id,
-            fallbackChannel
-          )
-        : null;
+      const serverConfig = await this.configService
+        .getServerConfig(detectionEvent.server_id)
+        .catch(() => null);
+      const responseSettings = getDetectionResponseSettings(serverConfig?.settings ?? {});
       if (!notificationChannel) {
         return false;
       }
 
-      const message = await notificationChannel.messages
-        .fetch(metadata.observed_notification_message_id)
-        .catch(() => null);
-      if (!message) {
-        return false;
-      }
-
+      const message = await notificationChannel.messages.fetch(
+        metadata.observed_notification_message_id
+      );
       if (!message.embeds.length) {
         await message.edit({ allowedMentions: { parse: [] }, components: [] });
         return false;
@@ -508,6 +499,14 @@ export class NotificationManager implements INotificationManager {
       });
       return true;
     } catch (error) {
+      // A deleted presentation needs no further update; ambiguous failures stay retryable.
+      if (
+        typeof error === 'object' &&
+        error !== null &&
+        'code' in error &&
+        (error.code === 10008 || error.code === 10003)
+      )
+        return true;
       console.error('Failed to mark observed detection action:', error);
       return false;
     }
@@ -798,6 +797,14 @@ export class NotificationManager implements INotificationManager {
       await message.edit({ allowedMentions: { parse: [] }, embeds: [updatedEmbed] });
       return true;
     } catch (error) {
+      // A deleted presentation cannot block durable moderation closeout.
+      if (
+        typeof error === 'object' &&
+        error !== null &&
+        'code' in error &&
+        (error.code === 10008 || error.code === 10003)
+      )
+        return true;
       console.error('Failed to log action to message:', error);
       return false;
     }
@@ -903,6 +910,25 @@ export class NotificationManager implements INotificationManager {
       : fallbackChannel;
   }
 
+  private async getExistingNotificationChannel(
+    guildId: string,
+    storedChannelId?: string | null
+  ): Promise<TextChannel | null> {
+    // Existing message identity must not migrate to a configured fallback channel.
+    let channel;
+    if (storedChannelId) channel = await this.client.channels.fetch(storedChannelId);
+    else {
+      const config = await this.configService.getServerConfig(guildId);
+      const settings = getDetectionResponseSettings(config.settings);
+      channel = settings.observedNotificationChannelId
+        ? await this.client.channels.fetch(settings.observedNotificationChannelId)
+        : await this.configService.getAdminChannel(guildId);
+    }
+    return channel && channel.type === ChannelType.GuildText && channel.guildId === guildId
+      ? channel
+      : null;
+  }
+
   private async getMessageForVerificationEvent(
     verificationEvent: VerificationEvent
   ): Promise<Message> {
@@ -910,22 +936,12 @@ export class NotificationManager implements INotificationManager {
       throw new Error('No notification message ID found for verification event');
     }
 
-    const serverConfig = await this.configService.getServerConfig(verificationEvent.server_id);
-    const responseSettings = getDetectionResponseSettings(serverConfig.settings);
-    const fallbackChannel = await this.getModerationNotificationChannel(
+    const notificationChannel = await this.getExistingNotificationChannel(
       verificationEvent.server_id,
-      responseSettings
+      verificationEvent.notification_channel_id
     );
-
-    if (!fallbackChannel) {
+    if (!notificationChannel)
       throw new Error('No moderation notification channel found for verification event');
-    }
-
-    const notificationChannel = await this.getStoredNotificationChannel(
-      verificationEvent.server_id,
-      verificationEvent.notification_channel_id,
-      fallbackChannel
-    );
 
     return await notificationChannel.messages.fetch(verificationEvent.notification_message_id);
   }
@@ -1560,50 +1576,64 @@ export class NotificationManager implements INotificationManager {
     verificationEvent: VerificationEvent,
     newStatus: VerificationStatus
   ): Promise<void> {
-    if (!verificationEvent.notification_message_id) {
-      throw new Error('No notification message ID found for verification event');
+    try {
+      if (!verificationEvent.notification_message_id) {
+        throw new Error('No notification message ID found for verification event');
+      }
+
+      const message = await this.getMessageForVerificationEvent(verificationEvent);
+      const messageEmbeds = (message as { embeds?: Message['embeds'] }).embeds ?? [];
+      const updatedEmbed = messageEmbeds.length > 0 ? EmbedBuilder.from(messageEmbeds[0]) : null;
+
+      if (updatedEmbed) {
+        this.presentationBuilder.upsertResolvedCasePresentation(
+          updatedEmbed,
+          verificationEvent,
+          newStatus
+        );
+        this.presentationBuilder.upsertVerificationActionFailureField(
+          updatedEmbed,
+          verificationEvent
+        );
+        this.presentationBuilder.upsertAccountQuarantinePresentation(
+          updatedEmbed,
+          verificationEvent
+        );
+      }
+
+      const serverConfig = await this.configService
+        .getServerConfig(verificationEvent.server_id)
+        .catch(() => null);
+      const responseSettings = serverConfig
+        ? getDetectionResponseSettings(serverConfig.settings)
+        : null;
+
+      await message.edit({
+        allowedMentions: { parse: [] },
+        components: this.presentationBuilder.createAdminNotificationActionRows(
+          verificationEvent.user_id,
+          {
+            guildId: verificationEvent.server_id,
+            verificationEventId: verificationEvent.id,
+            verificationStatus: newStatus,
+            caseKind: verificationEvent.case_kind,
+            caseMembershipState: this.presentationBuilder.getCaseMembershipState(verificationEvent),
+            caseAttentionState: verificationEvent.attention_state,
+            includeBanAction: responseSettings?.moderatorBanActionEnabled ?? true,
+          }
+        ),
+        ...(updatedEmbed ? { embeds: [updatedEmbed] } : {}),
+      });
+    } catch (error) {
+      if (
+        typeof error === 'object' &&
+        error !== null &&
+        'code' in error &&
+        (error.code === 10008 || error.code === 10003)
+      )
+        return;
+      throw error;
     }
-
-    const message = await this.getMessageForVerificationEvent(verificationEvent);
-    const messageEmbeds = (message as { embeds?: Message['embeds'] }).embeds ?? [];
-    const updatedEmbed = messageEmbeds.length > 0 ? EmbedBuilder.from(messageEmbeds[0]) : null;
-
-    if (updatedEmbed) {
-      this.presentationBuilder.upsertResolvedCasePresentation(
-        updatedEmbed,
-        verificationEvent,
-        newStatus
-      );
-      this.presentationBuilder.upsertVerificationActionFailureField(
-        updatedEmbed,
-        verificationEvent
-      );
-      this.presentationBuilder.upsertAccountQuarantinePresentation(updatedEmbed, verificationEvent);
-    }
-
-    const serverConfig = await this.configService
-      .getServerConfig(verificationEvent.server_id)
-      .catch(() => null);
-    const responseSettings = serverConfig
-      ? getDetectionResponseSettings(serverConfig.settings)
-      : null;
-
-    await message.edit({
-      allowedMentions: { parse: [] },
-      components: this.presentationBuilder.createAdminNotificationActionRows(
-        verificationEvent.user_id,
-        {
-          guildId: verificationEvent.server_id,
-          verificationEventId: verificationEvent.id,
-          verificationStatus: newStatus,
-          caseKind: verificationEvent.case_kind,
-          caseMembershipState: this.presentationBuilder.getCaseMembershipState(verificationEvent),
-          caseAttentionState: verificationEvent.attention_state,
-          includeBanAction: responseSettings?.moderatorBanActionEnabled ?? true,
-        }
-      ),
-      ...(updatedEmbed ? { embeds: [updatedEmbed] } : {}),
-    });
   }
 
   public async updateCaptchaChallengePresentation(

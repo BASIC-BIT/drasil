@@ -125,8 +125,15 @@ function buildService(input: {
     findPendingByServer: jest.fn().mockResolvedValue(input.pendingCases),
     findReviewablePendingByServer: jest.fn().mockResolvedValue(input.pendingCases),
     update: jest.fn().mockResolvedValue({} as VerificationEvent),
+    patchMetadata: jest.fn().mockResolvedValue({} as VerificationEvent),
+    findById: jest
+      .fn()
+      .mockImplementation(
+        async (id: string) => input.pendingCases.find((event) => event.id === id) ?? null
+      ),
   } as unknown as jest.Mocked<IVerificationEventRepository>;
   const serverMemberRepository = {
+    findByServerAndUser: jest.fn().mockResolvedValue(null),
     findLongPendingDiscordMembers: jest
       .fn()
       .mockResolvedValue(input.longPendingScreeningMembers ?? []),
@@ -193,6 +200,66 @@ describe('CaseReviewReminderService (unit)', () => {
       process.env.NEXT_PUBLIC_APP_URL = originalNextPublicAppUrl;
     }
   });
+
+  it.each([
+    {
+      label: 'departed',
+      metadata: { membership_state: 'left_or_removed' },
+      memberStatus: VerificationStatus.PENDING,
+      sends: false,
+    },
+    { label: 'verified', metadata: {}, memberStatus: VerificationStatus.VERIFIED, sends: false },
+    { label: 'banned', metadata: {}, memberStatus: VerificationStatus.BANNED, sends: false },
+    {
+      label: 'present pending',
+      metadata: {},
+      memberStatus: VerificationStatus.PENDING,
+      sends: true,
+    },
+  ])(
+    'checks current subject eligibility before reminding a $label member',
+    async ({ metadata, memberStatus, sends }) => {
+      const event = buildPendingCase(new Date('2026-06-02T10:00:00Z'), metadata);
+      const threadSend = jest.fn().mockResolvedValue(undefined);
+      const { service, serverMemberRepository } = buildService({
+        server: buildServer({
+          case_review_reminder_stale_hours: 24,
+          case_review_reminder_repeat_hours: 24,
+          [CASE_REVIEW_DIGEST_LAST_SENT_AT_SETTING_KEY]: '2026-06-03T10:00:00Z',
+        }),
+        pendingCases: [event],
+        threadSend,
+      });
+      serverMemberRepository.findByServerAndUser = jest
+        .fn()
+        .mockResolvedValue({ verification_status: memberStatus });
+      await service.runOnce(new Date('2026-06-03T12:00:00Z'));
+      expect(threadSend).toHaveBeenCalledTimes(sends ? 1 : 0);
+    }
+  );
+
+  it.each(['departed', 'resolved'])(
+    'rechecks a case that becomes %s during thread lookup',
+    async (change) => {
+      const event = buildPendingCase(new Date('2026-06-02T10:00:00Z'));
+      const threadSend = jest.fn().mockResolvedValue(undefined);
+      const { service, verificationEventRepository } = buildService({
+        server: buildServer({
+          [CASE_REVIEW_DIGEST_LAST_SENT_AT_SETTING_KEY]: '2026-06-03T10:00:00Z',
+        }),
+        pendingCases: [event],
+        threadSend,
+      });
+      verificationEventRepository.findById.mockResolvedValue({
+        ...event,
+        ...(change === 'resolved'
+          ? { status: VerificationStatus.BANNED }
+          : { metadata: { membership_state: 'left_or_removed' } }),
+      });
+      await service.runOnce(new Date('2026-06-03T12:00:00Z'));
+      expect(threadSend).not.toHaveBeenCalled();
+    }
+  );
 
   it('sends a screening-only daily admin batch when a member crosses the threshold', async () => {
     const now = new Date('2026-06-03T12:00:00.000Z');
@@ -360,7 +427,7 @@ describe('CaseReviewReminderService (unit)', () => {
     expect(threadSend).toHaveBeenCalledWith(
       expect.objectContaining({ content: 'Ticket reminder: 26h elapsed. <@user-1> See above.' })
     );
-    expect(verificationEventRepository.update).toHaveBeenCalledWith(
+    expect(verificationEventRepository.patchMetadata).toHaveBeenCalledWith(
       staleCase.id,
       expect.any(Object),
       { touchUpdatedAt: false }
@@ -514,7 +581,7 @@ describe('CaseReviewReminderService (unit)', () => {
       })
     );
     expect(client.channels.fetch).not.toHaveBeenCalled();
-    expect(verificationEventRepository.update).not.toHaveBeenCalled();
+    expect(verificationEventRepository.patchMetadata).not.toHaveBeenCalled();
   });
 
   it('splits large admin digests on whole line boundaries and only pings roles once', async () => {
@@ -633,7 +700,7 @@ describe('CaseReviewReminderService (unit)', () => {
     await service.runOnce(now);
 
     expect(adminSend).not.toHaveBeenCalled();
-    expect(verificationEventRepository.update).not.toHaveBeenCalled();
+    expect(verificationEventRepository.patchMetadata).not.toHaveBeenCalled();
     expect(configService.updateServerSettings).not.toHaveBeenCalled();
   });
 
@@ -663,14 +730,12 @@ describe('CaseReviewReminderService (unit)', () => {
         repliedUser: false,
       },
     });
-    expect(verificationEventRepository.update).toHaveBeenCalledWith(
+    expect(verificationEventRepository.patchMetadata).toHaveBeenCalledWith(
       staleCase.id,
       {
-        metadata: {
-          support_thread_reminder: {
-            lastReminderAt: now.toISOString(),
-            reminderCount: 1,
-          },
+        support_thread_reminder: {
+          lastReminderAt: now.toISOString(),
+          reminderCount: 1,
         },
       },
       { touchUpdatedAt: false }
@@ -710,12 +775,10 @@ describe('CaseReviewReminderService (unit)', () => {
       },
     });
     expect(configService.updateServerSettings).not.toHaveBeenCalled();
-    expect(verificationEventRepository.update).toHaveBeenCalledWith(
+    expect(verificationEventRepository.patchMetadata).toHaveBeenCalledWith(
       staleCase.id,
       expect.objectContaining({
-        metadata: expect.objectContaining({
-          support_thread_reminder: expect.objectContaining({ reminderCount: 1 }),
-        }),
+        support_thread_reminder: expect.objectContaining({ reminderCount: 1 }),
       }),
       { touchUpdatedAt: false }
     );
@@ -746,6 +809,6 @@ describe('CaseReviewReminderService (unit)', () => {
     expect(content).toContain('Very stale - awaiting moderator review (1)');
     expect(content).toContain('user reminders sent 2/2; awaiting moderator review');
     expect(client.channels.fetch).not.toHaveBeenCalled();
-    expect(verificationEventRepository.update).not.toHaveBeenCalled();
+    expect(verificationEventRepository.patchMetadata).not.toHaveBeenCalled();
   });
 });

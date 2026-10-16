@@ -296,3 +296,75 @@ describe('moderationActionRequestDataAdapter', () => {
     );
   });
 });
+it.each([
+  ['banned_updates_pending', 'Banned. Report updates are still pending.'],
+  [
+    'ban_outcome_unknown',
+    'Ban outcome needs review. Operation: request-1. Use /review-report-ban operation:request-1 reason:<review reason> if no current ban exists.',
+  ],
+  [
+    'ban_reviewed_no_current_ban',
+    'Reviewed: no current ban, historical outcome uncertain. Matching claims released.',
+  ],
+])('parses the durable %s report ban receipt', (status, message) => {
+  expect(
+    parseModerationActionRequestRow({
+      id: 'request-1',
+      action_type: 'ban_observed_detection',
+      actor_surface: 'web',
+      completed_at: new Date(),
+      failed_at: null,
+      last_error: null,
+      requested_at: new Date(),
+      result: { observed_ban_result: { status, operationId: 'request-1' } },
+      status: 'completed',
+      target_user_id: 'user-1',
+      updated_at: new Date(),
+    })
+  ).toMatchObject({
+    observedBanResult: { status, operationId: 'request-1' },
+    resultSummary: message,
+  });
+});
+
+it.each(['preparing', 'enforcement_started', 'discord_confirmed', 'reconciliation_required'])(
+  'represents the actual report-ban phase %s without inventing an outcome',
+  (phase) => {
+    const row = {
+      id: 'request-1',
+      action_type: 'ban_observed_detection' as const,
+      actor_surface: 'web',
+      completed_at: null,
+      failed_at: null,
+      last_error: null,
+      requested_at: new Date(),
+      result: {},
+      metadata: { report_ban_phase: phase },
+      status: 'processing' as const,
+      target_user_id: 'user-1',
+      updated_at: new Date(),
+    };
+    const request = parseModerationActionRequestRow(row);
+    expect(request.status).toBe('processing');
+    if (phase === 'discord_confirmed')
+      expect(request.observedBanResult).toEqual({
+        status: 'banned_updates_pending',
+        operationId: 'request-1',
+      });
+    else if (phase === 'reconciliation_required')
+      expect(request.observedBanResult).toEqual({
+        status: 'ban_outcome_unknown',
+        operationId: 'request-1',
+      });
+    else {
+      expect(request.observedBanResult).toBeUndefined();
+      expect(request.resultSummary ?? '').not.toContain('/review-report-ban');
+    }
+    expect(
+      parseModerationActionRequestRow({
+        ...row,
+        result: { observed_ban_result: { status: 'banned' } },
+      }).observedBanResult
+    ).toEqual({ status: 'banned' });
+  }
+);

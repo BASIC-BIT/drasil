@@ -1,3 +1,4 @@
+import { readFixtureReportBan } from './reportBanFixtures';
 import {
   moderationInboxItemSchema,
   sortModerationInboxItems,
@@ -82,6 +83,7 @@ const caseActionMap: Record<CaseAction, ModerationInboxAction> = {
 };
 
 const reportActionMap: Record<ReportQueueAction, ModerationInboxAction> = {
+  ban_user: 'ban_user',
   dismiss_no_action: 'dismiss_no_action',
   mark_actioned: 'mark_actioned',
   mark_false_positive: 'mark_false_positive',
@@ -457,7 +459,13 @@ export class PostgresModerationInboxDataAdapter implements ModerationInboxDataAd
 
 export class FixtureModerationInboxDataAdapter implements ModerationInboxDataAdapter {
   public async listInboxItems(guildId: string): Promise<ModerationInboxItem[]> {
-    return fixtureModerationInboxItems(guildId);
+    const request = await readFixtureReportBan();
+    return fixtureModerationInboxItems(guildId).filter(
+      (item) =>
+        request?.observedBanResult?.status !== 'banned' ||
+        item.kind !== 'submitted_report' ||
+        item.sourceId !== request.reportIntakeId
+    );
   }
 }
 

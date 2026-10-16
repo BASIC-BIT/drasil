@@ -1,3 +1,4 @@
+import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -11,6 +12,7 @@ import {
   InteractionContextType,
   MessageFlags,
   ModalSubmitInteraction,
+  PermissionFlagsBits,
   TextChannel,
   ThreadChannel,
   User,
@@ -38,10 +40,12 @@ import { canModerateReportIntake } from '../utils/reportIntakeStaffAuthorization
 import { messageAttachmentsToReportMetadata } from '../utils/reportAttachments';
 import {
   buildReportIntakeAdminActionsCustomId,
+  buildReportIntakeAdminBanCustomId,
   buildReportIntakeAdminCancelCustomId,
   buildReportIntakeAdminCloseCustomId,
   buildReportIntakeAdminConfirmCloseCustomId,
   isReportIntakeAdminActionCustomId,
+  isReportIntakeActionChannel,
   parseReportIntakeAdminActionCustomId,
 } from '../utils/reportIntakeAdminActions';
 
@@ -72,7 +76,11 @@ export class ReportInteractionHandler {
     private readonly reportSubmissionService: ReportSubmissionService,
     private readonly configService: IConfigService,
     private readonly threadManager: IThreadManager,
-    private readonly reportIntakeService?: IReportIntakeService
+    private readonly reportIntakeService?: IReportIntakeService,
+    private readonly showReportBan?: (
+      interaction: ButtonInteraction,
+      intakeId: string
+    ) => Promise<void>
   ) {
     this.userResolver = new DiscordUserResolver(client);
   }
@@ -386,6 +394,16 @@ export class ReportInteractionHandler {
           { content: 'Unknown report admin action.', components: [] },
           responseMode
         );
+        return;
+      }
+
+      if (parsed.action === 'ban') {
+        if (this.showReportBan) await this.showReportBan(interaction, parsed.intakeId);
+        else
+          await interaction.reply({
+            content: 'Report ban actions are unavailable.',
+            flags: MessageFlags.Ephemeral,
+          });
         return;
       }
 
@@ -775,7 +793,12 @@ export class ReportInteractionHandler {
       intake.thread_id &&
       currentChannelId &&
       currentChannelId !== intake.thread_id &&
-      !(await this.isReportIntakeAdminNotificationChannel(guildId, currentChannelId))
+      !(await isReportIntakeActionChannel(
+        this.configService,
+        guildId,
+        currentChannelId,
+        intake.thread_id
+      ))
     ) {
       await this.respondToReportIntakeAdminInteraction(
         interaction,
@@ -813,17 +836,46 @@ export class ReportInteractionHandler {
     interaction: ButtonInteraction,
     context: ReportIntakeAdminContext
   ): Promise<void> {
+    const config = await this.configService.getServerConfig(context.intake.server_id);
+    const banEnabled = getDetectionResponseSettings(config.settings).moderatorBanActionEnabled;
+    const banUnavailableReason =
+      context.intake.status !== ReportIntakeStatus.SUBMITTED
+        ? 'Only submitted reports can be banned.'
+        : !context.intake.confirmed_target_user_id
+          ? 'Confirm the report target before banning.'
+          : context.intake.metadata &&
+              typeof context.intake.metadata === 'object' &&
+              !Array.isArray(context.intake.metadata) &&
+              context.intake.metadata.report_ban_operation_id
+            ? 'A ban is already being processed for this report.'
+            : !interaction.memberPermissions?.has(PermissionFlagsBits.BanMembers)
+              ? 'Requires Ban Members permission.'
+              : !banEnabled
+                ? 'Moderator ban actions are disabled for this server.'
+                : !this.showReportBan
+                  ? 'Report ban actions are unavailable.'
+                  : null;
     await this.respondToReportIntakeAdminInteraction(
       interaction,
       {
-        content: this.buildReportIntakeAdminMenuMessage(context.intake),
+        content: [
+          this.buildReportIntakeAdminMenuMessage(context.intake),
+          banUnavailableReason ? `Ban unavailable: ${banUnavailableReason}` : null,
+        ]
+          .filter(Boolean)
+          .join('\n'),
         components: [
           new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder()
               .setCustomId(buildReportIntakeAdminCloseCustomId(context.intake.id))
               .setLabel('Close Report')
               .setStyle(ButtonStyle.Secondary)
-              .setDisabled(!context.intake.thread_id)
+              .setDisabled(!context.intake.thread_id),
+            new ButtonBuilder()
+              .setCustomId(buildReportIntakeAdminBanCustomId(context.intake.id))
+              .setLabel('Ban')
+              .setStyle(ButtonStyle.Danger)
+              .setDisabled(Boolean(banUnavailableReason))
           ),
         ],
       },
@@ -1036,17 +1088,6 @@ export class ReportInteractionHandler {
       channel.isThread()
     );
     return isThread ? (channel as unknown as ReportIntakeThreadChannel) : null;
-  }
-
-  private async isReportIntakeAdminNotificationChannel(
-    guildId: string,
-    channelId: string
-  ): Promise<boolean> {
-    const adminChannel = await this.configService.getAdminChannel(guildId).catch((error) => {
-      console.warn(`Failed to resolve admin channel for report intake admin action:`, error);
-      return null;
-    });
-    return adminChannel?.id === channelId;
   }
 
   private buildExistingReportIntakeMessage(guildId: string, threadId: string | null): string {

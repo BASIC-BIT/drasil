@@ -1,3 +1,4 @@
+import { readFixtureReportBan } from './reportBanFixtures';
 import { inboxModerationActionRequestTypes } from './inboxActionRequestTypes';
 import type {
   ModerationActionRequestActionType,
@@ -6,7 +7,28 @@ import type {
 import { isWebE2eFixtureMode, fixtureTimestampIso } from './e2eFixtures';
 import { getPostgresPool } from './setupDataAdapter';
 
+export type ObservedBanResult =
+  | { status: 'banned' }
+  | { status: 'already_handled' }
+  | { status: 'banned_updates_pending'; operationId: string }
+  | { status: 'ban_outcome_unknown'; operationId: string }
+  | { status: 'ban_reviewed_no_current_ban'; operationId: string };
+export function parseObservedBanResult(value: unknown): ObservedBanResult | null {
+  if (!value || typeof value !== 'object') return null;
+  const result = value as Record<string, unknown>;
+  if (result.status === 'banned' || result.status === 'already_handled')
+    return { status: result.status };
+  if (
+    (result.status === 'banned_updates_pending' ||
+      result.status === 'ban_outcome_unknown' ||
+      result.status === 'ban_reviewed_no_current_ban') &&
+    typeof result.operationId === 'string'
+  )
+    return { status: result.status, operationId: result.operationId };
+  return null;
+}
 export interface ModerationActionRequestSummary {
+  readonly observedBanResult?: ObservedBanResult | null;
   readonly accountQuarantinePreview?: AccountQuarantinePreviewSummary | null;
   readonly id: string;
   readonly actionType: ModerationActionRequestActionType;
@@ -315,6 +337,14 @@ const operationResultFormatters: Partial<
 };
 
 function formatOperationResult(result: OperationResultRecord): string | null {
+  const ban = parseObservedBanResult(result.observed_ban_result);
+  if (ban?.status === 'banned_updates_pending') return 'Banned. Report updates are still pending.';
+  if (ban?.status === 'ban_outcome_unknown')
+    return `Ban outcome needs review. Operation: ${ban.operationId}. Use /review-report-ban operation:${ban.operationId} reason:<review reason> if no current ban exists.`;
+  if (ban?.status === 'ban_reviewed_no_current_ban')
+    return 'Reviewed: no current ban, historical outcome uncertain. Matching claims released.';
+  if (ban?.status === 'banned') return 'Banned.';
+  if (ban?.status === 'already_handled') return 'Already handled.';
   const actionType = typeof result.action_type === 'string' ? result.action_type : null;
   const formatter = actionType
     ? operationResultFormatters[actionType as ModerationActionRequestActionType]
@@ -364,6 +394,22 @@ export function parseModerationActionRequestRow(
 ): ModerationActionRequestSummary {
   const accountQuarantinePreview = parseAccountQuarantinePreview(row.result);
   const setupInput = parseSetupRequestInput(row.action_type, row.metadata);
+  const metadata = (row.metadata ?? {}) as Record<string, unknown>;
+  const parsedBan = parseObservedBanResult(
+    (row.result as Record<string, unknown> | null)?.observed_ban_result
+  );
+  const observedBanResult: ObservedBanResult | null =
+    parsedBan ??
+    (row.action_type === 'ban_observed_detection' &&
+    ['discord_confirmed', 'reconciliation_required'].includes(String(metadata.report_ban_phase))
+      ? {
+          status:
+            metadata.report_ban_phase === 'discord_confirmed'
+              ? 'banned_updates_pending'
+              : 'ban_outcome_unknown',
+          operationId: row.id,
+        }
+      : null);
   return {
     ...(accountQuarantinePreview ? { accountQuarantinePreview } : {}),
     ...(setupInput ? { setupInput } : {}),
@@ -373,7 +419,7 @@ export function parseModerationActionRequestRow(
     completedAt: toNullableIsoString(row.completed_at),
     detectionEventId: row.detection_event_id ?? null,
     failedAt: toNullableIsoString(row.failed_at),
-    lastError: row.last_error,
+    lastError: row.last_error ?? readString(metadata.report_ban_last_error),
     messageDeletionJobId: row.message_deletion_job_id ?? null,
     requestedAt: toIsoString(row.requested_at),
     reportIntakeId: row.report_intake_id ?? null,
@@ -382,7 +428,10 @@ export function parseModerationActionRequestRow(
         ? (readString((row.metadata as OperationResultRecord).case_action) ??
           readString((row.metadata as OperationResultRecord).inbox_action))
         : null,
-    resultSummary: buildResultSummary(row.result),
+    resultSummary: observedBanResult
+      ? formatOperationResult({ observed_ban_result: observedBanResult })
+      : buildResultSummary(row.result),
+    ...(observedBanResult ? { observedBanResult } : {}),
     status: row.status,
     targetUserId: row.target_user_id,
     updatedAt: toIsoString(row.updated_at),
@@ -500,7 +549,7 @@ export class PostgresModerationActionRequestDataAdapter implements ModerationAct
          where $3::boolean
            and server_id = $1
            and action_type = any($4::moderation_action_request_type[])
-           and status in ('queued', 'processing')
+           and (status in ('queued', 'processing') or result->'observed_ban_result'->>'status' in ('banned_updates_pending', 'ban_outcome_unknown') or metadata->>'report_ban_phase' is not null)
        )
        select
          requests.id::text,
@@ -544,7 +593,9 @@ export class FixtureModerationActionRequestDataAdapter implements ModerationActi
     guildId: string,
     recentLimit = 8
   ): Promise<ModerationActionRequestSummary[]> {
-    return this.listRecentRequests(guildId, recentLimit);
+    const reportBan = await readFixtureReportBan();
+    const requests = await this.listRecentRequests(guildId, recentLimit);
+    return reportBan ? [reportBan, ...requests] : requests;
   }
 
   public async listRecentRequests(

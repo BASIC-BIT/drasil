@@ -13,6 +13,8 @@ export function restoreUserInstallReportingEnvAfterEach(): void {
 }
 
 export type HandlerOverrides = Partial<{
+  prepareReportBanReview: jest.Mock;
+  reviewUncertainReportBan: jest.Mock;
   banUser: jest.Mock;
   banUserById: jest.Mock;
   updateSetupConfiguration: jest.Mock;
@@ -85,6 +87,16 @@ export const buildHandler = (overrides: HandlerOverrides = {}) => {
   } as any;
 
   const securityActionService = {
+    prepareReportBanReview:
+      overrides.prepareReportBanReview ??
+      jest.fn().mockResolvedValue({
+        operationId: 'operation-1',
+        attemptToken: 'attempt-1',
+        updatedAt: new Date(),
+        targetUserId: 'target',
+      }),
+    reviewUncertainReportBan:
+      overrides.reviewUncertainReportBan ?? jest.fn().mockResolvedValue(undefined),
     handleUserReport: overrides.handleUserReport ?? jest.fn().mockResolvedValue(true),
     handleMessageReport: overrides.handleMessageReport ?? jest.fn().mockResolvedValue(true),
     openAdminCase:

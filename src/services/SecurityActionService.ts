@@ -1,3 +1,8 @@
+import { randomUUID } from 'crypto';
+import {
+  getReportBanAttemptToken,
+  IModerationActionRequestRepository,
+} from '../repositories/ModerationActionRequestRepository';
 import { getReportConfirmationMessageIds } from './ReportIntakeService';
 import { context, ROOT_CONTEXT } from '@opentelemetry/api';
 import {
@@ -7,13 +12,18 @@ import {
 } from '../observability/langfuse';
 import { hashIdentifier } from '../observability/hash';
 import { injectable, inject, optional } from 'inversify';
-import { createHash } from 'crypto';
+import {
+  ModerationEvidenceService,
+  ProfileAssetSnapshot,
+  toStoredModerationEvidence,
+} from './ModerationEvidenceService';
 import {
   GuildMember,
   Guild,
   Message,
   Client,
   User,
+  PermissionFlagsBits,
   APIUser,
   InteractionContextType,
   Role,
@@ -35,13 +45,17 @@ import {
   DetectionEvent,
   DetectionType,
   MessageContext,
+  ModerationActionRequest,
   ModerationOutcome,
   ReportIntake,
   ReportIntakeStatus,
   VerificationEvent,
   VerificationStatus,
 } from '../repositories/types';
-import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
+import {
+  IVerificationEventRepository,
+  VerificationCaseAdmissionSupersededError,
+} from '../repositories/VerificationEventRepository';
 import { IServerRepository } from '../repositories/ServerRepository';
 import { IUserRepository } from '../repositories/UserRepository';
 import {
@@ -50,7 +64,7 @@ import {
   VerificationThreadRepairResult,
   VERIFICATION_THREAD_TYPE_METADATA_KEY,
 } from './ThreadManager';
-import { IUserModerationService } from './UserModerationService';
+import { ICombinedBanLifecycleService, IUserModerationService } from './UserModerationService';
 import { IAdminActionService } from './AdminActionService';
 import { getUserReportSettings } from '../utils/userReportSettings';
 import type {
@@ -94,29 +108,12 @@ import { IReportIntakeRepository } from '../repositories/ReportIntakeRepository'
 
 const REPORT_INTAKE_STATE_WRITE_ATTEMPTS = 2;
 const DELAYED_THREAD_REPAIR_DELAY_MS = 70_000;
-const PROFILE_IMAGE_HASH_MAX_BYTES = 3 * 1024 * 1024;
-const PROFILE_IMAGE_HASH_TIMEOUT_MS = 5000;
 const EVIDENCE_BUNDLE_MESSAGE_LIMIT = 1900;
 const EVIDENCE_BUNDLE_RECENT_MESSAGE_LIMIT = 10;
 const EVIDENCE_BUNDLE_DETECTION_HISTORY_LIMIT = 8;
 const CASE_ROUTING_RETRY_LIMIT = 3;
 const AUTO_KICK_DEFAULT_REASON =
   'Suspected compromised account: high-confidence scam activity detected by Drasil.';
-
-interface ProfileAssetSnapshot {
-  avatar_url?: string;
-  avatar_hash?: string;
-  avatar_byte_sha256?: string;
-  avatar_is_default?: boolean;
-  avatar_decoration_url?: string;
-  guild_avatar_url?: string;
-  guild_avatar_hash?: string;
-  banner_url?: string;
-  banner_hash?: string;
-  banner_byte_sha256?: string;
-  accent_color?: string;
-  captured_at: string;
-}
 
 interface SuspiciousMemberOptions {
   readonly sourceMessage?: Message;
@@ -130,7 +127,31 @@ interface SuspiciousMemberOptions {
 /**
  * Interface for the SecurityActionService
  */
+export type ObservedBanResult =
+  | { status: 'banned' }
+  | { status: 'already_handled' }
+  | { status: 'banned_updates_pending'; operationId: string }
+  | { status: 'ban_outcome_unknown'; operationId: string };
+export interface ReportBanReviewReference {
+  observedBanId?: string;
+  operationId: string;
+  attemptToken: string;
+  updatedAt: Date;
+  targetUserId: string;
+}
 export interface ISecurityActionService {
+  prepareReportBanReview(
+    guild: Guild,
+    operationId: string,
+    moderator: User
+  ): Promise<ReportBanReviewReference>;
+  reviewUncertainReportBan(
+    guild: Guild,
+    reference: ReportBanReviewReference,
+    moderator: User,
+    reason: string
+  ): Promise<void>;
+  reconcileReportBan(request: ModerationActionRequest): Promise<ObservedBanResult>;
   /**
    * Handle the response to a suspicious message
    *
@@ -246,8 +267,9 @@ export interface ISecurityActionService {
     member: GuildMember,
     detectionEventId: string,
     moderator: User,
-    reason: string
-  ): Promise<boolean>;
+    reason: string,
+    request: ModerationActionRequest
+  ): Promise<ObservedBanResult>;
 
   kickObservedDetection(
     member: GuildMember,
@@ -261,8 +283,9 @@ export interface ISecurityActionService {
     userId: string,
     detectionEventId: string,
     moderator: User,
-    reason: string
-  ): Promise<boolean>;
+    reason: string,
+    request: ModerationActionRequest
+  ): Promise<ObservedBanResult>;
 
   dismissObservedDetection(
     guildId: string,
@@ -412,7 +435,7 @@ export class SecurityActionService implements ISecurityActionService {
   private userModerationService: IUserModerationService; // Keep for reopenVerification for now
   private client: Client;
   private gptService?: IGPTService;
-  private messageContextRepository?: IMessageContextRepository;
+  private evidenceService: ModerationEvidenceService;
   private productAnalyticsService: IProductAnalyticsService;
   private moderationQueueService?: IModerationQueueService;
   private messageDeletionService?: IMessageDeletionService;
@@ -454,7 +477,13 @@ export class SecurityActionService implements ISecurityActionService {
     @inject(TYPES.CaptchaChallengeService)
     @optional()
     captchaChallengeService?: ICaptchaChallengeService,
-    @inject(TYPES.JevService) @optional() jevService?: JevService
+    @inject(TYPES.JevService) @optional() jevService?: JevService,
+    @inject(TYPES.ModerationEvidenceService)
+    @optional()
+    evidenceService?: ModerationEvidenceService,
+    @inject(TYPES.ModerationActionRequestRepository)
+    @optional()
+    private readonly actionRequests?: IModerationActionRequestRepository
   ) {
     this.notificationManager = notificationManager;
     this.detectionEventsRepository = detectionEventsRepository;
@@ -467,7 +496,14 @@ export class SecurityActionService implements ISecurityActionService {
     this.userModerationService = userModerationService; // Keep for reopenVerification
     this.client = client;
     this.gptService = gptService;
-    this.messageContextRepository = messageContextRepository;
+    this.evidenceService =
+      evidenceService ??
+      new ModerationEvidenceService(
+        detectionEventsRepository,
+        messageContextRepository,
+        gptService,
+        verificationEventRepository
+      );
     this.productAnalyticsService = productAnalyticsService ?? NOOP_PRODUCT_ANALYTICS_SERVICE;
     this.moderationQueueService = moderationQueueService;
     this.messageDeletionService = messageDeletionService;
@@ -792,26 +828,14 @@ export class SecurityActionService implements ISecurityActionService {
     return snapshot;
   }
 
-  private withUserSnapshot(
-    metadata: VerificationEvent['metadata'],
-    member: GuildMember
-  ): VerificationEvent['metadata'] {
-    return {
-      ...this.metadataToRecord(metadata),
-      user_snapshot: this.buildUserSnapshot(member),
-    } as VerificationEvent['metadata'];
-  }
-
   private async refreshVerificationUserSnapshot(
     verificationEvent: VerificationEvent,
     member: GuildMember
   ): Promise<VerificationEvent> {
     try {
-      const updated = await this.verificationEventRepository.update(
+      const updated = await this.verificationEventRepository.patchMetadata(
         verificationEvent.id,
-        {
-          metadata: this.withUserSnapshot(verificationEvent.metadata, member),
-        },
+        { user_snapshot: this.buildUserSnapshot(member) },
         { touchUpdatedAt: false }
       );
 
@@ -903,11 +927,9 @@ export class SecurityActionService implements ISecurityActionService {
         return;
       }
 
-      await this.verificationEventRepository.update(
+      await this.verificationEventRepository.patchMetadata(
         activeCase.id,
-        {
-          metadata: this.mergeVerificationMetadata(activeCase.metadata, metadata),
-        },
+        this.metadataToRecord(this.mergeVerificationMetadata(activeCase.metadata, metadata)),
         { touchUpdatedAt: false }
       );
     } catch (error) {
@@ -923,7 +945,6 @@ export class SecurityActionService implements ISecurityActionService {
     const nextRecord = this.metadataToRecord(next);
     const sourceMessages = this.mergeSourceMessages(existingRecord, nextRecord);
     return {
-      ...existingRecord,
       ...nextRecord,
       ...(sourceMessages ? { source_messages: sourceMessages } : {}),
     } as VerificationEvent['metadata'];
@@ -946,7 +967,6 @@ export class SecurityActionService implements ISecurityActionService {
     const notificationChannelId = metadata.observed_notification_channel_id;
     const observedEvidenceThreadId = metadata.observed_evidence_thread_id;
     const adoptedMetadata = {
-      ...this.metadataToRecord(verificationEvent.metadata),
       case_origin: 'observed_alert',
       observed_detection_event_id: detectionEvent.id,
     } as VerificationEvent['metadata'];
@@ -962,12 +982,15 @@ export class SecurityActionService implements ISecurityActionService {
       metadata: adoptedMetadata,
     };
 
+    await this.verificationEventRepository.patchMetadata(
+      verificationEvent.id,
+      this.metadataToRecord(adoptedMetadata)
+    );
     return (
       (await this.verificationEventRepository.update(verificationEvent.id, {
         notification_message_id: adoptedEvent.notification_message_id,
         notification_channel_id: adoptedEvent.notification_channel_id,
         private_evidence_thread_id: adoptedEvent.private_evidence_thread_id,
-        metadata: adoptedEvent.metadata,
       })) ?? adoptedEvent
     );
   }
@@ -1014,6 +1037,8 @@ export class SecurityActionService implements ISecurityActionService {
         )
       : await this.threadManager.createVerificationThread(member, verificationEvent);
 
+    if (!thread && verificationEvent.status !== VerificationStatus.PENDING)
+      return verificationEvent;
     if (!thread) {
       const threadKind = useReportReviewThread ? 'report review thread' : 'verification thread';
       throw new Error(`Failed to create ${threadKind} for ${member.user.tag}`);
@@ -1065,30 +1090,31 @@ export class SecurityActionService implements ISecurityActionService {
       'chain',
       async (): Promise<VerificationEvent> => {
         try {
-          const [profileAssets, detectionEvents, recentMessages] = await Promise.all([
-            this.buildProfileAssetSnapshot(member),
-            this.detectionEventsRepository.findByServerAndUser(member.guild.id, member.id),
-            this.loadRecentMessageContext(member.guild.id, member.id),
-          ]);
-          const profileImageDescription = await this.describeProfileImages(member, profileAssets);
+          const snapshot = await this.evidenceService.capture({
+            guildId: member.guild.id,
+            userId: member.id,
+            member,
+            describeImages: true,
+          });
+          const profileAssets = snapshot.profile_assets ?? { captured_at: snapshot.captured_at };
+          const detectionEvents = snapshot.detection_history;
+          const recentMessages = snapshot.recent_messages;
+          const profileImageDescription = snapshot.profile_image_description;
           const metadata = {
-            ...this.metadataToRecord(verificationEvent.metadata),
             profile_assets: profileAssets,
-            ...(profileImageDescription
-              ? {
-                  profile_image_description:
-                    this.serializeProfileImageDescription(profileImageDescription),
-                }
-              : {}),
+            profile_image_description: profileImageDescription
+              ? this.serializeProfileImageDescription(profileImageDescription)
+              : null,
             evidence_bundle: {
               posted_at: new Date().toISOString(),
               recent_message_count: recentMessages.length,
               detection_history_count: detectionEvents.length,
             },
-          } as unknown as VerificationEvent['metadata'];
-          const updatedEvent = await this.verificationEventRepository.update(verificationEvent.id, {
-            metadata,
-          });
+          };
+          const updatedEvent = await this.verificationEventRepository.patchMetadata(
+            verificationEvent.id,
+            metadata
+          );
           const bundle = this.formatCaseEvidenceBundle(
             member,
             verificationEvent,
@@ -1107,7 +1133,7 @@ export class SecurityActionService implements ISecurityActionService {
             output: { evidence_delivered: true },
             metadata: { case_id: verificationEvent.id },
           });
-          return updatedEvent ?? { ...verificationEvent, metadata };
+          return updatedEvent ?? verificationEvent;
         } catch (error) {
           recordObservation('chain', {
             level: 'WARNING',
@@ -1124,100 +1150,6 @@ export class SecurityActionService implements ISecurityActionService {
       { metadata: { case_id: verificationEvent.id } },
       undefined
     );
-  }
-
-  private async loadRecentMessageContext(
-    serverId: string,
-    userId: string
-  ): Promise<MessageContext[]> {
-    if (!this.messageContextRepository) {
-      return [];
-    }
-
-    try {
-      return await this.messageContextRepository.findRecentByServerAndUser(
-        serverId,
-        userId,
-        EVIDENCE_BUNDLE_RECENT_MESSAGE_LIMIT
-      );
-    } catch (error) {
-      console.warn(`Failed to load message context for evidence bundle user ${userId}:`, error);
-      return [];
-    }
-  }
-
-  private async buildProfileAssetSnapshot(member: GuildMember): Promise<ProfileAssetSnapshot> {
-    const user = await member.client.users
-      .fetch(member.id, { force: true })
-      .catch(() => member.user);
-    const avatarHash = this.readString((user as { avatar?: unknown }).avatar);
-    const guildAvatarHash = this.readString((member as { avatar?: unknown }).avatar);
-    const avatarUrl =
-      this.callImageUrl(member, 'displayAvatarURL', { size: 256 }) ??
-      this.callImageUrl(user, 'displayAvatarURL', { size: 256 });
-    const guildAvatarUrl = this.callImageUrl(member, 'avatarURL', { size: 256 });
-    const bannerUrl =
-      this.callImageUrl(user, 'bannerURL', { size: 512 }) ??
-      this.callImageUrl(member, 'bannerURL', { size: 512 });
-    const avatarDecorationUrl =
-      this.callImageUrl(member, 'avatarDecorationURL', { size: 256 }) ??
-      this.callImageUrl(user, 'avatarDecorationURL', { size: 256 });
-    const snapshot: ProfileAssetSnapshot = {
-      captured_at: new Date().toISOString(),
-      avatar_is_default: !avatarHash && !guildAvatarHash,
-    };
-
-    if (avatarUrl) {
-      snapshot.avatar_url = avatarUrl;
-      snapshot.avatar_byte_sha256 = await this.hashRemoteImage(avatarUrl);
-    }
-    if (avatarHash) {
-      snapshot.avatar_hash = avatarHash;
-    }
-    if (guildAvatarUrl) {
-      snapshot.guild_avatar_url = guildAvatarUrl;
-    }
-    if (guildAvatarHash) {
-      snapshot.guild_avatar_hash = guildAvatarHash;
-    }
-    if (avatarDecorationUrl) {
-      snapshot.avatar_decoration_url = avatarDecorationUrl;
-    }
-    if (bannerUrl) {
-      snapshot.banner_url = bannerUrl;
-      snapshot.banner_byte_sha256 = await this.hashRemoteImage(bannerUrl);
-    }
-    const bannerHash = this.readString((user as { banner?: unknown }).banner);
-    if (bannerHash) {
-      snapshot.banner_hash = bannerHash;
-    }
-    const hexAccentColor = this.readString((user as { hexAccentColor?: unknown }).hexAccentColor);
-    if (hexAccentColor) {
-      snapshot.accent_color = hexAccentColor;
-    }
-
-    return snapshot;
-  }
-
-  private async describeProfileImages(
-    member: GuildMember,
-    profileAssets: ProfileAssetSnapshot
-  ): Promise<ProfileImageDescription | null> {
-    if (
-      !this.gptService ||
-      typeof this.gptService.describeProfileImages !== 'function' ||
-      (!profileAssets.avatar_url && !profileAssets.banner_url)
-    ) {
-      return null;
-    }
-
-    return await this.gptService.describeProfileImages({
-      username: member.user.username,
-      displayName: member.displayName,
-      avatarUrl: profileAssets.avatar_url,
-      bannerUrl: profileAssets.banner_url,
-      avatarIsDefault: profileAssets.avatar_is_default,
-    });
   }
 
   private serializeProfileImageDescription(
@@ -1324,51 +1256,6 @@ export class SecurityActionService implements ISecurityActionService {
     return lines;
   }
 
-  private async hashRemoteImage(url: string): Promise<string | undefined> {
-    try {
-      const response = await fetch(url, {
-        signal: AbortSignal.timeout(PROFILE_IMAGE_HASH_TIMEOUT_MS),
-      });
-      if (!response.ok) {
-        return undefined;
-      }
-      const rawContentLength = response.headers.get('content-length');
-      const contentLength = rawContentLength !== null ? Number(rawContentLength) : null;
-      if (
-        contentLength !== null &&
-        (!Number.isFinite(contentLength) ||
-          contentLength < 0 ||
-          contentLength > PROFILE_IMAGE_HASH_MAX_BYTES)
-      ) {
-        return undefined;
-      }
-      const buffer = Buffer.from(await response.arrayBuffer());
-      if (buffer.length > PROFILE_IMAGE_HASH_MAX_BYTES) {
-        return undefined;
-      }
-      return createHash('sha256').update(buffer).digest('hex');
-    } catch {
-      return undefined;
-    }
-  }
-
-  private callImageUrl(
-    source: unknown,
-    methodName: string,
-    options: { size: number }
-  ): string | undefined {
-    const method = (source as Record<string, unknown>)[methodName];
-    if (typeof method !== 'function') {
-      return undefined;
-    }
-
-    const value = (method as (options?: { size: number }) => string | null | undefined).call(
-      source,
-      options
-    );
-    return typeof value === 'string' && value ? value : undefined;
-  }
-
   private readString(value: unknown): string | undefined {
     return typeof value === 'string' && value ? value : undefined;
   }
@@ -1422,10 +1309,7 @@ export class SecurityActionService implements ISecurityActionService {
       verificationEvent,
       sourceMessage
     );
-    const previousPrivateEvidenceThreadId = verificationEvent.private_evidence_thread_id;
-    const previousMetadata = verificationEvent.metadata;
-
-    const updatedEvent = await this.ensurePrivateEvidenceThread(
+    const evidenceEvent = await this.ensurePrivateEvidenceThread(
       member,
       verificationEvent,
       detectionResult,
@@ -1433,12 +1317,10 @@ export class SecurityActionService implements ISecurityActionService {
       sourceMessage
     );
 
-    if (
-      updatedEvent.private_evidence_thread_id !== previousPrivateEvidenceThreadId ||
-      updatedEvent.metadata !== previousMetadata
-    ) {
-      await this.upsertNotification(member, detectionResult, updatedEvent, sourceMessage);
-    }
+    // Discord evidence delivery can outlive a departure or moderation action.
+    const updatedEvent =
+      (await this.verificationEventRepository.findById(verificationEvent.id)) ?? evidenceEvent;
+    await this.upsertNotification(member, detectionResult, updatedEvent, sourceMessage);
 
     return updatedEvent;
   }
@@ -1468,9 +1350,10 @@ export class SecurityActionService implements ISecurityActionService {
     };
 
     try {
-      const updatedEvent = await this.verificationEventRepository.update(verificationEvent.id, {
-        metadata: updatedMetadata as VerificationEvent['metadata'],
-      });
+      const updatedEvent = await this.verificationEventRepository.patchMetadata(
+        verificationEvent.id,
+        { action_failures: updatedMetadata.action_failures ?? [] }
+      );
 
       return updatedEvent ?? fallbackEvent;
     } catch (recordError) {
@@ -1500,9 +1383,10 @@ export class SecurityActionService implements ISecurityActionService {
     };
 
     try {
-      const updatedEvent = await this.verificationEventRepository.update(verificationEvent.id, {
-        metadata: updatedMetadata as VerificationEvent['metadata'],
-      });
+      const updatedEvent = await this.verificationEventRepository.patchMetadata(
+        verificationEvent.id,
+        { action_failures: updatedMetadata.action_failures ?? [] }
+      );
 
       return updatedEvent ?? fallbackEvent;
     } catch (error) {
@@ -2029,9 +1913,14 @@ export class SecurityActionService implements ISecurityActionService {
   private async updateDetectionMetadataForObservedAction(
     detectionEvent: DetectionEvent,
     moderator: User,
-    actionType: AdminActionType
+    actionType: AdminActionType,
+    operationId?: string,
+    attemptToken?: string
   ): Promise<DetectionEvent | null> {
     const metadata: Record<string, unknown> = {
+      ...(operationId
+        ? { report_ban_operation_id: operationId, report_ban_attempt_token: attemptToken }
+        : {}),
       observed_action: actionType,
       observed_action_by: moderator.id,
       observed_action_at: new Date().toISOString(),
@@ -2647,12 +2536,19 @@ export class SecurityActionService implements ISecurityActionService {
         `No active verification found for user ${member.user.tag}. Creating new verification event.`
       );
 
-      let newVerificationEvent = await this.verificationEventRepository.createFromDetection(
-        detectionEventId,
-        member.guild.id,
-        member.id,
-        VerificationStatus.PENDING
-      );
+      let newVerificationEvent: VerificationEvent;
+      try {
+        newVerificationEvent = await this.verificationEventRepository.createFromDetection(
+          detectionEventId,
+          member.guild.id,
+          member.id,
+          VerificationStatus.PENDING,
+          { user_snapshot: this.buildUserSnapshot(member) }
+        );
+      } catch (error) {
+        if (error instanceof VerificationCaseAdmissionSupersededError) return true;
+        throw error;
+      }
       const linkedDetectionEvent = await this.detectionEventsRepository.linkToVerificationEvent(
         detectionEventId,
         newVerificationEvent.id
@@ -2680,6 +2576,7 @@ export class SecurityActionService implements ISecurityActionService {
       );
 
       newVerificationEvent = await this.tryApplyCaseRole(member, newVerificationEvent, moderator);
+      if (newVerificationEvent.status !== VerificationStatus.PENDING) return true;
 
       newVerificationEvent = await this.tryCreateCaseThread(
         member,
@@ -3692,6 +3589,14 @@ export class SecurityActionService implements ISecurityActionService {
     moderator: User
   ): Promise<boolean> {
     const detectionEvent = await this.getObservedDetectionForMember(member, detectionEventId);
+    const linkedReportId = this.readString(
+      this.metadataToRecord(detectionEvent.metadata).reportIntakeId
+    );
+    if (linkedReportId) {
+      const report = await this.reportIntakeRepository?.findById(linkedReportId);
+      if (report && this.metadataToRecord(report.metadata).report_ban_operation_id)
+        throw new Error('Report ban is busy.');
+    }
     if (this.hasObservedAction(detectionEvent)) {
       return false;
     }
@@ -3775,93 +3680,18 @@ export class SecurityActionService implements ISecurityActionService {
     member: GuildMember,
     detectionEventId: string,
     moderator: User,
-    reason: string
-  ): Promise<boolean> {
-    const detectionEvent = await this.getObservedDetectionForMember(member, detectionEventId);
-    if (this.hasObservedAction(detectionEvent)) {
-      return false;
-    }
-    const claimedDetectionEvent = await this.updateDetectionMetadataForObservedAction(
-      detectionEvent,
+    reason: string,
+    request: ModerationActionRequest
+  ): Promise<ObservedBanResult> {
+    return this.executeObservedBan(
+      member.guild,
+      member.id,
+      member,
+      detectionEventId,
       moderator,
-      AdminActionType.BAN
+      reason,
+      request
     );
-    if (!claimedDetectionEvent) {
-      return false;
-    }
-    let actionApplied = false;
-    try {
-      await this.ensureObservedEntitiesExist(member.guild.id, member.id);
-      const activeVerificationEvent =
-        await this.verificationEventRepository.findActiveByUserAndServer(
-          member.id,
-          member.guild.id
-        );
-      const banned = await this.userModerationService.banUser(
-        member,
-        reason,
-        moderator,
-        detectionEvent.id
-      );
-      this.requireModerationSuccess(banned, 'ban', member);
-      actionApplied = true;
-      const actionAlreadyRecorded = await this.hasRecordedObservedAction(
-        member.guild.id,
-        member.id,
-        claimedDetectionEvent.id,
-        AdminActionType.BAN
-      );
-      if (!actionAlreadyRecorded) {
-        const currentVerificationEvent = activeVerificationEvent
-          ? await this.verificationEventRepository.findById(activeVerificationEvent.id)
-          : null;
-        await this.recordObservedAction({
-          serverId: member.guild.id,
-          userId: member.id,
-          moderator,
-          detectionEvent: claimedDetectionEvent,
-          verificationEvent: currentVerificationEvent ?? activeVerificationEvent ?? undefined,
-          actionType: AdminActionType.BAN,
-          notes: reason,
-        });
-      }
-      await this.notificationManager.markObservedDetectionActionTaken(
-        detectionEvent.id,
-        'banned this user',
-        moderator,
-        AdminActionType.BAN
-      );
-      await this.runModerationQueueTask(
-        `delete observed alert ${detectionEvent.id} from the live moderation queue`,
-        (moderationQueueService) =>
-          moderationQueueService.deleteObservedAlertMirror(detectionEvent.id)
-      );
-      await this.closeLinkedReportIntakeForObservedAction(
-        claimedDetectionEvent,
-        moderator,
-        ReportIntakeStatus.ACTIONED,
-        'observed_ban'
-      );
-      this.captureMemberAnalytics(
-        member,
-        'observed detection action completed',
-        { action_type: AdminActionType.BAN },
-        {
-          moderatorId: moderator.id,
-          detectionEventId: detectionEvent.id,
-        }
-      );
-      return true;
-    } catch (error) {
-      if (!actionApplied) {
-        await this.releaseDetectionMetadataForObservedAction(
-          detectionEvent,
-          moderator,
-          AdminActionType.BAN
-        );
-      }
-      throw error;
-    }
   }
 
   public async kickObservedDetection(
@@ -3968,96 +3798,521 @@ export class SecurityActionService implements ISecurityActionService {
     userId: string,
     detectionEventId: string,
     moderator: User,
-    reason: string
-  ): Promise<boolean> {
-    const detectionEvent = await this.getObservedDetectionForUser(
-      guild.id,
+    reason: string,
+    request: ModerationActionRequest
+  ): Promise<ObservedBanResult> {
+    return this.executeObservedBan(
+      guild,
       userId,
-      detectionEventId
-    );
-    if (this.hasObservedAction(detectionEvent)) {
-      return false;
-    }
-    const claimedDetectionEvent = await this.updateDetectionMetadataForObservedAction(
-      detectionEvent,
+      null,
+      detectionEventId,
       moderator,
-      AdminActionType.BAN
+      reason,
+      request
     );
-    if (!claimedDetectionEvent) {
-      return false;
-    }
-    let actionApplied = false;
+  }
+
+  private async checkReportBanReviewActor(guild: Guild, moderator: User): Promise<void> {
+    const actor = await guild.members.fetch({ user: moderator.id, force: true });
+    if (!actor.permissions.has(PermissionFlagsBits.BanMembers))
+      throw new Error('Ban Members permission is required to review this operation.');
+  }
+
+  public async prepareReportBanReview(
+    guild: Guild,
+    operationId: string,
+    moderator: User
+  ): Promise<ReportBanReviewReference> {
+    await this.checkReportBanReviewActor(guild, moderator);
+    if (!/^[0-9a-f-]{36}$/i.test(operationId))
+      throw new Error('Use the operation ID from the ban receipt.');
+    const request = await this.actionRequests?.findById(operationId);
+    const metadata = this.metadataToRecord(request?.metadata);
+    const result = this.metadataToRecord(request?.result);
+    if (
+      !request ||
+      request.server_id !== guild.id ||
+      request.action_type !== 'ban_observed_detection' ||
+      !request.target_user_id ||
+      !request.updated_at ||
+      metadata.report_ban_phase !== 'reconciliation_required' ||
+      metadata.report_ban_confirmed_at ||
+      this.metadataToRecord(result.observed_ban_result).status !== 'ban_outcome_unknown'
+    )
+      throw new Error('This operation is not awaiting uncertain-ban review.');
+    const attemptToken = getReportBanAttemptToken(request);
+    if (!attemptToken) throw new Error('The operation has no attempt identity.');
+    return {
+      operationId,
+      attemptToken,
+      updatedAt: request.updated_at,
+      targetUserId: request.target_user_id,
+      observedBanId:
+        this.readString(this.metadataToRecord(metadata.report_ban_observed_ban).id) ?? undefined,
+    };
+  }
+
+  public async reviewUncertainReportBan(
+    guild: Guild,
+    reference: ReportBanReviewReference,
+    moderator: User,
+    reason: string
+  ): Promise<void> {
+    await this.checkReportBanReviewActor(guild, moderator);
+    if (!reason.trim() || reason.length > 1000)
+      throw new Error('A review reason of 1 to 1000 characters is required.');
+    const request = await this.actionRequests?.findById(reference.operationId);
+    if (
+      !request ||
+      request.server_id !== guild.id ||
+      request.target_user_id !== reference.targetUserId
+    )
+      throw new Error('The review operation binding changed.');
+    let absent = false;
     try {
-      await this.ensureObservedEntitiesExist(guild.id, userId);
-      const activeVerificationEvent =
-        await this.verificationEventRepository.findActiveByUserAndServer(userId, guild.id);
-      const banned = await this.userModerationService.banUserById(
-        guild,
-        userId,
-        reason,
-        moderator,
-        detectionEvent.id
-      );
-      if (!banned) {
-        throw new Error(`Failed to ban user ${userId}`);
-      }
-      actionApplied = true;
-      const actionAlreadyRecorded = await this.hasRecordedObservedAction(
-        guild.id,
-        userId,
-        claimedDetectionEvent.id,
-        AdminActionType.BAN
-      );
-      if (!actionAlreadyRecorded) {
-        const currentVerificationEvent = activeVerificationEvent
-          ? await this.verificationEventRepository.findById(activeVerificationEvent.id)
-          : null;
-        await this.recordObservedAction({
+      await guild.bans.fetch({ user: reference.targetUserId, force: true });
+    } catch (error) {
+      if (typeof error === 'object' && error !== null && 'code' in error && error.code === 10026)
+        absent = true;
+      else throw error;
+    }
+    if (!absent)
+      throw new Error('A current ban exists. Allow confirmed-ban reconciliation to finish.');
+    const banAbsentCheckedAt = new Date();
+    await this.userRepository.getOrCreateUser(moderator.id, moderator.username);
+    const reviewed = await this.actionRequests?.reviewUncertainReportBan({
+      ...reference,
+      serverId: guild.id,
+      actorId: moderator.id,
+      reason,
+      banAbsentCheckedAt,
+    });
+    if (!reviewed)
+      throw new Error('The operation changed. Re-run the review command for its current state.');
+  }
+
+  private async saveBanPhase(
+    request: ModerationActionRequest,
+    patch: Record<string, unknown>
+  ): Promise<ModerationActionRequest> {
+    const saved = await this.actionRequests?.mergeMetadata(
+      request.id,
+      patch as import('../db/prisma').Prisma.JsonObject,
+      getReportBanAttemptToken(request)
+    );
+    if (!saved) throw new Error('Could not persist report ban operation.');
+    if (
+      (patch.report_ban_phase === 'preparing' ||
+        patch.report_ban_phase === 'enforcement_started') &&
+      (this.metadataToRecord(saved.metadata).report_ban_phase !== patch.report_ban_phase ||
+        (patch.report_ban_phase === 'preparing' &&
+          this.metadataToRecord(saved.metadata).report_ban_preparation_id !==
+            patch.report_ban_preparation_id) ||
+        (patch.report_ban_phase === 'enforcement_started' &&
+          this.metadataToRecord(saved.metadata).report_ban_enforcement_id !==
+            patch.report_ban_enforcement_id))
+    )
+      throw new Error('Report ban preparation ownership changed.');
+    if (getReportBanAttemptToken(saved) !== getReportBanAttemptToken(request))
+      throw new Error('Report ban preparation ownership changed.');
+    return saved;
+  }
+
+  private async releaseBanPreparation(request: ModerationActionRequest): Promise<void> {
+    const phase = this.metadataToRecord(request.metadata).report_ban_phase;
+    if (phase !== 'preparing' && phase !== 'enforcement_started') return;
+    const released = await this.actionRequests?.releaseReportBanPreparation(
+      request.id,
+      phase,
+      getReportBanAttemptToken(request)
+    );
+    if (!released) throw new Error('Could not release report ban preparation.');
+  }
+
+  private async executeObservedBan(
+    guild: Guild,
+    userId: string,
+    member: GuildMember | null,
+    detectionEventId: string,
+    moderator: User,
+    reason: string,
+    request: ModerationActionRequest
+  ): Promise<ObservedBanResult> {
+    const detection = await this.getObservedDetectionForUser(guild.id, userId, detectionEventId);
+    if (
+      !this.actionRequests ||
+      request.server_id !== guild.id ||
+      request.target_user_id !== userId ||
+      request.detection_event_id !== detectionEventId ||
+      request.actor_id !== moderator.id
+    )
+      throw new Error('Observed ban requires its matching queued request.');
+    const reportId = this.readString(this.metadataToRecord(detection.metadata).reportIntakeId);
+    if ((request.report_intake_id ?? undefined) !== reportId)
+      throw new Error('Report binding changed before ban.');
+    if (this.hasObservedAction(detection)) return { status: 'already_handled' };
+    const attemptToken = getReportBanAttemptToken(request);
+    if (!attemptToken) throw new Error('Report ban attempt identity is missing.');
+    let current = await this.saveBanPhase(request, {
+      report_ban_phase: 'preparing',
+      report_ban_preparation_id: randomUUID(),
+      report_ban_reason: reason,
+      report_ban_source_detail: member ? null : 'ban_by_id',
+      report_ban_membership_joined_at: null,
+      report_ban_lease_until: new Date(Date.now() + 15 * 60_000).toISOString(),
+    });
+    const enforcement = { started: false };
+    let confirmed = false;
+    let confirmedAt: string | undefined;
+    try {
+      if (reportId) {
+        const report = await this.reportIntakeRepository?.claimBan({
+          reportId,
           serverId: guild.id,
-          userId,
-          moderator,
-          detectionEvent: claimedDetectionEvent,
-          verificationEvent: currentVerificationEvent ?? activeVerificationEvent ?? undefined,
-          actionType: AdminActionType.BAN,
-          notes: reason,
+          targetUserId: userId,
+          detectionEventId,
+          operationId: request.id,
+          attemptToken,
         });
+        if (!report) throw new Error('Report is no longer available for this ban.');
       }
-      await this.notificationManager.markObservedDetectionActionTaken(
-        detectionEvent.id,
-        'banned this user by ID',
+      const claimedDetection = await this.updateDetectionMetadataForObservedAction(
+        detection,
+        moderator,
+        AdminActionType.BAN,
+        request.id,
+        attemptToken
+      );
+      if (!claimedDetection) {
+        await this.releaseBanPreparation(current);
+        return { status: 'already_handled' };
+      }
+      await this.ensureObservedEntitiesExist(guild.id, userId);
+      const membership = await this.serverMemberRepository.findByServerAndUser(guild.id, userId);
+      const joinedAt = member ? member.joinedAt : membership?.join_date;
+      current = await this.saveBanPhase(current, {
+        report_ban_membership_joined_at: joinedAt?.toISOString() ?? null,
+      });
+      const evidence = await this.evidenceService.capture({ guildId: guild.id, userId, member });
+      if (
+        !(await this.detectionEventsRepository.patchMetadata(detection.id, {
+          moderation_evidence: toStoredModerationEvidence(evidence),
+          report_ban_operation_id: request.id,
+        }))
+      )
+        throw new Error('Could not persist moderation evidence.');
+      const targetUser = member?.user ?? (await this.client.users.fetch(userId).catch(() => null));
+      const targetAvatarUrl =
+        targetUser?.id === userId ? (targetUser as Partial<User>).displayAvatarURL?.() : undefined;
+      current = await this.saveBanPhase(current, {
+        report_ban_target_snapshot: {
+          id: userId,
+          ...(targetUser?.id === userId
+            ? {
+                tag: targetUser.tag,
+                username: targetUser.username,
+                ...(targetAvatarUrl ? { avatar_url: targetAvatarUrl } : {}),
+                ...(Number.isFinite(targetUser.createdTimestamp)
+                  ? {
+                      account_created_at: new Date(targetUser.createdTimestamp).toISOString(),
+                    }
+                  : {}),
+              }
+            : {}),
+        },
+      });
+      const lifecycle = {
+        operationId: request.id,
+        attemptToken,
+        prepare: async (cases: VerificationEvent[], attemptId: string): Promise<void> => {
+          current = await this.saveBanPhase(current, {
+            report_ban_cases: cases.map((event) => ({
+              id: event.id,
+              case_kind: event.case_kind,
+              attention_state: event.attention_state,
+              containment_status: event.containment_status,
+              parked_at: event.parked_at,
+              parked_by: event.parked_by,
+            })),
+            report_ban_attempt_id: attemptId,
+          });
+        },
+        beforeEnforcement: async (
+          acquiredCases: VerificationEvent[],
+          attemptId: string | null
+        ): Promise<void> => {
+          if (reportId) {
+            const report = await this.reportIntakeRepository?.findById(reportId);
+            if (
+              !report ||
+              report.status !== ReportIntakeStatus.SUBMITTED ||
+              report.server_id !== guild.id ||
+              report.confirmed_target_user_id !== userId ||
+              this.metadataToRecord(report.metadata).report_ban_operation_id !== request.id
+            )
+              throw new Error('Report ban ownership changed.');
+          }
+          const latest = await this.detectionEventsRepository.findById(detectionEventId);
+          if (
+            latest?.metadata?.report_ban_operation_id !== request.id ||
+            latest.metadata.observed_action !== AdminActionType.BAN
+          )
+            throw new Error('Detection ban ownership changed.');
+          const prepared = this.metadataToRecord(current.metadata);
+          const candidates = prepared.report_ban_cases as { id: string }[];
+          if (
+            candidates.length !== acquiredCases.length ||
+            candidates.some(
+              (event) =>
+                !acquiredCases.some(
+                  (acquired) =>
+                    acquired.id === event.id && acquired.quarantine_attempt_id === attemptId
+                )
+            )
+          )
+            throw new Error('Acquired case set changed before enforcement.');
+          current = await this.saveBanPhase(current, {
+            report_ban_phase: 'enforcement_started',
+            report_ban_enforcement_id: randomUUID(),
+            report_ban_case_ids: acquiredCases.map((event) => event.id),
+          });
+          enforcement.started = true;
+        },
+      };
+      const moderation = this.userModerationService as IUserModerationService &
+        ICombinedBanLifecycleService;
+      if (member) await moderation.performDiscordMemberBan(member, reason, lifecycle);
+      else await moderation.performDiscordBanById(guild, userId, reason, lifecycle);
+      confirmed = true;
+      confirmedAt = new Date().toISOString();
+      current = await this.saveBanPhase(current, {
+        report_ban_phase: 'discord_confirmed',
+        report_ban_confirmed_at: confirmedAt,
+      });
+      await this.finishObservedBan(guild, moderator, current);
+      return { status: 'banned' };
+    } catch (error) {
+      const rejection =
+        typeof error === 'object' && error !== null
+          ? (error as { status?: number; code?: number })
+          : {};
+      const rejectedByDiscord =
+        !confirmed &&
+        (rejection.code === 50013 ||
+          rejection.code === 50001 ||
+          (typeof rejection.status === 'number' &&
+            rejection.status >= 400 &&
+            rejection.status < 500 &&
+            rejection.status !== 408));
+      if (!enforcement.started || rejectedByDiscord) {
+        await this.releaseBanPreparation(current);
+        throw error;
+      }
+      const result: ObservedBanResult = {
+        status: confirmed ? 'banned_updates_pending' : 'ban_outcome_unknown',
+        operationId: request.id,
+      };
+      await this.scheduleBanReconciliation(current, error, confirmed, confirmedAt).catch(
+        (persistError) => console.error('Could not save ban reconciliation receipt:', persistError)
+      );
+      return result;
+    }
+  }
+
+  private async scheduleBanReconciliation(
+    request: ModerationActionRequest,
+    error: unknown,
+    confirmed: boolean,
+    confirmedAt?: string
+  ): Promise<void> {
+    const metadata = this.metadataToRecord(request.metadata);
+    const attempt =
+      typeof metadata.report_ban_retry_count === 'number' ? metadata.report_ban_retry_count : 0;
+    const delay = [60_000, 300_000, 900_000][attempt] ?? 3_600_000;
+    const next = new Date(Date.now() + delay).toISOString();
+    await this.saveBanPhase(request, {
+      report_ban_phase: confirmed ? 'discord_confirmed' : 'reconciliation_required',
+      report_ban_retry_count: attempt + 1,
+      ...(confirmedAt ? { report_ban_confirmed_at: confirmedAt } : {}),
+      report_ban_retry_at: next,
+      report_ban_lease_until: next,
+      report_ban_last_error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  public async reconcileReportBan(request: ModerationActionRequest): Promise<ObservedBanResult> {
+    if (!request.target_user_id || !request.detection_event_id || !this.actionRequests)
+      throw new Error('Report ban operation is missing required bindings.');
+    await this.getObservedDetectionForUser(
+      request.server_id,
+      request.target_user_id,
+      request.detection_event_id
+    );
+    const metadata = this.metadataToRecord(request.metadata);
+    if (metadata.report_ban_phase === 'preparing') {
+      await this.releaseBanPreparation(request);
+      await this.actionRequests.fail(
+        request.id,
+        'Worker interrupted before enforcement. No ban was sent.',
+        getReportBanAttemptToken(request)
+      );
+      return { status: 'already_handled' };
+    }
+    let confirmed = metadata.report_ban_phase === 'discord_confirmed';
+    try {
+      const guild = await this.client.guilds.fetch(request.server_id);
+      const moderator = await this.client.users.fetch(request.actor_id);
+      if (!confirmed) await guild.bans.fetch({ user: request.target_user_id, force: true });
+      confirmed = true;
+      const current = await this.saveBanPhase(request, {
+        report_ban_phase: 'discord_confirmed',
+        report_ban_confirmed_at: metadata.report_ban_confirmed_at ?? new Date().toISOString(),
+      });
+      await this.finishObservedBan(guild, moderator, current);
+      return { status: 'banned' };
+    } catch (error) {
+      await this.scheduleBanReconciliation(request, error, confirmed);
+      return {
+        status: confirmed ? 'banned_updates_pending' : 'ban_outcome_unknown',
+        operationId: request.id,
+      };
+    }
+  }
+
+  private async finishObservedBan(
+    guild: Guild,
+    moderator: User,
+    request: ModerationActionRequest
+  ): Promise<void> {
+    if (!request.target_user_id || !request.detection_event_id || !this.actionRequests)
+      throw new Error('Report ban operation is missing required bindings.');
+    const adopted = await this.actionRequests.adoptConfirmedReportBanCases(
+      request.id,
+      getReportBanAttemptToken(request) ?? ''
+    );
+    if (!adopted) throw new Error('Confirmed ban cleanup ownership changed.');
+    request = adopted;
+    if (!request.target_user_id || !request.detection_event_id)
+      throw new Error('Confirmed ban cleanup bindings changed.');
+    const metadata = this.metadataToRecord(request.metadata);
+    const cases = Array.isArray(metadata.report_ban_cases)
+      ? (metadata.report_ban_cases as { id: string }[])
+      : [];
+    await (
+      this.userModerationService as IUserModerationService & ICombinedBanLifecycleService
+    ).finalizeObservedBan(guild, request.target_user_id, moderator, {
+      operationId: request.id,
+      reportId: request.report_intake_id,
+      reason: String(metadata.report_ban_reason),
+      detectionEventId: request.detection_event_id,
+      caseIds: Array.isArray(metadata.report_ban_case_ids)
+        ? (metadata.report_ban_case_ids as string[])
+        : cases.map((event) => event.id),
+      attemptId: String(metadata.report_ban_attempt_id),
+      confirmedAt: new Date(String(metadata.report_ban_confirmed_at)),
+      joinedAt:
+        typeof metadata.report_ban_membership_joined_at === 'string' &&
+        Number.isFinite(Date.parse(metadata.report_ban_membership_joined_at))
+          ? new Date(metadata.report_ban_membership_joined_at)
+          : null,
+      targetSnapshot: (metadata.report_ban_target_snapshot ?? {
+        id: request.target_user_id,
+      }) as Record<string, string>,
+    });
+    const detection = await this.detectionEventsRepository.findById(request.detection_event_id);
+    if (
+      this.readString(this.metadataToRecord(detection?.metadata).observed_notification_message_id)
+    ) {
+      const updated = await this.notificationManager.markObservedDetectionActionTaken(
+        request.detection_event_id,
+        'banned this user',
         moderator,
         AdminActionType.BAN
       );
-      await this.runModerationQueueTask(
-        `delete observed alert ${detectionEvent.id} from the live moderation queue`,
-        (moderationQueueService) =>
-          moderationQueueService.deleteObservedAlertMirror(detectionEvent.id)
-      );
-      await this.closeLinkedReportIntakeForObservedAction(
-        claimedDetectionEvent,
-        moderator,
-        ReportIntakeStatus.ACTIONED,
-        'observed_ban'
-      );
-      void this.productAnalyticsService.captureUserEvent(
-        guild.id,
-        userId,
-        'observed detection action completed',
-        { action_type: AdminActionType.BAN, source_detail: 'ban_by_id' },
+      if (!updated) throw new Error('Existing observed notification update is incomplete.');
+    }
+    await this.moderationQueueService?.deleteObservedAlertMirror(request.detection_event_id);
+    if (request.report_intake_id) {
+      const report = await this.reportIntakeRepository?.updateBan(
+        request.report_intake_id,
+        request.id,
         {
-          moderatorId: moderator.id,
-          detectionEventId: detectionEvent.id,
+          complete: true,
+          metadata: {
+            observed_action_closed_by: moderator.id,
+            observed_action_closed_at: metadata.report_ban_confirmed_at,
+            observed_action_close_reason: 'observed_ban',
+          },
         }
       );
-      return true;
-    } catch (error) {
-      if (!actionApplied) {
-        await this.releaseDetectionMetadataForObservedAction(
-          detectionEvent,
-          moderator,
-          AdminActionType.BAN
+      if (!report) throw new Error('Could not finish linked report ban.');
+      await this.moderationQueueService?.deleteReportThreadAttention(report.id);
+      const prompts = getReportConfirmationMessageIds(report);
+      if (prompts.length) await this.threadManager.retireReportConfirmationPrompts(report, prompts);
+      await this.closeReportBanThread(report, request);
+    }
+    const completed = await this.actionRequests.complete(
+      request.id,
+      {
+        action_type: request.action_type,
+        observed_ban_result: { status: 'banned' },
+        report_intake_id: request.report_intake_id,
+        detection_event_id: request.detection_event_id,
+        target_user_id: request.target_user_id,
+      },
+      getReportBanAttemptToken(request)
+    );
+    if (!completed) throw new Error('Could not persist completed ban receipt.');
+    await this.saveBanPhase(request, {
+      report_ban_phase: null,
+      report_ban_lease_until: null,
+      report_ban_retry_at: null,
+      report_ban_last_error: null,
+    });
+    // Claim before capture: best effort, at most one logical emission per operation.
+    // A process crash between claim and capture can lose analytics, never moderation.
+    try {
+      const token = getReportBanAttemptToken(request);
+      if (token && (await this.actionRequests.claimReportBanCompletionAnalytics(request.id, token)))
+        await this.productAnalyticsService.captureUserEvent(
+          guild.id,
+          request.target_user_id,
+          'observed detection action completed',
+          {
+            action_type: AdminActionType.BAN,
+            ...(metadata.report_ban_source_detail === 'ban_by_id'
+              ? { source_detail: 'ban_by_id' }
+              : {}),
+          },
+          { moderatorId: moderator.id, detectionEventId: request.detection_event_id }
         );
+    } catch (error) {
+      console.warn('Could not capture completed report-ban analytics:', error);
+    }
+  }
+
+  private async closeReportBanThread(
+    report: ReportIntake,
+    request: ModerationActionRequest
+  ): Promise<void> {
+    if (!report.thread_id) return;
+    try {
+      const channel = await this.client.channels.fetch(report.thread_id);
+      if (!channel) return;
+      if (!channel.isThread()) throw new Error('Linked report channel is not a thread.');
+      if (channel.archived) return;
+      const metadata = this.metadataToRecord(request.metadata);
+      if (!metadata.report_ban_closeout_message_id) {
+        const message = await channel.send({
+          content: this.buildReportIntakeReviewCloseoutMessage(ReportIntakeStatus.ACTIONED),
+          allowedMentions: { parse: [] },
+        });
+        await this.saveBanPhase(request, { report_ban_closeout_message_id: message.id });
       }
+      await channel.setArchived(true, 'Report intake reviewed');
+    } catch (error) {
+      if (typeof error === 'object' && error !== null && 'code' in error && error.code === 10003)
+        return;
       throw error;
     }
   }

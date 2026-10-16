@@ -1,0 +1,98 @@
+# Reliable verification and direct report bans
+
+## Outcome and confirmed scope
+
+Fix duplicate verification prompts and stale member-departure controls. Let moderators ban directly from a submitted report in the Discord intake-thread menu, the configured admin-notification menu, and the web report detail page, without first opening a case. Preserve the same available evidence and moderation audit information. One operator command lets a moderator review an uncertain ban with no current ban and release its claims. It never performs enforcement.
+
+The user selected both Discord and web. The existing Discord report-alert Ban action remains part of the same workflow. All four tasks are implemented locally on the shared feature branch. Internal branch review is complete. Newly arrived external review feedback is being addressed in the same PR; PR completion remains pending. No merge, deployment, historical repair, or live Discord edit has been performed by this work.
+
+## Moderator experience
+
+A submitted report with a confirmed target offers Ban. Discord accepts the current report thread or the currently configured admin-notification channel, and checks that channel again on modal submission. The moderator reviews the target's readable identity and immutable ID, enters a reason under the existing server policy, and confirms the action. The bot rechecks the moderator's Ban Members permission, server policy, report state, and target at execution time.
+
+The web page retains the actual queued/processing state during preparation and enforcement. It synthesizes an uncertain receipt only for reconciliation_required and pending updates only for discord_confirmed; an explicit persisted receipt takes precedence. A failed ban leaves the report available for review. A successful ban marks the report actioned and removes pending review attention. If Discord confirms the ban but later updates fail, show "Banned. Report updates are still pending." Keep the report unavailable for a second ban and reconcile audit/report updates without repeating enforcement. If the subject already left, the same confirmation bans by ID. If a case already exists, normal case resolution still runs.
+
+```mermaid
+flowchart TD
+  A[Discord report alert] --> D[Ban: review target and reason]
+  B[Discord intake or admin-notification Admin Actions] --> D
+  C[Web report detail] --> D
+  D --> E[Recheck permission, policy, report and target]
+  E --> F[Save available evidence snapshot]
+  F --> G[Ban member or ban by ID]
+  G -->|Succeeded| H[Save linked action and outcome, mark report actioned]
+  G -->|Known rejection| I[Show failure, retain report for review]
+  G -->|Uncertain| J[Receipt includes operation ID]
+  J --> K[Moderator runs review-report-ban with operation and reason]
+  K --> L[Confirm current attempt; recheck permission and current ban]
+  L -->|Ban present| O[Reject release; existing worker reconciles ban]
+  L -->|No current ban| M[Record uncertain history; release matching claims]
+  M --> N[Moderator chooses a new action]
+```
+
+Reuse the existing moderator session, reason modal, confirmation helper, and queue receipts. Reference-journey research is unnecessary for this settled flow.
+
+## Verification behavior
+
+- Creation and repair of the same case coordinate before creating a thread or posting its initial prompt. Repeated calls reuse the prompt. Legacy moderator-only report review repair never adds the subject or sends a verification prompt. A concurrent promotion waits, then rereads persisted state and creates or repairs the user-visible verification thread.
+- Persist the prompt message identity. Repair fetches it directly and reconciles a missing marker before sending. A timeout, permission error, or failed history read leaves repair incomplete without sending a replacement. A missing-message response or successful history scan must establish absence first. Match initial prompts by bot identity and the exact case-bound action ID, not any bot mention of the subject. Preserve recovery after partial setup failure.
+- Recheck pending status and the saved thread identity across awaited create/repair stages. If resolution wins, delete an exact late prompt, remove only a subject membership newly added by this setup, and archive/lock its thread. Preserve a newer thread identity and terminal metadata; surface cleanup failures.
+- Recover shipped unbound prompts in the saved normal case thread only when authored by the connected bot for the exact member: an ordinary content message without embeds or attachments, with one row containing one Primary Admin Actions button and an accepted shipped ID. Historical custom copy and current configuration do not affect recognition. Reject report-review, evidence and other-action layouts. An exact bot-authored copy of the full old shape remains indistinguishable and is accepted.
+- Evidence and setup writes update only the fields they own, without overwriting newer departure, reminder, resolution, quarantine, or action metadata.
+- Departure keeps the case pending for moderator judgment, displays Member Left Server, and offers the existing Ban by ID and Close No Action controls. It stops user-facing reminders. A confirmed external ban resolves the case normally.
+- Late setup/evidence completion rereads current state before updating moderator notifications or queue messages.
+- The investigated reminder example was banned before its second reminder became due. Retain the existing repeat interval and moderator review window.
+
+## Evidence and audit contract
+
+Capture the same available profile assets, optional existing image description, detection history, and retained recent-message context used by case evidence capture. Retain report text, attachments, reporter identity, target confirmation, and source references. Record actor, reason, action time, source, detection/report links, user snapshot, and actual moderation outcome.
+
+Extract one evidence collector for case setup and direct report bans. Store the report-ban snapshot on its linked detection record using an atomic metadata patch. Existing report evidence stays in its current records. Case IDs remain nullable when no case was opened; creating a fake pending case, case role, or verification thread would defeat the requested shortcut.
+
+Evidence persistence must succeed before enforcement. Optional data that cannot be fetched is recorded as unavailable; do not invent history, require a new model analysis, or prevent a ban solely because an optional enrichment is absent. Recent-message context keeps its existing 30-day source expiry. Case evidence can render transient previews, but the durable report-ban snapshot stores only message ID, channel ID, creation time, observation time and expiry. It excludes preview text and derived features. Existing report-submitted evidence stays in its own records. A departed member's missing live profile fields cannot be reconstructed reliably.
+
+Both surfaces use the existing observed-ban service and its action claim, rather than duplicating enforcement logic. A queued request carries the report ID and expected detection/target. Its request ID identifies the operation. The database mints a fresh internal attempt token for each safe retry; preparation and claims require the current token and a successful compare-and-swap transition. Neither entry point supplies that token. At worker execution, force-fetch the actor's guild membership and recheck Ban Members permission. Cached permission, departed membership or an unavailable fresh lookup cannot authorize enforcement. Atomically claim that exact submitted report before collecting evidence. All competing close/open-case/target-change paths must honor the claim and return a busy result. A report closed before the claim cancels the queued ban; a close after the claim is rejected until completion or reconciliation. Revalidate the claim immediately before enforcement. Repeated clicks execute one destructive operation.
+
+After a completed `already_handled` no-op, an actual undo can make the same report or observed alert eligible again. A fresh explicit moderator request may reuse its idempotency key only when the receipt is exactly that no-op, immutable bindings still match, and no phase, enforcement or confirmation evidence remains. Both enqueue paths check the current unhandled, unowned detection and, when present, its submitted, unclaimed report. This eligibility read is a snapshot; fresh permission checks and worker claims remain authoritative before enforcement. Reset the receipt and processing fields, retain review history, accept the new actor and reason, and mint one fresh server attempt token. Concurrent submissions keep that token. Successful, uncertain, partial, active and mismatched operations remain protected.
+
+Before enforcement, persist the initial owned case set and the target's membership join time for that attempt. Store each automatic case's join time in its initial insert so overlapping setup cannot leave its membership ambiguous. A retry captures fresh membership evidence and clears the previous value, including when the new value is unknown.
+
+Admission and confirmed adoption take existing request locks, then the same short per-target transaction fence, then case locks or insertion. Admission captures its start time and rereads committed confirmation under the fence, including requests absent from its first read. If confirmation won for that known membership and time, admission exits before creating a case, role or thread. If admission won, adoption sees the committed case. Newer memberships and genuinely post-confirmation admissions remain independent. These transactions contain no Discord I/O.
+
+After persisted Discord confirmation, cleanup can adopt additional pending cases for the same server, user and known membership that were created no later than confirmation. Under the current request and attempt, atomically claim those cases and append their IDs and prior state to the durable owned set before finalization. Existing owned cases retain their original recovery path. A later join, a post-confirmation case or a terminal case stays separate. Competing ownership or unknown membership leaves cleanup visibly pending rather than taking the case or reporting success.
+
+An unattributed Discord ban event may arrive before HTTP confirmation. Its case update locks matching active report-ban requests before the case and defers to enforcement or reconciliation for the same membership. Unknown membership also defers conservatively; preparation alone does not suppress ordinary external-ban handling. Delayed case-role completion locks active report-ban requests before the case. It records successful role work using the setup start time for status ordering, capped at a matching or unknown membership ban's persisted confirmation time. This keeps role state when enforcement is rejected and prevents delayed setup from appearing newer than a confirmed ban. The same timestamp bounds the conditional write, preserving newer decisions along with the existing case and join guards. Terminal setup stops before creating a thread. Confirmed member cleanup matches the captured join time as well as the existing status-time guard, so a rejoin during the HTTP wait stays separate.
+
+Use a structured outcome with `banned`, `already_handled`, `banned_updates_pending`, and `ban_outcome_unknown` variants. Pre-enforcement failures report a failed request and release the preparation claim. After confirmed enforcement, retain the operation identity and finish only idempotent audit/report cleanup. An interrupted send with no confirmed outcome is reconciliation-required. If Discord confirms the ban, finish cleanup; otherwise show "Ban outcome needs review." Never automatically resend an uncertain enforcement action or turn an audit failure into a generic retryable ban failure.
+
+The existing bot action worker runs a bounded reconciliation sweep every poll, including on startup, for report-ban operations with unfinished phases or pending-update receipts, regardless of request status. It acquires a database lease for each operation before cleanup. Failed cleanup retries after one minute, five minutes, fifteen minutes, then hourly; the receipt stays visible with the last error until recovered. A restart must resume this work. No external monitoring service or new automation is needed.
+
+## Operator recovery after an uncertain ban
+
+[AGENT] A moderator can run `/review-report-ban operation:<operation-id> reason:<review reason>` in the affected Discord server. The Discord queue receipt includes the operation ID; an unknown web receipt includes the ID and command hint. The command shows the target and reason for confirmation and captures the current attempt/version internally. It rechecks the actor's Ban Members permission and fetches the current Discord ban at confirmation. A present ban, ambiguous lookup failure, or changed operation rejects the release.
+
+An explicit Unknown Ban response permits the disposition **no current ban, historical outcome uncertain**. This records the reviewer, reason, time, original attempt, result and operation metadata in durable request history, stops reconciliation and atomically releases only matching report/detection/case claims. It neither bans nor unbans anyone and does not change member status. Absence is not evidence that no historical ban occurred. The reviewed receipt permits a later explicit moderation decision; a fresh attempt receives fresh ownership and cannot inherit the earlier review.
+
+Successful observed-ban completion analytics are claimed once per operation after durable completion, including recovery. Capture is best effort: a crash after the claim can lose the event, and analytics failure cannot change moderation success. This does not promise transactional delivery to the analytics provider.
+
+## Delivery recommendation and limits
+
+The user requested one PR with subagent implementation. Sequence verification lifecycle fixes before report-ban entry points and shared evidence capture, keeping all task commits in the same PR. Existing JSON metadata and request types should be sufficient; no schema migration is proposed. If implementation proves otherwise, revise this plan before introducing one.
+
+Single-instance coordination addresses the reproduced overlap. Discord send followed by a process crash remains an uncertain-send boundary; recovery must reconcile persisted identity and thread history. Do not claim universal exactly-once Discord delivery.
+
+Production repair is separate. After the code fix, propose an exact-case repair preview using current membership and saved outcome history. It must not ban, automatically close the case, or delete either duplicate message without authorization. Merging main automatically deploys the bot, so merge/deployment requires its own explicit decision.
+
+## Decision still needed
+
+The user confirmed both surfaces and selected one PR with subagent implementation. Implementation is authorized within the stated worktree and release boundaries.
+
+## Engineering references
+
+The investigation and local reproductions are in the calling chat's artifact directory. Primary files are `ThreadManager.ts`, `SecurityActionService.ts`, `VerificationEventRepository.ts`, `CaseReviewReminderService.ts`, `ReportInteractionHandler.ts`, `InteractionHandler.ts`, `ReportReviewService.ts`, `ModerationActionRequestService.ts`, and the web report adapters/actions/components. The implementation plan lists exact paths and tests.
+
+## Deleted notices and superseded role setup
+
+A deleted notification does not prevent confirmed ban cleanup from recording the audit, closing the report or clearing queue attention. Existing observed and case presentations resolve their stored channel directly, even if current configuration changed or is unset. Configured fallback applies only when no stored channel ID exists. Explicit Unknown Channel (10003) and Unknown Message (10008) responses retire the presentation during observed completion, case action logging and button updates. Null resolution, unknown configuration without a stored channel, wrong guild or channel type, permission and network failures remain pending; the lookup never migrates an existing message to another channel. A linked report thread also retires on explicit Unknown Channel 10003 during fetch, closeout send or archive. Permission, network and ambiguous failures keep cleanup pending without repeating enforcement.
+
+A role assignment that finishes after verification or Close No Action must honor that resolution. Capture the configured role once and pass that exact ID to assignment and any cleanup. Release it only when the case and member still require release, the captured membership matches both the database and a fresh Discord fetch, and no pending case or active report-ban operation owns a restriction. Recheck after removal and retain the role if a new restriction arrived. Capture the setup timestamp and membership before quarantine begins. Verification can mark a snapshot restored while a role removal is still in flight. Carry the captured snapshot and this operation's successful removals in memory, then restore those exact late effects through the existing per-role policy and restoration fence. This compensation does not reopen or rewrite the snapshot. Propagate removal or restoration failures. Unknown or later membership remains untouched. This compensation does not rewrite the winning member decision or change successful-role timestamp ordering.

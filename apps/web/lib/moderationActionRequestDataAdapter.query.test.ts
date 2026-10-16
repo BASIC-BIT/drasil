@@ -19,7 +19,9 @@ describe('PostgresModerationActionRequestDataAdapter setup requests', () => {
 
     const [sql, parameters] = mocks.query.mock.calls[0];
     expect(sql).toContain('and (not $3::boolean or action_type = any($4');
-    expect(sql).toContain("and status in ('queued', 'processing')");
+    expect(sql).toContain("and (status in ('queued', 'processing')");
+    expect(sql).toContain("'banned_updates_pending', 'ban_outcome_unknown'");
+    expect(sql).toContain("metadata->>'report_ban_phase' is not null");
     expect(parameters).toEqual(['guild-1', 10, true, ['complete_setup_verification']]);
   });
 

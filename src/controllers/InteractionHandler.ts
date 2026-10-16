@@ -1,3 +1,6 @@
+import { isReportIntakeActionChannel } from '../utils/reportIntakeAdminActions';
+import { IReportIntakeRepository } from '../repositories/ReportIntakeRepository';
+import { IModerationActionRequestRepository } from '../repositories/ModerationActionRequestRepository';
 import {
   Client,
   ButtonInteraction,
@@ -20,6 +23,7 @@ import { injectable, inject, optional } from 'inversify';
 import { INotificationManager } from '../services/NotificationManager';
 import { TYPES } from '../di/symbols';
 import {
+  ModerationActionRequestType,
   AdminActionType,
   CaseAttentionState,
   CaseKind,
@@ -211,7 +215,13 @@ export class InteractionHandler implements IInteractionHandler {
     accountQuarantineService?: IAccountQuarantineService,
     @inject(TYPES.CaptchaChallengeService)
     @optional()
-    captchaChallengeService?: ICaptchaChallengeService
+    captchaChallengeService?: ICaptchaChallengeService,
+    @inject(TYPES.ModerationActionRequestRepository)
+    @optional()
+    private readonly actionRequests?: IModerationActionRequestRepository,
+    @inject(TYPES.ReportIntakeRepository)
+    @optional()
+    private readonly reportIntakes?: IReportIntakeRepository
   ) {
     this.client = client;
     this.notificationManager = notificationManager;
@@ -236,7 +246,8 @@ export class InteractionHandler implements IInteractionHandler {
       reportSubmissionService,
       this.configService,
       this.threadManager,
-      reportIntakeService
+      reportIntakeService,
+      (interaction, intakeId) => this.showReportBanModal(interaction, intakeId)
     );
     this.setupVerificationModalHandler = new SetupVerificationModalHandler(
       this.client,
@@ -2493,7 +2504,10 @@ export class InteractionHandler implements IInteractionHandler {
           await this.reportInteractionHandler.handleReportMessageModalSubmit(interaction);
           return;
         }
-        if (interaction.customId.startsWith('observed:ban_modal:')) {
+        if (
+          interaction.customId.startsWith('observed:ban_modal:') ||
+          interaction.customId.startsWith('report_ban:')
+        ) {
           await this.handleObservedBanModalSubmit(interaction);
           return;
         }
@@ -3698,24 +3712,94 @@ export class InteractionHandler implements IInteractionHandler {
     }
   }
 
+  private async showReportBanModal(
+    interaction: ButtonInteraction,
+    reportId: string
+  ): Promise<void> {
+    const report = await this.reportIntakes?.findById(reportId);
+    const detection = await this.detectionEventsRepository?.findByReportIntakeId(reportId);
+    if (
+      !interaction.guildId ||
+      !report ||
+      report.server_id !== interaction.guildId ||
+      report.status !== 'submitted' ||
+      !report.confirmed_target_user_id ||
+      this.metadataToRecord(report.metadata).report_ban_operation_id ||
+      !detection ||
+      detection.server_id !== interaction.guildId ||
+      detection.user_id !== report.confirmed_target_user_id ||
+      detection.metadata?.reportIntakeId !== reportId ||
+      detection.metadata.observed_action ||
+      !(await isReportIntakeActionChannel(
+        this.configService,
+        interaction.guildId,
+        interaction.channelId,
+        report.thread_id
+      ))
+    ) {
+      await interaction.reply({
+        content: 'This report is no longer available for a ban. Refresh the report.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    if (
+      !(await this.hasAnyPermission(interaction, interaction.guildId, [
+        PermissionFlagsBits.BanMembers,
+      ])) ||
+      !(await this.canUseModeratorBanAction(interaction.guildId))
+    ) {
+      await interaction.reply({
+        content: 'You need Ban Members permission and enabled Drasil ban actions.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    await this.showObservedBanModal(
+      interaction,
+      interaction.guildId,
+      report.confirmed_target_user_id,
+      detection.id,
+      report.id
+    );
+  }
+
   private async showObservedBanModal(
     interaction: ButtonInteraction,
     guildId: string,
     userId: string,
-    detectionEventId: string
+    detectionEventId: string,
+    reportId?: string
   ): Promise<void> {
     const serverConfig = await this.configService.getServerConfig(guildId);
     const settings = getDetectionResponseSettings(serverConfig.settings);
+    const identity = reportId ? await this.client.users.fetch(userId).catch(() => null) : null;
     const modal = new ModalBuilder()
-      .setCustomId(`observed:ban_modal:${userId}:${detectionEventId}`)
-      .setTitle('Confirm Observed Ban');
+      .setCustomId(
+        reportId
+          ? `report_ban:${reportId}:${userId}`
+          : `observed:ban_modal:${userId}:${detectionEventId}`
+      )
+      .setTitle(
+        reportId ? `Ban ${identity?.username ?? userId}`.slice(0, 45) : 'Confirm Observed Ban'
+      );
     const reasonInput = new TextInputBuilder()
       .setCustomId(OBSERVED_ACTION_MODAL_REASON_FIELD_ID)
-      .setLabel(settings.moderatorBanActionRequiresReason ? 'Ban reason' : 'Ban reason (optional)')
+      .setLabel(
+        reportId
+          ? `Reason for ${userId}${settings.moderatorBanActionRequiresReason ? '' : ' (optional)'}`
+          : settings.moderatorBanActionRequiresReason
+            ? 'Ban reason'
+            : 'Ban reason (optional)'
+      )
       .setStyle(TextInputStyle.Paragraph)
       .setRequired(settings.moderatorBanActionRequiresReason)
       .setMaxLength(500)
-      .setPlaceholder(OBSERVED_BAN_DEFAULT_REASON);
+      .setPlaceholder(
+        reportId
+          ? `Target: ${identity?.username ?? userId} (${userId})`.slice(0, 100)
+          : OBSERVED_BAN_DEFAULT_REASON
+      );
     modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(reasonInput));
     await interaction.showModal(modal);
   }
@@ -3729,7 +3813,16 @@ export class InteractionHandler implements IInteractionHandler {
       return;
     }
 
-    const parsed = this.parseObservedActionCustomId(interaction.customId);
+    const reportParts = interaction.customId.startsWith('report_ban:')
+      ? interaction.customId.split(':')
+      : null;
+    const reportDetection = reportParts
+      ? await this.detectionEventsRepository?.findByReportIntakeId(reportParts[1])
+      : null;
+    const parsed =
+      reportParts && reportDetection
+        ? { action: 'ban_modal', userId: reportParts[2], detectionEventId: reportDetection.id }
+        : this.parseObservedActionCustomId(interaction.customId);
     if (!parsed || parsed.action !== 'ban_modal') {
       await interaction.reply({
         content: 'Unknown observed ban action.',
@@ -3772,33 +3865,57 @@ export class InteractionHandler implements IInteractionHandler {
 
     const reason = providedReason || OBSERVED_BAN_DEFAULT_REASON;
     try {
-      const guild = await this.client.guilds.fetch(interaction.guildId);
-      const member = await guild.members.fetch(parsed.userId).catch(() => null);
-      const banned = member
-        ? await this.securityActionService.banObservedDetection(
-            member,
-            parsed.detectionEventId,
-            interaction.user,
-            reason
-          )
-        : await this.securityActionService.banObservedDetectionById(
-            guild,
-            parsed.userId,
-            parsed.detectionEventId,
-            interaction.user,
-            reason
-          );
+      if (!this.actionRequests || !this.detectionEventsRepository)
+        throw new Error('Moderation request queue is unavailable.');
+      const detection = await this.detectionEventsRepository.findById(parsed.detectionEventId);
+      if (
+        !detection ||
+        detection.server_id !== interaction.guildId ||
+        detection.user_id !== parsed.userId
+      )
+        throw new Error('Observed target changed.');
+      const reportId =
+        typeof detection.metadata?.reportIntakeId === 'string'
+          ? detection.metadata.reportIntakeId
+          : undefined;
+      if (reportParts && reportId !== reportParts[1]) throw new Error('Report detection changed.');
+      if (reportId) {
+        const report = await this.reportIntakes?.findById(reportId);
+        if (
+          !report ||
+          report.server_id !== interaction.guildId ||
+          report.status !== 'submitted' ||
+          report.confirmed_target_user_id !== parsed.userId ||
+          (report.metadata as Record<string, unknown> | null)?.report_ban_operation_id ||
+          (reportParts &&
+            !(await isReportIntakeActionChannel(
+              this.configService,
+              interaction.guildId,
+              interaction.channelId,
+              report.thread_id
+            )))
+        )
+          throw new Error('Report is no longer available for this ban.');
+      }
+      const request = await this.actionRequests.enqueue({
+        serverId: interaction.guildId,
+        actorId: interaction.user.id,
+        actorSurface: 'discord_interaction',
+        actionType: ModerationActionRequestType.BAN_OBSERVED_DETECTION,
+        targetUserId: parsed.userId,
+        detectionEventId: parsed.detectionEventId,
+        reportIntakeId: reportId,
+        idempotencyKey: `observed-ban:${interaction.guildId}:${parsed.detectionEventId}`,
+        metadata: { reason, requested_action: 'ban_user' },
+      });
       await interaction.reply({
-        content: banned
-          ? `Banned <@${parsed.userId}>.`
-          : `This observed alert for <@${parsed.userId}> was already actioned.`,
+        content: `Ban queued for <@${parsed.userId}>. Operation: ${request.id}. If the outcome remains uncertain, use /review-report-ban with this operation ID.`,
         flags: MessageFlags.Ephemeral,
       });
     } catch (error) {
       console.error('Error handling observed ban modal submission:', error);
       const response = {
-        content:
-          'Failed to ban from the observed alert. A verification case may have been opened; check the case before retrying.',
+        content: 'Could not queue this ban. Refresh the report before trying again.',
         flags: MessageFlags.Ephemeral,
       } as const;
       if (interaction.replied || interaction.deferred) {

@@ -6,7 +6,9 @@ import {
   Client,
   Guild,
   GuildMember,
+  FetchMessagesOptions,
   Message,
+  MessageType,
   TextChannel,
   ThreadChannel,
   ThreadAutoArchiveDuration,
@@ -39,6 +41,7 @@ import {
   REPORT_INTAKE_REJECT_CUSTOM_ID_PREFIX,
 } from './ReportIntakeService';
 import { getDiscordErrorCode } from '../utils/discordErrors';
+import { parseAdminActionCustomId } from '../utils/adminActionCustomIds';
 
 export const VERIFICATION_THREAD_TYPE_METADATA_KEY = 'thread_type';
 export const VERIFICATION_THREAD_TYPE = 'verification';
@@ -55,6 +58,14 @@ export interface VerificationThreadRepairResult {
   userAdded: boolean;
   promptSent: boolean;
   promptAlreadyPresent: boolean;
+}
+
+class VerificationSetupSuperseded extends Error {}
+
+interface VerificationSetupResult {
+  metadata: VerificationEvent['metadata'];
+  thread: ThreadChannel | null;
+  repair: VerificationThreadRepairResult;
 }
 
 export interface ResolvedThreadClosureResult {
@@ -187,6 +198,7 @@ export class ThreadManager implements IThreadManager {
   private userRepository: IUserRepository;
   private serverRepository: IServerRepository;
   private serverMemberRepository: IServerMemberRepository;
+  private readonly verificationSetups = new Map<string, Promise<VerificationSetupResult>>();
   private readonly presentationBuilder = new NotificationPresentationBuilder();
 
   async retireReportConfirmationPrompts(
@@ -495,22 +507,22 @@ export class ThreadManager implements IThreadManager {
     verificationEvent: VerificationEvent,
     threadId: string,
     threadType: typeof VERIFICATION_THREAD_TYPE | typeof REPORT_REVIEW_THREAD_TYPE,
-    extraMetadata: Record<string, unknown> = {}
+    extraMetadata: Record<string, unknown> = {},
+    expectedPendingThreadId?: string | null
   ): Promise<void> {
-    const metadata =
-      verificationEvent.metadata &&
-      typeof verificationEvent.metadata === 'object' &&
-      !Array.isArray(verificationEvent.metadata)
-        ? { ...verificationEvent.metadata }
-        : {};
-
-    verificationEvent.thread_id = threadId;
-    verificationEvent.metadata = {
-      ...metadata,
-      [VERIFICATION_THREAD_TYPE_METADATA_KEY]: threadType,
-      ...extraMetadata,
-    };
-    await this.verificationEventRepository.update(verificationEvent.id, verificationEvent);
+    // Thread identity and type must commit together so a retry cannot mistake a
+    // newly promoted verification thread for its old moderator-only review thread.
+    const updated = await this.verificationEventRepository.setThreadIdentity(
+      verificationEvent.id,
+      threadId,
+      threadType,
+      extraMetadata,
+      expectedPendingThreadId
+    );
+    if (!updated && expectedPendingThreadId !== undefined) throw new VerificationSetupSuperseded();
+    if (!updated) throw new Error(`Verification event ${verificationEvent.id} was not found`);
+    verificationEvent.thread_id = updated.thread_id;
+    verificationEvent.metadata = updated.metadata;
   }
 
   private async storePrivateEvidenceThreadId(
@@ -781,7 +793,8 @@ export class ThreadManager implements IThreadManager {
   private async addFlaggedUserToVerificationThread(
     member: GuildMember,
     thread: ThreadChannel,
-    parentChannel?: TextChannel | null
+    parentChannel?: TextChannel | null,
+    requireCurrent?: () => Promise<void>
   ): Promise<void> {
     let lastError: unknown;
     let latestMember = member;
@@ -792,6 +805,7 @@ export class ThreadManager implements IThreadManager {
       throw this.buildPendingMemberThreadAddError(latestMember);
     }
 
+    await requireCurrent?.();
     try {
       await thread.members.add(member.id);
       return;
@@ -813,6 +827,7 @@ export class ThreadManager implements IThreadManager {
         throw this.buildPendingMemberThreadAddError(latestMember, lastError);
       }
 
+      await requireCurrent?.();
       try {
         await thread.members.add(latestMember.id);
         return;
@@ -880,11 +895,57 @@ export class ThreadManager implements IThreadManager {
     return maybeThread.isThread() ? maybeThread : null;
   }
 
+  private async requirePendingVerificationSetup(
+    event: VerificationEvent,
+    expectedThreadId = event.thread_id
+  ): Promise<void> {
+    const latest = await this.verificationEventRepository.findById(event.id);
+    const superseded =
+      !latest ||
+      latest.status !== VerificationStatus.PENDING ||
+      latest.thread_id !== expectedThreadId ||
+      latest.case_revision !== event.case_revision;
+    if (latest) Object.assign(event, latest);
+    if (superseded) throw new VerificationSetupSuperseded('Verification setup was superseded.');
+  }
+
+  private async retireVerificationSetup(
+    event: Pick<VerificationEvent, 'id' | 'case_revision'>,
+    thread: ThreadChannel,
+    addedMemberId?: string
+  ): Promise<void> {
+    const isCurrentPendingThread = async (): Promise<boolean> => {
+      const latest = await this.verificationEventRepository.findById(event.id);
+      return Boolean(
+        latest?.status === VerificationStatus.PENDING &&
+        latest.thread_id === thread.id &&
+        latest.case_revision >= event.case_revision
+      );
+    };
+    try {
+      if (await isCurrentPendingThread()) return;
+      if (addedMemberId) {
+        try {
+          await thread.members.remove(addedMemberId);
+        } catch (error) {
+          if (!['10003', '10007'].includes(String(getDiscordErrorCode(error)))) throw error;
+        }
+      }
+
+      if (await isCurrentPendingThread()) return;
+      await thread.setLocked(true);
+      if (await isCurrentPendingThread()) return;
+      await thread.setArchived(true);
+    } catch (error) {
+      if (String(getDiscordErrorCode(error)) !== '10003') throw error;
+    }
+  }
+
   private async sendInitialVerificationPrompt(
     member: GuildMember,
     thread: ThreadChannel,
-    verificationEventId: string
-  ): Promise<void> {
+    verificationEvent: VerificationEvent
+  ): Promise<Message> {
     const rawInitialPrompt = await this.getInitialVerificationPrompt(member);
     const initialPrompt = enforceDiscordMessageLimit(rawInitialPrompt);
     if (initialPrompt.length < rawInitialPrompt.length) {
@@ -893,7 +954,8 @@ export class ThreadManager implements IThreadManager {
       );
     }
 
-    await thread.send({
+    await this.requirePendingVerificationSetup(verificationEvent, thread.id);
+    const message = await thread.send({
       content: initialPrompt,
       allowedMentions: {
         parse: [],
@@ -901,22 +963,205 @@ export class ThreadManager implements IThreadManager {
         roles: [],
         repliedUser: false,
       },
-      components: [this.presentationBuilder.createActionRow(member.id, { verificationEventId })],
+      components: [
+        this.presentationBuilder.createActionRow(member.id, {
+          verificationEventId: verificationEvent.id,
+        }),
+      ],
     });
+    return message;
   }
 
-  private async hasInitialVerificationPrompt(
+  private async ensureInitialVerificationPrompt(
     member: GuildMember,
-    thread: ThreadChannel
-  ): Promise<boolean> {
-    const messages = await thread.messages.fetch({ limit: INITIAL_VERIFICATION_PROMPT_SCAN_LIMIT });
-    const botUserId = this.client.user?.id;
+    thread: ThreadChannel,
+    verificationEvent: VerificationEvent
+  ): Promise<{ messageId: string; sent: boolean }> {
+    await this.requirePendingVerificationSetup(verificationEvent, thread.id);
+    const metadata = verificationEvent.metadata;
+    const storedId =
+      metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+        ? metadata.initial_verification_prompt_message_id
+        : undefined;
+    const isInitialPrompt = (message: Message): boolean => {
+      if (!this.client.user || message.author.id !== this.client.user.id) return false;
+      return message.components.some(
+        (row) =>
+          row.type === ComponentType.ActionRow &&
+          row.components.some((component) => {
+            if (component.type !== ComponentType.Button || !component.customId) return false;
+            const action = parseAdminActionCustomId(component.customId);
+            if (
+              action?.surface !== 'case' ||
+              action.action !== 'menu' ||
+              action.userId !== member.id
+            )
+              return false;
+            if (action.verificationEventId === verificationEvent.id) return true;
+            // The shipped initial prompt has one Primary Admin Actions button. Its
+            // historical custom copy cannot be reconstructed from current configuration.
+            return (
+              thread.id === verificationEvent.thread_id &&
+              [`admin_actions:m:c:${member.id}`, `admin_actions:menu:case:${member.id}`].includes(
+                component.customId
+              ) &&
+              message.channelId === thread.id &&
+              message.guildId === member.guild.id &&
+              message.type === MessageType.Default &&
+              Boolean(message.content) &&
+              message.embeds.length === 0 &&
+              message.attachments.size === 0 &&
+              message.components.length === 1 &&
+              row.components.length === 1 &&
+              component.style === ButtonStyle.Primary &&
+              component.label === 'Admin Actions' &&
+              (metadata as Record<string, unknown> | null)?.thread_type !==
+                REPORT_REVIEW_THREAD_TYPE
+            );
+          })
+      );
+    };
+    const remember = async (
+      messageId: string,
+      sent: boolean
+    ): Promise<{ messageId: string; sent: boolean }> => {
+      const updated = await this.verificationEventRepository.patchMetadata(
+        verificationEvent.id,
+        {
+          initial_verification_prompt_message_id: messageId,
+        },
+        { expectedPendingThreadId: thread.id }
+      );
+      if (!updated) throw new VerificationSetupSuperseded('Prompt ownership changed.');
+      verificationEvent.metadata = updated.metadata;
+      return { messageId, sent };
+    };
+    if (typeof storedId === 'string' && storedId) {
+      try {
+        const message = await thread.messages.fetch({ message: storedId, force: true });
+        await this.requirePendingVerificationSetup(verificationEvent, thread.id);
+        if (isInitialPrompt(message)) return { messageId: message.id, sent: false };
+      } catch (error) {
+        if (String(getDiscordErrorCode(error)) !== '10008') throw error;
+      }
+    }
+    let historyOptions: FetchMessagesOptions = { limit: INITIAL_VERIFICATION_PROMPT_SCAN_LIMIT };
+    for (;;) {
+      const messages = await thread.messages.fetch(historyOptions);
+      await this.requirePendingVerificationSetup(verificationEvent, thread.id);
+      for (const message of messages.values()) {
+        if (isInitialPrompt(message)) return remember(message.id, false);
+      }
+      if (messages.size < INITIAL_VERIFICATION_PROMPT_SCAN_LIMIT) break;
+      const oldestId = messages.last()?.id;
+      if (oldestId === undefined || oldestId === historyOptions.before)
+        throw new Error('Verification prompt history scan did not advance');
+      historyOptions = { limit: INITIAL_VERIFICATION_PROMPT_SCAN_LIMIT, before: oldestId };
+    }
+    const sent = await this.sendInitialVerificationPrompt(member, thread, verificationEvent);
+    try {
+      await this.requirePendingVerificationSetup(verificationEvent, thread.id);
+      const remembered = await remember(sent.id, true);
+      await this.requirePendingVerificationSetup(verificationEvent, thread.id);
+      return remembered;
+    } catch (error) {
+      if (error instanceof VerificationSetupSuperseded) {
+        try {
+          await sent.delete();
+        } catch (deleteError) {
+          if (!['10003', '10008'].includes(String(getDiscordErrorCode(deleteError))))
+            throw deleteError;
+        } finally {
+          await this.retireVerificationSetup(verificationEvent, thread);
+        }
+      }
+      throw error;
+    }
+  }
 
-    return [...messages.values()].some((message) => {
-      const isFromBot =
-        (botUserId && message.author.id === botUserId) || (!botUserId && message.author.bot);
-      return isFromBot && message.content.includes(`<@${member.id}>`);
-    });
+  private async coordinateVerificationSetup(
+    member: GuildMember,
+    verificationEvent: VerificationEvent,
+    promoteReportReview = false
+  ): Promise<VerificationSetupResult> {
+    const existing = this.verificationSetups.get(verificationEvent.id);
+    if (existing) {
+      const result = await existing;
+      if (
+        !promoteReportReview ||
+        (result.metadata as Record<string, unknown> | null)?.thread_type !==
+          REPORT_REVIEW_THREAD_TYPE
+      )
+        return result;
+      // A skipped legacy repair cannot satisfy a promotion. Re-read after its owner exits.
+      if (this.verificationSetups.get(verificationEvent.id) === existing)
+        this.verificationSetups.delete(verificationEvent.id);
+      return this.coordinateVerificationSetup(member, verificationEvent, true);
+    }
+    const setup = Promise.resolve()
+      .then(async (): Promise<VerificationSetupResult> => {
+        const latest = Object.assign(
+          verificationEvent,
+          (await this.verificationEventRepository.findById(verificationEvent.id)) ??
+            verificationEvent
+        );
+        if (latest.status !== VerificationStatus.PENDING) throw new VerificationSetupSuperseded();
+        const isReportReview =
+          latest.metadata &&
+          typeof latest.metadata === 'object' &&
+          !Array.isArray(latest.metadata) &&
+          latest.metadata[VERIFICATION_THREAD_TYPE_METADATA_KEY] === REPORT_REVIEW_THREAD_TYPE;
+        if (isReportReview && !promoteReportReview)
+          return {
+            metadata: latest.metadata,
+            thread: null,
+            repair: {
+              threadId: latest.thread_id,
+              threadCreated: false,
+              userAdded: false,
+              promptSent: false,
+              promptAlreadyPresent: false,
+            },
+          };
+        if (latest.thread_id && !(promoteReportReview && isReportReview))
+          return this.repairVerificationThreadUnlocked(member, latest);
+        const thread = await this.createVerificationThreadUnlocked(member, latest);
+        return {
+          metadata: latest.metadata,
+          thread,
+          repair: {
+            threadId: thread?.id ?? null,
+            threadCreated: Boolean(thread),
+            userAdded: Boolean(thread),
+            promptSent: Boolean(thread),
+            promptAlreadyPresent: false,
+          },
+        };
+      })
+      .catch(async (error): Promise<VerificationSetupResult> => {
+        if (!(error instanceof VerificationSetupSuperseded)) throw error;
+        const latest = await this.verificationEventRepository.findById(verificationEvent.id);
+        if (latest) Object.assign(verificationEvent, latest);
+        return {
+          metadata: verificationEvent.metadata,
+          thread: null,
+          repair: {
+            threadId: verificationEvent.thread_id,
+            threadCreated: false,
+            userAdded: false,
+            promptSent: false,
+            promptAlreadyPresent: false,
+          },
+        };
+      });
+
+    this.verificationSetups.set(verificationEvent.id, setup);
+    try {
+      return await setup;
+    } finally {
+      if (this.verificationSetups.get(verificationEvent.id) === setup)
+        this.verificationSetups.delete(verificationEvent.id);
+    }
   }
 
   /**
@@ -925,6 +1170,16 @@ export class ThreadManager implements IThreadManager {
    * @returns Promise resolving to the created thread or null if creation failed
    */
   public async createVerificationThread(
+    member: GuildMember,
+    verificationEvent: VerificationEvent
+  ): Promise<ThreadChannel | null> {
+    const result = await this.coordinateVerificationSetup(member, verificationEvent, true);
+    verificationEvent.thread_id = result.thread?.id ?? verificationEvent.thread_id;
+    verificationEvent.metadata = result.metadata;
+    return result.thread;
+  }
+
+  private async createVerificationThreadUnlocked(
     member: GuildMember,
     verificationEvent: VerificationEvent
   ): Promise<ThreadChannel | null> {
@@ -944,6 +1199,8 @@ export class ThreadManager implements IThreadManager {
 
     let setupStage = 'prepare verification thread records';
     let threadWasCreated = false;
+    let ownedThread: ThreadChannel | undefined;
+    let userAdded = false;
 
     try {
       // Ensure the server exists
@@ -959,6 +1216,8 @@ export class ThreadManager implements IThreadManager {
         member.joinedAt ?? undefined // Pass Date object or undefined
       );
 
+      await this.requirePendingVerificationSetup(verificationEvent);
+      const priorThreadId = verificationEvent.thread_id;
       // Create a thread for verification
       setupStage = 'create verification thread';
       const threadName = `Verification: ${member.user.username}`;
@@ -969,15 +1228,28 @@ export class ThreadManager implements IThreadManager {
         type: ChannelType.PrivateThread,
       });
       threadWasCreated = true;
+      ownedThread = thread;
+      await this.requirePendingVerificationSetup(verificationEvent, priorThreadId);
 
       // Persist the Discord thread before follow-up operations so partial setup
       // failures do not orphan a thread that was already created.
       setupStage = 'store verification thread id';
-      await this.storeThreadId(verificationEvent, thread.id, VERIFICATION_THREAD_TYPE);
+      await this.storeThreadId(
+        verificationEvent,
+        thread.id,
+        VERIFICATION_THREAD_TYPE,
+        {},
+        priorThreadId
+      );
+      await this.requirePendingVerificationSetup(verificationEvent, thread.id);
 
       // Add the member to the private thread so they can see it
       setupStage = 'add flagged user to verification thread';
-      await this.addFlaggedUserToVerificationThread(member, thread, channel);
+      await this.addFlaggedUserToVerificationThread(member, thread, channel, () =>
+        this.requirePendingVerificationSetup(verificationEvent, thread.id)
+      );
+      userAdded = true;
+      await this.requirePendingVerificationSetup(verificationEvent, thread.id);
 
       // Lock invites after the flagged user has been added.
       // Some server permission setups allow creating private threads but not managing them;
@@ -991,22 +1263,34 @@ export class ThreadManager implements IThreadManager {
         );
       }
 
+      await this.requirePendingVerificationSetup(verificationEvent, thread.id);
       setupStage = 'route case responders to verification thread';
       const routingResult = await this.addCaseResponderMembers(member.guild, thread, [member.id]);
 
+      await this.requirePendingVerificationSetup(verificationEvent, thread.id);
       await this.storeThreadId(
         verificationEvent,
         thread.id,
         VERIFICATION_THREAD_TYPE,
-        this.buildCaseStaffRoutingMetadata(routingResult)
+        this.buildCaseStaffRoutingMetadata(routingResult),
+        thread.id
       );
 
       // Send an initial message to the thread
       setupStage = 'send initial verification prompt';
-      await this.sendInitialVerificationPrompt(member, thread, verificationEvent.id);
+      await this.ensureInitialVerificationPrompt(member, thread, verificationEvent);
 
       return thread;
     } catch (error) {
+      if (error instanceof VerificationSetupSuperseded) {
+        if (ownedThread)
+          await this.retireVerificationSetup(
+            verificationEvent,
+            ownedThread,
+            userAdded ? member.id : undefined
+          );
+        throw error;
+      }
       console.error('Failed to create verification thread:', error);
       if (threadWasCreated) {
         throw this.buildThreadSetupError(setupStage, error);
@@ -1019,42 +1303,66 @@ export class ThreadManager implements IThreadManager {
     member: GuildMember,
     verificationEvent: VerificationEvent
   ): Promise<VerificationThreadRepairResult> {
-    if (!verificationEvent.thread_id) {
-      const createdThread = await this.createVerificationThread(member, verificationEvent);
-      return {
-        threadId: createdThread?.id ?? null,
-        threadCreated: Boolean(createdThread),
-        userAdded: Boolean(createdThread),
-        promptSent: Boolean(createdThread),
-        promptAlreadyPresent: false,
-      };
-    }
+    const result = await this.coordinateVerificationSetup(member, verificationEvent);
+    verificationEvent.thread_id = result.thread?.id ?? verificationEvent.thread_id;
+    verificationEvent.metadata = result.metadata;
+    return result.repair;
+  }
 
+  private async repairVerificationThreadUnlocked(
+    member: GuildMember,
+    verificationEvent: VerificationEvent
+  ): Promise<VerificationSetupResult> {
     const thread = await this.fetchStoredThread(verificationEvent);
     if (!thread) {
       throw new Error(`Stored verification thread ${verificationEvent.thread_id} was not found.`);
     }
 
-    if (thread.archived) {
-      await thread.setArchived(false, 'Repair active verification case');
-    }
-    if (thread.locked) {
-      await thread.setLocked(false, 'Repair active verification case');
-    }
+    let newlyAdded = false;
+    try {
+      await this.requirePendingVerificationSetup(verificationEvent, thread.id);
+      if (thread.archived) {
+        await thread.setArchived(false, 'Repair active verification case');
+        await this.requirePendingVerificationSetup(verificationEvent, thread.id);
+      }
+      if (thread.locked) {
+        await thread.setLocked(false, 'Repair active verification case');
+        await this.requirePendingVerificationSetup(verificationEvent, thread.id);
+      }
 
-    await this.addFlaggedUserToVerificationThread(member, thread);
-    const promptAlreadyPresent = await this.hasInitialVerificationPrompt(member, thread);
-    if (!promptAlreadyPresent) {
-      await this.sendInitialVerificationPrompt(member, thread, verificationEvent.id);
+      const existingMember = await thread.members
+        .fetch({ member: member.id, force: true })
+        .catch((error) => {
+          if (String(getDiscordErrorCode(error)) === '10007') return null;
+          throw error;
+        });
+      await this.requirePendingVerificationSetup(verificationEvent, thread.id);
+      await this.addFlaggedUserToVerificationThread(member, thread, undefined, () =>
+        this.requirePendingVerificationSetup(verificationEvent, thread.id)
+      );
+      newlyAdded = !existingMember;
+      await this.requirePendingVerificationSetup(verificationEvent, thread.id);
+      const prompt = await this.ensureInitialVerificationPrompt(member, thread, verificationEvent);
+      return {
+        metadata: verificationEvent.metadata,
+        thread,
+        repair: {
+          threadId: thread.id,
+          threadCreated: false,
+          userAdded: true,
+          promptSent: prompt.sent,
+          promptAlreadyPresent: !prompt.sent,
+        },
+      };
+    } catch (error) {
+      if (error instanceof VerificationSetupSuperseded)
+        await this.retireVerificationSetup(
+          verificationEvent,
+          thread,
+          newlyAdded ? member.id : undefined
+        );
+      throw error;
     }
-
-    return {
-      threadId: thread.id,
-      threadCreated: false,
-      userAdded: true,
-      promptSent: !promptAlreadyPresent,
-      promptAlreadyPresent,
-    };
   }
 
   public async createReportReviewThread(
@@ -1651,13 +1959,28 @@ export class ThreadManager implements IThreadManager {
    */
   async reopenVerificationThread(verificationEvent: VerificationEvent): Promise<boolean> {
     try {
+      // Finish any already-started retirement before restoring this revision's access.
+      await this.verificationSetups.get(verificationEvent.id);
+      await this.requirePendingVerificationSetup(verificationEvent);
       let reopenedMainThread = false;
 
       if (verificationEvent.thread_id) {
         const thread = await this.fetchStoredThread(verificationEvent);
         if (thread) {
-          await this.setThreadArchiveAndLockState(thread, false, false);
-          reopenedMainThread = true;
+          try {
+            await this.requirePendingVerificationSetup(verificationEvent, thread.id);
+            await thread.setArchived(false);
+            await this.requirePendingVerificationSetup(verificationEvent, thread.id);
+            await thread.setLocked(false);
+            await this.requirePendingVerificationSetup(verificationEvent, thread.id);
+            await thread.members.add(verificationEvent.user_id);
+            await this.requirePendingVerificationSetup(verificationEvent, thread.id);
+            reopenedMainThread = true;
+          } catch (error) {
+            if (error instanceof VerificationSetupSuperseded)
+              await this.retireVerificationSetup(verificationEvent, thread);
+            throw error;
+          }
         }
       }
 

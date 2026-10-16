@@ -1,0 +1,157 @@
+# Verification and report ban implementation plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
+
+**Goal:** Repair verification lifecycle races and provide audited direct report bans in Discord and web.
+
+**Architecture:** Serialize initial thread setup and repair per case, persist prompt identity, and patch owned metadata atomically. Extract the existing case evidence collector and reuse the observed-ban operation for report bans. Add report-bound confirmation and queue entry points with execution-time validation.
+
+**Tech stack:** Existing TypeScript, discord.js, Inversify, Prisma/Postgres, Next.js, Zod, Jest, web unit tests, and Playwright. No new dependencies.
+
+**Spec:** [Confirmed scope and behavior](../specs/2026-10-15-verification-and-report-ban-design.md).
+
+## Global constraints
+
+- Both Discord and web are in scope. No case thread or case-role requirement for direct bans.
+- Preserve existing moderator Ban Members permissions and server reason/policy settings.
+- Preserve all available evidence and audit links; explicitly record unavailable optional fields.
+- No live moderation, historical repair, merge, deployment, or duplicate-message deletion as part of implementation.
+- Keep the protected mirror clean. Use `D:/bench/drasil-wt/verification-case-investigation` for every task in one PR, as requested by the user on October 15.
+- Use neutral public examples, prefix GitHub prose with `[AGENT]`, and link issues. No private guild names or incident identities in committed files or public posts.
+
+## Review focus
+
+1. A member leaves while setup/evidence is awaiting Discord or profile data: retain departure and correct controls.
+2. A report changes or is handled after confirmation but before queued execution: reject the stale action.
+3. Discord bans successfully but a database/presentation operation fails: record/report partial completion and never blindly repeat enforcement.
+4. Two clicks or repairs overlap: one destructive operation and one initial verification prompt.
+5. The target left or optional profile/context sources are unavailable: ban by ID with the available evidence and explicit gaps.
+
+## Verification lifecycle fixes
+
+### Task 1: Coordinate initial thread setup and repair
+
+**Files:** `src/services/ThreadManager.ts`, `src/repositories/VerificationEventRepository.ts`, `src/__tests__/unit/ThreadManager.unit.test.ts`, `src/__tests__/fakes/inMemoryRepositories.ts`.
+
+**Interfaces:** Keep public `createVerificationThread(member, event)` and `repairVerificationThread(member, event)` signatures. Add private `ensureInitialVerificationPrompt(member: GuildMember, thread: ThreadChannel, verificationEvent: VerificationEvent): Promise<{ messageId: string; sent: boolean }>` and a shared per-case setup promise. Add verification repository/fake `patchMetadata(id: string, patch: Record<string, unknown>, options?: { touchUpdatedAt?: boolean }): Promise<VerificationEvent | null>` using one database-side JSONB merge; use it to store `initial_verification_prompt_message_id`. Task 2 consumes this primitive. Refactor shared work into unlocked private helpers to avoid recursive lock waits when repair creates a missing thread.
+
+- [x] Add deterministic tests where creation pauses after storing the thread ID while repair starts, and where two repairs inspect a missing prompt. Assert one thread and one initial prompt, with both callers receiving the same thread identity.
+- [x] Add restart/partial-failure tests for an existing stored prompt, a confirmed missing message, failed member addition, and permission/timeout/history-read failures. Match a prompt by bot plus case-bound action ID. Assert unrelated bot mentions do not suppress a needed prompt, and unreadable messages/history never trigger a replacement.
+- [x] Run the focused ThreadManager suite and observe the overlap assertions fail on the current code.
+- [x] Implement coordination and identity reconciliation while preserving existing error-stage reporting and prompt copy.
+- [x] Run the focused suite and a repository integration test proving independent JSON patches both survive, then commit the tested change.
+
+### Task 2: Preserve concurrent case state and departure controls
+
+**Files:** `src/repositories/VerificationEventRepository.ts`, `src/services/SecurityActionService.ts`, `src/services/UserModerationService.ts`, `src/services/ThreadManager.ts`, `src/services/CaseReviewReminderService.ts`, their unit suites/fakes, and repository integration tests.
+
+**Interfaces:** Consume Task 1's `patchMetadata` primitive. Convert the affected setup/evidence and departure writers to owned patches. Use existing row/status guards for updates that can alter lifecycle state; do not replace guarded resolution methods with an unrestricted merge.
+
+- [x] Reproduce departure during evidence collection using the actual service method. Assert the departure marker, reminder state, and terminal/quarantine state survive, and final notification/queue controls reflect the latest row.
+- [x] Add a real-Postgres integration test with independent concurrent patches. Assert both metadata keys remain and unrelated fields are unchanged.
+- [x] Add reminder eligibility tests for left members, verified/banned members, and present pending members. Keep the existing second-reminder timing tests.
+- [x] Observe new assertions fail, then implement the merge and fresh-state presentation. Leave a departed case pending and show existing Ban by ID/Close No Action controls.
+- [x] Run bot unit tests, build, lint, format, and serial local integration tests using the integration-testing skill. Keep the tested task commits on the shared feature branch for the single combined PR. Do not merge or repair production.
+
+## Direct report bans with evidence parity
+
+### Task 3: Share evidence capture and bind bans to current reports
+
+**Files:** create `src/services/ModerationEvidenceService.ts`; modify `src/services/SecurityActionService.ts`, `src/services/UserModerationService.ts`, `src/services/ReportReviewService.ts`, `src/services/ModerationActionRequestService.ts`, `src/repositories/ModerationActionRequestRepository.ts`, `src/repositories/DetectionEventsRepository.ts`, `src/repositories/ReportIntakeRepository.ts`, DI files, fakes, `apps/web/lib/inboxActionReceipts.ts`, and their unit/integration tests.
+
+**Interfaces:** Extract existing evidence collection into `capture(input: { guildId: string; userId: string; member: GuildMember | null }): Promise<ModerationEvidenceSnapshot>`. Move the existing `ProfileAssetSnapshot` type alongside it; the snapshot carries profile assets, optional `ProfileImageDescription`, detection history, recent `MessageContext`, capture time, and explicit unavailable sources. The service collects data without Discord sends or case creation. Case and report paths own persistence/presentation. Add `patchMetadata(detectionEventId: string, patch: Record<string, unknown>): Promise<DetectionEvent | null>` for `moderation_evidence`, preserving observed-action claims.
+
+Continue using `BAN_OBSERVED_DETECTION`; include `report_intake_id` and expected target/detection. Add report repository `claimBan(input: { reportId: string; serverId: string; targetUserId: string; detectionEventId: string; operationId: string; attemptToken?: string }): Promise<ReportIntake | null>`, backed by an atomic conditional update of the submitted report and a metadata operation marker. Claim before evidence I/O. Make competing close/open/target-update paths honor that marker. A close before claim cancels the queued request; after claim it returns busy. Reread and verify ownership before enforcement. Reuse the existing request ID as operation identity. The database mints an internal per-attempt token on enqueue/retry; preparation and report claims must match that token and the compare-and-swap winner before enforcement. Clients do not provide authoritative attempt tokens. Track phases `preparing`, `enforcement_started`, `discord_confirmed`, and `reconciliation_required`; do not expire an uncertain enforcement phase into an automatic resend.
+
+Replace ambiguous boolean outcomes for the affected observed-ban callers with `ObservedBanResult = { status: 'banned' } | { status: 'already_handled' } | { status: 'banned_updates_pending'; operationId: string } | { status: 'ban_outcome_unknown'; operationId: string }`. Carry the confirmed-enforcement result through the user-moderation finalization seam instead of swallowing post-ban failures. Migrate all callers and their tests. Worker completion payloads retain this result; presentation maps pending updates to "Banned. Report updates are still pending." Unknown outcomes show "Ban outcome needs review." Neither state offers another Ban submit.
+
+Add `claimReportBanReconciliation(now: Date): Promise<ModerationActionRequest | null>` to the request repository/fake. It atomically leases one due report-ban operation using existing metadata fields, including completed requests with pending-update receipts and interrupted enforcement phases. Run at most `DEFAULT_MAX_REQUESTS_PER_TICK` such operations at the beginning of every `processPendingRequests` poll, including startup. Reconcile only missing idempotent audit/report updates when Discord confirms the ban. Record retry time and last error, retrying at 1 minute, 5 minutes, 15 minutes, then hourly; retain the visible partial/unknown receipt. If the ban is absent after an uncertain send, require moderator review and never automatically enforce again. Lease expiry allows another worker to resume cleanup after a crash without removing the report/detection enforcement claims.
+
+- [x] Add tests for member and by-ID direct report bans that assert persisted evidence precedes Discord enforcement, report/detection/action/outcome links remain, and no thread or role is created. Test an existing linked case resolves normally.
+- [x] Add stale/closed/foreign-guild report tests and duplicate-action tests. Check request acceptance, execution, and a close/target change while evidence capture is paused. Assert the report claim rejects competing mutations and policy/actor permissions are checked at execution.
+- [x] Test missing optional context versus failed required persistence, and a successful Discord ban followed by a finalization failure. Assert unavailable fields remain explicit, failed persistence prevents enforcement, and partial completion returns `banned_updates_pending`. Restart the worker with a completed pending-update receipt, assert the reconciliation sweep resumes and clears it, and assert zero additional Discord ban calls. Test cleanup retry timing, lease expiry, and interrupted enforcement with absent/current bans; an absent ban after an uncertain send becomes moderator review rather than automatic enforcement.
+- [x] Observe failures, extract the shared collector, and route both observed-ban variants through evidence persistence before enforcement. Preserve report closeout, prompt retirement, and queue cleanup semantics.
+- [x] Run service tests and serial repository integration tests, then commit.
+
+### Task 4: Add the Discord and web entry points
+
+**Files:** `src/controllers/ReportInteractionHandler.ts`, `src/controllers/InteractionHandler.ts`, `src/utils/reportIntakeAdminActions.ts`, `packages/contracts/src/reports.ts`, `apps/web/components/reports/ReportDetailView.tsx`, `apps/web/app/admin/guild/[guildId]/reports/actions.ts`, report detail page, `apps/web/lib/reportQueueDataAdapter.ts`, `apps/web/lib/reportDetailDataAdapter.ts`, `apps/web/lib/inboxActionReceipts.ts`, `apps/web/components/inbox/ModerationInboxView.tsx`, exhaustive action maps, stories, and tests.
+
+**Interfaces:** Add the contract action `ban_user`. Add `banSubmittedReport(guildId: string, reportId: string, previousState: InboxActionState, formData: FormData): Promise<InboxActionState>` as the web server action, returning existing queue receipt states. Discord intake actions resolve a submitted intake to its confirmed target/detection, then use the existing reason-modal flow with a report-bound identifier. Server-side code always reloads identity/target; neither surface supplies an authoritative user ID from client state.
+
+- [x] Add tests asserting Ban is available to authorized moderators on an eligible submitted report, and absent/disabled with a clear reason for unconfirmed, handled, or inaccessible reports.
+- [x] Add Discord tests for a moderator confirmation, reporter denial, target mismatch, stale submission, and Ban by ID. Keep moderation-only controls ephemeral and existing reporter close behavior unchanged.
+- [x] Add web action/component tests for target/reason confirmation, auth return to the same report, queue receipts, stale report rejection, and failure recovery. Confirm `banned_updates_pending` displays its distinct receipt and never offers another Ban submit while reconciliation is pending. Update exhaustive contract/action maps and stories.
+- [x] Observe failures, implement the controls using the existing confirmation patterns, and show Queued until the bot receipt confirms completion. Revalidate the report detail, report queue, and inbox after completion.
+- [x] Add a Playwright report-ban flow with simulated provider I/O. Assert no Open Case step, no case creation, and the final report status reflects the actual result.
+- [x] Run `npm run check:ci` with the repository's local test prerequisites and report unavailable checks. The full local gate and separate code metrics gate passed.
+- [x] Controller: requested a whole-branch review and published the single linked PR containing all four tasks. Final fixes are committed; scoped re-review and exact-head CI are the remaining readiness checks.
+
+Acceptance invalidates report detail, report queue and inbox. Detail polls through the terminal receipt; queue and inbox use dynamic session reads on navigation. The fixture browser journey verifies that a completed report ban removes pending attention from both views. No extra completion callback is required.
+
+## Completion and release boundaries
+
+Update task checkboxes as work completes. One PR links the issue and contains all four tasks. A PR is not merge-ready until the latest head is pushed, 30 minutes have elapsed since that commit, and a post-window sweep covers all checks, comments, reviews, inline threads, and mutable review summaries. Every commit restarts the window. No merge or deployment is authorized by this plan.
+
+## Plan review
+
+The user approved one PR with subagent implementation on October 15. Execute task-by-task with fresh implementation and review subagents, then review the combined branch. No further execution-method approval is needed.
+
+## External review recycle: bounded completion
+
+[AGENT] External GitHub feedback adds one operator recovery command, protects legacy review threads during repair, and restores completion analytics. The report Ban flow remains on Discord and web. `/review-report-ban operation:<operation-id> reason:<review reason>` uses the existing Discord confirmation helper; receipts supply the operation ID. It records a reviewed no-current-ban disposition while retaining historical uncertainty, releases only the matching claims, and requires a fresh explicit action for any later ban. No new approval decision, schema, dependency or enforcement path is introduced.
+
+- Serialize legacy repair and promotion on the existing case setup key. A repair of `report_review` is a safe no-op; a waiting promotion reevaluates persisted state. Cover both overlap orders and the direct delayed-repair caller.
+- Recheck Ban Members permission and an explicit Discord Unknown Ban response. Fence review with the operation, server, target, attempt token and captured request version. Hold request/report/detection/sorted-case locks while appending review history and releasing matching claims. Rotate the token to fence paused owners. Preserve newer case/member state and history through an explicit retry.
+- Parse `ban_reviewed_no_current_ban` receipts and restore available report controls. Keep a fresh unknown attempt blocked until its own review. Cover command catalog/routing/confirmation and actual Postgres concurrency, idempotence and audit behavior.
+- Claim observed detection completion analytics once after durable success, including reconciliation. Keep the existing member/by-ID event bindings and best-effort behavior. Cover partial, unknown, repeated completion and analytics failure.
+- Run affected unit/web/real-DB regressions, source checks, metrics and the full local gate. Keep external runtime and post-push CI evidence separate.
+
+## External follow-up: notification entry and cases created during enforcement
+
+The two confirmed review findings affect existing flows. Report Ban now accepts the configured admin-notification channel at modal open and submit. Confirmed cleanup adopts eligible cases created while Discord enforcement was in flight. This preserves the approved direct-ban experience without adding a case-opening step or a new enforcement path. No new user decision is needed.
+
+- Share the current report-thread/admin-channel predicate across menu admission, modal open and modal submit. Retain identity, permissions, policy, busy checks and the shipped observed-alert modal format.
+- Capture a fresh attempt-bound membership join time before enforcement, clearing it on retry when unknown. Add optional initial metadata to verification `createFromDetection` and write the automatic case snapshot with its first insert.
+- Add request repository `adoptConfirmedReportBanCases(id, attemptToken)`. Lock request, report, detection and sorted cases in the established order. Require persisted confirmation and current ownership, then atomically claim and append only same-membership pending cases created no later than confirmation. Preserve the initial owned set. Leave competing owners and unknown membership visibly pending; preserve later joins, later cases and terminal states.
+- Extend the existing external-ban update guard to lock matching active requests before the case. Defer enforcement/reconciliation observers for matching or unknown membership; keep the preparing-only observer control. Make case-role completion lock active report-ban requests before the case and persist successful role state ordered by setup start, capped at persisted confirmation for matching or unknown membership. Use that time in the newer-status guard so a rejected ban retains the role while a confirmed ban wins over delayed setup. Pass the captured join time through `ObservedBanFinalization` to `markBannedIfNotNewer` so delayed setup or HTTP completion cannot replace newer membership state.
+- Verify the actual notification menu-to-enqueue path and channel changes. Use real services and serial disposable Postgres tests for a paused ban plus automatic case creation, observer-first and HTTP-first ordering, interrupted cleanup, stale attempts, competing ownership, unknown membership, later joins before and after confirmation, post-confirmation cases and delayed role completion. Preserve previously owned-case and historical-cleanup coverage.
+
+The cost is conservative pending cleanup when membership evidence is missing or another operation owns an eligible case. Such cases require review; the worker never guesses membership or repeats uncertain enforcement.
+
+## External closeout: deleted notices and superseded role setup
+
+Two delayed review findings require bounded completion of the existing lifecycle. Deleted case notices must stop blocking durable ban cleanup. A successful case-role assignment must release its obsolete restriction when moderator verification wins during the assignment. These changes preserve the approved flow and require no new product decision.
+
+- Retire explicit Discord 10008 errors in case action logging and button updates, for fetch and edit. Keep permission and ambiguous failures retryable. Prove actual notification services finish case audit, report and queue cleanup with one ban; prove retries recover transient failures without enforcement.
+- Capture the actual configured role ID once and pass it into assignment. When guarded persistence rejects completion, check the current resolved case, member release state, known membership, pending cases and active report-ban ownership before removing that exact role. Recheck after external work. Use the existing quarantine restoration fence and surface failures.
+- Cover actual verification during paused assignment, config changes, pending cases, active and terminal bans, later membership, newer restriction decisions, and ownership changes during removal or restoration. Run the affected recovery and moderation database suites serially, covering units, build, lint, format and metrics. Leave unchanged broad surfaces to exact-head hosted CI.
+
+## Final external findings: quarantine timing, missing threads, context expiry and actor lookup
+
+Four validated findings complete the existing contracts. Setup starts before quarantine I/O, so moderator verification can supersede all of its role work. Deleted report threads retire during confirmed cleanup. Persistent snapshots follow the existing recent-context expiry policy, and queued bans use fresh moderator permissions. No new product or retention policy is introduced.
+
+- Capture setup time and membership before quarantine. Carry the exact captured snapshot and successful removals through this operation only. If verification already restored the snapshot before removal finished, restore the late effects through the existing role policy and per-role fence without reopening or overwriting the snapshot. Preserve later membership and competing restrictions, and report failed restoration.
+- Treat explicit Discord 10003 during report-thread fetch, closeout send or archive as retired. Keep permission and network errors partial until reconciliation succeeds, with no second ban.
+- Project recent-message references explicitly before storing report-ban evidence. Persist message/channel IDs and timestamps only. Keep transient previews for case rendering and leave report-submitted evidence unchanged. Prove source pruning leaves no new content copy in detection, request, audit, outcome, case or report metadata.
+- Force the worker's actor membership fetch before the Ban Members check. Prove a stale cached grant cannot authorize a revoked, departed or unavailable actor, and retain the fresh allowed path.
+- Run genuine focused RED/GREEN, the affected serial database suites, covering units, build, lint, format and metrics. Preserve separate hosted CI and production evidence.
+
+## Recovery follow-up: notification provenance and explicit retry after undo
+
+Deleted notification channels must retire their existing presentations. An undone dismissal must allow a fresh explicit Ban when the earlier queued Ban completed as a no-op. These fixes preserve the approved moderation flow and need no new product decision.
+
+- Resolve existing stored notification channels directly. Use configured fallback only without a stored ID, preserving explicit 10003/10008 retirement in observed completion and both case cleanup helpers. Keep null, wrong guild/type, configuration, permission and network failures pending; preserve creation behavior.
+- Add one shared reset predicate within each existing bot/web enqueue statement. Require completed `already_handled`, matching immutable bindings, no phase/enforcement/confirmation evidence and an eligible detection with its optional report. Reset attempt state, preserve review history and mint a server token once. Use nonlocking eligibility reads; worker authorization and ownership claims remain the enforcement boundary.
+- Prove actual dismiss, queued no-op, undo and concurrent explicit retry through both SQL implementations, with and without a report. Cover protected receipts, ownership and binding changes, stale-token rejection and a dismissal that wins before worker execution. Prove real notification resolution closes the durable audit/report/request with one ban, while ambiguous failures recover without enforcement.
+- Run affected serial Postgres, unit and web queue tests, build, lint, format and metrics. Keep the local commit separate from exact-head hosted CI and final readiness review.
+
+## Bounded race follow-up: admission, setup, receipts and shipped prompts
+
+Preserve the approved workflow while closing the reproduced admission and late-thread effects. This follow-up also corrects the active web receipt and recognizes the full shipped legacy prompt shape without depending on mutable copy.
+
+- Serialize pending case insertion and confirmed adoption with request-before-target-before-case ordering. Use two direct transaction advisory locks and a fresh nonlocking confirmation read under the target fence. Return the specific losing-admission conflict through the existing safe caller result before setup. Preserve newer membership/time and independent ownership. The cost is short per-target database serialization, with no Discord I/O under locks.
+- Add optional pending/current-thread guards to the existing identity and metadata repository writes. Recheck across create/repair awaits and retire only exact completed late prompt, subject-add and reopen effects. Preserve terminal metadata, newer identity, pending dedup and private report review. Keep public ThreadManager APIs unchanged.
+- Show actual queued/processing state through enforcement_started. Synthesize only the two durable recovery phases, preserving explicit receipts.
+- Recognize the connected bot's complete shipped unbound initial prompt in the saved normal thread for the exact member. Cover changed/unavailable configuration and reject other-action, evidence, multibutton and wrong identity layouts. Accept the unavoidable indistinguishability of an exact full-shape copy.
+- Prove both admission orders, including an initially absent request, with actual services and Postgres. Run focused thread and adapter regressions, affected suites, build, lint, formatting and metrics. Keep local proof separate from hosted CI and live Discord acceptance.

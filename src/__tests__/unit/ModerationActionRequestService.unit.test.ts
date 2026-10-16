@@ -591,6 +591,15 @@ const upsertReportInstructionsRequest: ModerationActionRequest = {
 };
 
 class FakeModerationActionRequestRepository implements IModerationActionRequestRepository {
+  public async adoptConfirmedReportBanCases(): Promise<ModerationActionRequest | null> {
+    throw new Error('not used');
+  }
+  public async reviewUncertainReportBan(): Promise<ModerationActionRequest | null> {
+    throw new Error('not used');
+  }
+  public async claimReportBanCompletionAnalytics(): Promise<boolean> {
+    return false;
+  }
   public byId = new Map<string, ModerationActionRequest>();
   public requests: ModerationActionRequest[] = [];
   public completed: Array<{ id: string; result: unknown }> = [];
@@ -604,6 +613,14 @@ class FakeModerationActionRequestRepository implements IModerationActionRequestR
 
   public async findById(id: string): Promise<ModerationActionRequest | null> {
     return this.byId.get(id) ?? null;
+  }
+
+  public async releaseReportBanPreparation(id: string): Promise<ModerationActionRequest | null> {
+    return this.findById(id);
+  }
+
+  public async claimReportBanReconciliation(): Promise<ModerationActionRequest | null> {
+    return null;
   }
 
   public async claimNext(): Promise<ModerationActionRequest | null> {
@@ -842,8 +859,8 @@ describe('ModerationActionRequestService', () => {
       })),
     };
     const securityActionService = {
-      banObservedDetection: jest.fn(async () => true),
-      banObservedDetectionById: jest.fn(async () => true),
+      banObservedDetection: jest.fn(async () => ({ status: 'banned' })),
+      banObservedDetectionById: jest.fn(async () => ({ status: 'banned' })),
       dismissObservedDetection: jest.fn(async () => true),
       excludeDetectionFromAccounting: jest.fn(async () => ({ id: 'det-1' })),
       kickObservedDetection: jest.fn(async () => true),
@@ -1625,7 +1642,8 @@ describe('ModerationActionRequestService', () => {
       member,
       'det-1',
       moderator,
-      'Observed ban reason.'
+      'Observed ban reason.',
+      banObservedRequest
     );
     expect(securityActionService.banObservedDetectionById).not.toHaveBeenCalled();
     expect(repository.completed).toEqual([
@@ -1634,7 +1652,7 @@ describe('ModerationActionRequestService', () => {
         result: expect.objectContaining({
           action_type: ModerationActionRequestType.BAN_OBSERVED_DETECTION,
           ban_by_id: false,
-          banned: true,
+          observed_ban_result: { status: 'banned' },
           detection_event_id: 'det-1',
           target_user_id: 'user-1',
         }),
@@ -1647,7 +1665,9 @@ describe('ModerationActionRequestService', () => {
     const { guild, moderator, repository, securityActionService, service } = buildService([
       banObservedRequest,
     ]);
-    guild.members.fetch.mockRejectedValueOnce(new Error('Unknown member'));
+    guild.members.fetch
+      .mockResolvedValueOnce({ permissions: { has: () => true } } as never)
+      .mockRejectedValueOnce({ code: 10007 });
 
     await expect(service.processPendingRequests()).resolves.toBe(1);
 
@@ -1657,7 +1677,8 @@ describe('ModerationActionRequestService', () => {
       'user-1',
       'det-1',
       moderator,
-      'Observed ban reason.'
+      'Observed ban reason.',
+      banObservedRequest
     );
     expect(repository.completed).toEqual([
       {
@@ -1665,7 +1686,7 @@ describe('ModerationActionRequestService', () => {
         result: expect.objectContaining({
           action_type: ModerationActionRequestType.BAN_OBSERVED_DETECTION,
           ban_by_id: true,
-          banned: true,
+          observed_ban_result: { status: 'banned' },
           detection_event_id: 'det-1',
           target_user_id: 'user-1',
         }),

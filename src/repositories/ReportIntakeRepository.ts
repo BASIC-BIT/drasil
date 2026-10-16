@@ -22,7 +22,21 @@ const OPEN_INTAKE_STATUSES: ReportIntakeStatus[] = [
   ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION,
 ];
 
+export interface ReportBanClaim {
+  reportId: string;
+  serverId: string;
+  targetUserId: string;
+  detectionEventId: string;
+  operationId: string;
+  attemptToken?: string;
+}
 export interface IReportIntakeRepository {
+  claimBan(input: ReportBanClaim): Promise<ReportIntake | null>;
+  updateBan(
+    reportId: string,
+    operationId: string,
+    input: { release?: boolean; complete?: boolean; metadata?: Record<string, unknown> }
+  ): Promise<ReportIntake | null>;
   create(data: ReportIntakeCreate): Promise<ReportIntake>;
   findById(id: string): Promise<ReportIntake | null>;
   findByThreadId(threadId: string): Promise<ReportIntake | null>;
@@ -59,6 +73,51 @@ export class ReportIntakeRepository implements IReportIntakeRepository {
       throw new RepositoryError(`Unexpected error during ${operation}: ${error.message}`, error);
     }
     throw new RepositoryError(`Unknown error during ${operation}`, error);
+  }
+
+  async claimBan(input: ReportBanClaim): Promise<ReportIntake | null> {
+    return this.prisma.$transaction(async (transaction) => {
+      const owner = await transaction.$queryRaw<
+        Array<{ token: string | null; phase: string | null }>
+      >`
+        SELECT metadata->>'report_ban_attempt_token' AS token, metadata->>'report_ban_phase' AS phase FROM moderation_action_requests WHERE id::text = ${input.operationId} FOR UPDATE`;
+      if (
+        !owner.length ||
+        owner[0].phase !== 'preparing' ||
+        owner[0].token !== (input.attemptToken ?? null)
+      )
+        return null;
+      // Match case opening's report-first lock order before checking the detection claim.
+      await transaction.$queryRaw`select id from report_intakes where id = ${input.reportId}::uuid for update`;
+      const rows = await transaction.$queryRaw<ReportIntake[]>`
+      update report_intakes r
+      set metadata = coalesce(r.metadata, '{}'::jsonb) || jsonb_build_object('report_ban_operation_id', ${input.operationId}::text), updated_at = now()
+      where r.id = ${input.reportId}::uuid and r.server_id = ${input.serverId}
+        and r.status = 'submitted' and r.confirmed_target_user_id = ${input.targetUserId}
+        and coalesce(r.metadata->>'report_ban_operation_id', '') = ''
+        and exists (select 1 from detection_events d where d.id = ${input.detectionEventId}::uuid
+          and d.server_id = r.server_id and d.user_id = r.confirmed_target_user_id
+          and d.metadata->>'reportIntakeId' = r.id::text
+          and not (coalesce(d.metadata, '{}'::jsonb) ? 'observed_action'))
+      returning r.*`;
+      return rows[0] ?? null;
+    });
+  }
+
+  async updateBan(
+    reportId: string,
+    operationId: string,
+    input: { release?: boolean; complete?: boolean; metadata?: Record<string, unknown> }
+  ): Promise<ReportIntake | null> {
+    const rows = await this.prisma.$queryRaw<ReportIntake[]>`
+      update report_intakes
+      set metadata = (case when ${input.release === true} then coalesce(metadata, '{}'::jsonb) - 'report_ban_operation_id' else coalesce(metadata, '{}'::jsonb) end) || ${JSON.stringify(input.metadata ?? {})}::jsonb,
+        status = case when ${input.complete === true} then 'actioned'::report_intake_status else status end,
+        closed_at = case when ${input.complete === true} then coalesce(closed_at, now()) else closed_at end,
+        updated_at = now()
+      where id = ${reportId}::uuid and metadata->>'report_ban_operation_id' = ${operationId}
+      returning *`;
+    return rows[0] ?? null;
   }
 
   async create(data: ReportIntakeCreate): Promise<ReportIntake> {
@@ -135,7 +194,7 @@ export class ReportIntakeRepository implements IReportIntakeRepository {
 
   async update(id: string, data: ReportIntakeUpdate): Promise<ReportIntake | null> {
     try {
-      const updateData: Prisma.report_intakesUpdateInput = {
+      const updateData: Prisma.report_intakesUpdateManyMutationInput = {
         updated_at: new Date(),
       };
 
@@ -155,11 +214,17 @@ export class ReportIntakeRepository implements IReportIntakeRepository {
         updateData.metadata = data.metadata as Prisma.InputJsonValue;
       }
 
-      const updated = await this.prisma.report_intakes.update({
-        where: { id },
+      const updated = await this.prisma.report_intakes.updateManyAndReturn({
+        where: {
+          id,
+          OR: [
+            { metadata: { path: ['report_ban_operation_id'], equals: Prisma.AnyNull } },
+            { metadata: { path: ['report_ban_operation_id'], equals: '' } },
+          ],
+        },
         data: updateData,
       });
-      return updated as ReportIntake;
+      return (updated[0] as ReportIntake | undefined) ?? null;
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
         console.warn(`Attempted to update non-existent report intake: ${id}`);
@@ -177,6 +242,10 @@ export class ReportIntakeRepository implements IReportIntakeRepository {
       const updated = await this.prisma.report_intakes.updateManyAndReturn({
         where: {
           id: intake.id,
+          OR: [
+            { metadata: { path: ['report_ban_operation_id'], equals: Prisma.AnyNull } },
+            { metadata: { path: ['report_ban_operation_id'], equals: '' } },
+          ],
           status: intake.status,
           confirmed_target_user_id: intake.confirmed_target_user_id,
           metadata: { equals: intake.metadata ?? Prisma.AnyNull },

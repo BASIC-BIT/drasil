@@ -3,7 +3,10 @@ import { Guild, GuildMember, PartialGuildMember, User } from 'discord.js';
 import { injectable, inject, optional } from 'inversify';
 import { Prisma } from '../db/prisma';
 import { TYPES } from '../di/symbols';
-import { IServerMemberRepository } from '../repositories/ServerMemberRepository';
+import {
+  CaseRoleApplicationCompletion,
+  IServerMemberRepository,
+} from '../repositories/ServerMemberRepository';
 import { INotificationManager } from './NotificationManager';
 import { IRoleManager } from './RoleManager';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
@@ -33,6 +36,8 @@ import { IModerationQueueService } from './ModerationQueueService';
 import {
   IRoleQuarantineService,
   RoleQuarantineApplyResult,
+  RoleQuarantineAppliedEffects,
+  RoleQuarantineApplyError,
   RoleRestorationFence,
   RoleQuarantineRestoreResult,
 } from './RoleQuarantineService';
@@ -41,6 +46,7 @@ import {
   CASE_ROLE_RELEASE_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_LEASE_MS,
   CASE_TERMINAL_ACTION_ATTEMPT_PREFIX,
+  REPORT_BAN_TERMINAL_ATTEMPT_PREFIX,
   isCaseRoleReleaseLeaseActive,
   isCaseTerminalActionAttempt,
 } from '../utils/caseRoleRelease';
@@ -144,13 +150,46 @@ export interface IUserModerationService {
   recordMemberLeftGuild(member: GuildMember | PartialGuildMember): Promise<number>;
 }
 
+export interface ObservedBanLifecycle {
+  prepare(cases: VerificationEvent[], attemptId: string): Promise<void>;
+  beforeEnforcement(cases: VerificationEvent[], attemptId: string | null): Promise<void>;
+  operationId: string;
+  attemptToken: string;
+}
+export interface ObservedBanFinalization {
+  operationId: string;
+  reason: string;
+  detectionEventId: string;
+  caseIds: string[];
+  attemptId: string;
+  confirmedAt: Date;
+  joinedAt: Date | null;
+  targetSnapshot: Partial<Record<string, string>>;
+  reportId: string | null;
+}
 export interface ICombinedBanLifecycleService {
+  finalizeObservedBan(
+    guild: Guild,
+    userId: string,
+    moderator: User,
+    input: ObservedBanFinalization
+  ): Promise<void>;
+
   markCombinedBanCleanupPending(
     verificationEventId: string,
     cleanupJobId: string
   ): Promise<VerificationEvent>;
-  performDiscordMemberBan(member: GuildMember, reason: string): Promise<void>;
-  performDiscordBanById(guild: Guild, userId: string, reason: string): Promise<void>;
+  performDiscordMemberBan(
+    member: GuildMember,
+    reason: string,
+    lifecycle?: ObservedBanLifecycle
+  ): Promise<void>;
+  performDiscordBanById(
+    guild: Guild,
+    userId: string,
+    reason: string,
+    lifecycle?: ObservedBanLifecycle
+  ): Promise<void>;
   finalizeSuccessfulMemberBan(
     member: GuildMember,
     reason: string,
@@ -254,13 +293,17 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     this.captchaChallengeRepository = captchaChallengeRepository;
   }
 
-  private async cancelPendingCaptchaChallenge(verificationEvent: VerificationEvent): Promise<void> {
+  private async cancelPendingCaptchaChallenge(
+    verificationEvent: VerificationEvent,
+    strict = false
+  ): Promise<void> {
     let cancelled = false;
     try {
       cancelled =
         (await this.captchaChallengeRepository?.cancelPendingForCase(verificationEvent.id)) ??
         false;
     } catch (error) {
+      if (strict) throw error;
       console.warn(
         `Failed to cancel pending security check for case ${verificationEvent.id}:`,
         error
@@ -279,6 +322,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         );
       }
     } catch (error) {
+      if (strict) throw error;
       console.warn(
         `Failed to refresh cancelled security-check presentation for case ${verificationEvent.id}:`,
         error
@@ -444,8 +488,9 @@ export class UserModerationService implements IUserModerationService, ICombinedB
 
     try {
       return (
-        (await this.verificationEventRepository.update(verificationEvent.id, { metadata })) ??
-        fallbackEvent
+        (await this.verificationEventRepository.patchMetadata(verificationEvent.id, {
+          role_quarantine: this.metadataToRecord(metadata).role_quarantine,
+        })) ?? fallbackEvent
       );
     } catch (error) {
       console.warn(
@@ -472,8 +517,8 @@ export class UserModerationService implements IUserModerationService, ICombinedB
 
     try {
       return (
-        (await this.verificationEventRepository.update(verificationEvent.id, {
-          metadata: metadata as VerificationEvent['metadata'],
+        (await this.verificationEventRepository.patchMetadata(verificationEvent.id, {
+          action_failures: metadata.action_failures ?? [],
         })) ?? fallbackEvent
       );
     } catch (recordError) {
@@ -489,7 +534,11 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     member: GuildMember,
     verificationEvent: VerificationEvent,
     moderator?: User
-  ): Promise<{ verificationEvent: VerificationEvent; metadata: Record<string, unknown> | null }> {
+  ): Promise<{
+    verificationEvent: VerificationEvent;
+    metadata: Record<string, unknown> | null;
+    appliedEffects?: RoleQuarantineAppliedEffects;
+  }> {
     if (!this.roleQuarantineService) {
       return { verificationEvent, metadata: null };
     }
@@ -512,6 +561,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
           metadata
         ),
         metadata,
+        appliedEffects: result.appliedEffects,
       };
     } catch (error) {
       console.error(
@@ -520,6 +570,8 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       );
       return {
         verificationEvent: await this.recordRoleQuarantineFailure(verificationEvent, error),
+        appliedEffects:
+          error instanceof RoleQuarantineApplyError ? error.result.appliedEffects : undefined,
         metadata: {
           status: 'failed',
           message: this.formatError(error),
@@ -533,7 +585,8 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     member: GuildMember,
     verificationEvent: VerificationEvent | null,
     moderator?: User,
-    fence?: RoleRestorationFence
+    fence?: RoleRestorationFence,
+    appliedEffects?: RoleQuarantineAppliedEffects
   ): Promise<{
     verificationEvent: VerificationEvent | null;
     metadata: Record<string, unknown> | null;
@@ -543,9 +596,16 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     }
 
     try {
-      const result = fence
-        ? await this.roleQuarantineService.restoreMemberRoles(member, moderator, fence)
-        : await this.roleQuarantineService.restoreMemberRoles(member, moderator);
+      const result = appliedEffects
+        ? await this.roleQuarantineService.restoreMemberRoles(
+            member,
+            moderator,
+            fence,
+            appliedEffects
+          )
+        : fence
+          ? await this.roleQuarantineService.restoreMemberRoles(member, moderator, fence)
+          : await this.roleQuarantineService.restoreMemberRoles(member, moderator);
       const metadata = this.buildRoleQuarantineRestoreMetadata(result);
       if (!metadata || !verificationEvent) {
         return { verificationEvent, metadata };
@@ -668,7 +728,11 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     return verificationEvents.filter((event) => event.status === VerificationStatus.PENDING);
   }
 
-  private async claimPendingTerminalActions(events: readonly VerificationEvent[]): Promise<{
+  private async claimPendingTerminalActions(
+    events: readonly VerificationEvent[],
+    ownedAttemptId?: string,
+    reportBanAttempt?: { operationId: string; attemptToken: string }
+  ): Promise<{
     events: VerificationEvent[];
     originalEvents: VerificationEvent[];
     attemptId: string | null;
@@ -679,12 +743,13 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     }
 
     const firstEvent = events[0];
-    const attemptId = `${CASE_TERMINAL_ACTION_ATTEMPT_PREFIX}${randomUUID()}`;
+    const attemptId = ownedAttemptId ?? `${CASE_TERMINAL_ACTION_ATTEMPT_PREFIX}${randomUUID()}`;
     const claimedEvents = await this.verificationEventRepository.claimTerminalActions(
       events.map((event) => event.id),
       firstEvent.server_id,
       firstEvent.user_id,
-      attemptId
+      attemptId,
+      reportBanAttempt
     );
     if (!claimedEvents) {
       throw new Error(
@@ -725,7 +790,8 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     moderator: User,
     resolvedAt: Date,
     notes: string,
-    metadataFor: (event: VerificationEvent) => VerificationEvent['metadata']
+    metadataPatch: VerificationEvent['metadata'],
+    clearActiveModerationOperation = false
   ): Promise<Array<{ event: VerificationEvent; previousStatus: VerificationStatus }>> {
     const terminalAttemptIds = [
       ...new Set(
@@ -743,7 +809,8 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     const completedEvents = await this.verificationEventRepository.completeTerminalActions(
       events.map((event) => ({
         id: event.id,
-        metadata: metadataFor(event),
+        metadata: metadataPatch,
+        clearActiveModerationOperation,
         requiresTerminalActionClaim: isCaseTerminalActionAttempt(event.quarantine_attempt_id),
       })),
       terminalAttemptIds[0] ?? null,
@@ -990,11 +1057,18 @@ export class UserModerationService implements IUserModerationService, ICombinedB
    */
   public async applyCaseRole(member: GuildMember, moderator?: User): Promise<boolean> {
     try {
+      const applicationStartedAt = new Date();
+      const membership = await this.serverMemberRepository.findByServerAndUser(
+        member.guild.id,
+        member.id
+      );
+      const joinedAt = member.joinedAt ?? membership?.join_date ?? null;
       let verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
         member.id,
         member.guild.id
       );
       let roleQuarantineMetadata: Record<string, unknown> | null = null;
+      let quarantineEffects: RoleQuarantineAppliedEffects | undefined;
 
       if (!verificationEvent) {
         console.warn(`ApplyCaseRole called for ${member.user.tag} but no active case was found.`);
@@ -1011,6 +1085,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         );
         verificationEvent = quarantineResult.verificationEvent;
         roleQuarantineMetadata = quarantineResult.metadata;
+        quarantineEffects = quarantineResult.appliedEffects;
       }
 
       const rollbackRoleQuarantine = async (): Promise<void> => {
@@ -1026,9 +1101,11 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         verificationEvent = rollbackResult.verificationEvent ?? verificationEvent;
       };
 
+      let roleId: string | null = null;
       let roleAssigned: boolean;
       try {
-        roleAssigned = await this.roleManager.assignCaseRole(member);
+        roleId = await this.roleManager.getCaseRoleId(member.guild.id);
+        roleAssigned = roleId ? await this.roleManager.assignCaseRole(member, roleId) : false;
       } catch (assignError) {
         await rollbackRoleQuarantine();
         throw assignError;
@@ -1038,18 +1115,105 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         throw new Error(`Failed to assign case role to ${member.user.tag}`);
       }
 
-      await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
-        case_role_active: true,
-        verification_status: VerificationStatus.PENDING,
-        last_status_change: new Date(),
-        updated_by: moderator?.id,
-      });
+      if (verificationEvent) {
+        const completion = {
+          caseId: verificationEvent.id,
+          joinedAt,
+          startedAt: applicationStartedAt,
+          moderatorId: moderator?.id,
+        };
+        const completed = await this.serverMemberRepository.completeCaseRoleApplication(
+          member.guild.id,
+          member.id,
+          completion
+        );
+        if (!completed && roleId)
+          await this.releaseSupersededCaseRole(
+            member,
+            verificationEvent,
+            completion,
+            roleId,
+            roleQuarantineMetadata,
+            moderator,
+            quarantineEffects
+          );
+      } else {
+        await this.serverMemberRepository.upsertMember(member.guild.id, member.id, {
+          case_role_active: true,
+          verification_status: VerificationStatus.PENDING,
+          last_status_change: new Date(),
+          updated_by: moderator?.id,
+        });
+      }
 
       console.log(`Successfully applied case role to ${member.user.tag}`);
       return true;
     } catch (error) {
       console.error(`Failed to apply case role to ${member.user.tag}:`, error);
       throw error;
+    }
+  }
+
+  private async releaseSupersededCaseRole(
+    member: GuildMember,
+    event: VerificationEvent,
+    completion: CaseRoleApplicationCompletion,
+    roleId: string,
+    quarantineMetadata: Record<string, unknown> | null,
+    moderator?: User,
+    quarantineEffects?: RoleQuarantineAppliedEffects
+  ): Promise<void> {
+    const sameMembership = async (): Promise<GuildMember | null> => {
+      try {
+        const current = await member.guild.members.fetch({ user: member.id, force: true });
+        return completion.joinedAt && current.joinedAt?.getTime() === completion.joinedAt.getTime()
+          ? current
+          : null;
+      } catch (error) {
+        if (typeof error === 'object' && error !== null && 'code' in error && error.code === 10007)
+          return null;
+        throw error;
+      }
+    };
+    const canRelease = async (): Promise<boolean> =>
+      (await this.serverMemberRepository.canReleaseSupersededCaseRole(
+        member.guild.id,
+        member.id,
+        completion
+      )) && Boolean(await sameMembership());
+    const retainNewerRestriction = async (): Promise<void> => {
+      const current = await sameMembership();
+      if (current && !(await this.roleManager.assignCaseRole(current, roleId)))
+        throw new Error('Failed to retain newer case restriction');
+    };
+    if (!(await canRelease())) return;
+    const current = await sameMembership();
+    if (!current) return;
+    if (!(await this.roleManager.removeCaseRole(current, roleId)))
+      throw new Error('Failed to remove superseded case role');
+    // A new restriction can win while Discord processes removal. Keep its role.
+    if (!(await canRelease())) {
+      await retainNewerRestriction();
+      return;
+    }
+    if (quarantineEffects || this.shouldRollbackRoleQuarantine(quarantineMetadata)) {
+      const restored = await this.tryRestoreRoleQuarantine(
+        current,
+        event,
+        moderator,
+        {
+          canRestoreRole: canRelease,
+        },
+        quarantineEffects
+      );
+      if (!(await canRelease())) await retainNewerRestriction();
+      if (
+        restored.metadata?.status === 'failed' ||
+        restored.metadata?.status === 'partially_restored' ||
+        Number(restored.metadata?.failed_restore_count ?? 0) > 0
+      ) {
+        throw new Error('Failed to restore roles after superseded case setup');
+      }
     }
   }
 
@@ -1128,7 +1292,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       const completedEvents = await this.verificationEventRepository.completeVerificationRelease(
         pendingVerificationEvents.map((pendingEvent) => ({
           id: pendingEvent.id,
-          metadata: this.withUserSnapshot(pendingEvent.metadata, member.user, member),
+          metadata: this.withUserSnapshot(null, member.user, member),
           requiresCaseRoleReleaseClaim: releaseClaimedEventIds.has(pendingEvent.id),
         })),
         releaseAttemptId,
@@ -1751,41 +1915,214 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     return updatedEvent;
   }
 
-  public async performDiscordMemberBan(member: GuildMember, reason: string): Promise<void> {
+  public async performDiscordMemberBan(
+    member: GuildMember,
+    reason: string,
+    lifecycle?: ObservedBanLifecycle
+  ): Promise<void> {
     const pendingVerificationEvents = await this.getPendingVerificationEvents(member);
-    const terminalClaim = await this.claimPendingTerminalActions(pendingVerificationEvents);
+    const attemptId = lifecycle
+      ? `${REPORT_BAN_TERMINAL_ATTEMPT_PREFIX}${lifecycle.operationId}:${lifecycle.attemptToken}`
+      : undefined;
+    if (lifecycle && attemptId) await lifecycle.prepare(pendingVerificationEvents, attemptId);
+    const terminalClaim = await this.claimPendingTerminalActions(
+      pendingVerificationEvents,
+      attemptId,
+      lifecycle
+        ? { operationId: lifecycle.operationId, attemptToken: lifecycle.attemptToken }
+        : undefined
+    );
     const auditReason = reason.trim().slice(0, DISCORD_AUDIT_LOG_REASON_MAX_LENGTH);
     try {
+      await lifecycle?.beforeEnforcement(terminalClaim.events, terminalClaim.attemptId);
       await member.ban({ reason: auditReason || 'Moderator-requested ban' });
     } catch (error) {
-      await this.rollbackPendingTerminalActions(
-        terminalClaim.originalEvents,
-        terminalClaim.attemptId
-      );
+      if (!lifecycle)
+        await this.rollbackPendingTerminalActions(
+          terminalClaim.originalEvents,
+          terminalClaim.attemptId
+        );
       throw error;
     }
     console.log(`Banned user ${member.user.tag}. Reason: ${reason}`);
   }
 
-  public async performDiscordBanById(guild: Guild, userId: string, reason: string): Promise<void> {
+  public async performDiscordBanById(
+    guild: Guild,
+    userId: string,
+    reason: string,
+    lifecycle?: ObservedBanLifecycle
+  ): Promise<void> {
     const verificationEvents = await this.verificationEventRepository.findByUserAndServer(
       userId,
       guild.id
     );
+    const pendingEvents = verificationEvents.filter(
+      (event) => event.status === VerificationStatus.PENDING
+    );
+    const attemptId = lifecycle
+      ? `${REPORT_BAN_TERMINAL_ATTEMPT_PREFIX}${lifecycle.operationId}:${lifecycle.attemptToken}`
+      : undefined;
+    if (lifecycle && attemptId) await lifecycle.prepare(pendingEvents, attemptId);
     const terminalClaim = await this.claimPendingTerminalActions(
-      verificationEvents.filter((event) => event.status === VerificationStatus.PENDING)
+      pendingEvents,
+      attemptId,
+      lifecycle
+        ? { operationId: lifecycle.operationId, attemptToken: lifecycle.attemptToken }
+        : undefined
     );
     const auditReason = reason.trim().slice(0, DISCORD_AUDIT_LOG_REASON_MAX_LENGTH);
     try {
+      await lifecycle?.beforeEnforcement(terminalClaim.events, terminalClaim.attemptId);
       await guild.bans.create(userId, { reason: auditReason || 'Moderator-requested ban' });
     } catch (error) {
-      await this.rollbackPendingTerminalActions(
-        terminalClaim.originalEvents,
-        terminalClaim.attemptId
-      );
+      if (!lifecycle)
+        await this.rollbackPendingTerminalActions(
+          terminalClaim.originalEvents,
+          terminalClaim.attemptId
+        );
       throw error;
     }
     console.log(`Banned user ${userId} for combined message cleanup. Reason: ${reason}`);
+  }
+
+  public async finalizeObservedBan(
+    guild: Guild,
+    userId: string,
+    moderator: User,
+    input: ObservedBanFinalization
+  ): Promise<void> {
+    const snapshot = input.targetSnapshot;
+    const outcomeMetadata = {
+      report_ban_operation_id: input.operationId,
+      report_intake_id: input.reportId,
+      discord_confirmed_at: input.confirmedAt.toISOString(),
+      user_snapshot: snapshot,
+    };
+    const target: ModerationTarget = {
+      guildId: guild.id,
+      userId,
+      userTag: snapshot.tag ?? userId,
+      username: snapshot.username ?? null,
+      accountCreatedAt: snapshot.account_created_at ? new Date(snapshot.account_created_at) : null,
+    };
+    const events: VerificationEvent[] = [];
+    for (const id of input.caseIds) {
+      const event = await this.verificationEventRepository.findById(id);
+      if (!event || event.server_id !== guild.id || event.user_id !== userId)
+        throw new Error('Linked ban case is missing or changed.');
+      const owned =
+        this.metadataToRecord(event.metadata).report_ban_operation_id === input.operationId;
+      if (event.status === VerificationStatus.BANNED && owned) {
+        events.push(event);
+        continue;
+      }
+      if (
+        event.status !== VerificationStatus.PENDING ||
+        event.quarantine_attempt_id !== input.attemptId
+      )
+        throw new Error('Linked ban case ownership changed.');
+      const completed = await this.completeTerminalVerificationEvents(
+        [event],
+        VerificationStatus.BANNED,
+        moderator,
+        input.confirmedAt,
+        input.reason,
+        outcomeMetadata as VerificationEvent['metadata'],
+        true
+      );
+      events.push(completed[0].event);
+    }
+    const currentMembership = await this.serverMemberRepository.markBannedIfNotNewer(
+      guild.id,
+      userId,
+      input.confirmedAt,
+      input.joinedAt
+    );
+    if (currentMembership && this.roleQuarantineService)
+      await this.roleQuarantineService.abandonActiveSnapshot(
+        guild.id,
+        userId,
+        'drasil_ban',
+        moderator.id
+      );
+    const actions = await this.adminActionService.getActionsForUser(guild.id, userId);
+    for (const event of events) {
+      await this.cancelPendingCaptchaChallenge(event, true);
+      await this.threadManager.resolveVerificationThread(
+        event,
+        VerificationStatus.BANNED,
+        moderator.id
+      );
+      const closure = await this.threadManager.closeResolvedVerificationThreads(event, {
+        execute: true,
+      });
+      if (closure.results.some((result) => result.error)) {
+        throw new Error('Linked ban case thread closure is incomplete.');
+      }
+      const alreadyAudited = actions.some(
+        (action) =>
+          this.metadataToRecord(action.metadata).report_ban_operation_id === input.operationId &&
+          action.verification_event_id === event.id
+      );
+      if (event.notification_message_id && !alreadyAudited) {
+        const logged = await this.notificationManager.logActionToMessage(
+          event,
+          AdminActionType.BAN,
+          moderator
+        );
+        if (!logged) throw new Error('Linked ban case notification update is incomplete.');
+      }
+      if (event.notification_message_id)
+        await this.notificationManager.updateNotificationButtons(event, VerificationStatus.BANNED);
+      await this.moderationQueueService?.deleteCaseMirror(event.id);
+      await this.moderationQueueService?.deleteCaseAttention(event.id);
+    }
+    for (const event of events.length ? events : [null]) {
+      if (
+        !actions.some(
+          (action) =>
+            this.metadataToRecord(action.metadata).report_ban_operation_id === input.operationId &&
+            action.verification_event_id === (event?.id ?? null)
+        )
+      ) {
+        await this.adminActionService.recordAction({
+          server_id: guild.id,
+          user_id: userId,
+          admin_id: moderator.id,
+          action_type: AdminActionType.BAN,
+          verification_event_id: event?.id ?? null,
+          detection_event_id: input.detectionEventId,
+          previous_status: event ? VerificationStatus.PENDING : null,
+          new_status: VerificationStatus.BANNED,
+          notes: input.reason,
+          metadata: outcomeMetadata as Prisma.JsonObject,
+        });
+      }
+      if (!this.moderationOutcomeService)
+        throw new Error('Moderation outcome persistence is unavailable.');
+      const outcomes = await this.moderationOutcomeService.findOutcomesForOperation(
+        guild.id,
+        userId,
+        input.operationId
+      );
+      if (!outcomes.some((outcome) => outcome.verification_event_id === (event?.id ?? null))) {
+        await this.recordModerationOutcomes(
+          target,
+          ModerationOutcomeType.BANNED,
+          ModerationOutcomeSource.DRASIL,
+          event ? [event] : [],
+          {
+            actorId: moderator.id,
+            reason: input.reason,
+            detectionEventId: input.detectionEventId,
+            occurredAt: input.confirmedAt,
+            recordWithoutVerificationEvent: true,
+            metadata: outcomeMetadata,
+          }
+        );
+      }
+    }
   }
 
   public async finalizeSuccessfulMemberBan(
@@ -1810,10 +2147,8 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         moderator,
         resolvedAt,
         reason,
-        (pendingEvent) =>
-          this.withoutActiveModerationOperation(
-            this.withUserSnapshot(pendingEvent.metadata, member.user, member)
-          )
+        this.withUserSnapshot(null, member.user, member),
+        true
       );
 
       await this.tryAbandonRoleQuarantine(member.guild.id, member.id, 'drasil_ban', moderator.id);
@@ -1922,7 +2257,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       moderator,
       resolvedAt,
       reason,
-      (pendingEvent) => this.withUserSnapshot(pendingEvent.metadata, existingBan.user)
+      this.withUserSnapshot(null, existingBan.user)
     );
 
     if (
@@ -2063,7 +2398,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
           moderator,
           resolvedAt,
           reason,
-          (pendingEvent) => this.withUserSnapshot(pendingEvent.metadata, member.user, member)
+          this.withUserSnapshot(null, member.user, member)
         );
 
         await this.tryAbandonRoleQuarantine(
@@ -2170,13 +2505,11 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         moderator,
         resolvedAt,
         reason,
-        (pendingEvent) =>
-          ({
-            ...this.metadataToRecord(pendingEvent.metadata),
-            ...(targetUser ? { user_snapshot: this.buildUserSnapshot(targetUser) } : {}),
-            membership_state: 'left_or_removed',
-            banned_by_id_at: resolvedAt.toISOString(),
-          }) as VerificationEvent['metadata']
+        {
+          ...(targetUser ? { user_snapshot: this.buildUserSnapshot(targetUser) } : {}),
+          membership_state: 'left_or_removed',
+          banned_by_id_at: resolvedAt.toISOString(),
+        } as VerificationEvent['metadata']
       );
       await this.tryAbandonRoleQuarantine(guild.id, userId, 'drasil_ban_by_id', moderator.id);
 
@@ -2601,6 +2934,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       const resolvedAt = options.occurredAt ?? new Date();
       await this.clearDiscordPendingScreeningState(guild.id, user.id, resolvedAt);
 
+      const membership = await this.serverMemberRepository.findByServerAndUser(guild.id, user.id);
       const verificationEvents = await this.verificationEventRepository.findByUserAndServer(
         user.id,
         guild.id
@@ -2657,25 +2991,26 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         const updatedEvent = await this.verificationEventRepository.update(
           pendingEvent.id,
           eventToUpdate,
-          { allowQuarantineOverride: true }
+          { allowQuarantineOverride: true, deferReportBanEnforcement: true }
         );
-        if (!updatedEvent) {
-          throw new Error(`Failed to record observed Discord ban for case ${pendingEvent.id}.`);
-        }
+        if (!updatedEvent) continue;
         resolvedEvents.push({ event: updatedEvent, previousStatus });
       }
 
-      await this.serverMemberRepository.upsertMember(guild.id, user.id, {
-        verification_status: VerificationStatus.BANNED,
-        case_role_active: false,
-        last_status_change: new Date(),
-      });
-      await this.tryAbandonRoleQuarantine(
+      if (resolvedEvents.length === 0) return 0;
+      const currentMembership = await this.serverMemberRepository.markBannedIfNotNewer(
         guild.id,
         user.id,
-        'observed_discord_ban',
-        options.actorId ?? null
+        resolvedAt,
+        membership?.join_date ?? null
       );
+      if (currentMembership)
+        await this.tryAbandonRoleQuarantine(
+          guild.id,
+          user.id,
+          'observed_discord_ban',
+          options.actorId ?? null
+        );
 
       for (const resolvedEvent of resolvedEvents) {
         await this.finalizeExternallyResolvedVerificationEvent(
@@ -2884,10 +3219,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
                 parked_by: null,
               }
             : {}),
-          metadata: {
-            ...this.metadataToRecord(pendingEvent.metadata),
-            ...outcomeMetadata,
-          } as VerificationEvent['metadata'],
+          metadata: outcomeMetadata as VerificationEvent['metadata'],
         };
         const updatedEvent = await this.verificationEventRepository.updatePendingAfterMemberLeft(
           pendingEvent.id,

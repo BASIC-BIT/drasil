@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { injectable, inject } from 'inversify';
 import {
   case_attention_state,
@@ -26,16 +27,20 @@ import {
   CASE_ROLE_RELEASE_ATTEMPT_PREFIX,
   CASE_ROLE_RELEASE_RECONCILIATION_ATTEMPT_PREFIX,
   CASE_TERMINAL_ACTION_ATTEMPT_PREFIX,
+  REPORT_BAN_TERMINAL_ATTEMPT_PREFIX,
 } from '../utils/caseRoleRelease';
 
 export interface VerificationReleaseCompletion {
   id: string;
+  // Only keys owned by this completion, merged with current metadata under the guard.
   metadata: VerificationEvent['metadata'];
   requiresCaseRoleReleaseClaim: boolean;
 }
 
 export interface TerminalActionCompletion {
   id: string;
+  clearActiveModerationOperation?: boolean;
+  // Only keys owned by this completion, merged with current metadata under the guard.
   metadata: VerificationEvent['metadata'];
   requiresTerminalActionClaim: boolean;
 }
@@ -61,6 +66,8 @@ export interface CaptchaPresentationClaimInput {
   requireDeliveryError?: boolean;
   attemptId: string;
 }
+
+export class VerificationCaseAdmissionSupersededError extends Error {}
 
 class VerificationReleaseConflictError extends Error {}
 class TerminalActionClaimConflictError extends Error {}
@@ -92,7 +99,8 @@ export interface IVerificationEventRepository {
     detectionEventId: string | null,
     serverId: string, // Explicitly require server/user IDs
     userId: string, // Explicitly require server/user IDs
-    status: VerificationStatus
+    status: VerificationStatus,
+    metadata?: VerificationEvent['metadata']
   ): Promise<VerificationEvent>;
   getVerificationHistory(userId: string, serverId: string): Promise<VerificationEvent[]>;
   findById(id: string): Promise<VerificationEvent | null>;
@@ -121,7 +129,8 @@ export interface IVerificationEventRepository {
     ids: readonly string[],
     serverId: string,
     userId: string,
-    attemptId: string
+    attemptId: string,
+    reportBanAttempt?: { operationId: string; attemptToken: string }
   ): Promise<VerificationEvent[] | null>;
   completeTerminalActions(
     completions: readonly TerminalActionCompletion[],
@@ -170,10 +179,23 @@ export interface IVerificationEventRepository {
     attemptId: string,
     data: Partial<VerificationEvent>
   ): Promise<VerificationEvent | null>;
+  // data.metadata is an owned patch, merged under the pending/attempt guard.
   updatePendingAfterMemberLeft(
     id: string,
     expectedQuarantineAttemptId: string | null,
     data: Partial<VerificationEvent>
+  ): Promise<VerificationEvent | null>;
+  setThreadIdentity(
+    id: string,
+    threadId: string,
+    threadType: 'verification' | 'report_review',
+    metadataPatch?: Record<string, unknown>,
+    expectedPendingThreadId?: string | null
+  ): Promise<VerificationEvent | null>;
+  patchMetadata(
+    id: string,
+    patch: Record<string, unknown>,
+    options?: { touchUpdatedAt?: boolean; expectedPendingThreadId?: string }
   ): Promise<VerificationEvent | null>;
   update(
     id: string,
@@ -182,6 +204,7 @@ export interface IVerificationEventRepository {
       touchUpdatedAt?: boolean;
       /** Only for persisting a Discord ban or kick that has already succeeded. */
       allowQuarantineOverride?: boolean;
+      deferReportBanEnforcement?: boolean;
       /** Only for rolling back a failed Discord action to an exact prior pending state. */
       preservePendingCaseState?: boolean;
       /** Requires an exact terminal-action claim before persisting a Discord side effect. */
@@ -412,7 +435,8 @@ export class VerificationEventRepository implements IVerificationEventRepository
     ids: readonly string[],
     serverId: string,
     userId: string,
-    attemptId: string
+    attemptId: string,
+    reportBanAttempt?: { operationId: string; attemptToken: string }
   ): Promise<VerificationEvent[] | null> {
     if (!attemptId.startsWith(CASE_TERMINAL_ACTION_ATTEMPT_PREFIX) || ids.length === 0) {
       throw new RepositoryError(
@@ -421,6 +445,16 @@ export class VerificationEventRepository implements IVerificationEventRepository
     }
     try {
       return (await this.prisma.$transaction(async (transaction) => {
+        if (reportBanAttempt) {
+          const owner = await transaction.$queryRaw<
+            Array<{ token: string | null; phase: string | null }>
+          >`
+            SELECT metadata->>'report_ban_attempt_token' AS token, metadata->>'report_ban_phase' AS phase
+            FROM moderation_action_requests WHERE id = ${reportBanAttempt.operationId}::uuid FOR UPDATE`;
+          if (owner[0]?.token !== reportBanAttempt.attemptToken || owner[0]?.phase !== 'preparing')
+            return null;
+        }
+        await transaction.$queryRaw`SELECT id FROM verification_events WHERE id::text = ANY(${[...ids].sort()}::text[]) ORDER BY id FOR UPDATE`;
         const claimed = await transaction.verification_events.updateMany({
           where: {
             id: { in: [...ids] },
@@ -471,6 +505,12 @@ export class VerificationEventRepository implements IVerificationEventRepository
           if (completion.requiresTerminalActionClaim && !attemptId) {
             throw new TerminalActionClaimConflictError();
           }
+          const metadata = await this.mergeLockedMetadataPatch(
+            transaction,
+            completion.id,
+            completion.metadata,
+            completion.clearActiveModerationOperation
+          );
           const completed = await transaction.verification_events.updateMany({
             where: {
               id: completion.id,
@@ -495,7 +535,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
               quarantine_lease_renewed_at: null,
               parked_at: null,
               parked_by: null,
-              metadata: completion.metadata as Prisma.InputJsonValue,
+              metadata,
               updated_at: new Date(),
             },
           });
@@ -527,6 +567,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
   ): Promise<VerificationEvent | null> {
     try {
       return (await this.prisma.$transaction(async (transaction) => {
+        const mergedMetadata = await this.mergeLockedMetadataPatch(transaction, id, metadata);
         const completed = await transaction.verification_events.updateMany({
           where: {
             id,
@@ -546,7 +587,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
             quarantine_lease_renewed_at: null,
             parked_at: null,
             parked_by: null,
-            metadata: metadata as Prisma.InputJsonValue,
+            metadata: mergedMetadata,
             updated_at: new Date(),
           },
         });
@@ -569,6 +610,11 @@ export class VerificationEventRepository implements IVerificationEventRepository
     try {
       return (await this.prisma.$transaction(async (transaction) => {
         for (const completion of completions) {
+          const metadata = await this.mergeLockedMetadataPatch(
+            transaction,
+            completion.id,
+            completion.metadata
+          );
           const completed = await transaction.verification_events.updateMany({
             where: {
               id: completion.id,
@@ -593,7 +639,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
               quarantine_lease_renewed_at: null,
               parked_at: null,
               parked_by: null,
-              metadata: completion.metadata as Prisma.InputJsonValue,
+              metadata,
               updated_at: new Date(),
             },
           });
@@ -1038,12 +1084,17 @@ export class VerificationEventRepository implements IVerificationEventRepository
   ): Promise<VerificationEvent | null> {
     try {
       return (await this.prisma.$transaction(async (transaction) => {
+        const metadata =
+          data.metadata === undefined
+            ? undefined
+            : await this.mergeLockedMetadataPatch(transaction, id, data.metadata);
         const recovered = await transaction.verification_events.updateMany({
           where: {
             id,
             status: VerificationStatus.PENDING,
             containment_status: CaseContainmentStatus.IN_PROGRESS,
             quarantine_attempt_id: attemptId,
+            NOT: { quarantine_attempt_id: { startsWith: REPORT_BAN_TERMINAL_ATTEMPT_PREFIX } },
             OR: [
               { quarantine_lease_renewed_at: null },
               { quarantine_lease_renewed_at: { lte: staleBefore } },
@@ -1056,7 +1107,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
             quarantine_lease_renewed_at: null,
             parked_at: data.parked_at,
             parked_by: data.parked_by,
-            metadata: data.metadata as Prisma.InputJsonValue | undefined,
+            metadata,
             updated_at: new Date(),
           },
         });
@@ -1077,6 +1128,10 @@ export class VerificationEventRepository implements IVerificationEventRepository
   ): Promise<VerificationEvent | null> {
     try {
       return (await this.prisma.$transaction(async (transaction) => {
+        const metadata =
+          data.metadata === undefined
+            ? undefined
+            : await this.mergeLockedMetadataPatch(transaction, id, data.metadata);
         const updated = await transaction.verification_events.updateMany({
           where: {
             id,
@@ -1093,7 +1148,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
             parked_at: data.parked_at,
             parked_by: data.parked_by,
             quarantine_case_role_id: data.quarantine_case_role_id,
-            metadata: data.metadata as Prisma.InputJsonValue | undefined,
+            metadata,
             updated_at: new Date(),
           },
         });
@@ -1107,34 +1162,58 @@ export class VerificationEventRepository implements IVerificationEventRepository
     }
   }
 
+  private async mergeLockedMetadataPatch(
+    transaction: Prisma.TransactionClient,
+    id: string,
+    patch: VerificationEvent['metadata'],
+    clearActiveModerationOperation = false
+  ): Promise<Prisma.InputJsonValue> {
+    const rows = await transaction.$queryRaw<Array<Pick<VerificationEvent, 'metadata'>>>`
+      SELECT metadata FROM verification_events WHERE id = ${id}::uuid FOR UPDATE
+    `;
+    const current = rows.at(0)?.metadata;
+    const metadata = {
+      ...(current && typeof current === 'object' && !Array.isArray(current) ? current : {}),
+      ...(patch && typeof patch === 'object' && !Array.isArray(patch) ? patch : {}),
+    };
+    if (clearActiveModerationOperation) delete metadata.active_moderation_operation;
+    return metadata as Prisma.InputJsonValue;
+  }
+
   async updatePendingAfterMemberLeft(
     id: string,
     expectedQuarantineAttemptId: string | null,
     data: Partial<VerificationEvent>
   ): Promise<VerificationEvent | null> {
     try {
-      const updated = await this.prisma.verification_events.updateMany({
-        where: {
-          id,
-          status: VerificationStatus.PENDING,
-          quarantine_attempt_id: expectedQuarantineAttemptId,
-        },
-        data: {
-          attention_state: data.attention_state as case_attention_state | undefined,
-          containment_status: data.containment_status as case_containment_status | undefined,
-          quarantine_attempt_id: data.quarantine_attempt_id,
-          quarantine_lease_renewed_at: data.quarantine_lease_renewed_at,
-          parked_at: data.parked_at,
-          parked_by: data.parked_by,
-          metadata: data.metadata as Prisma.InputJsonValue | undefined,
-        },
+      return await this.prisma.$transaction(async (transaction) => {
+        const metadata =
+          data.metadata === undefined
+            ? undefined
+            : await this.mergeLockedMetadataPatch(transaction, id, data.metadata);
+        const updated = await transaction.verification_events.updateMany({
+          where: {
+            id,
+            status: VerificationStatus.PENDING,
+            quarantine_attempt_id: expectedQuarantineAttemptId,
+          },
+          data: {
+            attention_state: data.attention_state as case_attention_state | undefined,
+            containment_status: data.containment_status as case_containment_status | undefined,
+            quarantine_attempt_id: data.quarantine_attempt_id,
+            quarantine_lease_renewed_at: data.quarantine_lease_renewed_at,
+            parked_at: data.parked_at,
+            parked_by: data.parked_by,
+            metadata,
+          },
+        });
+        if (updated.count !== 1) {
+          return null;
+        }
+        return (await transaction.verification_events.findUnique({
+          where: { id },
+        })) as VerificationEvent | null;
       });
-      if (updated.count !== 1) {
-        return null;
-      }
-      return (await this.prisma.verification_events.findUnique({
-        where: { id },
-      })) as VerificationEvent | null;
     } catch (error) {
       this.handleError(error, 'updatePendingAfterMemberLeft');
     }
@@ -1284,6 +1363,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
           status: VerificationStatus.PENDING,
           containment_status: CaseContainmentStatus.IN_PROGRESS,
           quarantine_attempt_id: { not: null },
+          NOT: { quarantine_attempt_id: { startsWith: REPORT_BAN_TERMINAL_ATTEMPT_PREFIX } },
           AND: [
             {
               OR: [
@@ -1325,30 +1405,33 @@ export class VerificationEventRepository implements IVerificationEventRepository
     metadata: VerificationEvent['metadata']
   ): Promise<VerificationEvent | null> {
     try {
-      const updated = await this.prisma.verification_events.updateMany({
-        where: {
-          id,
-          status: VerificationStatus.PENDING,
-          case_kind: CaseKind.COMPROMISED_ACCOUNT,
-          attention_state: CaseAttentionState.PARKED,
-          containment_status: CaseContainmentStatus.CONTAINED,
-          quarantine_attempt_id: null,
-        },
-        data: {
-          attention_state: CaseAttentionState.REVIEW_REQUIRED,
-          containment_status: CaseContainmentStatus.INCOMPLETE,
-          parked_at: null,
-          parked_by: null,
-          metadata: metadata as Prisma.InputJsonValue,
-          updated_at: new Date(),
-        },
+      return await this.prisma.$transaction(async (transaction) => {
+        const mergedMetadata = await this.mergeLockedMetadataPatch(transaction, id, metadata);
+        const updated = await transaction.verification_events.updateMany({
+          where: {
+            id,
+            status: VerificationStatus.PENDING,
+            case_kind: CaseKind.COMPROMISED_ACCOUNT,
+            attention_state: CaseAttentionState.PARKED,
+            containment_status: CaseContainmentStatus.CONTAINED,
+            quarantine_attempt_id: null,
+          },
+          data: {
+            attention_state: CaseAttentionState.REVIEW_REQUIRED,
+            containment_status: CaseContainmentStatus.INCOMPLETE,
+            parked_at: null,
+            parked_by: null,
+            metadata: mergedMetadata,
+            updated_at: new Date(),
+          },
+        });
+        if (updated.count !== 1) {
+          return null;
+        }
+        return (await transaction.verification_events.findUnique({
+          where: { id },
+        })) as VerificationEvent | null;
       });
-      if (updated.count !== 1) {
-        return null;
-      }
-      return (await this.prisma.verification_events.findUnique({
-        where: { id },
-      })) as VerificationEvent | null;
     } catch (error) {
       this.handleError(error, 'markParkedContainmentIncomplete');
     }
@@ -1386,13 +1469,41 @@ export class VerificationEventRepository implements IVerificationEventRepository
     }
   }
 
-  // Modified: Requires serverId and userId explicitly now
+  private activeReportBanMayOwnCase(
+    metadata: Prisma.JsonObject,
+    event: VerificationEvent
+  ): boolean {
+    if (
+      !['enforcement_started', 'discord_confirmed', 'reconciliation_required'].includes(
+        String(metadata.report_ban_phase)
+      )
+    )
+      return false;
+    const snapshot = ((event.metadata ?? {}) as Prisma.JsonObject).user_snapshot as
+      | Prisma.JsonObject
+      | undefined;
+    const operationJoin = metadata.report_ban_membership_joined_at;
+    const caseJoin = snapshot?.joined_at;
+    if (
+      typeof operationJoin === 'string' &&
+      typeof caseJoin === 'string' &&
+      Number.isFinite(Date.parse(operationJoin)) &&
+      Number.isFinite(Date.parse(caseJoin)) &&
+      Date.parse(operationJoin) !== Date.parse(caseJoin)
+    )
+      return false;
+    const confirmedAt = metadata.report_ban_confirmed_at;
+    return !(typeof confirmedAt === 'string' && event.created_at > new Date(confirmedAt));
+  }
+
   async createFromDetection(
     detectionEventId: string | null,
     serverId: string,
     userId: string,
-    status: VerificationStatus
+    status: VerificationStatus,
+    metadata?: VerificationEvent['metadata']
   ): Promise<VerificationEvent> {
+    const admissionAt = new Date();
     try {
       if (!serverId || !userId) {
         throw new RepositoryError(
@@ -1400,19 +1511,51 @@ export class VerificationEventRepository implements IVerificationEventRepository
         );
       }
 
-      const newEventData: Prisma.verification_eventsCreateInput = {
-        servers: { connect: { guild_id: serverId } },
-        users: { connect: { discord_id: userId } },
-        detection_events_verification_events_detection_event_idTodetection_events: detectionEventId
-          ? { connect: { id: detectionEventId } }
-          : undefined,
-        status: status as verification_status, // Cast to Prisma enum
-        metadata: Prisma.JsonNull,
-        // created_at, updated_at handled by default
-      };
+      const created = await this.prisma.$transaction(async (transaction) => {
+        // Request locks precede the target fence and case insert. Adoption uses the same order.
+        if (status === VerificationStatus.PENDING) {
+          await transaction.$queryRaw`
+            SELECT id FROM moderation_action_requests
+            WHERE server_id = ${serverId} AND target_user_id = ${userId}
+              AND action_type = 'ban_observed_detection'
+            ORDER BY id FOR UPDATE`;
+          await transaction.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${JSON.stringify(['report-ban-case-admission', serverId, userId])}, 0))`;
+          // A request can appear after the first read and finish before we acquire the fence.
+          // Read its committed confirmation without reversing the request-before-target lock order.
+          const requests = await transaction.$queryRaw<{ metadata: Prisma.JsonObject | null }[]>`
+            SELECT metadata FROM moderation_action_requests
+            WHERE server_id = ${serverId} AND target_user_id = ${userId}
+              AND action_type = 'ban_observed_detection'`;
+          const joinedAt = (metadata as Prisma.JsonObject | null)?.user_snapshot as
+            | Prisma.JsonObject
+            | undefined;
+          for (const request of requests) {
+            const confirmed = request.metadata?.report_ban_confirmed_at;
+            const expectedJoin = request.metadata?.report_ban_membership_joined_at;
+            if (
+              typeof confirmed === 'string' &&
+              admissionAt <= new Date(confirmed) &&
+              typeof expectedJoin === 'string' &&
+              typeof joinedAt?.joined_at === 'string' &&
+              Number.isFinite(Date.parse(expectedJoin)) &&
+              Date.parse(expectedJoin) === Date.parse(joinedAt.joined_at)
+            )
+              throw new VerificationCaseAdmissionSupersededError(
+                'Confirmed ban superseded this case admission.'
+              );
+          }
+        }
+        const newEventData: Prisma.verification_eventsCreateInput = {
+          servers: { connect: { guild_id: serverId } },
+          users: { connect: { discord_id: userId } },
+          detection_events_verification_events_detection_event_idTodetection_events:
+            detectionEventId ? { connect: { id: detectionEventId } } : undefined,
+          status: status as verification_status, // Cast to Prisma enum
+          metadata: metadata ?? Prisma.JsonNull,
+          created_at: admissionAt,
+        };
 
-      const created = await this.prisma.verification_events.create({
-        data: newEventData,
+        return await transaction.verification_events.create({ data: newEventData });
       });
 
       // Update the related detection event if applicable
@@ -1433,8 +1576,9 @@ export class VerificationEventRepository implements IVerificationEventRepository
         }
       }
 
-      return created as VerificationEvent; // Cast needed if type differs
+      return created as VerificationEvent;
     } catch (error) {
+      if (error instanceof VerificationCaseAdmissionSupersededError) throw error;
       this.handleError(error, 'createFromDetection');
     }
   }
@@ -1444,12 +1588,164 @@ export class VerificationEventRepository implements IVerificationEventRepository
     return this.findByUserAndServer(userId, serverId, { limit: 100 });
   }
 
+  async setThreadIdentity(
+    id: string,
+    threadId: string,
+    threadType: 'verification' | 'report_review',
+    metadataPatch: Record<string, unknown> = {},
+    expectedPendingThreadId?: string | null
+  ): Promise<VerificationEvent | null> {
+    try {
+      const rows = await this.prisma.$queryRaw<VerificationEvent[]>`
+        UPDATE verification_events
+        SET thread_id = ${threadId},
+        metadata = CASE
+          WHEN jsonb_typeof(metadata) = 'object' THEN metadata
+          ELSE '{}'::jsonb
+        END || ${JSON.stringify({ ...metadataPatch, thread_type: threadType })}::jsonb,
+        updated_at = now()
+        WHERE id = ${id}::uuid AND (${expectedPendingThreadId === undefined} OR (status = 'pending' AND thread_id IS NOT DISTINCT FROM ${expectedPendingThreadId ?? null}))
+        RETURNING *
+      `;
+      return rows[0] ?? null;
+    } catch (error) {
+      this.handleError(error, 'setThreadIdentity');
+    }
+  }
+
+  async patchMetadata(
+    id: string,
+    patch: Record<string, unknown>,
+    options: { touchUpdatedAt?: boolean; expectedPendingThreadId?: string } = {}
+  ): Promise<VerificationEvent | null> {
+    try {
+      const rows = await this.prisma.$queryRaw<VerificationEvent[]>`
+        UPDATE verification_events
+        SET metadata = CASE
+          WHEN jsonb_typeof(metadata) = 'object' THEN metadata
+          ELSE '{}'::jsonb
+        END || ${JSON.stringify(patch)}::jsonb,
+        updated_at = CASE WHEN ${options.touchUpdatedAt !== false} THEN now() ELSE updated_at END
+        WHERE id = ${id}::uuid AND (${options.expectedPendingThreadId === undefined} OR (status = 'pending' AND thread_id = ${options.expectedPendingThreadId ?? null}))
+        RETURNING *
+      `;
+      return rows[0] ?? null;
+    } catch (error) {
+      this.handleError(error, 'patchMetadata');
+    }
+  }
+
+  private async resolveObservedReportBan(
+    id: string,
+    data: Partial<VerificationEvent>,
+    updateData: Prisma.verification_eventsUpdateInput
+  ): Promise<VerificationEvent | null> {
+    return this.prisma.$transaction(async (transaction) => {
+      const binding = await transaction.verification_events.findUnique({ where: { id } });
+      if (!binding) return null;
+      // The gateway can precede HTTP confirmation and adoption of a late case.
+      const operations = await transaction.$queryRaw<
+        Array<{
+          id: string;
+          metadata: Prisma.JsonObject;
+          result: Prisma.JsonObject;
+          requested_at: Date | null;
+        }>
+      >`
+            SELECT id, metadata, result, requested_at FROM moderation_action_requests
+            WHERE server_id = ${binding.server_id} AND target_user_id = ${binding.user_id}
+              AND action_type = 'ban_observed_detection'
+              AND metadata->>'report_ban_phase' IN ('preparing', 'enforcement_started', 'discord_confirmed', 'reconciliation_required')
+            ORDER BY id FOR UPDATE`;
+      const rows = await transaction.$queryRaw<VerificationEvent[]>`
+            SELECT * FROM verification_events WHERE id = ${id}::uuid FOR UPDATE`;
+      const current = rows.at(0);
+      if (
+        !current ||
+        current.status !== VerificationStatus.PENDING ||
+        (data.case_revision !== undefined && current.case_revision !== data.case_revision) ||
+        (current.quarantine_attempt_id &&
+          current.quarantine_attempt_id !== data.quarantine_attempt_id) ||
+        (data.resolved_at && current.created_at > data.resolved_at)
+      )
+        return null;
+      const owners = operations.filter((operation) =>
+        this.activeReportBanMayOwnCase(operation.metadata, current)
+      );
+      // Save delivered gateway evidence before deferring to the operation. Review takes
+      // this same request lock first, so either it sees the observation or we see release.
+      if (data.status === VerificationStatus.BANNED && data.resolved_at) {
+        for (const operation of owners) {
+          if (operation.requested_at && operation.requested_at > data.resolved_at) continue;
+          const prior = operation.metadata.report_ban_observed_ban as Prisma.JsonObject | undefined;
+          const evidence = (data.metadata ?? {}) as Prisma.JsonObject;
+          const observation = {
+            id: randomUUID(),
+            attempt_token: operation.metadata.report_ban_attempt_token,
+            occurred_at: data.resolved_at.toISOString(),
+            source: evidence.moderation_outcome_source ?? null,
+            source_detail: evidence.source_detail ?? null,
+            actor_id: evidence.moderation_outcome_actor_id ?? null,
+            audit_log_entry_id: evidence.audit_log_entry_id ?? null,
+            membership_joined_at: operation.metadata.report_ban_membership_joined_at ?? null,
+            case_id: current.id,
+            case_revision: current.case_revision,
+            uncertain_result: prior?.uncertain_result ?? operation.result,
+          };
+          await transaction.$executeRaw`
+                UPDATE moderation_action_requests SET metadata = metadata ||
+                  jsonb_build_object('report_ban_observed_ban', ${JSON.stringify(observation)}::jsonb), updated_at = clock_timestamp()
+                WHERE id = ${operation.id}::uuid`;
+        }
+      }
+      if (
+        owners.length ||
+        (current.quarantine_attempt_id?.startsWith(REPORT_BAN_TERMINAL_ATTEMPT_PREFIX) &&
+          (current.metadata as Record<string, unknown> | null)?.report_ban_enforcement_operation_id)
+      )
+        return null;
+      // A review may have released ownership while this observer waited. Keep its
+      // current metadata instead of copying the stale operation claim back onto the case.
+      updateData.metadata = {
+        ...((current.metadata ?? {}) as Prisma.JsonObject),
+        ...Object.fromEntries(
+          Object.entries((data.metadata ?? {}) as Prisma.JsonObject).filter(([key]) =>
+            [
+              'source_detail',
+              'audit_log_entry_id',
+              'moderation_outcome_source',
+              'moderation_outcome_actor_id',
+            ].includes(key)
+          )
+        ),
+      };
+      return (await transaction.verification_events.update({
+        where: { id },
+        data: {
+          status: updateData.status,
+          resolved_at: updateData.resolved_at,
+          resolved_by: updateData.resolved_by,
+          notes: updateData.notes,
+          attention_state: updateData.attention_state,
+          containment_status: updateData.containment_status,
+          quarantine_attempt_id: null,
+          quarantine_lease_renewed_at: null,
+          parked_at: null,
+          parked_by: null,
+          metadata: updateData.metadata,
+          updated_at: updateData.updated_at,
+        },
+      })) as VerificationEvent;
+    });
+  }
+
   async update(
     id: string,
     data: Partial<VerificationEvent>,
     options: {
       touchUpdatedAt?: boolean;
       allowQuarantineOverride?: boolean;
+      deferReportBanEnforcement?: boolean;
       preservePendingCaseState?: boolean;
       expectedQuarantineAttemptId?: string;
     } = {}
@@ -1520,6 +1816,9 @@ export class VerificationEventRepository implements IVerificationEventRepository
         data.status === VerificationStatus.BANNED ||
         data.status === VerificationStatus.KICKED ||
         data.status === VerificationStatus.CLOSED_NO_ACTION;
+      if (isResolution && options.deferReportBanEnforcement) {
+        return this.resolveObservedReportBan(id, data, updateData);
+      }
       if (isResolution && options.expectedQuarantineAttemptId) {
         const updated = await this.prisma.verification_events.updateMany({
           where: {

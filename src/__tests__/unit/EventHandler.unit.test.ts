@@ -10,6 +10,7 @@ import {
   PermissionFlagsBits,
   PermissionsBitField,
 } from 'discord.js';
+import { InMemoryVerificationEventRepository } from '../fakes/inMemoryRepositories';
 import { EventHandler } from '../../controllers/EventHandler';
 import {
   ActiveAccountQuarantineCache,
@@ -1669,6 +1670,77 @@ describe('EventHandler (unit)', () => {
       })
     );
   });
+
+  it.each([true, false])(
+    'preserves newer metadata after breach attention delivery (direct delivered: %s)',
+    async (directDelivered) => {
+      const repository = new InMemoryVerificationEventRepository();
+      const event = await repository.createFromDetection(
+        null,
+        'guild-1',
+        'user-1',
+        VerificationStatus.PENDING
+      );
+      await repository.update(event.id, {
+        thread_id: 'recovery-thread',
+        case_kind: CaseKind.COMPROMISED_ACCOUNT,
+        attention_state: CaseAttentionState.PARKED,
+        containment_status: CaseContainmentStatus.CONTAINED,
+        metadata: {
+          evidence_bundle: { detection_history_count: 1 },
+          support_thread_reminder: { reminderCount: 1 },
+        },
+      });
+      const handler = buildHandler({
+        configService: buildQuarantineConfigService(),
+        notificationManager: {
+          notifyAccountQuarantineAttention: jest.fn().mockImplementation(async () => {
+            await repository.patchMetadata(event.id, {
+              evidence_bundle: { detection_history_count: 2 },
+              support_thread_reminder: { reminderCount: 2 },
+            });
+            return directDelivered;
+          }),
+        },
+        verificationEventRepository: {
+          findPendingByServer: jest.fn(repository.findPendingByServer.bind(repository)),
+          findByUserAndServer: jest.fn(repository.findByUserAndServer.bind(repository)),
+          findActiveByUserAndServer: jest.fn(repository.findActiveByUserAndServer.bind(repository)),
+          claimAccountQuarantineAttention: jest.fn(
+            repository.claimAccountQuarantineAttention.bind(repository)
+          ),
+          updateQuarantineAttempt: jest.fn(repository.updateQuarantineAttempt.bind(repository)),
+        },
+      });
+      const message = buildMessage(new PermissionsBitField());
+      await (handler as any).recordParkedQuarantineBreach(message);
+      const latest = await repository.findById(event.id);
+      expect(latest).toMatchObject({
+        status: VerificationStatus.PENDING,
+        quarantine_attempt_id: null,
+        attention_state: directDelivered
+          ? CaseAttentionState.PARKED
+          : CaseAttentionState.REVIEW_REQUIRED,
+        containment_status: directDelivered
+          ? CaseContainmentStatus.CONTAINED
+          : CaseContainmentStatus.INCOMPLETE,
+        metadata: {
+          evidence_bundle: { detection_history_count: 2 },
+          support_thread_reminder: { reminderCount: 2 },
+        },
+      });
+      if (directDelivered)
+        expect(latest?.metadata).toMatchObject({
+          breach_attention_direct_notified_at: expect.any(String),
+          breach_attention_direct_message_id: message.id,
+        });
+      else
+        expect(latest?.metadata).toMatchObject({
+          breach_attention_delivery_failed_at: expect.any(String),
+          breach_attention_message_id: message.id,
+        });
+    }
+  );
 
   it('returns a breach to durable review when every attention delivery path fails', async () => {
     const activeCase = {

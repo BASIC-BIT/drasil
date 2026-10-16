@@ -1,7 +1,10 @@
 import { isDeepStrictEqual } from 'util';
 import type { IAdminActionRepository } from '../../repositories/AdminActionRepository';
 import type { IDetectionEventsRepository } from '../../repositories/DetectionEventsRepository';
-import type { IServerMemberRepository } from '../../repositories/ServerMemberRepository';
+import type {
+  IServerMemberRepository,
+  CaseRoleApplicationCompletion,
+} from '../../repositories/ServerMemberRepository';
 import type {
   IServerRepository,
   ServerSetupConfigurationUpdate,
@@ -62,6 +65,7 @@ import {
 } from '../../utils/detectionResponseSettings';
 import {
   CAPTCHA_FINALIZATION_ATTEMPT_PREFIX,
+  REPORT_BAN_TERMINAL_ATTEMPT_PREFIX,
   isCaseRoleReleaseRecoveryAttempt,
   isCaptchaPresentationAttempt,
 } from '../../utils/caseRoleRelease';
@@ -168,6 +172,11 @@ export class InMemoryDetectionEventsRepository implements IDetectionEventsReposi
   private nextId(): string {
     this.idCounter += 1;
     return `det-${this.idCounter}`;
+  }
+
+  async patchMetadata(id: string, patch: Record<string, unknown>): Promise<DetectionEvent | null> {
+    const event = await this.findById(id);
+    return event ? this.updateMetadata(id, { ...event.metadata, ...patch }) : null;
   }
 
   async create(data: Partial<DetectionEvent>): Promise<DetectionEvent> {
@@ -399,7 +408,8 @@ export class InMemoryDetectionEventsRepository implements IDetectionEventsReposi
   async releaseObservedAction(
     detectionEventId: string,
     actionType: string,
-    adminId: string
+    adminId: string,
+    operationId?: string
   ): Promise<DetectionEvent | null> {
     const eventIndex = this.events.findIndex((item) => item.id === detectionEventId);
     if (eventIndex === -1) {
@@ -409,7 +419,8 @@ export class InMemoryDetectionEventsRepository implements IDetectionEventsReposi
     const existingMetadata = this.events[eventIndex].metadata ?? {};
     if (
       existingMetadata.observed_action !== actionType ||
-      existingMetadata.observed_action_by !== adminId
+      existingMetadata.observed_action_by !== adminId ||
+      (operationId !== undefined && existingMetadata.report_ban_operation_id !== operationId)
     ) {
       return null;
     }
@@ -418,6 +429,7 @@ export class InMemoryDetectionEventsRepository implements IDetectionEventsReposi
     delete metadata.observed_action;
     delete metadata.observed_action_by;
     delete metadata.observed_action_at;
+    delete metadata.report_ban_operation_id;
     if (actionType === 'false_positive') {
       delete metadata[DETECTION_ACCOUNTING_EXCLUDED_METADATA_KEY];
       delete metadata[DETECTION_ACCOUNTING_EXCLUSION_SCOPE_METADATA_KEY];
@@ -466,6 +478,19 @@ export class InMemoryDetectionEventsRepository implements IDetectionEventsReposi
     this.events[eventIndex] = updated;
     return { ...updated };
   }
+}
+
+function mergeCaseMetadata(
+  current: VerificationEvent['metadata'],
+  patch: VerificationEvent['metadata'],
+  clearActiveModerationOperation = false
+): VerificationEvent['metadata'] {
+  const metadata = {
+    ...(current && typeof current === 'object' && !Array.isArray(current) ? current : {}),
+    ...(patch && typeof patch === 'object' && !Array.isArray(patch) ? patch : {}),
+  };
+  if (clearActiveModerationOperation) delete metadata.active_moderation_operation;
+  return metadata;
 }
 
 export class InMemoryVerificationEventRepository implements IVerificationEventRepository {
@@ -574,6 +599,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
           event.containment_status === CaseContainmentStatus.IN_PROGRESS &&
           event.quarantine_attempt_id !== null &&
           event.quarantine_attempt_id !== undefined &&
+          !event.quarantine_attempt_id.startsWith(REPORT_BAN_TERMINAL_ATTEMPT_PREFIX) &&
           (isCaptchaPresentationAttempt(event.quarantine_attempt_id) ||
             (event.case_kind === CaseKind.COMPROMISED_ACCOUNT &&
               !isCaseRoleReleaseRecoveryAttempt(event.quarantine_attempt_id))) &&
@@ -606,7 +632,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       containment_status: CaseContainmentStatus.INCOMPLETE,
       parked_at: null,
       parked_by: null,
-      metadata,
+      metadata: mergeCaseMetadata(this.events[eventIndex].metadata, metadata),
       updated_at: new Date(),
     };
     this.events[eventIndex] = updated;
@@ -638,7 +664,8 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     detectionEventId: string | null,
     serverId: string,
     userId: string,
-    status: VerificationStatus
+    status: VerificationStatus,
+    metadata?: VerificationEvent['metadata']
   ): Promise<VerificationEvent> {
     const now = new Date();
     const event: VerificationEvent = {
@@ -666,7 +693,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       resolved_at: null,
       resolved_by: null,
       notes: null,
-      metadata: null,
+      metadata: metadata ?? null,
     };
 
     this.events.push(event);
@@ -1090,7 +1117,11 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
         quarantine_lease_renewed_at: null,
         parked_at: null,
         parked_by: null,
-        metadata: completions[index].metadata,
+        metadata: mergeCaseMetadata(
+          this.events[eventIndex].metadata,
+          completions[index].metadata,
+          completions[index].clearActiveModerationOperation
+        ),
         updated_at: completedAt,
       };
       this.events[eventIndex] = completed;
@@ -1129,7 +1160,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
       quarantine_lease_renewed_at: null,
       parked_at: null,
       parked_by: null,
-      metadata,
+      metadata: mergeCaseMetadata(this.events[eventIndex].metadata, metadata),
       updated_at: new Date(),
     };
     this.events[eventIndex] = completed;
@@ -1171,7 +1202,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
         quarantine_lease_renewed_at: null,
         parked_at: null,
         parked_by: null,
-        metadata: completion.metadata,
+        metadata: mergeCaseMetadata(this.events[eventIndex].metadata, completion.metadata),
         updated_at: new Date(),
       };
       this.events[eventIndex] = completed;
@@ -1257,6 +1288,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
         event.status === VerificationStatus.PENDING &&
         event.containment_status === CaseContainmentStatus.IN_PROGRESS &&
         event.quarantine_attempt_id === attemptId &&
+        !attemptId.startsWith(REPORT_BAN_TERMINAL_ATTEMPT_PREFIX) &&
         (event.quarantine_lease_renewed_at === null ||
           event.quarantine_lease_renewed_at === undefined ||
           event.quarantine_lease_renewed_at <= staleBefore)
@@ -1267,6 +1299,10 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     const updated = {
       ...this.events[eventIndex],
       ...data,
+      metadata:
+        data.metadata === undefined
+          ? this.events[eventIndex].metadata
+          : mergeCaseMetadata(this.events[eventIndex].metadata, data.metadata),
       quarantine_attempt_id: null,
       quarantine_lease_renewed_at: null,
       updated_at: new Date(),
@@ -1293,6 +1329,10 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     const updated = {
       ...this.events[eventIndex],
       ...data,
+      metadata:
+        data.metadata === undefined
+          ? this.events[eventIndex].metadata
+          : mergeCaseMetadata(this.events[eventIndex].metadata, data.metadata),
       quarantine_attempt_id: null,
       quarantine_lease_renewed_at: null,
       updated_at: new Date(),
@@ -1342,9 +1382,71 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     if (eventIndex === -1) {
       return null;
     }
-    const updated = {
+    const updated: VerificationEvent = {
       ...this.events[eventIndex],
       ...data,
+      metadata:
+        data.metadata === undefined
+          ? this.events[eventIndex].metadata
+          : mergeCaseMetadata(this.events[eventIndex].metadata, data.metadata),
+    };
+    this.events[eventIndex] = updated;
+    return { ...updated };
+  }
+
+  async setThreadIdentity(
+    id: string,
+    threadId: string,
+    threadType: 'verification' | 'report_review',
+    metadataPatch: Record<string, unknown> = {},
+    expectedPendingThreadId?: string | null
+  ): Promise<VerificationEvent | null> {
+    const eventIndex = this.events.findIndex((event) => event.id === id);
+    if (eventIndex === -1) return null;
+    const event = this.events[eventIndex];
+    if (
+      expectedPendingThreadId !== undefined &&
+      (event.status !== VerificationStatus.PENDING || event.thread_id !== expectedPendingThreadId)
+    )
+      return null;
+    const metadata =
+      event.metadata && typeof event.metadata === 'object' && !Array.isArray(event.metadata)
+        ? event.metadata
+        : {};
+    const updated: VerificationEvent = {
+      ...event,
+      thread_id: threadId,
+      metadata: JSON.parse(
+        JSON.stringify({ ...metadata, ...metadataPatch, thread_type: threadType })
+      ),
+      updated_at: new Date(),
+    };
+    this.events[eventIndex] = updated;
+    return { ...updated };
+  }
+
+  async patchMetadata(
+    id: string,
+    patch: Record<string, unknown>,
+    options: { touchUpdatedAt?: boolean; expectedPendingThreadId?: string } = {}
+  ): Promise<VerificationEvent | null> {
+    const eventIndex = this.events.findIndex((event) => event.id === id);
+    if (eventIndex === -1) return null;
+    const event = this.events[eventIndex];
+    if (
+      options.expectedPendingThreadId !== undefined &&
+      (event.status !== VerificationStatus.PENDING ||
+        event.thread_id !== options.expectedPendingThreadId)
+    )
+      return null;
+    const metadata =
+      event.metadata && typeof event.metadata === 'object' && !Array.isArray(event.metadata)
+        ? event.metadata
+        : {};
+    const updated: VerificationEvent = {
+      ...event,
+      metadata: JSON.parse(JSON.stringify({ ...metadata, ...patch })),
+      updated_at: options.touchUpdatedAt === false ? event.updated_at : new Date(),
     };
     this.events[eventIndex] = updated;
     return { ...updated };
@@ -1356,6 +1458,7 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     options: {
       touchUpdatedAt?: boolean;
       allowQuarantineOverride?: boolean;
+      deferReportBanEnforcement?: boolean;
       preservePendingCaseState?: boolean;
       expectedQuarantineAttemptId?: string;
     } = {}
@@ -1366,6 +1469,14 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
     }
 
     const existing = this.events[eventIndex];
+    if (
+      options.deferReportBanEnforcement &&
+      (existing.status !== VerificationStatus.PENDING ||
+        (existing.quarantine_attempt_id?.startsWith(REPORT_BAN_TERMINAL_ATTEMPT_PREFIX) &&
+          (existing.metadata as Record<string, unknown> | null)
+            ?.report_ban_enforcement_operation_id))
+    )
+      return null;
     if (
       options.expectedQuarantineAttemptId !== undefined &&
       (existing.status !== VerificationStatus.PENDING ||
@@ -1465,6 +1576,55 @@ export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
     return `evidence-${this.evidenceIdCounter}`;
   }
 
+  async claimBan(input: {
+    reportId: string;
+    serverId: string;
+    targetUserId: string;
+    detectionEventId: string;
+    operationId: string;
+  }): Promise<ReportIntake | null> {
+    const index = this.intakes.findIndex(
+      (item) =>
+        item.id === input.reportId &&
+        item.server_id === input.serverId &&
+        item.confirmed_target_user_id === input.targetUserId &&
+        item.status === ReportIntakeStatus.SUBMITTED &&
+        !(item.metadata as Record<string, unknown> | null)?.report_ban_operation_id
+    );
+    if (index < 0) return null;
+    this.intakes[index] = {
+      ...this.intakes[index],
+      metadata: {
+        ...(this.intakes[index].metadata as Record<string, unknown>),
+        report_ban_operation_id: input.operationId,
+      },
+    };
+    return { ...this.intakes[index] };
+  }
+  async updateBan(
+    reportId: string,
+    operationId: string,
+    input: { release?: boolean; complete?: boolean; metadata?: Record<string, unknown> }
+  ): Promise<ReportIntake | null> {
+    const index = this.intakes.findIndex(
+      (item) =>
+        item.id === reportId &&
+        (item.metadata as Record<string, unknown> | null)?.report_ban_operation_id === operationId
+    );
+    if (index < 0) return null;
+    const metadata = {
+      ...(this.intakes[index].metadata as Record<string, unknown>),
+      ...input.metadata,
+    };
+    if (input.release) delete metadata.report_ban_operation_id;
+    this.intakes[index] = {
+      ...this.intakes[index],
+      metadata: metadata as ReportIntake['metadata'],
+      ...(input.complete ? { status: ReportIntakeStatus.ACTIONED, closed_at: new Date() } : {}),
+    };
+    return { ...this.intakes[index] };
+  }
+
   async create(data: ReportIntakeCreate): Promise<ReportIntake> {
     const now = new Date();
     const intake: ReportIntake = {
@@ -1531,6 +1691,7 @@ export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
     }
 
     const existing = this.intakes[index];
+    if ((existing.metadata as Record<string, unknown> | null)?.report_ban_operation_id) return null;
     const updated: ReportIntake = {
       ...existing,
       status: data.status ?? existing.status,
@@ -1900,6 +2061,63 @@ export class InMemoryServerMemberRepository implements IServerMemberRepository {
     return member ? { ...member } : null;
   }
 
+  async completeCaseRoleApplication(
+    serverId: string,
+    userId: string,
+    input: CaseRoleApplicationCompletion
+  ): Promise<boolean> {
+    const member = await this.findByServerAndUser(serverId, userId);
+    if (
+      member &&
+      (member.verification_status === VerificationStatus.BANNED ||
+        (member.last_status_change && member.last_status_change > input.startedAt) ||
+        member.join_date?.getTime() !== input.joinedAt?.getTime())
+    )
+      return false;
+    await this.upsertMember(serverId, userId, {
+      case_role_active: true,
+      verification_status: VerificationStatus.PENDING,
+      last_status_change: input.startedAt,
+      updated_by: input.moderatorId,
+    });
+    return true;
+  }
+  async canReleaseSupersededCaseRole(
+    serverId: string,
+    userId: string,
+    input: CaseRoleApplicationCompletion
+  ): Promise<boolean> {
+    const member = await this.findByServerAndUser(serverId, userId);
+    return Boolean(
+      input.joinedAt &&
+      member?.join_date?.getTime() === input.joinedAt.getTime() &&
+      !member.case_role_active &&
+      (member.verification_status === VerificationStatus.VERIFIED ||
+        member.verification_status === VerificationStatus.CLOSED_NO_ACTION) &&
+      member.last_status_change &&
+      member.last_status_change >= input.startedAt
+    );
+  }
+  async markBannedIfNotNewer(
+    serverId: string,
+    userId: string,
+    confirmedAt: Date,
+    joinedAt: Date | null
+  ): Promise<boolean> {
+    const member = await this.findByServerAndUser(serverId, userId);
+    if (
+      !member ||
+      (member.last_status_change && member.last_status_change > confirmedAt) ||
+      (member.join_date && member.join_date.getTime() !== joinedAt?.getTime())
+    )
+      return false;
+    await this.upsertMember(serverId, userId, {
+      verification_status: VerificationStatus.BANNED,
+      case_role_active: false,
+      last_status_change: confirmedAt,
+    });
+    return true;
+  }
   async upsertMember(
     serverId: string,
     userId: string,

@@ -184,7 +184,8 @@ describe('ReportInteractionHandler (unit)', () => {
   });
 
   const createHandler = (
-    reportIntakeService?: jest.Mocked<IReportIntakeService>
+    reportIntakeService?: jest.Mocked<IReportIntakeService>,
+    showReportBan?: ConstructorParameters<typeof ReportInteractionHandler>[5]
   ): ReportInteractionHandler => {
     const reportSubmissionService = new ReportSubmissionService(
       configService,
@@ -195,7 +196,8 @@ describe('ReportInteractionHandler (unit)', () => {
       reportSubmissionService,
       configService,
       threadManager,
-      reportIntakeService
+      reportIntakeService,
+      showReportBan
     );
   };
 
@@ -811,6 +813,45 @@ describe('ReportInteractionHandler (unit)', () => {
       label: 'Close Report',
     });
   });
+
+  it.each(['submitted', 'unconfirmed', 'handled', 'busy', 'permission', 'disabled-policy'])(
+    'renders the intake Ban control with availability explained: %s',
+    async (state) => {
+      const member = buildMember('guild-1', 'moderator-1');
+      Object.assign(member, { permissions: { has: () => true } });
+      (client.guilds.fetch as jest.Mock).mockResolvedValue({
+        id: 'guild-1',
+        members: { fetch: jest.fn().mockResolvedValue(member) },
+      });
+      const service = createReportIntakeService();
+      service.findIntakeById.mockResolvedValue(
+        buildReportIntake({
+          thread_id: 'channel-1',
+          status: state === 'handled' ? ReportIntakeStatus.ACTIONED : ReportIntakeStatus.SUBMITTED,
+          confirmed_target_user_id: state === 'unconfirmed' ? null : 'user-1',
+          metadata: state === 'busy' ? { report_ban_operation_id: 'operation-1' } : {},
+        })
+      );
+      if (state === 'disabled-policy')
+        configService.getServerConfig.mockResolvedValue({
+          settings: { moderator_ban_action_enabled: false },
+        } as never);
+      const handler = createHandler(service, async () => {});
+      const interaction = buildInteraction('report_intake_admin:m:intake-1', 'guild-1', {
+        id: 'moderator-1',
+      } as User);
+      Object.assign(interaction, { memberPermissions: { has: () => state !== 'permission' } });
+      await handler.handleReportIntakeAdminAction(interaction, interaction.customId);
+      const reply = (interaction.editReply as jest.Mock).mock.calls[0][0];
+      expect(reply.components[0].toJSON().components[1]).toMatchObject({
+        label: 'Ban',
+        custom_id: 'report_intake_admin:b:intake-1',
+        disabled: state !== 'submitted',
+      });
+      if (state !== 'submitted') expect(reply.content).toContain('Ban unavailable:');
+      expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    }
+  );
 
   it('denies report intake admin actions for non-staff members', async () => {
     const viewerMember = buildMember('guild-1', 'viewer-1');

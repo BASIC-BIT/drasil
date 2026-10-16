@@ -32,6 +32,9 @@ import { VERIFICATION_ACTION_FAILURES_METADATA_KEY } from '../../utils/verificat
 import { MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY } from '../../utils/detectionResponseSettings';
 
 type MockTextChannel = {
+  id?: string;
+  type?: ChannelType;
+  guildId?: string;
   send: jest.Mock;
   messages: { fetch: jest.Mock };
 };
@@ -168,6 +171,9 @@ describe('NotificationManager (unit)', () => {
     delete process.env.NEXT_PUBLIC_APP_URL;
     detectionRepository = new InMemoryDetectionEventsRepository();
     adminChannel = {
+      id: 'admin-channel',
+      type: ChannelType.GuildText,
+      guildId: 'guild-1',
       send: jest.fn(),
       messages: {
         fetch: jest.fn(),

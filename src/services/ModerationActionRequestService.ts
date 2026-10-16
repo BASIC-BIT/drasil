@@ -22,7 +22,10 @@ import {
 import { Prisma } from '../db/prisma';
 import { TYPES } from '../di/symbols';
 import { DISCORD_UNKNOWN_MEMBER_ERROR_CODE, isDiscordErrorCode } from '../utils/discordErrors';
-import { IModerationActionRequestRepository } from '../repositories/ModerationActionRequestRepository';
+import {
+  getReportBanAttemptToken,
+  IModerationActionRequestRepository,
+} from '../repositories/ModerationActionRequestRepository';
 import { IMessageDeletionJobRepository } from '../repositories/MessageDeletionJobRepository';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import {
@@ -236,6 +239,35 @@ export class ModerationActionRequestService implements IModerationActionRequestS
   }
 
   private async drainPendingRequests(limit: number): Promise<number> {
+    for (let index = 0; index < DEFAULT_MAX_REQUESTS_PER_TICK; index++) {
+      const recovery = await this.repository.claimReportBanReconciliation(new Date());
+      if (!recovery) break;
+      const heartbeat = setInterval(() => {
+        void this.repository
+          .heartbeat(recovery.id, getReportBanAttemptToken(recovery))
+          .catch((error) => console.warn('Report ban lease renewal failed:', error));
+      }, REQUEST_HEARTBEAT_INTERVAL_MS);
+      heartbeat.unref();
+      try {
+        const result = await this.securityActionService.reconcileReportBan(recovery);
+        if (result.status !== 'already_handled')
+          await this.repository.complete(
+            recovery.id,
+            {
+              action_type: recovery.action_type,
+              observed_ban_result: result,
+              report_intake_id: recovery.report_intake_id,
+              detection_event_id: recovery.detection_event_id,
+              target_user_id: recovery.target_user_id,
+            },
+            getReportBanAttemptToken(recovery)
+          );
+      } catch (error) {
+        console.warn('Report ban reconciliation failed:', error);
+      } finally {
+        clearInterval(heartbeat);
+      }
+    }
     let processed = 0;
     while (processed < limit) {
       const request = await this.repository.claimNext();
@@ -252,9 +284,11 @@ export class ModerationActionRequestService implements IModerationActionRequestS
 
   private async processClaimedRequest(request: ModerationActionRequest): Promise<void> {
     const heartbeat = setInterval(() => {
-      void this.repository.heartbeat(request.id).catch((error) => {
-        console.warn(`Failed to heartbeat moderation action request ${request.id}:`, error);
-      });
+      void this.repository
+        .heartbeat(request.id, getReportBanAttemptToken(request))
+        .catch((error) => {
+          console.warn(`Failed to heartbeat moderation action request ${request.id}:`, error);
+        });
     }, REQUEST_HEARTBEAT_INTERVAL_MS);
     heartbeat.unref();
     try {
@@ -262,14 +296,19 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       if (!processor) {
         await this.repository.fail(
           request.id,
-          `Unsupported action request: ${request.action_type}`
+          `Unsupported action request: ${request.action_type}`,
+          getReportBanAttemptToken(request)
         );
         return;
       }
 
       await processor(request);
     } catch (error) {
-      await this.repository.fail(request.id, this.errorMessage(error));
+      await this.repository.fail(
+        request.id,
+        this.errorMessage(error),
+        getReportBanAttemptToken(request)
+      );
     } finally {
       clearInterval(heartbeat);
     }
@@ -661,29 +700,42 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       this.fetchModerator(request.actor_id),
     ]);
     await this.assertBotPermission(guild, PermissionFlagsBits.BanMembers, 'Ban Members');
-    const member = await guild.members.fetch(request.target_user_id).catch(() => null);
+    const actor = await guild.members.fetch({ user: request.actor_id, force: true });
+    if (!actor.permissions.has(PermissionFlagsBits.BanMembers))
+      throw new Error('Moderator no longer has Ban Members permission.');
+    const member = await guild.members.fetch(request.target_user_id).catch((error) => {
+      if (isDiscordErrorCode(error, DISCORD_UNKNOWN_MEMBER_ERROR_CODE)) return null;
+      throw error;
+    });
     const banned = member
       ? await this.securityActionService.banObservedDetection(
           member,
           request.detection_event_id,
           moderator,
-          reason
+          reason,
+          request
         )
       : await this.securityActionService.banObservedDetectionById(
           guild,
           request.target_user_id,
           request.detection_event_id,
           moderator,
-          reason
+          reason,
+          request
         );
 
-    await this.repository.complete(request.id, {
-      action_type: request.action_type,
-      ban_by_id: !member,
-      banned,
-      detection_event_id: request.detection_event_id,
-      target_user_id: request.target_user_id,
-    });
+    await this.repository.complete(
+      request.id,
+      {
+        action_type: request.action_type,
+        ban_by_id: !member,
+        observed_ban_result: banned,
+        report_intake_id: request.report_intake_id,
+        detection_event_id: request.detection_event_id,
+        target_user_id: request.target_user_id,
+      },
+      getReportBanAttemptToken(request)
+    );
   }
 
   private async syncExistingBan(request: ModerationActionRequest): Promise<void> {

@@ -117,6 +117,29 @@ export class AdminActionRepository implements IAdminActionRepository {
         // action_at handled by default
       };
 
+      const operationId = (data.metadata as Record<string, unknown> | null)
+        ?.report_ban_operation_id;
+      if (typeof operationId === 'string') {
+        return await this.prisma.$transaction(async (transaction) => {
+          // Serialize the check and insert, including cleanup by an expired worker.
+          const operation = await transaction.$queryRaw<Array<{ id: string }>>`
+            SELECT id FROM moderation_action_requests WHERE id = ${operationId}::uuid FOR UPDATE
+          `;
+          if (!operation.length) throw new Error('Report ban operation is missing.');
+          const existing = await transaction.admin_actions.findFirst({
+            where: {
+              server_id: data.server_id,
+              user_id: data.user_id,
+              verification_event_id: data.verification_event_id ?? null,
+              action_type: data.action_type as admin_action_type,
+              metadata: { path: ['report_ban_operation_id'], equals: operationId },
+            },
+          });
+          return (existing ??
+            (await transaction.admin_actions.create({ data: actionData }))) as AdminAction;
+        });
+      }
+
       const createdAction = await this.prisma.admin_actions.create({
         data: actionData,
       });

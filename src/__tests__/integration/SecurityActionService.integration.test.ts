@@ -172,7 +172,8 @@ describeIntegration('SecurityActionService (integration)', () => {
 
     expect(userModerationService.applyCaseRole).toHaveBeenCalledWith(member);
     expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
-    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
+    // Initial notification, then final presentation from the refreshed case row.
+    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(2);
   });
 
   it('updates notification without creating a new verification', async () => {
@@ -226,7 +227,8 @@ describeIntegration('SecurityActionService (integration)', () => {
     const verificationEvents = await prisma.verification_events.findMany();
     expect(verificationEvents).toHaveLength(1);
     expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
-    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(1);
+    // Initial notification, then final presentation from the refreshed case row.
+    expect(notificationManager.upsertSuspiciousUserNotification).toHaveBeenCalledTimes(2);
   });
 
   it('creates detection event for user report', async () => {

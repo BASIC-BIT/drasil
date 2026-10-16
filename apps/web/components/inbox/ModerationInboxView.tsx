@@ -545,6 +545,18 @@ function InboxActions({
           );
         }
 
+        if (item.kind === 'submitted_report' && action === 'ban_user') {
+          return (
+            <a
+              className="pill action-pill"
+              href={`/admin/guild/${item.guildId}/reports/${item.sourceId}#report-ban`}
+              key={`${item.id}-${action}`}
+            >
+              Review Ban
+            </a>
+          );
+        }
+
         if (item.kind === 'submitted_report' && action === 'open_case') {
           return canOpenReportCases ? (
             <InboxActionForm
