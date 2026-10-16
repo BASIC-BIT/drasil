@@ -1,110 +1,87 @@
-# Claude PR Review
+# Claude pull request review
 
-Drasil runs Claude as an automatic pull request reviewer through
-`.github/workflows/claude-review.yml` for trusted same-repository PRs targeting
-`main`. The workflow is based on Perkcord's hardened subscription-backed
-reviewer.
+This branch prepares the shared GitHub App reviewer and retires the repository's
+legacy publisher. Source preparation is not live acceptance. Merge/activation
+requires the separately approved pilot and single-publisher cutover below.
 
-## Setup
+## Repository policy
 
-The canonical Claude Code subscription OAuth token lives in BASIC's AWS Secrets
-Manager secret `/basic/shared/claude-code-oauth-token` in `us-east-2`. The review
-job uses GitHub OIDC to assume the narrowly scoped
-`basic-shared-claude-github-review` role for 15 minutes and retrieves that one
-secret at runtime. Drasil has no repository copy to rotate.
+The live default branch owns `.github/claude-review.json` and `REVIEW.md`.
+The App reads those files and explicit `instructionPaths` at the captured base
+SHA. PR edits cannot weaken their own review. Missing/invalid policy fails
+closed. REVIEW.md retains this repository's calibration.
 
-The AWS credential action emits short-lived credentials as step outputs rather
-than job environment variables. Only the retrieval step receives them. It masks
-the fetched token before passing it to the pinned
-`anthropics/claude-code-action` commit through the
-`claude_code_oauth_token` input. The job's `id-token: write` permission exists
-only for AWS role assumption; its explicit read-scoped `github_token` still
-prevents the Claude action from using its own GitHub App OIDC exchange. If AWS
-retrieval fails, review fails visibly instead of silently skipping.
+- Base: `main`; open, same-repository, non-draft PRs only.
+- Skip label: `skip-claude-review`; unskip-triggered review: `false`.
+- Bot authors: `false`; allowed bot triggering actors: `[]`.
+- Additional trusted instruction files: `[]`.
+- No unconditional changed-file exclusions. Docs-only exclusion: `false`.
 
-Treat the token like any other automation secret. It consumes the
-subscription's Claude Code quota and rate limits rather than Anthropic API
-token billing.
+`allowlist` with `contextAllowGlobs: ["**"]` retains repository source navigation as inert PR-head data. Where the old job exposed a base checkout, this deliberately replaces stale-base navigation with captured current-head context. Files remain data, including proposed instructions; they never become executable code or trusted policy.
 
-Create the repository label `skip-claude-review` so maintainers can suppress a
-review when needed.
+Preserve moderation, tenant isolation and evidence boundaries from REVIEW.md. Both bot authors and bot triggering actors are excluded. Keep issue-linked PR delivery, Greptile/Copilot review and current Claude evidence. Removing the skip label enables the next eligible event; it does not itself trigger inference.
 
-## Triggers
+## Results and controls
 
-- Open, update, reopen, or mark ready for review on a trusted same-repository,
-  non-draft pull request.
-- Add the `skip-claude-review` label to cancel queued or in-flight Claude work
-  through `.github/workflows/claude-review-control.yml` and mark the sticky
-  comment as skipped for the current commit. Pushes made while the label remains
-  applied also refresh that skipped notice to the new head. Removing the label
-  re-enables review on the next eligible pull request event.
+The App publishes a COMMENT review with validated inline findings, one mutable
+sticky summary and an exact-head coverage check. It never approves or merges.
+Partial coverage, failures, missing context and old-base comparisons are
+explicit; a green job or prior prose alone is not completion. Compatible
+structured scope results may be reused only with current integration.
 
-Fork, cross-repository, draft, bot-authored, and bot-triggered pull requests are
-skipped. The AWS role trust admits only this repository's `pull_request`
-subject, and the trusted base workflow independently requires a same-repository
-head before the review job can run.
+New eligible heads supersede stale work. Skip, draft, close, disable, retarget
+and installation revocation cancel work and suppress stale publication.
+Unrelated labels do not start inference. Base-only pushes invalidate existing
+comparisons without inference or new comments on never-reviewed PRs.
 
-The `synchronize` trigger reviews every subsequent commit. Workflow concurrency
-cancels older runs for the same pull request so only the latest head publishes.
-The control workflow intentionally uses the same repo-scoped concurrency group
-as the review workflow so adding the skip label cancels active review work.
+A human with current write, maintain or admin permission may comment exactly
+`/claude-review rerun`, or rerequest the App's current-head check. Bot actor
+allowlists do not relax command permission checks or bot-author policy. The
+App may resolve only its own verified-fixed finding threads without human
+replies; human discussions and other reviewers remain with the implementer.
 
-## Security and Output
+The shared service uses the canonical Claude Code subscription through its
+isolated worker. No API-key fallback or repository credential copy is added.
+PR code, hooks, project commands and head-owned instructions never execute.
 
-The workflow owns one top-level comment marked with
-`<!-- claude-pr-review -->` and visibly attributes its content with `[AGENT]`.
-A small write-scoped preparation job creates or finds that marker-owned comment.
-On follow-up runs it resets the comment to a queued notice for the current commit
-before review begins, so a completed review for an older head is never left
-looking current. Claude runs in a separate read-scoped job and returns Markdown;
-a later trusted job publishes that output only if the pull request head still
-matches the reviewed commit. If the final comment update is rejected, the
-publisher fails instead of leaving a green workflow with a queued-looking
-comment.
+## Cutover and rollback
 
-Both workflows use `pull_request_target` restricted to PRs targeting `main`, so
-GitHub loads their definitions from the trusted base branch before granting a
-repository token or AWS OIDC access. The review job checks out the exact PR head
-with persisted credentials disabled, but it never executes repository scripts
-or actions from that checkout. Generated context lives under the runner
-temporary directory rather than a PR-controlled path, and that exact directory
-is explicitly added to Claude's readable roots.
+1. Obtain exact target, App/access, infrastructure and inference/publication
+   approval. Establish trusted policy on the real default branch through an
+   approved baseline procedure while legacy remains the sole publisher.
+2. Prove App reads, COMMENT/inline/sticky/check publication, actual thread
+   permissions and finite shadow behavior. Record exact engine/runtime,
+   repository/install, head/base/policy and coverage identities. Missing proof
+   remains UNKNOWN. Keep service execution/publication durably paused.
+3. For the approved target, stop/drain App work, disable the recorded legacy
+   workflows, cancel queued/in-flight legacy jobs and verify terminal status.
+   Only then enable App publication and prove one inference owner/publisher.
+4. Verify new push, labels, skip/unskip, draft/ready, retarget, close/reopen,
+   base invalidation, authorized rerun, publication failure and revocation on
+   the approved disposable acceptance PR. Preserve branch protection and
+   required product checks; workflow removal is not review evidence.
 
-Claude is restricted to the `Read` tool, which is pre-authorized for the
-noninteractive review. The generated runner-temporary context directory is the
-only extra readable root added beyond the checkout. Shell, file writes, edits,
-GitHub comment tools, `.git`, `/proc`, and runner credential/config paths remain
-denied. The checkout does not persist credentials. Pull-request-provided Claude
-hooks, skills, plugins, MCP servers, memory, and `CLAUDE.md` customizations are
-disabled by safe mode. The review contract is loaded with `git show` from the
-trusted base commit; a PR's edits to `REVIEW.md` are reviewed as diff content
-but cannot calibrate their own review. Line-specific findings use file and line
-references in the sticky comment rather than independent review threads.
+Rollback pauses App execution/publication and stops its in-flight attempts,
+restores the recorded prior workflows, then proves only the legacy owner is
+active. Never enable both publishers. Engine rollback alone does not restore
+retired workflows. Private exact source identities and live evidence belong in
+the basic-infra migration inventory.
 
-The Claude CLI is capped at 100 turns. If it hits the cap or fails to produce a
-review, treat the failed job and sticky-comment notice as missing review
-evidence rather than code feedback.
+## Delivery and verification
 
-The Claude action is pinned to a reviewed commit SHA rather than a mutable tag
-because it receives a Claude OAuth token. Update the SHA deliberately after
-reviewing the upstream release.
+Validate JSON with the deployed engine schema, inspect calibration and context
+scope against the prior trusted policy, parse/lint remaining workflow YAML,
+run applicable repository checks and `git diff --check`. Live label behavior,
+App permissions, credential-account route and end-to-end publication require
+separate acceptance; local tests do not prove them.
 
-The workflow intentionally does not expose `issue_comment` or
-`workflow_dispatch` review triggers. Review remains tied to pull request commits
-and the marker-owned sticky comment.
+Before a follow-up push, reply to and resolve handled review threads. Before
+calling a PR merge-ready, keep the latest head pushed for at least 30 minutes,
+then refresh checks, ordinary comments, inline threads, formal reviews, mutable
+sticky summaries and mergeability. Every new commit restarts that window.
+Preserve repository-specific reviewer, owner-approval and release gates.
 
-Because `pull_request_target` only loads workflows already present on the base
-branch, the migration PR cannot exercise the new AWS-backed path against its own
-head. Validate its workflow syntax and security locally, then confirm the first
-post-merge PR runs role assumption, retrieval, generation, and publishing
-successfully.
+Retired paths in this change:
 
-## Review Calibration
-
-`REVIEW.md` is the repo-specific review contract. Keep it short and focused on
-what changes Claude's behavior: Important severity, noise suppression, evidence
-quality, and Drasil moderation invariants. Do not duplicate all of `AGENTS.md`.
-
-Treat Claude comments like other AI review feedback: validate each finding
-against the code and product intent before changing anything. After every push,
-reread the sticky comment because the workflow updates it in place.
+- `.github/workflows/claude-review.yml`
+- `.github/workflows/claude-review-control.yml`

@@ -27,3 +27,7 @@ npm run check
 
 - Never paste secrets into PRs.
 - If build fails due to missing Prisma client types, run `npm run prisma:generate`.
+
+## Shared Claude review
+
+Read `docs/dev/claude-review.md`; require actual current-head review/coverage evidence. The local JSON and trusted REVIEW.md replace the legacy workflows. Missing App acceptance does not satisfy the review gate.

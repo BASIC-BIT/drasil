@@ -72,7 +72,7 @@ We want each merge to have:
 - Greptile review completed.
 - Copilot code review requested/completed.
 - Claude's latest sticky review comment checked for every eligible trusted PR. The reviewer
-  retrieves the shared credential through the repository-bound AWS OIDC role described in
+  uses the shared subscription service described in
   `docs/dev/claude-review.md`; Drasil has no repository copy.
 
 Practical loop:
