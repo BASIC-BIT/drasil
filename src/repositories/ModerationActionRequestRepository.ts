@@ -31,7 +31,10 @@ const reportBanRetryResult = Prisma.raw(reportBanRetryResultSql);
 const reportBanRetryMetadata = Prisma.raw(reportBanRetryMetadataSql);
 
 export function getReportBanAttemptToken(request: ModerationActionRequest): string | undefined {
-  return parseReportBanState(request.metadata).report_ban_attempt_token ?? undefined;
+  const metadata = request.metadata;
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return undefined;
+  const token = metadata.report_ban_attempt_token;
+  return typeof token === 'string' ? token : undefined;
 }
 
 export interface ReportBanReviewDisposition {
