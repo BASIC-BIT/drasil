@@ -437,7 +437,7 @@ export class SecurityActionService implements ISecurityActionService {
   private serverRepository: IServerRepository;
   private adminActionService: IAdminActionService;
   private threadManager: IThreadManager;
-  private userModerationService: IUserModerationService; // Keep for reopenVerification for now
+  private userModerationService: IUserModerationService & ICombinedBanLifecycleService;
   private client: Client;
   private gptService?: IGPTService;
   private evidenceService: ModerationEvidenceService;
@@ -461,7 +461,8 @@ export class SecurityActionService implements ISecurityActionService {
     @inject(TYPES.ServerRepository) serverRepository: IServerRepository,
     @inject(TYPES.AdminActionService) adminActionService: IAdminActionService,
     @inject(TYPES.ThreadManager) threadManager: IThreadManager,
-    @inject(TYPES.UserModerationService) userModerationService: IUserModerationService, // Keep for reopenVerification
+    @inject(TYPES.UserModerationService)
+    userModerationService: IUserModerationService & ICombinedBanLifecycleService,
     @inject(TYPES.DiscordClient) client: Client,
     @optional() @inject(TYPES.GPTService) gptService?: IGPTService,
     @inject(TYPES.ProductAnalyticsService)
@@ -498,7 +499,7 @@ export class SecurityActionService implements ISecurityActionService {
     this.serverRepository = serverRepository;
     this.adminActionService = adminActionService;
     this.threadManager = threadManager;
-    this.userModerationService = userModerationService; // Keep for reopenVerification
+    this.userModerationService = userModerationService;
     this.client = client;
     this.gptService = gptService;
     this.evidenceService =
@@ -4086,10 +4087,9 @@ export class SecurityActionService implements ISecurityActionService {
           enforcement.started = true;
         },
       };
-      const moderation = this.userModerationService as IUserModerationService &
-        ICombinedBanLifecycleService;
-      if (member) await moderation.performDiscordMemberBan(member, reason, lifecycle);
-      else await moderation.performDiscordBanById(guild, userId, reason, lifecycle);
+      if (member)
+        await this.userModerationService.performDiscordMemberBan(member, reason, lifecycle);
+      else await this.userModerationService.performDiscordBanById(guild, userId, reason, lifecycle);
       confirmed = true;
       confirmedAt = new Date().toISOString();
       current = await this.saveBanPhase(current, {
@@ -4204,9 +4204,7 @@ export class SecurityActionService implements ISecurityActionService {
       throw new Error('Confirmed ban cleanup bindings changed.');
     const metadata = parseReportBanState(request.metadata);
     const cases = metadata.report_ban_cases ?? [];
-    await (
-      this.userModerationService as IUserModerationService & ICombinedBanLifecycleService
-    ).finalizeObservedBan(guild, request.target_user_id, moderator, {
+    await this.userModerationService.finalizeObservedBan(guild, request.target_user_id, moderator, {
       operationId: request.id,
       reportId: request.report_intake_id,
       reason: String(metadata.report_ban_reason),

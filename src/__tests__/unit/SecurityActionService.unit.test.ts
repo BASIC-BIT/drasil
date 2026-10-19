@@ -33,6 +33,7 @@ import {
 import {
   UserModerationService,
   IUserModerationService,
+  ICombinedBanLifecycleService,
 } from '../../services/UserModerationService';
 import { NotificationPresentationBuilder } from '../../services/NotificationPresentationBuilder';
 import { IAdminActionService } from '../../services/AdminActionService';
@@ -85,7 +86,7 @@ describe('SecurityActionService (unit)', () => {
   let serverRepository: InMemoryServerRepository;
   let notificationManager: jest.Mocked<INotificationManager>;
   let threadManager: jest.Mocked<IThreadManager>;
-  let userModerationService: jest.Mocked<IUserModerationService>;
+  let userModerationService: jest.Mocked<IUserModerationService & ICombinedBanLifecycleService>;
   let adminActionService: jest.Mocked<IAdminActionService>;
   let gptService: { analyzeReportEvidence: jest.Mock; describeProfileImages: jest.Mock };
   let fetchSpy: jest.SpiedFunction<typeof fetch>;
@@ -172,6 +173,13 @@ describe('SecurityActionService (unit)', () => {
       recordObservedDiscordKick: jest.fn().mockResolvedValue(0),
       findLatestKickOutcome: jest.fn().mockResolvedValue(null),
       recordMemberLeftGuild: jest.fn().mockResolvedValue(0),
+      finalizeObservedBan: jest.fn().mockResolvedValue(undefined),
+      markCombinedBanCleanupPending: jest.fn(),
+      performDiscordMemberBan: jest.fn().mockResolvedValue(undefined),
+      performDiscordBanById: jest.fn().mockResolvedValue(undefined),
+      finalizeSuccessfulMemberBan: jest.fn().mockResolvedValue(true),
+      finalizeSuccessfulCombinedBan: jest.fn().mockResolvedValue(true),
+      clearCombinedBanCleanupMarker: jest.fn().mockResolvedValue(true),
     };
 
     adminActionService = {
