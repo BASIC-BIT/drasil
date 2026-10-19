@@ -323,8 +323,8 @@ export class ModerationActionRequestRepository implements IModerationActionReque
       if (!current) return null;
       if (current.action_type !== 'ban_observed_detection')
         throw new Error('Not a report-ban operation.');
-      if (getReportBanAttemptToken(current) !== expectedAttemptToken) return current;
       const metadata = parseReportBanState(current.metadata);
+      if (getReportBanAttemptToken(current) !== expectedAttemptToken) return current;
       if (!canAdvanceReportBanPhase(metadata, current.status, current.result, patch))
         return current;
       if (

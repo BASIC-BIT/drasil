@@ -158,8 +158,8 @@ export class InMemoryModerationActionRequestRepository implements IModerationAct
     if (!row) return null;
     if (row.action_type !== 'ban_observed_detection')
       throw new Error('Not a report-ban operation.');
-    if (getReportBanAttemptToken(row) !== expectedAttemptToken) return row;
     const current = parseReportBanState(row.metadata);
+    if (getReportBanAttemptToken(row) !== expectedAttemptToken) return row;
     const patch = reportBanTransitionPatch(transition);
     parseReportBanState(patch);
     if (!canAdvanceReportBanPhase(current, row.status, row.result, patch)) return row;
