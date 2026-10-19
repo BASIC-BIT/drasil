@@ -416,8 +416,13 @@ integration('report-ban stale worker recovery with real services and Postgres', 
       await getPrismaClient().moderation_action_requests.update({
         where: { id: f.request.id },
         data: {
+          requested_at: new Date(0),
+          failed_at: new Date(0),
+          last_error: 'Previous failure',
           metadata: {
             ...(completed.metadata as Record<string, never>),
+            report_ban_retry_at: new Date(0).toISOString(),
+            retained_context: 'Keep audit context',
             observed_ban_reviews: [{ reason: 'retained review' }],
           },
         },
@@ -435,15 +440,21 @@ integration('report-ban stale worker recovery with real services and Postgres', 
         expect(getReportBanAttemptToken(fresh)).not.toBe('untrusted-token');
         expect(fresh).toMatchObject({
           actor_id: 'new-moderator',
+          actor_surface: 'web',
+          failed_at: null,
+          last_error: null,
           result: {},
           completed_at: null,
           started_at: null,
           attempts: 0,
           metadata: {
             reason: 'Fresh explicit decision',
+            retained_context: 'Keep audit context',
             observed_ban_reviews: [{ reason: 'retained review' }],
           },
         });
+        expect(fresh.requested_at!.getTime()).toBeGreaterThan(0);
+        expect(fresh.metadata).not.toHaveProperty('report_ban_retry_at');
         await requeue();
         expect(getReportBanAttemptToken((await f.requests.findById(fresh.id))!)).toBe(
           getReportBanAttemptToken(fresh)

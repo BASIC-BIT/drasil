@@ -1,3 +1,9 @@
+import {
+  completedNoopRetrySql,
+  completedNoopRetryResetSql,
+  reportBanRetryResultSql,
+  reportBanRetryMetadataSql,
+} from '../contracts/reportBanRetrySql';
 import { REPORT_BAN_TERMINAL_ATTEMPT_PREFIX } from '../utils/caseRoleRelease';
 import { inject, injectable } from 'inversify';
 import { Prisma, PrismaClient } from '../db/prisma';
@@ -9,34 +15,10 @@ import {
   ModerationActionRequestStatus,
 } from './types';
 
-// Only a fresh explicit request may reset a completed no-op; the worker revalidates ownership.
-const completedNoopRetry = Prisma.sql`(moderation_action_requests.status = 'completed'
-  AND moderation_action_requests.action_type = 'ban_observed_detection'
-  AND excluded.action_type = moderation_action_requests.action_type
-  AND moderation_action_requests.result->'observed_ban_result' = '{"status":"already_handled"}'::jsonb
-  AND moderation_action_requests.metadata->>'report_ban_phase' IS NULL
-  AND moderation_action_requests.metadata->>'report_ban_enforcement_id' IS NULL
-  AND moderation_action_requests.metadata->>'report_ban_enforcement_operation_id' IS NULL
-  AND moderation_action_requests.metadata->>'report_ban_confirmed_at' IS NULL
-  AND moderation_action_requests.server_id = excluded.server_id
-  AND moderation_action_requests.target_user_id IS NOT DISTINCT FROM excluded.target_user_id
-  AND moderation_action_requests.detection_event_id IS NOT DISTINCT FROM excluded.detection_event_id
-  AND moderation_action_requests.report_intake_id IS NOT DISTINCT FROM excluded.report_intake_id
-  AND moderation_action_requests.verification_event_id IS NOT DISTINCT FROM excluded.verification_event_id
-  AND moderation_action_requests.message_deletion_job_id IS NOT DISTINCT FROM excluded.message_deletion_job_id
-  AND EXISTS (
-    SELECT 1 FROM detection_events d
-    WHERE d.id = moderation_action_requests.detection_event_id
-      AND d.server_id = moderation_action_requests.server_id AND d.user_id = moderation_action_requests.target_user_id
-      AND NOT (coalesce(d.metadata, '{}'::jsonb) ? 'observed_action')
-      AND coalesce(d.metadata->>'report_ban_operation_id', '') = ''
-      AND d.metadata->>'reportIntakeId' IS NOT DISTINCT FROM moderation_action_requests.report_intake_id::text
-      AND (moderation_action_requests.report_intake_id IS NULL OR EXISTS (
-        SELECT 1 FROM report_intakes r WHERE r.id = moderation_action_requests.report_intake_id
-          AND r.server_id = d.server_id AND r.confirmed_target_user_id = d.user_id AND r.status = 'submitted'
-          AND coalesce(r.metadata->>'report_ban_operation_id', '') = ''
-      ))
-  ))`;
+const completedNoopRetry = Prisma.raw(completedNoopRetrySql);
+const completedNoopRetryReset = Prisma.raw(completedNoopRetryResetSql);
+const reportBanRetryResult = Prisma.raw(reportBanRetryResultSql);
+const reportBanRetryMetadata = Prisma.raw(reportBanRetryMetadataSql);
 
 export function getReportBanAttemptToken(request: ModerationActionRequest): string | undefined {
   const value = (request.metadata as Record<string, unknown> | null)?.report_ban_attempt_token;
@@ -149,10 +131,7 @@ export class ModerationActionRequestRepository implements IModerationActionReque
               else 'queued'::moderation_action_request_status
             end,
             updated_at = now(),
-          requested_at = CASE WHEN ${completedNoopRetry} THEN now() ELSE moderation_action_requests.requested_at END,
-          started_at = CASE WHEN ${completedNoopRetry} THEN null ELSE moderation_action_requests.started_at END,
-          completed_at = CASE WHEN ${completedNoopRetry} THEN null ELSE moderation_action_requests.completed_at END,
-          attempts = CASE WHEN ${completedNoopRetry} THEN 0 ELSE moderation_action_requests.attempts END,
+          ${completedNoopRetryReset},
             failed_at = null,
             last_error = null,
             actor_id = case
@@ -171,10 +150,8 @@ export class ModerationActionRequestRepository implements IModerationActionReque
               moderation_action_requests.message_deletion_job_id,
               excluded.message_deletion_job_id
             ),
-            result = CASE WHEN (moderation_action_requests.action_type = 'ban_observed_detection' AND moderation_action_requests.status = 'failed') OR ${completedNoopRetry} THEN '{}'::jsonb ELSE moderation_action_requests.result END,
-            metadata = CASE WHEN (moderation_action_requests.action_type = 'ban_observed_detection' AND moderation_action_requests.status = 'failed') OR ${completedNoopRetry}
-              THEN (SELECT coalesce(jsonb_object_agg(key, value), '{}'::jsonb) FROM jsonb_each(coalesce(moderation_action_requests.metadata, '{}'::jsonb)) WHERE key !~ '^report_ban_') || (excluded.metadata - 'observed_ban_reviews')
-              ELSE coalesce(moderation_action_requests.metadata, '{}'::jsonb) || (CASE WHEN moderation_action_requests.action_type = 'ban_observed_detection' THEN excluded.metadata - 'observed_ban_reviews' ELSE excluded.metadata END - 'report_ban_attempt_token') END
+            result = ${reportBanRetryResult},
+            metadata = ${reportBanRetryMetadata}
         WHERE (moderation_action_requests.action_type <> 'ban_observed_detection' OR moderation_action_requests.status NOT IN ('completed', 'processing') OR ${completedNoopRetry}) AND NOT (moderation_action_requests.action_type = 'ban_observed_detection' AND (moderation_action_requests.metadata->>'report_ban_phase' IS NOT NULL OR coalesce(moderation_action_requests.result->'observed_ban_result'->>'status', '') IN ('banned', 'banned_updates_pending', 'ban_outcome_unknown')))
         returning *
       `;
