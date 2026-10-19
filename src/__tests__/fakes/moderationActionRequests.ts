@@ -1,3 +1,11 @@
+import {
+  parseReportBanState,
+  ReportBanTransition,
+  reportBanTransitionPatch,
+  canAdvanceReportBanPhase,
+  ownedReportBanPatch,
+  assertUnrelatedReportBanMetadata,
+} from '../../utils/reportBanState';
 import { IVerificationEventRepository } from '../../repositories/VerificationEventRepository';
 import { IReportIntakeRepository } from '../../repositories/ReportIntakeRepository';
 import { IDetectionEventsRepository } from '../../repositories/DetectionEventsRepository';
@@ -28,7 +36,7 @@ export class InMemoryModerationActionRequestRepository implements IModerationAct
     if (existing) {
       if (
         existing.status !== ModerationActionRequestStatus.FAILED ||
-        (existing.metadata as Prisma.JsonObject).report_ban_phase ||
+        parseReportBanState(existing.metadata).report_ban_phase ||
         (existing.result as Prisma.JsonObject).observed_ban_result
       )
         return existing;
@@ -112,7 +120,7 @@ export class InMemoryModerationActionRequestRepository implements IModerationAct
     const row = [...this.rows.values()].find(
       (row) =>
         row.status === ModerationActionRequestStatus.QUEUED &&
-        !(row.metadata as Prisma.JsonObject).report_ban_phase
+        !parseReportBanState(row.metadata).report_ban_phase
     );
     if (!row) return null;
     const claimed = {
@@ -128,37 +136,35 @@ export class InMemoryModerationActionRequestRepository implements IModerationAct
   }
   async mergeMetadata(
     id: string,
-    patch: Prisma.JsonObject,
+    metadata: Prisma.JsonObject
+  ): Promise<ModerationActionRequest | null> {
+    assertUnrelatedReportBanMetadata(metadata);
+    const row = this.rows.get(id);
+    if (!row) return null;
+    const next = {
+      ...row,
+      metadata: { ...(row.metadata as Prisma.JsonObject), ...metadata },
+      updated_at: new Date(),
+    };
+    this.rows.set(id, next);
+    return next;
+  }
+  async transitionReportBan(
+    id: string,
+    transition: ReportBanTransition,
     expectedAttemptToken?: string
   ): Promise<ModerationActionRequest | null> {
     const row = this.rows.get(id);
     if (!row) return null;
-    if (
-      row.action_type === 'ban_observed_detection' &&
-      getReportBanAttemptToken(row) !== expectedAttemptToken
-    )
-      return row;
-    const current = row.metadata as Prisma.JsonObject;
-    const receipt = (row.result as Prisma.JsonObject).observed_ban_result as
-      | Prisma.JsonObject
-      | undefined;
-    if (receipt?.status === 'banned' && patch.report_ban_phase !== null) return row;
-    if (row.status === ModerationActionRequestStatus.FAILED && !current.report_ban_phase)
-      return row;
-    if (
-      current.report_ban_phase === 'discord_confirmed' &&
-      patch.report_ban_phase &&
-      patch.report_ban_phase !== 'discord_confirmed'
-    )
-      return row;
-    if (
-      patch.report_ban_phase === 'enforcement_started' &&
-      current.report_ban_phase !== 'preparing'
-    )
-      return row;
-    if (current.report_ban_phase && patch.report_ban_phase === 'preparing') return row;
+    if (row.action_type !== 'ban_observed_detection')
+      throw new Error('Not a report-ban operation.');
+    if (getReportBanAttemptToken(row) !== expectedAttemptToken) return row;
+    const current = parseReportBanState(row.metadata);
+    const patch = reportBanTransitionPatch(transition);
+    parseReportBanState(patch);
+    if (!canAdvanceReportBanPhase(current, row.status, row.result, patch)) return row;
     if (patch.report_ban_phase === 'enforcement_started' && this.banContext) {
-      const ids = (patch.report_ban_case_ids ?? []) as string[];
+      const ids = patch.report_ban_case_ids ?? [];
       for (const caseId of ids) {
         const event = await this.banContext.cases.findById(caseId);
         if (
@@ -172,12 +178,10 @@ export class InMemoryModerationActionRequestRepository implements IModerationAct
           report_ban_enforcement_operation_id: id,
         });
     }
-    patch = { ...patch };
-    delete patch.report_ban_attempt_token;
-    if (current.report_ban_confirmed_at) delete patch.report_ban_confirmed_at;
+    const owned = ownedReportBanPatch(current, patch);
     const next = {
       ...row,
-      metadata: { ...(row.metadata as Prisma.JsonObject), ...patch },
+      metadata: { ...(row.metadata as Prisma.JsonObject), ...owned },
       updated_at: new Date(),
     };
     this.rows.set(id, next);
@@ -232,7 +236,7 @@ export class InMemoryModerationActionRequestRepository implements IModerationAct
       | Prisma.JsonObject
       | undefined;
     if (
-      (row.metadata as Prisma.JsonObject).report_ban_phase ||
+      parseReportBanState(row.metadata).report_ban_phase ||
       ['banned', 'banned_updates_pending', 'ban_outcome_unknown'].includes(String(receipt?.status))
     )
       return row;
@@ -252,14 +256,14 @@ export class InMemoryModerationActionRequestRepository implements IModerationAct
       getReportBanAttemptToken(row) !== expectedAttemptToken
     )
       return row;
-    const metadata = row.metadata as Prisma.JsonObject;
+    const metadata = parseReportBanState(row.metadata);
     if (
       metadata.report_ban_phase !== expectedPhase &&
       !(row.status === ModerationActionRequestStatus.FAILED && !metadata.report_ban_phase)
     )
       return row;
     const context = this.banContext;
-    const candidates = (metadata.report_ban_cases ?? []) as Prisma.JsonObject[];
+    const candidates = metadata.report_ban_cases ?? [];
     if (context) {
       for (const candidate of candidates) {
         const event = await context.cases.findById(String(candidate.id));
@@ -274,12 +278,12 @@ export class InMemoryModerationActionRequestRepository implements IModerationAct
             event.id,
             String(metadata.report_ban_attempt_id),
             {
-              case_kind: candidate.case_kind,
-              attention_state: candidate.attention_state,
-              containment_status: candidate.containment_status,
-              parked_at: candidate.parked_at,
+              case_kind: candidate.case_kind ?? undefined,
+              attention_state: candidate.attention_state ?? undefined,
+              containment_status: candidate.containment_status ?? undefined,
+              parked_at: candidate.parked_at ? new Date(candidate.parked_at) : null,
               parked_by: candidate.parked_by,
-            } as never
+            }
           );
         }
       }
@@ -296,14 +300,18 @@ export class InMemoryModerationActionRequestRepository implements IModerationAct
     const next = {
       ...row,
       status: ModerationActionRequestStatus.FAILED,
-      metadata: { ...metadata, report_ban_phase: null, report_ban_lease_until: null },
+      metadata: {
+        ...(row.metadata as Prisma.JsonObject),
+        report_ban_phase: null,
+        report_ban_lease_until: null,
+      },
     };
     this.rows.set(id, next);
     return next;
   }
   async claimReportBanReconciliation(now: Date): Promise<ModerationActionRequest | null> {
     const row = [...this.rows.values()].find((row) => {
-      const m = row.metadata as Prisma.JsonObject;
+      const m = parseReportBanState(row.metadata);
       return (
         Boolean(m.report_ban_phase) &&
         (m.report_ban_retry_at ? new Date(String(m.report_ban_retry_at)).getTime() : 0) <=
@@ -314,9 +322,10 @@ export class InMemoryModerationActionRequestRepository implements IModerationAct
       );
     });
     return row
-      ? this.mergeMetadata(
+      ? this.transitionReportBan(
           row.id,
           {
+            kind: 'renew_lease',
             report_ban_lease_until: new Date(now.getTime() + 900_000).toISOString(),
           },
           getReportBanAttemptToken(row)

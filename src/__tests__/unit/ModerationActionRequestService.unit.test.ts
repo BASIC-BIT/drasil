@@ -632,6 +632,10 @@ class FakeModerationActionRequestRepository implements IModerationActionRequestR
     return { ...baseRequest, id, status: ModerationActionRequestStatus.PROCESSING };
   }
 
+  public async transitionReportBan(): Promise<ModerationActionRequest | null> {
+    throw new Error('not used');
+  }
+
   public async mergeMetadata(
     id: string,
     metadata: Prisma.JsonObject
