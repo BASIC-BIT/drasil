@@ -1,3 +1,8 @@
+import {
+  parseReportBanState,
+  ReportBanTransition,
+  reportBanTransitionPatch,
+} from '../utils/reportBanState';
 import { randomUUID } from 'crypto';
 import {
   getReportBanAttemptToken,
@@ -432,7 +437,7 @@ export class SecurityActionService implements ISecurityActionService {
   private serverRepository: IServerRepository;
   private adminActionService: IAdminActionService;
   private threadManager: IThreadManager;
-  private userModerationService: IUserModerationService; // Keep for reopenVerification for now
+  private userModerationService: IUserModerationService & ICombinedBanLifecycleService;
   private client: Client;
   private gptService?: IGPTService;
   private evidenceService: ModerationEvidenceService;
@@ -456,7 +461,8 @@ export class SecurityActionService implements ISecurityActionService {
     @inject(TYPES.ServerRepository) serverRepository: IServerRepository,
     @inject(TYPES.AdminActionService) adminActionService: IAdminActionService,
     @inject(TYPES.ThreadManager) threadManager: IThreadManager,
-    @inject(TYPES.UserModerationService) userModerationService: IUserModerationService, // Keep for reopenVerification
+    @inject(TYPES.UserModerationService)
+    userModerationService: IUserModerationService & ICombinedBanLifecycleService,
     @inject(TYPES.DiscordClient) client: Client,
     @optional() @inject(TYPES.GPTService) gptService?: IGPTService,
     @inject(TYPES.ProductAnalyticsService)
@@ -493,7 +499,7 @@ export class SecurityActionService implements ISecurityActionService {
     this.serverRepository = serverRepository;
     this.adminActionService = adminActionService;
     this.threadManager = threadManager;
-    this.userModerationService = userModerationService; // Keep for reopenVerification
+    this.userModerationService = userModerationService;
     this.client = client;
     this.gptService = gptService;
     this.evidenceService =
@@ -3827,7 +3833,7 @@ export class SecurityActionService implements ISecurityActionService {
     if (!/^[0-9a-f-]{36}$/i.test(operationId))
       throw new Error('Use the operation ID from the ban receipt.');
     const request = await this.actionRequests?.findById(operationId);
-    const metadata = this.metadataToRecord(request?.metadata);
+    const metadata = parseReportBanState(request?.metadata);
     const result = this.metadataToRecord(request?.result);
     if (
       !request ||
@@ -3847,8 +3853,7 @@ export class SecurityActionService implements ISecurityActionService {
       attemptToken,
       updatedAt: request.updated_at,
       targetUserId: request.target_user_id,
-      observedBanId:
-        this.readString(this.metadataToRecord(metadata.report_ban_observed_ban).id) ?? undefined,
+      observedBanId: metadata.report_ban_observed_ban?.id,
     };
   }
 
@@ -3893,24 +3898,24 @@ export class SecurityActionService implements ISecurityActionService {
 
   private async saveBanPhase(
     request: ModerationActionRequest,
-    patch: Record<string, unknown>
+    transition: ReportBanTransition
   ): Promise<ModerationActionRequest> {
-    const saved = await this.actionRequests?.mergeMetadata(
+    const patch = reportBanTransitionPatch(transition);
+    const saved = await this.actionRequests?.transitionReportBan(
       request.id,
-      patch as import('../db/prisma').Prisma.JsonObject,
+      transition,
       getReportBanAttemptToken(request)
     );
     if (!saved) throw new Error('Could not persist report ban operation.');
+    const savedState = parseReportBanState(saved.metadata);
     if (
       (patch.report_ban_phase === 'preparing' ||
         patch.report_ban_phase === 'enforcement_started') &&
-      (this.metadataToRecord(saved.metadata).report_ban_phase !== patch.report_ban_phase ||
+      (savedState.report_ban_phase !== patch.report_ban_phase ||
         (patch.report_ban_phase === 'preparing' &&
-          this.metadataToRecord(saved.metadata).report_ban_preparation_id !==
-            patch.report_ban_preparation_id) ||
+          savedState.report_ban_preparation_id !== patch.report_ban_preparation_id) ||
         (patch.report_ban_phase === 'enforcement_started' &&
-          this.metadataToRecord(saved.metadata).report_ban_enforcement_id !==
-            patch.report_ban_enforcement_id))
+          savedState.report_ban_enforcement_id !== patch.report_ban_enforcement_id))
     )
       throw new Error('Report ban preparation ownership changed.');
     if (getReportBanAttemptToken(saved) !== getReportBanAttemptToken(request))
@@ -3919,7 +3924,7 @@ export class SecurityActionService implements ISecurityActionService {
   }
 
   private async releaseBanPreparation(request: ModerationActionRequest): Promise<void> {
-    const phase = this.metadataToRecord(request.metadata).report_ban_phase;
+    const phase = parseReportBanState(request.metadata).report_ban_phase;
     if (phase !== 'preparing' && phase !== 'enforcement_started') return;
     const released = await this.actionRequests?.releaseReportBanPreparation(
       request.id,
@@ -3954,7 +3959,7 @@ export class SecurityActionService implements ISecurityActionService {
     const attemptToken = getReportBanAttemptToken(request);
     if (!attemptToken) throw new Error('Report ban attempt identity is missing.');
     let current = await this.saveBanPhase(request, {
-      report_ban_phase: 'preparing',
+      kind: 'prepare',
       report_ban_preparation_id: randomUUID(),
       report_ban_reason: reason,
       report_ban_source_detail: member ? null : 'ban_by_id',
@@ -3991,6 +3996,7 @@ export class SecurityActionService implements ISecurityActionService {
       const membership = await this.serverMemberRepository.findByServerAndUser(guild.id, userId);
       const joinedAt = member ? member.joinedAt : membership?.join_date;
       current = await this.saveBanPhase(current, {
+        kind: 'record_membership',
         report_ban_membership_joined_at: joinedAt?.toISOString() ?? null,
       });
       const evidence = await this.evidenceService.capture({ guildId: guild.id, userId, member });
@@ -4005,6 +4011,7 @@ export class SecurityActionService implements ISecurityActionService {
       const targetAvatarUrl =
         targetUser?.id === userId ? (targetUser as Partial<User>).displayAvatarURL?.() : undefined;
       current = await this.saveBanPhase(current, {
+        kind: 'record_target',
         report_ban_target_snapshot: {
           id: userId,
           ...(targetUser?.id === userId
@@ -4026,12 +4033,13 @@ export class SecurityActionService implements ISecurityActionService {
         attemptToken,
         prepare: async (cases: VerificationEvent[], attemptId: string): Promise<void> => {
           current = await this.saveBanPhase(current, {
+            kind: 'prepare_cases',
             report_ban_cases: cases.map((event) => ({
               id: event.id,
               case_kind: event.case_kind,
               attention_state: event.attention_state,
               containment_status: event.containment_status,
-              parked_at: event.parked_at,
+              parked_at: event.parked_at?.toISOString() ?? null,
               parked_by: event.parked_by,
             })),
             report_ban_attempt_id: attemptId,
@@ -4058,8 +4066,8 @@ export class SecurityActionService implements ISecurityActionService {
             latest.metadata.observed_action !== AdminActionType.BAN
           )
             throw new Error('Detection ban ownership changed.');
-          const prepared = this.metadataToRecord(current.metadata);
-          const candidates = prepared.report_ban_cases as { id: string }[];
+          const prepared = parseReportBanState(current.metadata);
+          const candidates = prepared.report_ban_cases ?? [];
           if (
             candidates.length !== acquiredCases.length ||
             candidates.some(
@@ -4072,21 +4080,20 @@ export class SecurityActionService implements ISecurityActionService {
           )
             throw new Error('Acquired case set changed before enforcement.');
           current = await this.saveBanPhase(current, {
-            report_ban_phase: 'enforcement_started',
+            kind: 'start_enforcement',
             report_ban_enforcement_id: randomUUID(),
             report_ban_case_ids: acquiredCases.map((event) => event.id),
           });
           enforcement.started = true;
         },
       };
-      const moderation = this.userModerationService as IUserModerationService &
-        ICombinedBanLifecycleService;
-      if (member) await moderation.performDiscordMemberBan(member, reason, lifecycle);
-      else await moderation.performDiscordBanById(guild, userId, reason, lifecycle);
+      if (member)
+        await this.userModerationService.performDiscordMemberBan(member, reason, lifecycle);
+      else await this.userModerationService.performDiscordBanById(guild, userId, reason, lifecycle);
       confirmed = true;
       confirmedAt = new Date().toISOString();
       current = await this.saveBanPhase(current, {
-        report_ban_phase: 'discord_confirmed',
+        kind: 'confirm_discord',
         report_ban_confirmed_at: confirmedAt,
       });
       await this.finishObservedBan(guild, moderator, current);
@@ -4125,12 +4132,13 @@ export class SecurityActionService implements ISecurityActionService {
     confirmed: boolean,
     confirmedAt?: string
   ): Promise<void> {
-    const metadata = this.metadataToRecord(request.metadata);
+    const metadata = parseReportBanState(request.metadata);
     const attempt =
       typeof metadata.report_ban_retry_count === 'number' ? metadata.report_ban_retry_count : 0;
     const delay = [60_000, 300_000, 900_000][attempt] ?? 3_600_000;
     const next = new Date(Date.now() + delay).toISOString();
     await this.saveBanPhase(request, {
+      kind: 'schedule_reconciliation',
       report_ban_phase: confirmed ? 'discord_confirmed' : 'reconciliation_required',
       report_ban_retry_count: attempt + 1,
       ...(confirmedAt ? { report_ban_confirmed_at: confirmedAt } : {}),
@@ -4148,7 +4156,7 @@ export class SecurityActionService implements ISecurityActionService {
       request.target_user_id,
       request.detection_event_id
     );
-    const metadata = this.metadataToRecord(request.metadata);
+    const metadata = parseReportBanState(request.metadata);
     if (metadata.report_ban_phase === 'preparing') {
       await this.releaseBanPreparation(request);
       await this.actionRequests.fail(
@@ -4165,7 +4173,7 @@ export class SecurityActionService implements ISecurityActionService {
       if (!confirmed) await guild.bans.fetch({ user: request.target_user_id, force: true });
       confirmed = true;
       const current = await this.saveBanPhase(request, {
-        report_ban_phase: 'discord_confirmed',
+        kind: 'confirm_discord',
         report_ban_confirmed_at: metadata.report_ban_confirmed_at ?? new Date().toISOString(),
       });
       await this.finishObservedBan(guild, moderator, current);
@@ -4194,20 +4202,14 @@ export class SecurityActionService implements ISecurityActionService {
     request = adopted;
     if (!request.target_user_id || !request.detection_event_id)
       throw new Error('Confirmed ban cleanup bindings changed.');
-    const metadata = this.metadataToRecord(request.metadata);
-    const cases = Array.isArray(metadata.report_ban_cases)
-      ? (metadata.report_ban_cases as { id: string }[])
-      : [];
-    await (
-      this.userModerationService as IUserModerationService & ICombinedBanLifecycleService
-    ).finalizeObservedBan(guild, request.target_user_id, moderator, {
+    const metadata = parseReportBanState(request.metadata);
+    const cases = metadata.report_ban_cases ?? [];
+    await this.userModerationService.finalizeObservedBan(guild, request.target_user_id, moderator, {
       operationId: request.id,
       reportId: request.report_intake_id,
       reason: String(metadata.report_ban_reason),
       detectionEventId: request.detection_event_id,
-      caseIds: Array.isArray(metadata.report_ban_case_ids)
-        ? (metadata.report_ban_case_ids as string[])
-        : cases.map((event) => event.id),
+      caseIds: metadata.report_ban_case_ids ?? cases.map((event) => event.id),
       attemptId: String(metadata.report_ban_attempt_id),
       confirmedAt: new Date(String(metadata.report_ban_confirmed_at)),
       joinedAt:
@@ -4215,9 +4217,7 @@ export class SecurityActionService implements ISecurityActionService {
         Number.isFinite(Date.parse(metadata.report_ban_membership_joined_at))
           ? new Date(metadata.report_ban_membership_joined_at)
           : null,
-      targetSnapshot: (metadata.report_ban_target_snapshot ?? {
-        id: request.target_user_id,
-      }) as Record<string, string>,
+      targetSnapshot: metadata.report_ban_target_snapshot ?? { id: request.target_user_id },
     });
     const detection = await this.detectionEventsRepository.findById(request.detection_event_id);
     if (
@@ -4263,12 +4263,7 @@ export class SecurityActionService implements ISecurityActionService {
       getReportBanAttemptToken(request)
     );
     if (!completed) throw new Error('Could not persist completed ban receipt.');
-    await this.saveBanPhase(request, {
-      report_ban_phase: null,
-      report_ban_lease_until: null,
-      report_ban_retry_at: null,
-      report_ban_last_error: null,
-    });
+    await this.saveBanPhase(request, { kind: 'finish' });
     // Claim before capture: best effort, at most one logical emission per operation.
     // A process crash between claim and capture can lose analytics, never moderation.
     try {
@@ -4301,13 +4296,16 @@ export class SecurityActionService implements ISecurityActionService {
       if (!channel) return;
       if (!channel.isThread()) throw new Error('Linked report channel is not a thread.');
       if (channel.archived) return;
-      const metadata = this.metadataToRecord(request.metadata);
+      const metadata = parseReportBanState(request.metadata);
       if (!metadata.report_ban_closeout_message_id) {
         const message = await channel.send({
           content: this.buildReportIntakeReviewCloseoutMessage(ReportIntakeStatus.ACTIONED),
           allowedMentions: { parse: [] },
         });
-        await this.saveBanPhase(request, { report_ban_closeout_message_id: message.id });
+        await this.saveBanPhase(request, {
+          kind: 'record_closeout',
+          report_ban_closeout_message_id: message.id,
+        });
       }
       await channel.setArchived(true, 'Report intake reviewed');
     } catch (error) {

@@ -378,9 +378,10 @@ describe('report-bound observed bans with real services', () => {
       },
       getReportBanAttemptToken(f.request)
     );
-    await f.requests.mergeMetadata(
+    await f.requests.transitionReportBan(
       f.request.id,
       {
+        kind: 'renew_lease',
         report_ban_retry_at: new Date(0).toISOString(),
         report_ban_lease_until: new Date(0).toISOString(),
       },
@@ -502,14 +503,14 @@ describe('report-bound observed bans with real services', () => {
       'target',
       VerificationStatus.PENDING
     );
-    const write = f.requests.mergeMetadata.bind(f.requests);
+    const write = f.requests.transitionReportBan.bind(f.requests);
     let reached!: () => void;
     const ready = new Promise<void>((resolve) => {
       reached = resolve;
     });
-    jest.spyOn(f.requests, 'mergeMetadata').mockImplementation(async (...args) => {
+    jest.spyOn(f.requests, 'transitionReportBan').mockImplementation(async (...args) => {
       const patch = args[1];
-      if (patch.report_ban_phase === 'enforcement_started') {
+      if (patch.kind === 'start_enforcement') {
         reached();
         return new Promise(() => {});
       }
@@ -618,11 +619,10 @@ describe('report-bound observed bans with real services', () => {
       'target',
       VerificationStatus.PENDING
     );
-    const save = f.requests.mergeMetadata.bind(f.requests);
-    jest.spyOn(f.requests, 'mergeMetadata').mockImplementation(async (...args) => {
+    const save = f.requests.transitionReportBan.bind(f.requests);
+    jest.spyOn(f.requests, 'transitionReportBan').mockImplementation(async (...args) => {
       const patch = args[1];
-      if (patch.report_ban_phase === 'enforcement_started')
-        throw new Error('owned context unavailable');
+      if (patch.kind === 'start_enforcement') throw new Error('owned context unavailable');
       return save(...args);
     });
     await expect(f.execute()).rejects.toThrow('owned context unavailable');

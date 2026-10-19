@@ -256,7 +256,7 @@ export async function banSubmittedReport(
           targetUserId: detail.targetUserId,
           idempotencyKey: `observed-ban:${guildId}:${detail.latestDetectionId}`,
           metadata: {
-            reason: reason || 'Banned from observed suspicious notification',
+            reason,
             requested_action: 'ban_user',
           },
         });
