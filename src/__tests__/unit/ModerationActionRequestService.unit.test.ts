@@ -1631,6 +1631,26 @@ describe('ModerationActionRequestService', () => {
     expect(repository.failed).toEqual([]);
   });
 
+  it.each(['web_report', 'discord_interaction'] as const)(
+    'defaults an empty optional %s ban reason at execution',
+    async (actor_surface) => {
+      const request = { ...banObservedRequest, actor_surface, metadata: { reason: '' } };
+      const { member, moderator, repository, securityActionService, service } = buildService([
+        request,
+      ]);
+      await expect(service.processPendingRequests()).resolves.toBe(1);
+      expect(securityActionService.banObservedDetection).toHaveBeenCalledWith(
+        member,
+        'det-1',
+        moderator,
+        'Banned from observed suspicious notification',
+        request
+      );
+      expect(repository.failed).toEqual([]);
+      expect(repository.completed).toHaveLength(1);
+    }
+  );
+
   it('bans observed alert users through the logged-in bot Discord client', async () => {
     const { member, moderator, repository, securityActionService, service } = buildService([
       banObservedRequest,
@@ -3069,26 +3089,33 @@ describe('ModerationActionRequestService', () => {
     ]);
   });
 
-  it('fails observed destructive requests when a required reason is missing', async () => {
-    const { repository, securityActionService, service } = buildService(
-      [{ ...banObservedRequest, metadata: {} }],
-      {
-        moderator_ban_action_requires_reason: true,
-      }
-    );
+  it.each([
+    { actor_surface: 'web_report', metadata: {} },
+    { actor_surface: 'web_report', metadata: { reason: '' } },
+    { actor_surface: 'discord_interaction', metadata: { reason: '' } },
+  ])(
+    'rejects a queued ban without a reason when current policy requires one: %j',
+    async ({ actor_surface, metadata }) => {
+      const { repository, securityActionService, service } = buildService(
+        [{ ...banObservedRequest, actor_surface, metadata }],
+        {
+          moderator_ban_action_requires_reason: true,
+        }
+      );
 
-    await expect(service.processPendingRequests()).resolves.toBe(1);
+      await expect(service.processPendingRequests()).resolves.toBe(1);
 
-    expect(securityActionService.banObservedDetection).not.toHaveBeenCalled();
-    expect(securityActionService.banObservedDetectionById).not.toHaveBeenCalled();
-    expect(repository.completed).toEqual([]);
-    expect(repository.failed).toEqual([
-      {
-        id: 'ban-observed-request-1',
-        error: 'Moderator ban action requires a reason.',
-      },
-    ]);
-  });
+      expect(securityActionService.banObservedDetection).not.toHaveBeenCalled();
+      expect(securityActionService.banObservedDetectionById).not.toHaveBeenCalled();
+      expect(repository.completed).toEqual([]);
+      expect(repository.failed).toEqual([
+        {
+          id: 'ban-observed-request-1',
+          error: 'Moderator ban action requires a reason.',
+        },
+      ]);
+    }
+  );
 
   it('fails open-admin-case requests when a required reason is missing', async () => {
     const { repository, securityActionService, service } = buildService(

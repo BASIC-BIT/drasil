@@ -96,6 +96,17 @@ describe('banSubmittedReport', () => {
       ])
     );
   });
+  it.each(['', '   '])('queues an empty optional reason without defaulting %j', async (reason) => {
+    m.server.mockResolvedValue({ settings: { moderator_ban_action_requires_reason: false } });
+    expect(await banSubmittedReport('guild-1', 'report-1', idle, form({ reason }))).toMatchObject({
+      status: 'queued',
+    });
+    expect(m.queue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: { reason: '', requested_action: 'ban_user' },
+      })
+    );
+  });
   it.each([{ confirmAction: '' }, { reason: '' }, { confirmedTargetUserId: 'changed' }])(
     'rejects invalid confirmation %j',
     async (changes) => {

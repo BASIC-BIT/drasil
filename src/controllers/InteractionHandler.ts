@@ -3863,7 +3863,6 @@ export class InteractionHandler implements IInteractionHandler {
       return;
     }
 
-    const reason = providedReason || OBSERVED_BAN_DEFAULT_REASON;
     try {
       if (!this.actionRequests || !this.detectionEventsRepository)
         throw new Error('Moderation request queue is unavailable.');
@@ -3906,7 +3905,7 @@ export class InteractionHandler implements IInteractionHandler {
         detectionEventId: parsed.detectionEventId,
         reportIntakeId: reportId,
         idempotencyKey: `observed-ban:${interaction.guildId}:${parsed.detectionEventId}`,
-        metadata: { reason, requested_action: 'ban_user' },
+        metadata: { reason: providedReason, requested_action: 'ban_user' },
       });
       await interaction.reply({
         content: `Ban queued for <@${parsed.userId}>. Operation: ${request.id}. If the outcome remains uncertain, use /review-report-ban with this operation ID.`,
