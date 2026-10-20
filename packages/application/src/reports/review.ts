@@ -116,7 +116,7 @@ export const reportStatusByClosureAction: Record<ReportClosureAction, ReportRevi
 export function isReportClosureAction(action: string): action is ReportClosureAction {
   return reportClosureActions.some((candidate) => candidate === action);
 }
-const REPORT_REVIEW_PERMISSIONS = (1n << 3n) | (1n << 5n) | (1n << 40n);
+const REPORT_MODERATION_PERMISSIONS = (1n << 3n) | (1n << 5n) | (1n << 40n);
 
 const closeSchema = z
   .object({ reportId: z.string().min(1), action: z.enum(reportClosureActions) })
@@ -135,14 +135,18 @@ export interface ReportReviewActions {
 }
 
 export function createReportReviewActions(deps: ReportReviewDependencies): ReportReviewActions {
-  async function authorize(context: ActionContext): Promise<ActionDenialCode | null> {
+  async function authorize(
+    context: ActionContext,
+    requiredAuthority: 'report_review' | 'case_opening'
+  ): Promise<ActionDenialCode | null> {
     if (context.actor.kind !== 'user') return 'permission_denied';
     const facts = await deps.authority.loadFresh(context.guildId, context.actor.userId);
     if (!facts || !facts.present) return 'actor_unavailable';
     if (facts.guildId !== context.guildId || facts.userId !== context.actor.userId)
       return 'binding_mismatch';
     const permissions = /^\d+$/.test(facts.permissions) ? BigInt(facts.permissions) : 0n;
-    if (facts.owner || (permissions & REPORT_REVIEW_PERMISSIONS) !== 0n) return null;
+    if (facts.owner || (permissions & REPORT_MODERATION_PERMISSIONS) !== 0n) return null;
+    if (requiredAuthority === 'case_opening') return 'permission_denied';
     const roleIds = await deps.staffRoles.loadRoleIds(context.guildId);
     return roleIds.some((id) => facts.roleIds.includes(id)) ? null : 'permission_denied';
   }
@@ -166,7 +170,7 @@ export function createReportReviewActions(deps: ReportReviewDependencies): Repor
   return {
     async close(context, command): Promise<ActionResult<CloseSubmittedReportResult>> {
       const input = closeSchema.parse(command);
-      const denial = await authorize(context);
+      const denial = await authorize(context, 'report_review');
       if (denial) return { kind: 'denied', code: denial };
       if (context.actor.kind !== 'user') return { kind: 'denied', code: 'permission_denied' };
       const actor = { id: context.actor.userId, surface: context.source };
@@ -200,7 +204,7 @@ export function createReportReviewActions(deps: ReportReviewDependencies): Repor
     },
     async openCase(context, command): Promise<ActionResult<OpenSubmittedReportCaseResult>> {
       const input = openCaseSchema.parse(command);
-      const denial = await authorize(context);
+      const denial = await authorize(context, 'case_opening');
       if (denial) return { kind: 'denied', code: denial };
       if (context.actor.kind !== 'user') return { kind: 'denied', code: 'permission_denied' };
       const base: OpenSubmittedReportCaseResult = {

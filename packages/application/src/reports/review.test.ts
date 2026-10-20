@@ -189,7 +189,9 @@ it('rechecks permissions and responder roles after an earlier successful review'
   const f = arrange({ ...staff, permissions: '0', roleIds: ['responder-1'] });
   await f.actions.close(context, { reportId: 'report-1', action: 'mark_actioned' });
   f.staffRoles.loadRoleIds.mockResolvedValue([]);
-  await expect(f.actions.openCase(context, { reportId: 'report-1' })).resolves.toEqual({
+  await expect(
+    f.actions.close(context, { reportId: 'report-1', action: 'mark_actioned' })
+  ).resolves.toEqual({
     kind: 'denied',
     code: 'permission_denied',
   });
@@ -369,4 +371,45 @@ it('does not enqueue a report whose submitted state changed', async () => {
     outcome: { status: 'already_handled' },
   });
   expect(f.reportCaseOpener.openObservedDetectionCase).not.toHaveBeenCalled();
+});
+
+it('denies case opening for a configured responder with no moderation permissions', async () => {
+  const f = arrange({ ...staff, permissions: '0', roleIds: ['responder-1'] });
+  await expect(f.actions.openCase(context, { reportId: 'report-1' })).resolves.toEqual({
+    kind: 'denied',
+    code: 'permission_denied',
+  });
+  expect(f.openCaseRepository.findSubmittedReportCaseCandidate).not.toHaveBeenCalled();
+  expect(f.reportCaseOpener.openObservedDetectionCase).not.toHaveBeenCalled();
+  expect(f.staffRoles.loadRoleIds).not.toHaveBeenCalled();
+});
+it('denies case opening after moderation permission revocation while the responder role remains', async () => {
+  const f = arrange({ ...staff, roleIds: ['responder-1'] });
+  await expect(f.actions.openCase(context, { reportId: 'report-1' })).resolves.toMatchObject({
+    kind: 'outcome',
+    outcome: { status: 'queued' },
+  });
+  f.openCaseRepository.findSubmittedReportCaseCandidate.mockClear();
+  f.reportCaseOpener.openObservedDetectionCase.mockClear();
+  f.authority.loadFresh.mockResolvedValue({ ...staff, permissions: '0', roleIds: ['responder-1'] });
+  await expect(f.actions.openCase(context, { reportId: 'report-1' })).resolves.toEqual({
+    kind: 'denied',
+    code: 'permission_denied',
+  });
+  expect(f.authority.loadFresh).toHaveBeenCalledTimes(2);
+  expect(f.openCaseRepository.findSubmittedReportCaseCandidate).not.toHaveBeenCalled();
+  expect(f.reportCaseOpener.openObservedDetectionCase).not.toHaveBeenCalled();
+  expect(f.staffRoles.loadRoleIds).not.toHaveBeenCalled();
+});
+it.each([
+  { ...staff, permissions: '0', owner: true },
+  { ...staff, permissions: '8' },
+  { ...staff, permissions: '32' },
+  { ...staff, permissions: String(1n << 40n) },
+])('accepts the existing case-opening moderation authority %j', async (facts) => {
+  const f = arrange(facts);
+  await expect(f.actions.openCase(context, { reportId: 'report-1' })).resolves.toMatchObject({
+    kind: 'outcome',
+    outcome: { status: 'queued' },
+  });
 });
