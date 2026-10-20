@@ -1,58 +1,37 @@
 import { buildEnqueueStatement } from '@drasil/application/postgres';
-import type { EnqueueInput } from '@drasil/application';
+import type { EnqueueInput, QueuedActionReceipt } from '@drasil/application';
 import type { Pool, PoolClient } from 'pg';
 import { getPostgresPool } from './setupDataAdapter';
 
 export type ModerationActionRequestActionType = EnqueueInput['actionType'];
 
-export type ModerationActionRequestQueueStatus = 'queued' | 'processing' | 'completed' | 'failed';
+export type ModerationActionRequestQueueStatus = QueuedActionReceipt['status'];
 
-export interface ModerationActionRequestReceipt {
-  readonly id: string;
+export interface ModerationActionRequestReceipt extends QueuedActionReceipt {
   readonly messageDeletionJobId?: string | null;
-  readonly status: ModerationActionRequestQueueStatus;
 }
 
 interface ActiveModerationActionRequestReceipt extends ModerationActionRequestReceipt {
   readonly idempotencyKey: string;
 }
 
-export interface QueueModerationActionRequestInput {
-  readonly actionType: ModerationActionRequestActionType;
-  readonly actorId: string;
-  readonly actorSurface: string;
-  readonly detectionEventId?: string | null;
-  readonly idempotencyKey: string;
-  readonly metadata?: EnqueueInput['metadata'];
-  readonly messageDeletionJobId?: string | null;
-  readonly reportIntakeId?: string | null;
-  readonly serverId: string;
-  readonly targetUserId?: string | null;
-  readonly verificationEventId?: string | null;
-}
-
 export async function queueModerationActionRequest(
-  input: QueueModerationActionRequestInput
+  input: EnqueueInput
 ): Promise<ModerationActionRequestQueueStatus> {
   return (await queueModerationActionRequestWithReceipt(input)).status;
 }
 
 export async function queueModerationActionRequestWithReceipt(
-  input: QueueModerationActionRequestInput
+  input: EnqueueInput
 ): Promise<ModerationActionRequestReceipt> {
   return insertModerationActionRequestWithReceipt(getPostgresPool(), input);
 }
 
 export async function insertModerationActionRequestWithReceipt(
   client: Pool | PoolClient,
-  input: QueueModerationActionRequestInput
+  input: EnqueueInput
 ): Promise<ModerationActionRequestReceipt> {
-  const statement = buildEnqueueStatement({
-    ...input,
-    targetUserId: input.targetUserId ?? null,
-    messageDeletionJobId: input.messageDeletionJobId ?? undefined,
-    metadata: input.metadata ?? {},
-  });
+  const statement = buildEnqueueStatement(input);
   const result = await client.query<{
     id: string;
     message_deletion_job_id?: string | null;
@@ -64,9 +43,16 @@ export async function insertModerationActionRequestWithReceipt(
 }
 
 export async function queueSerializedModerationActionRequestWithReceipt(
-  input: QueueModerationActionRequestInput
+  input: EnqueueInput
 ): Promise<ModerationActionRequestReceipt> {
-  const client = await getPostgresPool().connect();
+  return insertSerializedSetupRequestWithReceipt(getPostgresPool(), input);
+}
+
+export async function insertSerializedSetupRequestWithReceipt(
+  pool: Pool,
+  input: EnqueueInput
+): Promise<ModerationActionRequestReceipt> {
+  const client = await pool.connect();
 
   try {
     await client.query('begin');

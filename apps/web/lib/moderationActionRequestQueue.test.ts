@@ -47,6 +47,8 @@ describe('queueSerializedModerationActionRequestWithReceipt', () => {
       actorSurface: 'web',
       idempotencyKey: 'setup-2',
       serverId: 'guild-1',
+      targetUserId: null,
+      metadata: {},
     });
 
     expect(result).toEqual({ id: 'active-1', status: 'processing' });
@@ -78,6 +80,8 @@ describe('queueSerializedModerationActionRequestWithReceipt', () => {
         actorSurface: 'web',
         idempotencyKey: 'setup-2',
         serverId: 'guild-1',
+        targetUserId: null,
+        metadata: {},
       })
     ).rejects.toThrow('Another Drasil setup is already in progress for this server.');
 
@@ -99,6 +103,8 @@ describe('queueSerializedModerationActionRequestWithReceipt', () => {
       actorSurface: 'web',
       idempotencyKey: 'setup-2',
       serverId: 'guild-1',
+      targetUserId: null,
+      metadata: {},
     });
 
     expect(result).toEqual({ id: 'request-2', status: 'queued' });
@@ -125,6 +131,8 @@ describe('insertModerationActionRequestWithReceipt', () => {
         actorSurface: 'captcha',
         idempotencyKey: 'captcha:apply:challenge-1:1',
         serverId: 'guild-1',
+        targetUserId: null,
+        metadata: {},
       })
     ).resolves.toEqual({ id: 'active-1', status: 'processing' });
 
@@ -143,6 +151,7 @@ describe('insertModerationActionRequestWithReceipt', () => {
         idempotencyKey: 'web:case-action:ban:guild-1:case-1',
         metadata: { reason: 'Corrected reason' },
         serverId: 'guild-1',
+        targetUserId: null,
       })
     ).resolves.toEqual({ id: 'active-1', status: 'queued' });
 
@@ -161,6 +170,7 @@ describe('insertModerationActionRequestWithReceipt', () => {
         idempotencyKey: 'web:case-action:ban:guild-1:case-1',
         metadata: { reason: 'Different reason' },
         serverId: 'guild-1',
+        targetUserId: null,
       })
     ).resolves.toEqual({ id: 'active-1', status: 'processing' });
 
@@ -175,6 +185,8 @@ it('maps the returned job binding and rejects a missing database row', async () 
     actorId: 'moderator',
     actorSurface: 'web',
     serverId: 'guild',
+    targetUserId: null,
+    metadata: {},
     idempotencyKey: 'key',
   };
   mocks.query.mockResolvedValueOnce({

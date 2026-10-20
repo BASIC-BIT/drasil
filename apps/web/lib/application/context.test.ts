@@ -5,6 +5,22 @@ import {
   createWebReportConfirmationPort,
 } from './context';
 
+it('keeps a supplied submission identity and provenance', () => {
+  expect(
+    createWebActionContext({
+      guildId: 'guild',
+      userId: 'user',
+      requestId: 'attempt-2',
+      source: 'web_report',
+    })
+  ).toEqual({
+    guildId: 'guild',
+    requestId: 'attempt-2',
+    source: 'web_report',
+    actor: { kind: 'user', userId: 'user' },
+  });
+});
+
 it('binds an authenticated form confirmation to its actor, guild, case, and operation', async () => {
   const context = createWebActionContext({ guildId: 'guild-1', userId: 'actor-1' });
   const command = { kind: 'ban_case_user', caseId: 'case-1' };
