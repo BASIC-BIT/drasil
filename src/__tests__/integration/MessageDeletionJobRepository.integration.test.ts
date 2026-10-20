@@ -377,7 +377,7 @@ describeIntegration('MessageDeletionJobRepository (integration)', () => {
     });
   });
 
-  it('fails interrupted setup requests so the same submission can be retried', async () => {
+  it('fails interrupted setup requests and preserves the original actor when retrying a submission', async () => {
     const servers = new ServerRepository(prisma);
     await servers.getOrCreateServer('guild-1');
     const request = await requests.enqueue({
@@ -409,9 +409,42 @@ describeIntegration('MessageDeletionJobRepository (integration)', () => {
         idempotencyKey: 'web:setup:complete_setup_verification:guild-1:submission-1',
       })
     ).resolves.toMatchObject({
+      id: request.id,
+      actor_id: 'administrator-1',
+      status: ModerationActionRequestStatus.FAILED,
+      last_error: 'Worker interrupted before this action completed.',
+    });
+    await expect(requests.findById(request.id)).resolves.toMatchObject({
+      actor_id: 'administrator-1',
+      status: ModerationActionRequestStatus.FAILED,
+    });
+
+    await expect(
+      requests.enqueue({
+        serverId: 'guild-1',
+        actionType: ModerationActionRequestType.COMPLETE_SETUP_VERIFICATION,
+        actorId: 'administrator-1',
+        actorSurface: 'web',
+        idempotencyKey: 'web:setup:complete_setup_verification:guild-1:submission-1',
+      })
+    ).resolves.toMatchObject({
+      id: request.id,
+      actor_id: 'administrator-1',
+      status: ModerationActionRequestStatus.QUEUED,
+    });
+
+    const newActorSubmission = await requests.enqueue({
+      serverId: 'guild-1',
+      actionType: ModerationActionRequestType.COMPLETE_SETUP_VERIFICATION,
+      actorId: 'administrator-2',
+      actorSurface: 'web',
+      idempotencyKey: 'web:setup:complete_setup_verification:guild-1:submission-2',
+    });
+    expect(newActorSubmission).toMatchObject({
       actor_id: 'administrator-2',
       status: ModerationActionRequestStatus.QUEUED,
     });
+    expect(newActorSubmission.id).not.toBe(request.id);
   });
 
   it('merges prior and candidate setup permission provenance into request metadata', async () => {

@@ -122,6 +122,66 @@ test('domain_internal_call_is_allowed', () => {
     (result) => assert.equal(result.status, 0, result.stderr)
   );
 });
+for (const [owner, method] of [
+  ['controllers/ReportInstructionsManager', 'upsertReportInstructionsMessage'],
+  ['controllers/ReportInstructionsManager', 'clearReportInstructions'],
+  ['services/RoleGateService', 'applyResolution'],
+]) {
+  test(`mixed_mutation_cannot_bypass_${method}`, () => {
+    check(
+      {
+        [`src/${owner}.ts`]: `export interface Workflow { ${method}(): void; }`,
+        'src/controllers/InteractionHandler.ts': `
+          import type { Workflow as Renamed } from '../${owner}';
+          class InteractionHandler {
+            constructor(private workflow: Renamed) {}
+            executeConfirmedCaseAction() { const alias = this.workflow.${method}; alias(); }
+          }
+        `,
+      },
+      (result) => {
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr, new RegExp(`direct workflow call ${method}`));
+      }
+    );
+  });
+}
+test('role_gate_and_report_instructions_reads_and_owned_runtime_calls_are_allowed', () => {
+  check(
+    {
+      'src/controllers/ReportInstructionsManager.ts':
+        'export interface Instructions { readRepostBinding(): void; clearReportInstructions(): void; }',
+      'src/services/RoleGateService.ts':
+        'export interface RoleGate { previewResolution(): void; applyResolution(): void; }',
+      'src/services/RecoveryService.ts': `
+        import type { Instructions } from '../controllers/ReportInstructionsManager';
+        import type { RoleGate } from './RoleGateService';
+        export function recover(instructions: Instructions, roles: RoleGate) {
+          instructions.clearReportInstructions(); roles.applyResolution();
+        }
+      `,
+      'src/controllers/RuntimeRecovery.ts': `
+        import { recover } from '../services/RecoveryService';
+        import type { Instructions } from './ReportInstructionsManager';
+        import type { RoleGate } from '../services/RoleGateService';
+        export function run(instructions: Instructions, roles: RoleGate) {
+          recover(instructions, roles); roles.applyResolution();
+        }
+      `,
+      'src/controllers/InteractionHandler.ts': `
+        import type { Instructions } from './ReportInstructionsManager';
+        import type { RoleGate } from '../services/RoleGateService';
+        class InteractionHandler {
+          constructor(private instructions: Instructions, private roles: RoleGate) {}
+          executeConfirmedCaseAction() {
+            this.instructions.readRepostBinding(); this.roles.previewResolution();
+          }
+        }
+      `,
+    },
+    (result) => assert.equal(result.status, 0, result.stderr)
+  );
+});
 test('pending_inventory_row_fails', () => {
   check(
     { 'docs/dev/action-boundary-inventory.md': '| `verify_case_user` | Pending |' },

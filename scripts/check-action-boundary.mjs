@@ -90,7 +90,7 @@ export const mutationMethods = {
   ],
 };
 const workflowOwners =
-  /\/(?:UserModerationService|SecurityActionService|ReportSubmissionService|ReportIntakeService|ReportReviewService|AccountQuarantineService|CaptchaChallengeService|CaseMessageCleanupService|MessageCleanupService|CaseThreadClosureSweepService|CaseRoleLockdownService|IntegrityAuditService|SetupWorkflowService|SetupProvisioningService|ConfigService|ModerationQueueService)\.ts$|\/src\/repositories\/[^/]+\.ts$/;
+  /\/(?:UserModerationService|SecurityActionService|ReportSubmissionService|ReportIntakeService|ReportReviewService|ReportInstructionsManager|RoleGateService|AccountQuarantineService|CaptchaChallengeService|CaseMessageCleanupService|MessageCleanupService|CaseThreadClosureSweepService|CaseRoleLockdownService|IntegrityAuditService|SetupWorkflowService|SetupProvisioningService|ConfigService|ModerationQueueService)\.ts$|\/src\/repositories\/[^/]+\.ts$/;
 const readMethods = /^(?:get|find|list|count|build|format|is|has|can|parse|load)/;
 const presentationMethods = new Set(['sendReportConfirmation', 'sendReportInstructions']);
 const normalize = (value) => value.split(path.sep).join('/');
@@ -238,8 +238,12 @@ function inspectDependencies(root, errors) {
           // Persisting a typed command is a transport boundary, not enforcement.
           const enqueue =
             owner.endsWith('/ModerationActionRequestRepository.ts') && name === 'enqueue';
+          const preview =
+            (owner.endsWith('/RoleGateService.ts') && name === 'previewResolution') ||
+            (owner.endsWith('/ReportInstructionsManager.ts') && name === 'readRepostBinding');
           if (
             !enqueue &&
+            !preview &&
             workflowOwners.test(owner) &&
             !readMethods.test(name) &&
             !presentationMethods.has(name)
