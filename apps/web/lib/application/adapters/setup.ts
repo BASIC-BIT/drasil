@@ -1,13 +1,36 @@
-import { createSetupUpdateActions, type SetupUpdateActions } from '@drasil/application';
+import {
+  createSetupUpdateActions,
+  type AuthorityPort,
+  type SetupUpdateActions,
+} from '@drasil/application';
 import { createWebAuthority } from './attention';
 import { createSetupDataAdapter, type SetupDataAdapter } from '../../setupDataAdapter';
 import { captchaProviderConfigurationIssues } from '../../turnstile';
+import { fixtureAdminSession, fixtureGuilds, isWebE2eFixtureMode } from '../../e2eFixtures';
+
+function createSetupAuthority(): AuthorityPort {
+  if (!isWebE2eFixtureMode()) return createWebAuthority();
+  return {
+    async loadFresh(guildId, userId) {
+      const guild = fixtureGuilds().find((entry) => entry.id === guildId);
+      if (!guild || userId !== fixtureAdminSession().userId) return null;
+      return {
+        guildId,
+        userId,
+        present: true,
+        owner: guild.owner,
+        permissions: guild.permissions,
+        roleIds: [],
+      };
+    },
+  };
+}
 
 export function createWebSetupActions(
   adapter: SetupDataAdapter = createSetupDataAdapter()
 ): SetupUpdateActions {
   return createSetupUpdateActions({
-    authority: createWebAuthority(),
+    authority: createSetupAuthority(),
     provider: { isConfigured: () => captchaProviderConfigurationIssues().length === 0 },
     configuration: {
       loadFresh: (guildId) => adapter.getServer(guildId),

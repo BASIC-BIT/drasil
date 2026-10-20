@@ -7,6 +7,7 @@ METRIC_PATHS=(
   "$ROOT_DIR/src"
   "$ROOT_DIR/apps/web"
   "$ROOT_DIR/packages/contracts"
+  "$ROOT_DIR/packages/application/src"
 )
 
 echo "== scc (size) =="
@@ -24,11 +25,13 @@ lizard -C 25 -L 300 -w \
   -x "*/coverage/*" \
   -x "*/src/generated/prisma/*" \
   -x "*/__tests__/*" \
+  -x "*.test.ts" \
   -x "*/test/*" \
   "$ROOT_DIR/src" \
   "$ROOT_DIR/apps/web/app" \
   "$ROOT_DIR/apps/web/lib" \
-  "$ROOT_DIR/packages/contracts/src"
+  "$ROOT_DIR/packages/contracts/src" \
+  "$ROOT_DIR/packages/application/src"
 
 echo "== largest tracked source/test files (advisory) =="
 git -C "$ROOT_DIR" ls-files --cached --others --exclude-standard \

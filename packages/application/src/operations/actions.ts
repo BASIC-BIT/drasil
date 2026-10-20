@@ -36,7 +36,7 @@ export function operationConfirmationCommand(
     ]),
   };
 }
-function needsConfirmation(command: OperationCommand): boolean {
+export function operationNeedsConfirmation(command: OperationCommand): boolean {
   switch (command.kind) {
     case 'clear_moderation_queue':
     case 'apply_case_role_lockdown':
@@ -83,7 +83,7 @@ export function createOperationsActions(deps: OperationsDependencies): Operation
           return { kind: 'denied', code: 'reason_required' };
       }
       if (
-        needsConfirmation(command) &&
+        operationNeedsConfirmation(command) &&
         !(await deps.confirmations.verify(context, operationConfirmationCommand(context, command)))
       )
         return { kind: 'denied', code: 'confirmation_required' };

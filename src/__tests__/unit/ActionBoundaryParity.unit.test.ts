@@ -1,0 +1,323 @@
+import { mock, mockDeep } from 'jest-mock-extended';
+import {
+  createCaseActions,
+  createReportActions,
+  createCaptchaActions,
+  createMessageCleanupActions,
+  createSetupActions,
+  decodeQueuedAction,
+  encodeQueuedAction,
+  type ActionContext,
+  type AuthorityPort,
+  type CaseDependencies,
+  type ReportDependencies,
+  type CaptchaDependencies,
+  type MessageCleanupDependencies,
+  type SetupDependencies,
+  type MessageCleanupJob,
+  type QueuedCommand,
+} from '@drasil/application';
+import type { BotApplication } from '../../application/createBotApplication';
+import type { BotSetupRuntime } from '../../application/adapters/setup';
+import { createDiscordActionContext } from '../../application/context';
+import { dispatchQueuedAction } from '../../application/requestDispatch';
+
+const directContext = createDiscordActionContext({
+  guildId: 'guild',
+  userId: 'actor',
+  requestId: 'interaction-id',
+});
+const queuedContext: ActionContext = {
+  ...directContext,
+  source: 'web',
+  requestId: 'submission-id',
+};
+function arrange(family: 'case' | 'report' | 'captcha' | 'cleanup' | 'setup', present = true) {
+  const effects: unknown[] = [];
+  const contexts: ActionContext[] = [];
+  const decisions: unknown[] = [];
+  const authority: AuthorityPort = {
+    loadFresh: async () => ({
+      guildId: 'guild',
+      userId: 'actor',
+      present,
+      owner: false,
+      permissions: '8',
+      roleIds: [],
+    }),
+  };
+  let app = mock<BotApplication>();
+  let command: QueuedCommand;
+  let direct = async (context: ActionContext): Promise<unknown> => {
+    throw new Error(`Unconfigured ${family} fixture entry: ${context.requestId}`);
+  };
+  async function trace<T>(context: ActionContext, run: () => Promise<T>): Promise<T> {
+    contexts.push(context);
+    const result = await run();
+    decisions.push(result);
+    return result;
+  }
+  switch (family) {
+    case 'case': {
+      const deps = mockDeep<CaseDependencies>();
+      deps.authority.loadFresh.mockImplementation(authority.loadFresh);
+      deps.confirmations.verify.mockResolvedValue(true);
+      deps.repository.findById.mockResolvedValue({
+        id: 'case',
+        server_id: 'guild',
+        user_id: 'target',
+        status: 'pending',
+      });
+      deps.repository.findActive.mockResolvedValue({
+        id: 'case',
+        server_id: 'guild',
+        user_id: 'target',
+        status: 'pending',
+      });
+      deps.settings.loadFresh.mockResolvedValue({
+        adminCaseOpenRequiresReason: false,
+        moderatorBanActionEnabled: true,
+        moderatorBanActionRequiresReason: true,
+        moderatorKickActionEnabled: true,
+        moderatorKickActionRequiresReason: true,
+      });
+      deps.workflows.ban.mockImplementation(async (input) => {
+        effects.push({
+          guildId: input.guildId,
+          actorId: input.actorId,
+          targetUserId: input.targetUserId,
+          caseId: input.caseId,
+          reason: input.reason,
+        });
+        return true;
+      });
+      const actions = createCaseActions(deps);
+      const execute = actions.execute;
+      app = mock<BotApplication>({
+        cases: { execute: (context, input) => trace(context, () => execute(context, input)) },
+      });
+      command = {
+        kind: 'ban_case_user',
+        caseId: 'case',
+        targetUserId: 'target',
+        reason: 'reviewed',
+        detectionEventId: null,
+      };
+      const input = command;
+      direct = (context) => app.cases.execute(context, input);
+      break;
+    }
+    case 'report': {
+      const deps = mockDeep<ReportDependencies>();
+      deps.authority.loadFresh.mockImplementation(authority.loadFresh);
+      deps.settings.loadFresh.mockResolvedValue({ reasonRequired: true, staffRoleIds: [] });
+      deps.submissions.user.mockImplementation(async (context, input) => {
+        effects.push({
+          guildId: context.guildId,
+          actor: context.actor,
+          target: input.targetUserId,
+          reason: input.reason,
+        });
+        return { status: 'submitted', targetUserId: input.targetUserId };
+      });
+      const actions = createReportActions(deps);
+      app = mock<BotApplication>({
+        reports: {
+          execute: (context, input) => trace(context, () => actions.execute(context, input)),
+        },
+      });
+      command = {
+        kind: 'submit_user_report',
+        targetUserId: 'target',
+        targetLabel: 'target',
+        reason: 'reviewed',
+      };
+      const input = command;
+      direct = (context) => app.reports.execute(context, input);
+      break;
+    }
+    case 'captcha': {
+      const deps = mockDeep<CaptchaDependencies>();
+      deps.authority.loadFresh.mockImplementation(authority.loadFresh);
+      deps.confirmations.verify.mockResolvedValue(true);
+      deps.workflows.recoverCommitted.mockResolvedValue(null);
+      deps.settings.loadFresh.mockResolvedValue({ enabled: true });
+      deps.state.load.mockResolvedValue({
+        guildId: 'guild',
+        caseId: 'case',
+        targetUserId: 'target',
+        status: 'pending',
+        caseKind: 'standard',
+        challenge: null,
+      });
+      deps.workflows.request.mockImplementation(async (context, input) => {
+        effects.push({
+          guildId: context.guildId,
+          actor: context.actor,
+          caseId: input.caseId,
+          targetUserId: input.targetUserId,
+        });
+        return {
+          action_type: 'request_captcha_challenge',
+          challenge_id: 'challenge',
+          generation: 1,
+          delivered: true,
+          target_user_id: 'target',
+          verification_event_id: 'case',
+        };
+      });
+      const actions = createCaptchaActions(deps);
+      app = mock<BotApplication>({
+        captcha: {
+          execute: (context, input) => trace(context, () => actions.execute(context, input)),
+        },
+      });
+      command = { kind: 'request_captcha_challenge', caseId: 'case', targetUserId: 'target' };
+      const input = command;
+      direct = (context) => app.captcha.execute(context, input);
+      break;
+    }
+    case 'cleanup': {
+      const deps = mockDeep<MessageCleanupDependencies>();
+      const job: MessageCleanupJob = {
+        id: 'job',
+        guildId: 'guild',
+        caseId: 'case',
+        targetUserId: 'target',
+        requestedBy: 'actor',
+        source: 'web_case',
+        mode: 'delete_only',
+        scope: 'last_day',
+        reason: 'reviewed',
+        evidenceThreadId: 'evidence',
+        generation: 'generation',
+        status: 'ready',
+        coverage: 'ready',
+        candidateCount: 1,
+        banStatus: 'not_requested',
+        caseFinalizationStatus: 'not_applicable',
+      };
+      deps.authority.loadFresh.mockImplementation(authority.loadFresh);
+      deps.jobs.find.mockResolvedValue(job);
+      deps.cases.find.mockResolvedValue({
+        id: 'case',
+        guildId: 'guild',
+        targetUserId: 'target',
+        status: 'pending',
+        evidenceThreadId: 'evidence',
+      });
+      deps.workflows.preview.mockImplementation(async (jobId) => {
+        effects.push({ jobId, preservedCandidate: 'message' });
+        return job;
+      });
+      const actions = createMessageCleanupActions(deps);
+      app = mock<BotApplication>({
+        messageCleanup: {
+          execute: (context, input) => trace(context, () => actions.execute(context, input)),
+        },
+      });
+      command = {
+        kind: 'preview_case_message_deletion',
+        caseId: 'case',
+        targetUserId: 'target',
+        jobId: 'job',
+        mode: 'delete_only',
+        scope: 'last_day',
+        reason: 'reviewed',
+        detectionEventId: null,
+        previewReference: { jobId: 'job', generation: null },
+      };
+      const input = command;
+      direct = (context) => app.messageCleanup.execute(context, input);
+      break;
+    }
+    case 'setup': {
+      const deps = mockDeep<SetupDependencies>();
+      deps.authority.loadFresh.mockImplementation(authority.loadFresh);
+      deps.configuration.loadFresh.mockResolvedValue({ settings: {}, case_role_id: null });
+      deps.panels.upsert.mockImplementation(async (context, input) => {
+        effects.push({
+          guildId: context.guildId,
+          actor: context.actor,
+          channelId: input.channelId,
+          repost: input.repost,
+        });
+        return { action: 'updated', messageId: 'panel' };
+      });
+      const actions = createSetupActions(deps);
+      app = mock<BotApplication>({
+        setupRuntime: mock<BotSetupRuntime>({
+          execute: (context, input) => trace(context, () => actions.execute(context, input)),
+        }),
+      });
+      command = { kind: 'upsert_report_instructions', channelId: 'channel', repost: false };
+      const input = command;
+      direct = (context) => trace(context, () => actions.execute(context, input));
+      break;
+    }
+  }
+  return { app, command, direct, effects, contexts, decisions };
+}
+function queued(command: QueuedCommand, source = 'web') {
+  const encoded = encodeQueuedAction({ ...queuedContext, source }, command);
+  return decodeQueuedAction({
+    id: 'durable-request-id',
+    server_id: encoded.serverId,
+    action_type: encoded.actionType,
+    actor_id: encoded.actorId,
+    actor_surface: encoded.actorSurface,
+    target_user_id: encoded.targetUserId,
+    verification_event_id: encoded.verificationEventId,
+    detection_event_id: encoded.detectionEventId,
+    report_intake_id: encoded.reportIntakeId,
+    message_deletion_job_id: encoded.messageDeletionJobId,
+    metadata: encoded.metadata,
+  });
+}
+describe.each(['case', 'report', 'captcha', 'cleanup', 'setup'] as const)(
+  '%s cross-entry parity',
+  (family) => {
+    it('preserves shared decisions and effects through the real codec and worker dispatch', async () => {
+      const direct = arrange(family);
+      const worker = arrange(family);
+      // Cleanup has no shipped Discord control. Its reusable direct invocation and
+      // durable invocation both retain the actual web_case provenance.
+      const context =
+        family === 'cleanup' ? { ...directContext, source: 'web_case' } : directContext;
+      const source = family === 'cleanup' ? 'web_case' : 'web';
+      const directDecision = await direct.direct(context);
+      await dispatchQueuedAction(worker.app, queued(worker.command, source));
+      const workerDecision = worker.decisions[0];
+      expect(directDecision).toMatchObject({ kind: 'outcome' });
+      expect(directDecision).toEqual(workerDecision);
+      const directDomainEffects = direct.effects;
+      const workerDomainEffects = worker.effects;
+      expect(directDomainEffects).toHaveLength(1);
+      expect(directDomainEffects).toEqual(workerDomainEffects);
+      const auditSources = [direct.contexts[0].source, worker.contexts[0].source];
+      if (family === 'cleanup') expect(auditSources).toEqual(['web_case', 'web_case']);
+      else expect(auditSources).toEqual(['discord_interaction', 'web']);
+      expect([direct.contexts[0].requestId, worker.contexts[0].requestId]).toEqual([
+        'interaction-id',
+        'durable-request-id',
+      ]);
+    });
+    it('rechecks actor presence at both execution entries before domain effects', async () => {
+      const direct = arrange(family, false);
+      const worker = arrange(family, false);
+      const context =
+        family === 'cleanup' ? { ...directContext, source: 'web_case' } : directContext;
+      const directDecision = await direct.direct(context);
+      await expect(
+        dispatchQueuedAction(
+          worker.app,
+          queued(worker.command, family === 'cleanup' ? 'web_case' : 'web')
+        )
+      ).rejects.toThrow();
+      expect(directDecision).toEqual({ kind: 'denied', code: 'actor_unavailable' });
+      expect(directDecision).toEqual(worker.decisions[0]);
+      expect(direct.effects).toEqual([]);
+      expect(worker.effects).toEqual([]);
+    });
+  }
+);

@@ -6,6 +6,7 @@ import {
   isQueuedSetupCommand,
   isQueuedMessageCleanupCommand,
   operationConfirmationCommand,
+  operationNeedsConfirmation,
   type DecodedQueuedAction,
 } from '@drasil/application';
 import type { BotApplication } from './createBotApplication';
@@ -46,6 +47,9 @@ export async function prepareQueuedRequest(
     !isQueuedReportCommand(command) &&
     !isQueuedSetupCommand(command) &&
     !isQueuedMessageCleanupCommand(command) &&
+    command.kind !== 'repair_active_case' &&
+    command.kind !== 'refresh_case_notification' &&
+    (!isQueuedOperationCommand(command) || operationNeedsConfirmation(command)) &&
     command.kind !== 'preview_account_quarantine' &&
     command.kind !== 'quarantine_compromised_account'
   ) {

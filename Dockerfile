@@ -36,6 +36,7 @@ RUN npm run build
 
 # Produce a production-only node_modules for runtime.
 RUN npm prune --omit=dev
+RUN node scripts/check-application-imports.mjs
 
 
 FROM base AS runtime

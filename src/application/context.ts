@@ -30,13 +30,28 @@ export function createCaseConfirmationStore(): {
     evidence?: ConfirmationBinding
   ): void;
 } {
-  const bindings = new Map<string, ConfirmationBinding>();
+  // Denied/failed executions may never consume a proof. Bound their lifetime and
+  // count independently of successful confirmation, without retaining timers.
+  const ttlMs = 10 * 60 * 1000;
+  const maxBindings = 1024;
+  const bindings = new Map<string, { binding: ConfirmationBinding; expiresAt: number }>();
+  const prune = (): void => {
+    for (const [id, entry] of bindings) {
+      if (entry.expiresAt <= Date.now()) bindings.delete(id);
+    }
+  };
   return {
     recordVerified(context, command, evidence): void {
       if (context.actor.kind !== 'user') throw new Error('A case confirmation needs a user actor.');
-      bindings.set(
-        context.requestId,
-        evidence ?? {
+      prune();
+      bindings.delete(context.requestId);
+      if (bindings.size >= maxBindings) {
+        const oldest = bindings.keys().next().value;
+        if (oldest !== undefined) bindings.delete(oldest);
+      }
+      bindings.set(context.requestId, {
+        expiresAt: Date.now() + ttlMs,
+        binding: evidence ?? {
           guildId: context.guildId,
           actorId: context.actor.userId,
           action: command.kind,
@@ -48,12 +63,13 @@ export function createCaseConfirmationStore(): {
                 : 'operationId' in command
                   ? command.operationId
                   : command.targetUserId,
-        }
-      );
+        },
+      });
     },
     confirmations: {
       async verify(context, command): Promise<boolean> {
-        const binding = bindings.get(context.requestId) ?? null;
+        prune();
+        const binding = bindings.get(context.requestId)?.binding ?? null;
         bindings.delete(context.requestId);
         return matchesConfirmation(context, command, binding);
       },

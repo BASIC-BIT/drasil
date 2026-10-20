@@ -217,18 +217,22 @@ test('a fresh disabled policy blocks a new request', async () => {
     code: 'policy_disabled',
   });
 });
-test('an authenticated bypass retains the existing disabled-mode behavior', async () => {
+test('an authenticated bypass delegates final eligibility to the transactional workflow', async () => {
   const { actions, deps } = setup();
   deps.settings.loadFresh = async (): Promise<{ enabled: boolean }> => ({ enabled: false });
-  expect(
-    await actions.execute(user, {
+  deps.workflows.bypass = jest.fn(async () => {
+    throw new Error('Challenge is not eligible');
+  });
+  await expect(
+    actions.execute(user, {
       kind: 'bypass_captcha_challenge',
       ...target,
       expectedChallengeId: 'challenge',
       expectedGeneration: 2,
       reason: 'Reviewed',
     })
-  ).toMatchObject({ kind: 'outcome', outcome: { bypassed: true } });
+  ).rejects.toThrow('Challenge is not eligible');
+  expect(deps.workflows.bypass).toHaveBeenCalledTimes(1);
 });
 test('an unconfirmed moderator command cannot mutate a challenge', async () => {
   const { actions, deps } = setup();

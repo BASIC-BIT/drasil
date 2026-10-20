@@ -48,7 +48,7 @@
     "format:check": "prettier --check \"**/*.{ts,js,json,md,mjs}\"",
     "check": "npm run lint:fix && npm run build && npm test",
     "check:full": "npm run format:check && npm run check && npm run test:integration",
-    "check:ci": "npm run format:check && npm run lint && npm run build && npm test && npm run application:lint && npm run application:typecheck && npm run application:test:coverage && npm run contracts:lint && npm run contracts:typecheck && npm run contracts:test:coverage && npm run web:lint && npm run web:typecheck && npm run web:test:coverage && npm run web:build && npm run web:storybook:build && npm run web:e2e && npm run web:e2e:visual && npm run web:storybook:visual && npm run test:integration && npm run db:check:rls",
+    "check:ci": "npm run format:check && npm run application:build && npm run application:lint && npm run application:typecheck && npm run application:test:coverage && npm run action:boundary && npm run lint && npm run build && npm test && npm run contracts:lint && npm run contracts:typecheck && npm run contracts:test:coverage && npm run web:lint && npm run web:typecheck && npm run web:test:coverage && npm run web:build && npm run web:storybook:build && npm run web:e2e && npm run web:e2e:visual && npm run web:storybook:visual && npm run test:integration && npm run db:check:rls",
     "prisma:generate": "node scripts/prisma-generate.js",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:migrate:dev": "prisma migrate dev",
@@ -72,7 +72,8 @@
     "pretest:coverage": "npm run application:build",
     "pretest:integration": "npm run application:build",
     "prebuild": "npm run application:build",
-    "prebuild:watch": "npm run application:build"
+    "prebuild:watch": "npm run application:build",
+    "action:boundary": "node --test scripts/check-action-boundary.test.mjs && node scripts/check-action-boundary.mjs"
   },
   "keywords": [
     "discord",

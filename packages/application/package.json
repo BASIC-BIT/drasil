@@ -19,11 +19,11 @@
     "./setup-settings": {
       "types": "./dist/setup/settings.d.ts",
       "require": "./dist/setup/settings.js",
-      "import": "./dist/setup/settings.js"
+      "import": "./dist/browser/settings.mjs"
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/build-browser.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint src --max-warnings=0",
     "test": "jest --config jest.config.cjs",

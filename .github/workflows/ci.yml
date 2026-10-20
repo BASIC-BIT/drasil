@@ -60,6 +60,10 @@ jobs:
           exit 1
       - name: Quality gate
         run: npm run check:ci
+      - name: Production application package smoke
+        run: |
+          docker build -t drasil-action-boundary:ci .
+          docker run --rm --entrypoint node drasil-action-boundary:ci scripts/check-application-imports.mjs
       - name: Upload Playwright artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v7.0.1
@@ -86,7 +90,7 @@ jobs:
           python-version: '3.11'
       - name: Install lizard
         run: python -m pip install "lizard==1.21.6"
-      - name: Run web code metrics
+      - name: Run production code metrics
         run: |
           export PATH="$HOME/go/bin:$PATH"
           bash scripts/check-metrics.sh

@@ -1,6 +1,7 @@
 import { deferConfigurationMutation, replyToConfiguration } from './configInteractionResponse';
 import {
   operationConfirmationCommand,
+  operationNeedsConfirmation,
   setupCommandSchema,
   type SetupCommand,
   type SettingsSection,
@@ -568,10 +569,12 @@ export class ConfigSubcommandHandler {
     const command = { kind };
     // Config subcommands are authenticated explicit execution intents, with a
     // fresh Administrator check inside the operation before touching the queue.
-    this.application.caseConfirmations.recordVerified(
-      context,
-      operationConfirmationCommand(context, command)
-    );
+    if (operationNeedsConfirmation(command)) {
+      this.application.caseConfirmations.recordVerified(
+        context,
+        operationConfirmationCommand(context, command)
+      );
+    }
     const outcome = requireOperationsOutcome(
       await this.application.operations.execute(context, command)
     );

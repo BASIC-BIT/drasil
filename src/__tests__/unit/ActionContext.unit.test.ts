@@ -70,3 +70,30 @@ it('loads fresh Discord member and role facts rather than cached interaction per
   expect(fetchMember).toHaveBeenCalledWith({ user: 'moderator-1', force: true });
   expect(fetchRoles).toHaveBeenCalledTimes(1);
 });
+
+it('expires abandoned confirmation evidence and bounds outstanding request storage', async () => {
+  const { createCaseConfirmationStore } = await import('../../application/context');
+  const store = createCaseConfirmationStore();
+  const now = jest.spyOn(Date, 'now').mockReturnValue(1_000);
+  const context = createDiscordActionContext({
+    guildId: 'guild',
+    userId: 'actor',
+    requestId: 'old',
+  });
+  const command = { kind: 'clear_moderation_queue', operationId: 'queue' };
+  try {
+    store.recordVerified(context, command);
+    now.mockReturnValue(601_001);
+    expect(await store.confirmations.verify(context, command)).toBe(false);
+    store.recordVerified(context, command);
+    for (let index = 0; index < 1024; index++) {
+      store.recordVerified({ ...context, requestId: `request-${index}` }, command);
+    }
+    expect(await store.confirmations.verify(context, command)).toBe(false);
+    const latest = { ...context, requestId: 'request-1023' };
+    expect(await store.confirmations.verify(latest, command)).toBe(true);
+    expect(await store.confirmations.verify(latest, command)).toBe(false);
+  } finally {
+    now.mockRestore();
+  }
+});
