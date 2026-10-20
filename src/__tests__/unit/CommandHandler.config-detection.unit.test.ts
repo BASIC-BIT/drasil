@@ -1,5 +1,4 @@
-import { MessageFlags } from 'discord.js';
-import { buildHandler } from './commandHandlerTestHarness';
+import { buildHandler, configurationResponseMocks } from './commandHandlerTestHarness';
 
 describe('CommandHandler detection config commands (unit)', () => {
   it('handles /config detection set-mode', async () => {
@@ -31,6 +30,7 @@ describe('CommandHandler detection config commands (unit)', () => {
         getString: jest.fn().mockReturnValue('notify_only'),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      ...configurationResponseMocks(),
     } as any;
 
     await handler.handleSlashCommand(interaction);
@@ -38,9 +38,8 @@ describe('CommandHandler detection config commands (unit)', () => {
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       detection_response_mode: 'notify_only',
     });
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('Updated automatic detection response policy'),
-      flags: MessageFlags.Ephemeral,
       allowedMentions: { parse: [] },
     });
   });
@@ -75,6 +74,7 @@ describe('CommandHandler detection config commands (unit)', () => {
         getString: jest.fn((name: string) => (name === 'event' ? 'message' : 'restrict')),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      ...configurationResponseMocks(),
     } as any;
 
     await handler.handleSlashCommand(interaction);
@@ -82,9 +82,8 @@ describe('CommandHandler detection config commands (unit)', () => {
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       message_detection_response_mode: 'restrict',
     });
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('Updated message detection response policy'),
-      flags: MessageFlags.Ephemeral,
       allowedMentions: { parse: [] },
     });
   });
@@ -119,6 +118,7 @@ describe('CommandHandler detection config commands (unit)', () => {
         getString: jest.fn().mockReturnValue('join'),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      ...configurationResponseMocks(),
     } as any;
 
     await handler.handleSlashCommand(interaction);
@@ -126,9 +126,8 @@ describe('CommandHandler detection config commands (unit)', () => {
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       join_detection_response_mode: null,
     });
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('Reset join detection response policy to default'),
-      flags: MessageFlags.Ephemeral,
       allowedMentions: { parse: [] },
     });
   });
@@ -162,6 +161,7 @@ describe('CommandHandler detection config commands (unit)', () => {
         getSubcommand: jest.fn().mockReturnValue('moderator-exemption-disable'),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      ...configurationResponseMocks(),
     } as any;
 
     await handler.handleSlashCommand(interaction);
@@ -169,9 +169,8 @@ describe('CommandHandler detection config commands (unit)', () => {
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       automatic_detection_exempt_moderators: false,
     });
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('Moderator/admin exemption: `disabled`'),
-      flags: MessageFlags.Ephemeral,
       allowedMentions: { parse: [] },
     });
   });
@@ -205,6 +204,7 @@ describe('CommandHandler detection config commands (unit)', () => {
         getSubcommand: jest.fn().mockReturnValue('ban-action-disable'),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      ...configurationResponseMocks(),
     } as any;
 
     await handler.handleSlashCommand(interaction);
@@ -212,9 +212,8 @@ describe('CommandHandler detection config commands (unit)', () => {
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       moderator_ban_action_enabled: false,
     });
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('Moderator ban action enabled: `no`'),
-      flags: MessageFlags.Ephemeral,
       allowedMentions: { parse: [] },
     });
   });
@@ -248,6 +247,7 @@ describe('CommandHandler detection config commands (unit)', () => {
         getSubcommand: jest.fn().mockReturnValue('ban-action-enable'),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      ...configurationResponseMocks(),
     } as any;
 
     await handler.handleSlashCommand(interaction);
@@ -255,9 +255,8 @@ describe('CommandHandler detection config commands (unit)', () => {
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       moderator_ban_action_enabled: true,
     });
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('Moderator ban action enabled: `yes`'),
-      flags: MessageFlags.Ephemeral,
       allowedMentions: { parse: [] },
     });
   });
@@ -386,6 +385,7 @@ describe('CommandHandler detection config commands (unit)', () => {
         getString: jest.fn().mockReturnValue(source),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      ...configurationResponseMocks(),
     } as any;
 
     await handler.handleSlashCommand(interaction);
@@ -393,9 +393,8 @@ describe('CommandHandler detection config commands (unit)', () => {
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       [key]: value,
     });
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining(responseText),
-      flags: MessageFlags.Ephemeral,
       allowedMentions: { parse: [] },
     });
   });
@@ -427,6 +426,7 @@ describe('CommandHandler detection config commands (unit)', () => {
         getSubcommand: jest.fn().mockReturnValue(subcommand),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      ...configurationResponseMocks(),
     } as any;
 
     await handler.handleSlashCommand(interaction);
@@ -434,9 +434,8 @@ describe('CommandHandler detection config commands (unit)', () => {
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       moderator_ban_action_requires_reason: value,
     });
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining(responseText),
-      flags: MessageFlags.Ephemeral,
       allowedMentions: { parse: [] },
     });
   });
@@ -466,6 +465,7 @@ describe('CommandHandler detection config commands (unit)', () => {
         getInteger: jest.fn().mockReturnValue(98),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      ...configurationResponseMocks(),
     } as any;
 
     await handler.handleSlashCommand(interaction);
@@ -473,9 +473,8 @@ describe('CommandHandler detection config commands (unit)', () => {
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       auto_kick_min_confidence_threshold: 98,
     });
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('Auto-kick threshold: `98%`'),
-      flags: MessageFlags.Ephemeral,
       allowedMentions: { parse: [] },
     });
   });
@@ -509,6 +508,7 @@ describe('CommandHandler detection config commands (unit)', () => {
         getSubcommand: jest.fn().mockReturnValue('moderator-exemption-enable'),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      ...configurationResponseMocks(),
     } as any;
 
     await handler.handleSlashCommand(interaction);
@@ -516,9 +516,8 @@ describe('CommandHandler detection config commands (unit)', () => {
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       automatic_detection_exempt_moderators: true,
     });
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('Moderator/admin exemption: `enabled`'),
-      flags: MessageFlags.Ephemeral,
       allowedMentions: { parse: [] },
     });
   });

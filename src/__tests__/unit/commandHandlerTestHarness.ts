@@ -283,3 +283,17 @@ export const buildHandler = (overrides: HandlerOverrides = {}) => {
     integrityAuditService: overrides.integrityAuditService,
   };
 };
+
+export function configurationResponseMocks(): {
+  deferred: boolean;
+  deferReply: jest.Mock;
+  editReply: jest.Mock;
+} {
+  return {
+    deferred: false,
+    deferReply: jest.fn(async function (this: { deferred: boolean }) {
+      this.deferred = true;
+    }),
+    editReply: jest.fn().mockResolvedValue(undefined),
+  };
+}

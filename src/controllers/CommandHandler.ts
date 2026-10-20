@@ -1,3 +1,4 @@
+import { deferConfigurationMutation, replyToConfiguration } from './configInteractionResponse';
 import { setupCommandSchema } from '@drasil/application';
 import { requireSetupOutcome } from '../application/adapters/setup';
 import { createDiscordActionContext } from '../application/context';
@@ -418,6 +419,7 @@ export class CommandHandler implements ICommandHandler {
     const value = interaction.options.getString('value', true);
 
     try {
+      await deferConfigurationMutation(interaction);
       const settingKeys = {
         case_role_id: 'caseRoleId',
         admin_channel_id: 'adminChannelId',
@@ -438,13 +440,13 @@ export class CommandHandler implements ICommandHandler {
         )
       );
 
-      await interaction.reply({
+      await replyToConfiguration(interaction, {
         content: `✅ Configuration updated successfully!\n\`${key}\` has been set to \`${value}\``,
         flags: MessageFlags.Ephemeral,
       });
     } catch (error) {
       console.error(`Failed to update configuration for guild ${guild.id}:`, error);
-      await interaction.reply({
+      await replyToConfiguration(interaction, {
         content: 'An error occurred while updating the configuration. Please try again later.',
         flags: MessageFlags.Ephemeral,
       });

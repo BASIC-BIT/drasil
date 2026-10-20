@@ -1,6 +1,6 @@
 import { ChannelType, type ChatInputCommandInteraction } from 'discord.js';
 import type { ServerSettings } from '../../repositories/types';
-import { buildHandler } from './commandHandlerTestHarness';
+import { buildHandler, configurationResponseMocks } from './commandHandlerTestHarness';
 
 const rows = [
   ['role-gate', 'enable', {}, { role_gate_enabled: true }],
@@ -49,8 +49,7 @@ test.each(rows)(
         getChannel: () => ({ id: 'channel', type: ChannelType.GuildText }),
       },
       reply: jest.fn(),
-      deferReply: jest.fn(),
-      editReply: jest.fn(),
+      ...configurationResponseMocks(),
     } as unknown as ChatInputCommandInteraction;
     await handler.handleSlashCommand(interaction);
     expect(updateServerSettings).toHaveBeenCalledWith('guild-1', patch);
@@ -80,10 +79,11 @@ test('fresh setup authority can reject a config change after the interaction gat
     },
     options: { getSubcommandGroup: () => 'role-gate', getSubcommand: () => 'enable' },
     reply: jest.fn(),
+    ...configurationResponseMocks(),
   } as unknown as ChatInputCommandInteraction;
   await handler.handleSlashCommand(interaction);
   expect(configService.updateServerSettings).not.toHaveBeenCalled();
-  expect(interaction.reply).toHaveBeenCalledWith(
+  expect(interaction.editReply).toHaveBeenCalledWith(
     expect.objectContaining({
       content: expect.stringContaining('current Administrator permission'),
     })
@@ -106,6 +106,7 @@ test('bare config set preserves its single column write without an empty setting
       getString: (name: string) => (name === 'key' ? 'admin_channel_id' : 'channel'),
     },
     reply: jest.fn(),
+    ...configurationResponseMocks(),
   } as unknown as ChatInputCommandInteraction;
   await handler.handleSlashCommand(interaction);
   expect(configService.updateServerConfig).toHaveBeenCalledTimes(1);

@@ -1,3 +1,4 @@
+import { deferConfigurationMutation, replyToConfiguration } from './configInteractionResponse';
 import {
   operationConfirmationCommand,
   setupCommandSchema,
@@ -146,6 +147,7 @@ export class ConfigSubcommandHandler {
     guildId: string,
     command: SetupCommand
   ): Promise<SetupOutcome> {
+    await deferConfigurationMutation(interaction);
     if (!this.application) throw new Error('Setup application is unavailable.');
     return requireSetupOutcome(
       await this.application.setup.execute(
@@ -373,7 +375,7 @@ export class ConfigSubcommandHandler {
             [ROLE_GATE_ENABLED_SETTING_KEY]: enabled,
           });
           const settings = getRoleGateSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               `${enabled ? 'Enabled' : 'Disabled'} role gate handling.\n\n` +
               this.formatRoleGateSettings(guildId, settings),
@@ -394,7 +396,7 @@ export class ConfigSubcommandHandler {
             [key]: role.id,
           });
           const settings = getRoleGateSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               `Updated ${subcommand === 'set-honeypot-role' ? 'honeypot' : 'member access'} role to <@&${role.id}>.\n\n` +
               this.formatRoleGateSettings(guildId, settings),
@@ -414,7 +416,7 @@ export class ConfigSubcommandHandler {
             [key]: null,
           });
           const settings = getRoleGateSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               `Cleared ${subcommand === 'clear-honeypot-role' ? 'honeypot' : 'member access'} role.\n\n` +
               this.formatRoleGateSettings(guildId, settings),
@@ -436,7 +438,7 @@ export class ConfigSubcommandHandler {
             [HONEYPOT_ROLE_RESPONSE_MODE_SETTING_KEY]: mode,
           });
           const settings = getRoleGateSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               'Updated honeypot role response mode.\n\n' +
               this.formatRoleGateSettings(guildId, settings),
@@ -447,7 +449,7 @@ export class ConfigSubcommandHandler {
         }
 
         default:
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content: 'Unsupported /config role-gate subcommand.',
             flags: MessageFlags.Ephemeral,
           });
@@ -458,11 +460,7 @@ export class ConfigSubcommandHandler {
         content: `Failed to process role gate settings: ${errorMessage}`,
         flags: MessageFlags.Ephemeral,
       } as const;
-      if (interaction.replied || interaction.deferred) {
-        await interaction.followUp(errorResponse);
-      } else {
-        await interaction.reply(errorResponse);
-      }
+      await replyToConfiguration(interaction, errorResponse);
     }
   }
 
@@ -490,7 +488,7 @@ export class ConfigSubcommandHandler {
         case 'set-mode': {
           const mode = interaction.options.getString('mode', true);
           if (!isRoleQuarantineMode(mode)) {
-            await interaction.reply({
+            await replyToConfiguration(interaction, {
               content: `Unsupported role quarantine mode. Choose one of: ${ROLE_QUARANTINE_MODES.map((value) => `\`${value}\``).join(', ')}`,
               flags: MessageFlags.Ephemeral,
             });
@@ -501,7 +499,7 @@ export class ConfigSubcommandHandler {
             [ROLE_QUARANTINE_MODE_SETTING_KEY]: mode,
           });
           const settings = getRoleQuarantineSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               'Updated role quarantine mode.\n\n' +
               this.formatRoleQuarantineSettings(guildId, settings),
@@ -530,7 +528,7 @@ export class ConfigSubcommandHandler {
             [ROLE_QUARANTINE_EXEMPT_ROLE_IDS_SETTING_KEY]: [...existingIds],
           });
           const settings = getRoleQuarantineSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               `Role <@&${role.id}> ${subcommand === 'exempt-add' ? 'added to' : 'removed from'} the role quarantine exemption list.\n\n` +
               this.formatRoleQuarantineSettings(guildId, settings),
@@ -541,7 +539,7 @@ export class ConfigSubcommandHandler {
         }
 
         default:
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content: 'Unsupported /config role-quarantine subcommand.',
             flags: MessageFlags.Ephemeral,
           });
@@ -552,11 +550,7 @@ export class ConfigSubcommandHandler {
         content: `Failed to process role quarantine settings: ${errorMessage}`,
         flags: MessageFlags.Ephemeral,
       } as const;
-      if (interaction.replied || interaction.deferred) {
-        await interaction.followUp(errorResponse);
-      } else {
-        await interaction.reply(errorResponse);
-      }
+      await replyToConfiguration(interaction, errorResponse);
     }
   }
 
@@ -643,7 +637,7 @@ export class ConfigSubcommandHandler {
         }
 
         default:
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content: 'Unsupported /config case-queue subcommand.',
             flags: MessageFlags.Ephemeral,
           });
@@ -657,7 +651,7 @@ export class ConfigSubcommandHandler {
         return;
       }
 
-      await interaction.reply({
+      await replyToConfiguration(interaction, {
         content: 'Failed to update live moderation queue settings. Please try again later.',
         flags: MessageFlags.Ephemeral,
       });
@@ -770,7 +764,7 @@ export class ConfigSubcommandHandler {
           const role = interaction.options.getRole('role', true);
           const serverConfig = await this.configService.getServerConfig(guildId);
           if (role.id === serverConfig.case_role_id) {
-            await interaction.reply({
+            await replyToConfiguration(interaction, {
               content:
                 'Manual intake needs a separate trigger role. Do not use the configured case role as the intake trigger.',
               flags: MessageFlags.Ephemeral,
@@ -784,7 +778,7 @@ export class ConfigSubcommandHandler {
             [MANUAL_INTAKE_ENABLED_SETTING_KEY]: true,
           });
           const settings = getManualIntakeSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               `Set manual intake trigger role to <@&${role.id}> and enabled manual intake.\n\n` +
               this.formatManualIntakeSettings(guildId, settings),
@@ -800,7 +794,7 @@ export class ConfigSubcommandHandler {
             [MANUAL_INTAKE_ENABLED_SETTING_KEY]: false,
           });
           const settings = getManualIntakeSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               'Cleared the manual intake trigger role and disabled manual intake.\n\n' +
               this.formatManualIntakeSettings(guildId, settings),
@@ -816,7 +810,7 @@ export class ConfigSubcommandHandler {
           const serverConfig = await this.configService.getServerConfig(guildId);
           const currentSettings = getManualIntakeSettings(serverConfig.settings);
           if (enabled && !currentSettings.roleId) {
-            await interaction.reply({
+            await replyToConfiguration(interaction, {
               content: 'Set a manual intake trigger role before enabling manual intake.',
               flags: MessageFlags.Ephemeral,
             });
@@ -827,7 +821,7 @@ export class ConfigSubcommandHandler {
             [MANUAL_INTAKE_ENABLED_SETTING_KEY]: enabled,
           });
           const settings = getManualIntakeSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               `${enabled ? 'Enabled' : 'Disabled'} manual intake.\n\n` +
               this.formatManualIntakeSettings(guildId, settings),
@@ -843,7 +837,7 @@ export class ConfigSubcommandHandler {
             [MANUAL_INTAKE_GRACE_PERIOD_SECONDS_SETTING_KEY]: seconds,
           });
           const settings = getManualIntakeSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               'Updated manual intake grace period.\n\n' +
               this.formatManualIntakeSettings(guildId, settings),
@@ -854,7 +848,7 @@ export class ConfigSubcommandHandler {
         }
 
         default:
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content: 'Unsupported /config manual-intake subcommand.',
             flags: MessageFlags.Ephemeral,
           });
@@ -865,11 +859,7 @@ export class ConfigSubcommandHandler {
         content: `Failed to process manual intake settings: ${errorMessage}`,
         flags: MessageFlags.Ephemeral,
       } as const;
-      if (interaction.replied || interaction.deferred) {
-        await interaction.followUp(errorResponse);
-      } else {
-        await interaction.reply(errorResponse);
-      }
+      await replyToConfiguration(interaction, errorResponse);
     }
   }
 
@@ -897,7 +887,7 @@ export class ConfigSubcommandHandler {
         case 'set-mode': {
           const mode = interaction.options.getString('mode', true);
           if (!isDetectionResponseMode(mode)) {
-            await interaction.reply({
+            await replyToConfiguration(interaction, {
               content: `Unsupported detection response mode. Choose one of: ${DETECTION_RESPONSE_MODES.map((value) => `\`${value}\``).join(', ')}`,
               flags: MessageFlags.Ephemeral,
             });
@@ -908,7 +898,7 @@ export class ConfigSubcommandHandler {
             [DETECTION_RESPONSE_MODE_SETTING_KEY]: mode,
           });
           const settings = getDetectionResponseSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               'Updated automatic detection response policy.\n\n' +
               this.formatDetectionResponseSettings(guildId, settings),
@@ -925,7 +915,7 @@ export class ConfigSubcommandHandler {
             throw new Error('Invalid event. Use message or join.');
           }
           if (!isDetectionResponseMode(mode)) {
-            await interaction.reply({
+            await replyToConfiguration(interaction, {
               content: `Unsupported detection response mode. Choose one of: ${DETECTION_RESPONSE_MODES.map((value) => `\`${value}\``).join(', ')}`,
               flags: MessageFlags.Ephemeral,
             });
@@ -938,7 +928,7 @@ export class ConfigSubcommandHandler {
               : JOIN_DETECTION_RESPONSE_MODE_SETTING_KEY]: mode,
           });
           const settings = getDetectionResponseSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               `Updated ${event} detection response policy.\n\n` +
               this.formatDetectionResponseSettings(guildId, settings),
@@ -960,7 +950,7 @@ export class ConfigSubcommandHandler {
               : JOIN_DETECTION_RESPONSE_MODE_SETTING_KEY]: null,
           });
           const settings = getDetectionResponseSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               `Reset ${event} detection response policy to default.\n\n` +
               this.formatDetectionResponseSettings(guildId, settings),
@@ -976,7 +966,7 @@ export class ConfigSubcommandHandler {
             [OBSERVED_DETECTION_NOTIFICATION_CHANNEL_ID_SETTING_KEY]: channel.id,
           });
           const settings = getDetectionResponseSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               'Updated observe-only notification channel.\n\n' +
               this.formatDetectionResponseSettings(guildId, settings),
@@ -991,7 +981,7 @@ export class ConfigSubcommandHandler {
             [OBSERVED_DETECTION_NOTIFICATION_CHANNEL_ID_SETTING_KEY]: null,
           });
           const settings = getDetectionResponseSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               'Reset observe-only notifications to use the admin channel.\n\n' +
               this.formatDetectionResponseSettings(guildId, settings),
@@ -1007,7 +997,7 @@ export class ConfigSubcommandHandler {
             [OBSERVED_DETECTION_MIN_CONFIDENCE_THRESHOLD_SETTING_KEY]: value,
           });
           const settings = getDetectionResponseSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               'Updated observe-only notification threshold.\n\n' +
               this.formatDetectionResponseSettings(guildId, settings),
@@ -1023,7 +1013,7 @@ export class ConfigSubcommandHandler {
             [OBSERVED_DETECTION_NOTIFICATION_WINDOW_MINUTES_SETTING_KEY]: minutes,
           });
           const settings = getDetectionResponseSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               'Updated observe-only notification window.\n\n' +
               this.formatDetectionResponseSettings(guildId, settings),
@@ -1040,7 +1030,7 @@ export class ConfigSubcommandHandler {
             [AUTOMATIC_DETECTION_EXEMPT_MODERATORS_SETTING_KEY]: enabled,
           });
           const settings = getDetectionResponseSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               'Updated automatic detection moderator/admin exemption.\n\n' +
               this.formatDetectionResponseSettings(guildId, settings),
@@ -1057,7 +1047,7 @@ export class ConfigSubcommandHandler {
             [ADMIN_CASE_OPEN_REQUIRES_REASON_SETTING_KEY]: required,
           });
           const settings = getDetectionResponseSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               'Updated staff case-open reason policy.\n\n' +
               this.formatDetectionResponseSettings(guildId, settings),
@@ -1074,7 +1064,7 @@ export class ConfigSubcommandHandler {
             [MODERATOR_BAN_ACTION_REQUIRES_REASON_SETTING_KEY]: required,
           });
           const settings = getDetectionResponseSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               'Updated staff ban reason policy.\n\n' +
               this.formatDetectionResponseSettings(guildId, settings),
@@ -1091,7 +1081,7 @@ export class ConfigSubcommandHandler {
             [MODERATOR_KICK_ACTION_REQUIRES_REASON_SETTING_KEY]: required,
           });
           const settings = getDetectionResponseSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               'Updated staff kick reason policy.\n\n' +
               this.formatDetectionResponseSettings(guildId, settings),
@@ -1108,7 +1098,7 @@ export class ConfigSubcommandHandler {
             [MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY]: enabled,
           });
           const settings = getDetectionResponseSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               'Updated moderator ban action policy.\n\n' +
               this.formatDetectionResponseSettings(guildId, settings),
@@ -1125,7 +1115,7 @@ export class ConfigSubcommandHandler {
             [MODERATOR_KICK_ACTION_ENABLED_SETTING_KEY]: enabled,
           });
           const settings = getDetectionResponseSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               'Updated moderator kick action policy.\n\n' +
               this.formatDetectionResponseSettings(guildId, settings),
@@ -1142,7 +1132,7 @@ export class ConfigSubcommandHandler {
             [OBSERVED_ACTION_KICK_ENABLED_SETTING_KEY]: enabled,
           });
           const settings = getDetectionResponseSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               'Updated observed alert kick action policy.\n\n' +
               this.formatDetectionResponseSettings(guildId, settings),
@@ -1173,7 +1163,7 @@ export class ConfigSubcommandHandler {
             [sourceSettingKey]: enabled,
           });
           const settings = getDetectionResponseSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               `Updated ${source.replace('_', '-')} auto-kick policy.\n\n` +
               this.formatDetectionResponseSettings(guildId, settings),
@@ -1189,7 +1179,7 @@ export class ConfigSubcommandHandler {
             [AUTO_KICK_MIN_CONFIDENCE_THRESHOLD_SETTING_KEY]: value,
           });
           const settings = getDetectionResponseSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               'Updated auto-kick confidence threshold.\n\n' +
               this.formatDetectionResponseSettings(guildId, settings),
@@ -1200,7 +1190,7 @@ export class ConfigSubcommandHandler {
         }
 
         default:
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content: 'Unsupported detection subcommand.',
             flags: MessageFlags.Ephemeral,
           });
@@ -1210,7 +1200,7 @@ export class ConfigSubcommandHandler {
         error instanceof Error
           ? error.message
           : 'An error occurred while processing detection settings.';
-      await interaction.reply({
+      await replyToConfiguration(interaction, {
         content: `Failed to process detection settings: ${errorMessage}`,
         flags: MessageFlags.Ephemeral,
       });
@@ -1254,7 +1244,7 @@ export class ConfigSubcommandHandler {
             [CASE_RESPONDER_ROLE_IDS_SETTING_KEY]: nextRoleIds,
           });
           const settings = getCaseResponderSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               'Updated case responder roles.\n\n' +
               this.formatCaseResponderSettings(guildId, settings),
@@ -1276,7 +1266,7 @@ export class ConfigSubcommandHandler {
             [CASE_RESPONDER_ROUTING_MODE_SETTING_KEY]: mode,
           });
           const settings = getCaseResponderSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               'Updated case responder routing.\n\n' +
               this.formatCaseResponderSettings(guildId, settings),
@@ -1292,7 +1282,7 @@ export class ConfigSubcommandHandler {
             [CASE_RESPONDER_THREAD_MEMBER_CAP_SETTING_KEY]: value,
           });
           const settings = getCaseResponderSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               'Updated case responder thread member cap.\n\n' +
               this.formatCaseResponderSettings(guildId, settings),
@@ -1303,7 +1293,7 @@ export class ConfigSubcommandHandler {
         }
 
         default:
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content: 'Unsupported case-staff subcommand.',
             flags: MessageFlags.Ephemeral,
           });
@@ -1313,7 +1303,7 @@ export class ConfigSubcommandHandler {
         error instanceof Error
           ? error.message
           : 'An error occurred while processing case staff settings.';
-      await interaction.reply({
+      await replyToConfiguration(interaction, {
         content: `Failed to process case staff settings: ${errorMessage}`,
         flags: MessageFlags.Ephemeral,
       });
@@ -1347,7 +1337,7 @@ export class ConfigSubcommandHandler {
             [CASE_REVIEW_REMINDERS_ENABLED_SETTING_KEY]: enabled,
           });
           const settings = getCaseReviewReminderSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               `${enabled ? 'Enabled' : 'Disabled'} stale case review reminders.\n\n` +
               this.formatCaseReviewReminderSettings(settings),
@@ -1362,7 +1352,7 @@ export class ConfigSubcommandHandler {
             [CASE_REVIEW_REMINDER_STALE_HOURS_SETTING_KEY]: hours,
           });
           const settings = getCaseReviewReminderSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               'Updated stale case reminder threshold.\n\n' +
               this.formatCaseReviewReminderSettings(settings),
@@ -1377,7 +1367,7 @@ export class ConfigSubcommandHandler {
             [CASE_REVIEW_REMINDER_REPEAT_HOURS_SETTING_KEY]: hours,
           });
           const settings = getCaseReviewReminderSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               'Updated shared admin reminder repeat interval.\n\n' +
               this.formatCaseReviewReminderSettings(settings),
@@ -1392,7 +1382,7 @@ export class ConfigSubcommandHandler {
             [CASE_REVIEW_VERY_STALE_DAYS_SETTING_KEY]: days,
           });
           const settings = getCaseReviewReminderSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               'Updated very stale case threshold.\n\n' +
               this.formatCaseReviewReminderSettings(settings),
@@ -1402,7 +1392,7 @@ export class ConfigSubcommandHandler {
         }
 
         default:
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content: 'Unsupported case-review subcommand.',
             flags: MessageFlags.Ephemeral,
           });
@@ -1412,7 +1402,7 @@ export class ConfigSubcommandHandler {
         error instanceof Error
           ? error.message
           : 'An error occurred while processing case review settings.';
-      await interaction.reply({
+      await replyToConfiguration(interaction, {
         content: `Failed to process case review settings: ${errorMessage}`,
         flags: MessageFlags.Ephemeral,
       });
@@ -1466,7 +1456,7 @@ export class ConfigSubcommandHandler {
             [USER_REPORT_REASON_REQUIRED_SETTING_KEY]: required,
           });
           const settings = getUserReportSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               'Updated user report settings.\n\n' +
               this.formatUserReportSettings(guildId, settings),
@@ -1486,7 +1476,7 @@ export class ConfigSubcommandHandler {
             [USER_REPORT_EXTERNAL_RESPONSE_MODE_SETTING_KEY]: mode,
           });
           const settings = getUserReportSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               'Updated user report settings.\n\n' +
               this.formatUserReportSettings(guildId, settings),
@@ -1506,7 +1496,7 @@ export class ConfigSubcommandHandler {
             [REPORT_INTAKE_CONFIRMED_RESPONSE_MODE_SETTING_KEY]: mode,
           });
           const settings = getReportIntakeSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               'Updated report intake response settings.\n\n' +
               this.formatReportIntakeSettings(settings),
@@ -1532,7 +1522,7 @@ export class ConfigSubcommandHandler {
             [REPORT_AI_TRIAGE_ENABLED_SETTING_KEY]: enabled,
           });
           const settings = getReportAiSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               `${enabled ? 'Enabled' : 'Disabled'} AI report triage.\n\n` +
               this.formatReportAiSettings(settings),
@@ -1548,7 +1538,7 @@ export class ConfigSubcommandHandler {
             [REPORT_AI_ANALYZE_TEXT_SETTING_KEY]: enabled,
           });
           const settings = getReportAiSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               `${enabled ? 'Enabled' : 'Disabled'} AI report text analysis.\n\n` +
               this.formatReportAiSettings(settings),
@@ -1564,7 +1554,7 @@ export class ConfigSubcommandHandler {
             [REPORT_AI_ANALYZE_IMAGES_SETTING_KEY]: enabled,
           });
           const settings = getReportAiSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               `${enabled ? 'Enabled' : 'Disabled'} AI report image analysis.\n\n` +
               this.formatReportAiSettings(settings),
@@ -1584,7 +1574,7 @@ export class ConfigSubcommandHandler {
             [REPORT_AI_MAX_ACTION_SETTING_KEY]: action,
           });
           const settings = getReportAiSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               'Updated AI report triage max action.\n\n' + this.formatReportAiSettings(settings),
             flags: MessageFlags.Ephemeral,
@@ -1598,7 +1588,7 @@ export class ConfigSubcommandHandler {
             [REPORT_AI_MAX_IMAGES_SETTING_KEY]: value,
           });
           const settings = getReportAiSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               'Updated AI report triage max images.\n\n' + this.formatReportAiSettings(settings),
             flags: MessageFlags.Ephemeral,
@@ -1612,7 +1602,7 @@ export class ConfigSubcommandHandler {
             [REPORT_AI_MAX_IMAGE_BYTES_SETTING_KEY]: value * 1024 * 1024,
           });
           const settings = getReportAiSettings(updated.settings);
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               'Updated AI report triage max image size.\n\n' +
               this.formatReportAiSettings(settings),
@@ -1622,7 +1612,7 @@ export class ConfigSubcommandHandler {
         }
 
         default:
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content: 'Unsupported report subcommand.',
             flags: MessageFlags.Ephemeral,
           });
@@ -1632,7 +1622,7 @@ export class ConfigSubcommandHandler {
         error instanceof Error
           ? error.message
           : 'An error occurred while processing report settings.';
-      await interaction.reply({
+      await replyToConfiguration(interaction, {
         content: `Failed to process report settings: ${errorMessage}`,
         flags: MessageFlags.Ephemeral,
       });
@@ -1687,7 +1677,7 @@ export class ConfigSubcommandHandler {
             );
           }
 
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               'Updated product analytics sharing settings.\n\n' +
               this.formatAnalyticsSettings(guildId, settings),
@@ -1698,7 +1688,7 @@ export class ConfigSubcommandHandler {
         }
 
         default:
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content: 'Unsupported analytics subcommand.',
             flags: MessageFlags.Ephemeral,
           });
@@ -1714,11 +1704,7 @@ export class ConfigSubcommandHandler {
       } as const;
 
       try {
-        if (interaction.replied || interaction.deferred) {
-          await interaction.followUp(errorResponse);
-        } else {
-          await interaction.reply(errorResponse);
-        }
+        await replyToConfiguration(interaction, errorResponse);
       } catch (replyError) {
         console.warn('Failed to send analytics settings error response:', replyError);
       }
@@ -1755,7 +1741,7 @@ export class ConfigSubcommandHandler {
           const template = decodeVerificationPromptTemplateInput(rawTemplate);
 
           if (!template) {
-            await interaction.reply({
+            await replyToConfiguration(interaction, {
               content: 'Template cannot be empty.',
               flags: MessageFlags.Ephemeral,
             });
@@ -1766,7 +1752,7 @@ export class ConfigSubcommandHandler {
             verification_prompt_template: template,
           });
 
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               '✅ Updated verification prompt template. ' +
               'Use `{user_mention}` and `{server_name}` placeholders as needed. ' +
@@ -1784,7 +1770,7 @@ export class ConfigSubcommandHandler {
             reset: 'prompt',
           });
 
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               '✅ Reset verification prompt template to default. ' +
               'Run `/config verification prompt-view` to preview it.',
@@ -1835,7 +1821,7 @@ export class ConfigSubcommandHandler {
           }
 
           if (Object.keys(updates).length === 0) {
-            await interaction.reply({
+            await replyToConfiguration(interaction, {
               content: 'Provide at least one server context field to update.',
               flags: MessageFlags.Ephemeral,
             });
@@ -1845,7 +1831,7 @@ export class ConfigSubcommandHandler {
           const updated = await this.updateSettings(interaction, guildId, 'verification', updates);
           const contextSettings = getServerContextSettings(updated.settings);
 
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               '✅ Updated AI server context.\n\n' +
               `${this.formatServerContextPreview(guildId, contextSettings)}`,
@@ -1863,7 +1849,7 @@ export class ConfigSubcommandHandler {
             reset: 'context',
           });
 
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content: '✅ Reset AI server context to defaults.',
             flags: MessageFlags.Ephemeral,
           });
@@ -1889,7 +1875,7 @@ export class ConfigSubcommandHandler {
           });
           const analysisSettings = getVerificationThreadAnalysisSettings(updated.settings);
 
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               '✅ Enabled verification reply AI analysis.\n\n' +
               `${this.formatVerificationAnalysisSettings(analysisSettings)}`,
@@ -1904,7 +1890,7 @@ export class ConfigSubcommandHandler {
           });
           const analysisSettings = getVerificationThreadAnalysisSettings(updated.settings);
 
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               '✅ Disabled verification reply AI analysis.\n\n' +
               `${this.formatVerificationAnalysisSettings(analysisSettings)}`,
@@ -1920,7 +1906,7 @@ export class ConfigSubcommandHandler {
           });
           const analysisSettings = getVerificationThreadAnalysisSettings(updated.settings);
 
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               '✅ Updated verification reply AI analysis message limit.\n\n' +
               `${this.formatVerificationAnalysisSettings(analysisSettings)}`,
@@ -1941,7 +1927,7 @@ export class ConfigSubcommandHandler {
           });
           const analysisSettings = getVerificationThreadAnalysisSettings(updated.settings);
 
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content:
               '✅ Updated verification reply AI max action.\n\n' +
               `${this.formatVerificationAnalysisSettings(analysisSettings)}`,
@@ -1951,7 +1937,7 @@ export class ConfigSubcommandHandler {
         }
 
         default:
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content: 'Unsupported verification subcommand.',
             flags: MessageFlags.Ephemeral,
           });
@@ -1961,7 +1947,7 @@ export class ConfigSubcommandHandler {
         error instanceof Error
           ? error.message
           : 'An error occurred while processing verification settings.';
-      await interaction.reply({
+      await replyToConfiguration(interaction, {
         content: `Failed to process verification settings: ${errorMessage}`,
         flags: MessageFlags.Ephemeral,
       });
@@ -1990,7 +1976,7 @@ export class ConfigSubcommandHandler {
           const settings = await this.updateHeuristics(interaction, guildId, {
             messageThreshold: value,
           });
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content: `✅ Updated heuristic threshold.\n${this.formatHeuristicSettings(settings)}`,
             flags: MessageFlags.Ephemeral,
           });
@@ -2002,7 +1988,7 @@ export class ConfigSubcommandHandler {
           const settings = await this.updateHeuristics(interaction, guildId, {
             timeframeSeconds: value,
           });
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content: `✅ Updated heuristic timeframe.\n${this.formatHeuristicSettings(settings)}`,
             flags: MessageFlags.Ephemeral,
           });
@@ -2023,7 +2009,7 @@ export class ConfigSubcommandHandler {
         case 'keywords-add': {
           const keyword = interaction.options.getString('keyword', true).trim();
           if (!keyword) {
-            await interaction.reply({
+            await replyToConfiguration(interaction, {
               content: 'Keyword cannot be empty.',
               flags: MessageFlags.Ephemeral,
             });
@@ -2034,7 +2020,7 @@ export class ConfigSubcommandHandler {
           const settings = await this.updateHeuristics(interaction, guildId, {
             suspiciousKeywords: [...current.suspiciousKeywords, keyword],
           });
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content: `✅ Added suspicious keyword.\n${this.formatHeuristicSettings(settings)}`,
             flags: MessageFlags.Ephemeral,
           });
@@ -2044,7 +2030,7 @@ export class ConfigSubcommandHandler {
         case 'keywords-remove': {
           const keyword = interaction.options.getString('keyword', true).trim().toLowerCase();
           if (!keyword) {
-            await interaction.reply({
+            await replyToConfiguration(interaction, {
               content: 'Keyword cannot be empty.',
               flags: MessageFlags.Ephemeral,
             });
@@ -2055,7 +2041,7 @@ export class ConfigSubcommandHandler {
           const remaining = current.suspiciousKeywords.filter((existing) => existing !== keyword);
 
           if (remaining.length === current.suspiciousKeywords.length) {
-            await interaction.reply({
+            await replyToConfiguration(interaction, {
               content: `Keyword \`${keyword}\` is not in the configured list.`,
               flags: MessageFlags.Ephemeral,
             });
@@ -2065,7 +2051,7 @@ export class ConfigSubcommandHandler {
           const settings = await this.updateHeuristics(interaction, guildId, {
             suspiciousKeywords: remaining,
           });
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content: `✅ Removed suspicious keyword.\n${this.formatHeuristicSettings(settings)}`,
             flags: MessageFlags.Ephemeral,
           });
@@ -2074,7 +2060,7 @@ export class ConfigSubcommandHandler {
 
         case 'keywords-reset': {
           const settings = await this.resetHeuristics(interaction, guildId, 'keywords');
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content: `✅ Reset suspicious keywords to defaults.\n${this.formatHeuristicSettings(settings)}`,
             flags: MessageFlags.Ephemeral,
           });
@@ -2083,7 +2069,7 @@ export class ConfigSubcommandHandler {
 
         case 'reset': {
           const settings = await this.resetHeuristics(interaction, guildId, 'all');
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content: `✅ Reset all heuristic settings to defaults.\n${this.formatHeuristicSettings(settings)}`,
             flags: MessageFlags.Ephemeral,
           });
@@ -2091,7 +2077,7 @@ export class ConfigSubcommandHandler {
         }
 
         default:
-          await interaction.reply({
+          await replyToConfiguration(interaction, {
             content: 'Unsupported heuristic subcommand.',
             flags: MessageFlags.Ephemeral,
           });
@@ -2101,7 +2087,7 @@ export class ConfigSubcommandHandler {
         error instanceof Error
           ? error.message
           : 'An error occurred while updating heuristic settings.';
-      await interaction.reply({
+      await replyToConfiguration(interaction, {
         content: `Failed to update heuristic settings: ${errorMessage}`,
         flags: MessageFlags.Ephemeral,
       });
