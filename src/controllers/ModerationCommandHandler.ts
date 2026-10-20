@@ -25,7 +25,6 @@ import {
   IntegrityAuditReport,
 } from '../services/IntegrityAuditService';
 import { ISecurityActionService } from '../services/SecurityActionService';
-import { IUserModerationService } from '../services/UserModerationService';
 import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
 import {
   buildModerationActionReasonModalCustomId,
@@ -47,7 +46,6 @@ const AUDIT_INTEGRITY_RESPONSE_MAX_LENGTH = 1900;
 export class ModerationCommandHandler {
   public constructor(
     private readonly configService: IConfigService,
-    private readonly userModerationService: IUserModerationService,
     private readonly securityActionService: ISecurityActionService,
     private readonly replyGuildInstallRequired: ReplyGuildInstallRequired,
     private readonly integrityAuditService?: IIntegrityAuditService,
@@ -159,28 +157,34 @@ export class ModerationCommandHandler {
       return;
     }
 
-    const reason = providedReason ?? 'No reason provided';
     const member = await guild.members.fetch(targetUser.id).catch(() => null);
 
     await requestSlashCommandConfirmation(interaction, {
+      confirmation: { action: 'ban_user', targetId: targetUser.id },
       message: member
         ? `Ban ${targetUser.tag} from this server?`
         : `Ban ${targetUser.tag} from this server by ID?`,
       confirmLabel: member ? 'Ban User' : 'Ban by ID',
       confirmStyle: ButtonStyle.Danger,
-      execute: async (buttonInteraction) => {
+      execute: async (buttonInteraction, evidence) => {
         await buttonInteraction.update({ content: `Banning ${targetUser.tag}...`, components: [] });
         try {
-          if (member) {
-            await this.userModerationService.banUser(member, reason, interaction.user);
-          } else {
-            await this.userModerationService.banUserById(
-              guild,
-              targetUser.id,
-              reason,
-              interaction.user
-            );
-          }
+          if (!this.application) throw new Error('Case application is unavailable.');
+          const context = createDiscordActionContext({
+            guildId: guild.id,
+            userId: interaction.user.id,
+            requestId: buttonInteraction.id,
+          });
+          const command = {
+            kind: 'ban_user',
+            intent: 'slash_command',
+            targetUserId: targetUser.id,
+            reason: providedReason ?? null,
+            selectedMessage: null,
+          } as const;
+          if (!evidence) throw new Error('Confirmation is unavailable.');
+          this.application.caseConfirmations.recordVerified(context, command, evidence);
+          requireCaseOutcome(await this.application.cases.execute(context, command));
           await buttonInteraction.editReply({ content: `User ${targetUser.tag} has been banned.` });
         } catch (error) {
           console.error('Failed to ban user via command:', error);

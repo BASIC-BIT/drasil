@@ -8,6 +8,23 @@ export const selectedMessageSchema = z.object({ channelId: id, messageId: id }).
 export const caseCommandSchema = z.discriminatedUnion('kind', [
   z
     .object({
+      kind: z.literal('ban_user'),
+      ...target,
+      reason,
+      intent: z.enum(['slash_command', 'native_action']).default('native_action'),
+      selectedMessage: selectedMessageSchema.nullable().default(null),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('kick_user'),
+      ...target,
+      reason,
+      selectedMessage: selectedMessageSchema.nullable().default(null),
+    })
+    .strict(),
+  z
+    .object({
       kind: z.literal('open_case_from_observed_detection'),
       ...target,
       detectionEventId: id,

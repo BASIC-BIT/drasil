@@ -1,5 +1,5 @@
 import type { BotApplication } from './createBotApplication';
-import type { CaseCommand, DecodedQueuedAction } from '@drasil/application';
+import type { CaseCommand, CaseOutcome, DecodedQueuedAction } from '@drasil/application';
 import { requireCaseOutcome } from './adapters/cases';
 
 type CaseReceipt = { readonly target_user_id: string; readonly verification_event_id: string };
@@ -85,48 +85,71 @@ export async function dispatchQueuedAction(
     }
     case 'manual_flag_user':
       return { ...target, action_type: outcome.kind, flagged: outcome.succeeded };
+    case 'ban_user':
+    case 'kick_user':
+      throw new Error('Ordinary staff actions execute directly.');
     default: {
-      const bound = { ...target, verification_event_id: boundCaseId(command) };
-      switch (outcome.kind) {
-        case 'verify_case_user':
-          return { ...bound, action_type: outcome.kind, verified: outcome.succeeded };
-        case 'close_case_no_action':
-          return { ...bound, action_type: outcome.kind, closed_count: outcome.count };
-        case 'kick_case_user':
-          return { ...bound, action_type: outcome.kind, kicked: outcome.succeeded };
-        case 'ban_case_user':
-        case 'ban_case_user_by_id':
-          return { ...bound, action_type: outcome.kind, banned: outcome.succeeded };
-        case 'repair_active_case':
-          return {
-            ...bound,
-            action_type: outcome.kind,
-            message: outcome.result.message,
-            repaired: outcome.result.repaired,
-            thread_created: outcome.result.threadCreated,
-          };
-        case 'reopen_case':
-          return { ...bound, action_type: outcome.kind, reopened: outcome.succeeded };
-        case 'refresh_case_notification':
-          return {
-            ...bound,
-            action_type: outcome.kind,
-            message: outcome.result.message,
-            refreshed: outcome.result.refreshed,
-            notification_channel_id: outcome.result.notificationChannelId ?? null,
-            notification_message_id: outcome.result.notificationMessageId ?? null,
-            status: outcome.result.status ?? null,
-          };
-        case 'sync_existing_ban':
-          return { ...bound, action_type: outcome.kind, synced_count: outcome.count };
-        default: {
-          const exhaustive: never = outcome;
-          return exhaustive;
-        }
-      }
+      return projectBoundReceipt(command, outcome);
     }
   }
 }
+function projectBoundReceipt(
+  command: CaseCommand,
+  outcome: Exclude<
+    CaseOutcome,
+    {
+      kind:
+        | 'open_case_from_observed_detection'
+        | 'open_admin_case'
+        | 'manual_flag_user'
+        | 'ban_user'
+        | 'kick_user';
+    }
+  >
+): QueuedActionOutcome {
+  const bound = {
+    target_user_id: command.targetUserId,
+    verification_event_id: boundCaseId(command),
+  };
+  switch (outcome.kind) {
+    case 'verify_case_user':
+      return { ...bound, action_type: outcome.kind, verified: outcome.succeeded };
+    case 'close_case_no_action':
+      return { ...bound, action_type: outcome.kind, closed_count: outcome.count };
+    case 'kick_case_user':
+      return { ...bound, action_type: outcome.kind, kicked: outcome.succeeded };
+    case 'ban_case_user':
+    case 'ban_case_user_by_id':
+      return { ...bound, action_type: outcome.kind, banned: outcome.succeeded };
+    case 'repair_active_case':
+      return {
+        ...bound,
+        action_type: outcome.kind,
+        message: outcome.result.message,
+        repaired: outcome.result.repaired,
+        thread_created: outcome.result.threadCreated,
+      };
+    case 'reopen_case':
+      return { ...bound, action_type: outcome.kind, reopened: outcome.succeeded };
+    case 'refresh_case_notification':
+      return {
+        ...bound,
+        action_type: outcome.kind,
+        message: outcome.result.message,
+        refreshed: outcome.result.refreshed,
+        notification_channel_id: outcome.result.notificationChannelId ?? null,
+        notification_message_id: outcome.result.notificationMessageId ?? null,
+        status: outcome.result.status ?? null,
+      };
+    case 'sync_existing_ban':
+      return { ...bound, action_type: outcome.kind, synced_count: outcome.count };
+    default: {
+      const exhaustive: never = outcome;
+      return exhaustive;
+    }
+  }
+}
+
 function boundCaseId(command: CaseCommand): string {
   if (!('caseId' in command)) throw new Error('Case receipt requires a bound command.');
   return command.caseId;

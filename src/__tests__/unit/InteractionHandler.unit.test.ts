@@ -337,6 +337,7 @@ describe('InteractionHandler (unit)', () => {
         fetch: jest.fn().mockResolvedValue({
           members: {
             me: { permissions: { has: jest.fn().mockReturnValue(true) } },
+            fetchMe: jest.fn().mockResolvedValue({ permissions: { has: () => true } }),
             fetch: buildGuildMemberFetchMock(),
           },
         }),
@@ -1714,6 +1715,7 @@ describe('InteractionHandler (unit)', () => {
       bans: { fetch: jest.fn().mockResolvedValue({ user: { id: 'user-1' } }) },
       members: {
         me: { permissions: { has: jest.fn().mockReturnValue(true) } },
+        fetchMe: jest.fn().mockResolvedValue({ permissions: { has: () => true } }),
         fetch: jest.fn().mockResolvedValue(buildMember('guild-1', 'admin-1')),
       },
     });
@@ -1796,6 +1798,7 @@ describe('InteractionHandler (unit)', () => {
       bans: { fetch: jest.fn().mockRejectedValue({ code: 10026 }) },
       members: {
         me: { permissions: { has: jest.fn().mockReturnValue(true) } },
+        fetchMe: jest.fn().mockResolvedValue({ permissions: { has: () => true } }),
         fetch: jest.fn().mockResolvedValue(buildMember('guild-1', 'admin-1')),
       },
     });
@@ -1846,6 +1849,7 @@ describe('InteractionHandler (unit)', () => {
       bans: { fetch: jest.fn().mockRejectedValue({ code: 10026 }) },
       members: {
         me: { permissions: { has: jest.fn().mockReturnValue(true) } },
+        fetchMe: jest.fn().mockResolvedValue({ permissions: { has: () => true } }),
         fetch: jest.fn().mockResolvedValue(buildMember('guild-1', 'admin-1')),
       },
     });
@@ -2459,6 +2463,7 @@ describe('InteractionHandler (unit)', () => {
       id: 'guild-1',
       members: {
         me: { permissions: { has: jest.fn().mockReturnValue(true) } },
+        fetchMe: jest.fn().mockResolvedValue({ permissions: { has: () => true } }),
         fetch: jest.fn().mockRejectedValue(new Error('Unknown Member')),
       },
     });
@@ -2815,6 +2820,77 @@ describe('InteractionHandler (unit)', () => {
       allowedMentions: { parse: [] },
     });
   });
+
+  it.each(['ban_reason', 'kick_reason', 'expired', 'wrong_actor', 'wrong_guild'] as const)(
+    'native confirmation blocks %s before enforcement',
+    async (scenario) => {
+      jest.useFakeTimers();
+      try {
+        const action = scenario === 'kick_reason' ? 'kick' : 'ban';
+        const handler = buildHandler(
+          client,
+          notificationManager,
+          userModerationService,
+          securityActionService,
+          configService,
+          verificationEventRepository,
+          threadManager,
+          adminActionRepository
+        );
+        const reasonInteraction = {
+          id: 'reason-1',
+          customId: `moderation_action_reason:${action}:user-1`,
+          guildId: 'guild-1',
+          user: { id: 'moderator-1' },
+          fields: { getTextInputValue: () => '' },
+          reply: jest.fn(),
+          replied: false,
+          deferred: false,
+        } as unknown as ModalSubmitInteraction;
+        grantInteractionPermissions(reasonInteraction);
+        await handler.handleModalSubmit(reasonInteraction);
+        const reply = (reasonInteraction.reply as jest.Mock).mock.calls[0][0];
+        const confirmButton = buildInteraction(
+          reply.components[0].components[0].toJSON().custom_id,
+          'guild-1',
+          { id: 'moderator-1' } as User
+        );
+        grantInteractionPermissions(confirmButton);
+        await handler.handleButtonInteraction(confirmButton);
+        const modalId = (confirmButton.showModal as jest.Mock).mock.calls[0][0].toJSON().custom_id;
+        if (scenario.endsWith('reason')) {
+          (configService.getServerConfig as jest.Mock).mockResolvedValue({
+            settings: {
+              moderator_ban_action_requires_reason: true,
+              moderator_kick_action_requires_reason: true,
+            },
+          });
+        }
+        if (scenario === 'expired') jest.advanceTimersByTime(10 * 60 * 1000 + 1);
+        const confirmation = {
+          id: 'confirm-1',
+          customId: modalId,
+          guildId: scenario === 'wrong_guild' ? 'another-guild' : 'guild-1',
+          user: { id: scenario === 'wrong_actor' ? 'another-actor' : 'moderator-1' },
+          fields: { getTextInputValue: () => action.toUpperCase() },
+          reply: jest.fn(),
+          deferReply: jest.fn(),
+          editReply: jest.fn(),
+          replied: false,
+          deferred: false,
+        } as unknown as ModalSubmitInteraction;
+        grantInteractionPermissions(confirmation);
+        await handler.handleModalSubmit(confirmation);
+        const enforcementCountAfterExpiredConfirmation =
+          userModerationService.banUser.mock.calls.length +
+          userModerationService.banUserById.mock.calls.length +
+          userModerationService.kickUser.mock.calls.length;
+        expect(enforcementCountAfterExpiredConfirmation).toBe(0);
+      } finally {
+        jest.useRealTimers();
+      }
+    }
+  );
 
   it('executes native ban action only after the second confirmation modal', async () => {
     const handler = buildHandler(

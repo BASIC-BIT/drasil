@@ -98,7 +98,7 @@ export class CommandHandler implements ICommandHandler {
     @inject(TYPES.HeuristicService) heuristicService: IHeuristicService,
     @inject(TYPES.NotificationManager) notificationManager: INotificationManager,
     @inject(TYPES.ConfigService) configService: IConfigService,
-    @inject(TYPES.UserModerationService) userModerationService: IUserModerationService,
+    @inject(TYPES.UserModerationService) _userModerationService: IUserModerationService,
     @inject(TYPES.SecurityActionService) securityActionService: ISecurityActionService,
     @inject(TYPES.ProductAnalyticsService)
     @optional()
@@ -150,7 +150,6 @@ export class CommandHandler implements ICommandHandler {
     );
     this.moderationCommandHandler = new ModerationCommandHandler(
       this.configService,
-      userModerationService,
       securityActionService,
       (interaction) => this.replyGuildInstallRequired(interaction),
       integrityAuditService,

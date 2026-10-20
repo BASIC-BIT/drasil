@@ -105,6 +105,7 @@ describe('CommandHandler moderation commands (unit)', () => {
     const interaction = {
       commandName: 'audit',
       guild,
+      guildId: 'guild-1',
       channelId: 'channel-1',
       user: { id: 'admin-1' },
       memberPermissions: {
@@ -192,6 +193,7 @@ describe('CommandHandler moderation commands (unit)', () => {
       commandName: 'ban',
       user: invoker,
       guild,
+      guildId: 'guild-1',
       memberPermissions: {
         has: jest.fn().mockReturnValue(false),
       },
@@ -246,6 +248,7 @@ describe('CommandHandler moderation commands (unit)', () => {
       commandName: 'ban',
       user: invoker,
       guild,
+      guildId: 'guild-1',
       channelId: 'channel-1',
       memberPermissions: null,
       options: {
@@ -262,7 +265,11 @@ describe('CommandHandler moderation commands (unit)', () => {
     expect(userModerationService.banUser).not.toHaveBeenCalled();
     await confirmLastSlashCommand(interaction);
 
-    expect(userModerationService.banUser).toHaveBeenCalledWith(targetMember, 'reason', invoker);
+    expect(userModerationService.banUser).toHaveBeenCalledWith(
+      targetMember,
+      'reason',
+      expect.objectContaining({ id: invoker.id })
+    );
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: `User ${targetUser.tag} has been banned.`,
     });
@@ -291,6 +298,7 @@ describe('CommandHandler moderation commands (unit)', () => {
       commandName: 'ban',
       user: invoker,
       guild,
+      guildId: 'guild-1',
       memberPermissions: {
         has: jest.fn().mockReturnValue(true),
       },
@@ -308,7 +316,11 @@ describe('CommandHandler moderation commands (unit)', () => {
     expect(userModerationService.banUser).not.toHaveBeenCalled();
     await confirmLastSlashCommand(interaction);
 
-    expect(userModerationService.banUser).toHaveBeenCalledWith(targetMember, 'reason', invoker);
+    expect(userModerationService.banUser).toHaveBeenCalledWith(
+      targetMember,
+      'reason',
+      expect.objectContaining({ id: invoker.id })
+    );
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: `User ${targetUser.tag} has been banned.`,
     });

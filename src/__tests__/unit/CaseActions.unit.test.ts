@@ -96,6 +96,7 @@ async function arrange() {
         (typeof input === 'string' ? input : input.user) === actor.id ? actor : target
       ),
       me: { permissions: { has: () => true } },
+      fetchMe: jest.fn().mockResolvedValue({ permissions: { has: () => true } }),
     },
   };
   const sourceMessage = {

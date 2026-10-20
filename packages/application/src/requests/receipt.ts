@@ -1,11 +1,11 @@
-import type { CaseCommand } from '../cases/commands';
+import type { QueuedCommand } from './commands';
 export interface QueuedActionReceipt {
   readonly id: string;
   readonly status: 'queued' | 'processing' | 'completed' | 'failed';
 }
 // The codec alone owns the optional-column database representation.
 export interface EnqueueInput {
-  readonly actionType: CaseCommand['kind'];
+  readonly actionType: QueuedCommand['kind'];
   readonly actorId: string;
   readonly actorSurface: string;
   readonly serverId: string;

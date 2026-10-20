@@ -28,11 +28,15 @@ export function evaluateCasePolicy(
   policy: CasePolicy
 ): ActionDenialCode | null {
   const reason = 'reason' in command ? command.reason?.trim() : null;
-  if (command.kind === 'ban_case_user' || command.kind === 'ban_case_user_by_id') {
+  if (
+    command.kind === 'ban_user' ||
+    command.kind === 'ban_case_user' ||
+    command.kind === 'ban_case_user_by_id'
+  ) {
     if (!policy.moderatorBanActionEnabled) return 'policy_disabled';
     if (policy.moderatorBanActionRequiresReason && !reason) return 'reason_required';
   }
-  if (command.kind === 'kick_case_user') {
+  if (command.kind === 'kick_user' || command.kind === 'kick_case_user') {
     if (!policy.moderatorKickActionEnabled) return 'policy_disabled';
     if (policy.moderatorKickActionRequiresReason && !reason) return 'reason_required';
   }

@@ -1,4 +1,9 @@
-import { encodeQueuedAction, type QueuedCommand } from '@drasil/application';
+import {
+  evaluateCasePolicy,
+  readCasePolicy,
+  encodeQueuedAction,
+  type QueuedCommand,
+} from '@drasil/application';
 import {
   caseDetailSchema,
   caseSummarySchema,
@@ -564,6 +569,7 @@ export function parseCaseSummaryRow(row: CaseSummaryRow, now = new Date()): Case
   const updatedAt = new Date(toIsoString(row.updated_at));
   const staleHours = Math.max(0, Math.floor((now.getTime() - updatedAt.getTime()) / 3_600_000));
   const presenceState = resolvePresenceState(row);
+  const policy = readCasePolicy(metadataToRecord(row.server_settings));
   const quarantine = readNestedRecord(metadataToRecord(row.metadata), 'account_quarantine');
   const quarantineEffects =
     row.case_kind === 'compromised_account'
@@ -597,7 +603,17 @@ export function parseCaseSummaryRow(row: CaseSummaryRow, now = new Date()): Case
     lastActionType: row.last_action_type,
     lastActionAt: toNullableIsoString(row.last_action_at),
     surfaces: buildSurfaces(row),
-    allowedActions: resolveAllowedActions(row, presenceState),
+    allowedActions: resolveAllowedActions(row, presenceState).filter((action) => {
+      if (action === 'ban_user' || action === 'ban_by_id')
+        return (
+          evaluateCasePolicy({ kind: 'ban_case_user', reason: null }, policy) !== 'policy_disabled'
+        );
+      if (action === 'kick_user')
+        return (
+          evaluateCasePolicy({ kind: 'kick_case_user', reason: null }, policy) !== 'policy_disabled'
+        );
+      return true;
+    }),
     captchaChallenge: row.captcha_status
       ? {
           id: row.captcha_id,

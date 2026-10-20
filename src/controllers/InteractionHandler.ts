@@ -101,8 +101,6 @@ import { truncatePreview } from '../utils/textPreview';
 import { buildAccountQuarantinePreviewFingerprint as fingerprintAccountQuarantinePreview } from '../utils/accountQuarantinePreview';
 import {
   MODERATION_ACTION_REASON_FIELD_ID,
-  MODERATOR_ACTION_BAN_DEFAULT_REASON,
-  MODERATOR_ACTION_KICK_DEFAULT_REASON,
   ModeratorUserAction,
   parseModerationActionReasonModalCustomId,
 } from '../utils/moderationActionCustomIds';
@@ -133,7 +131,8 @@ interface PendingModerationActionConfirmation {
   readonly targetUserId: string;
   readonly userId: string;
   readonly guildId: string;
-  readonly reason: string;
+  readonly reason: string | null;
+  readonly selectedMessage: { readonly channelId: string; readonly messageId: string } | null;
   readonly createdAt: number;
 }
 /**
@@ -2611,12 +2610,6 @@ export class InteractionHandler implements IInteractionHandler {
     return action === 'ban' ? 'Ban User' : 'Kick User';
   }
 
-  private getModerationActionDefaultReason(action: ModeratorUserAction): string {
-    return action === 'ban'
-      ? MODERATOR_ACTION_BAN_DEFAULT_REASON
-      : MODERATOR_ACTION_KICK_DEFAULT_REASON;
-  }
-
   private async getModerationActionReasonRequired(
     guildId: string,
     action: ModeratorUserAction
@@ -2709,7 +2702,7 @@ export class InteractionHandler implements IInteractionHandler {
       return;
     }
 
-    const reason = providedReason || this.getModerationActionDefaultReason(input.action);
+    const reason = providedReason || null;
     const guild = await this.client.guilds.fetch(interaction.guildId);
     if (input.action === 'kick') {
       const member = await guild.members.fetch(input.targetUserId).catch(() => null);
@@ -2731,6 +2724,10 @@ export class InteractionHandler implements IInteractionHandler {
       userId: interaction.user.id,
       guildId: interaction.guildId,
       reason,
+      selectedMessage:
+        input.sourceChannelId && input.sourceMessageId
+          ? { channelId: input.sourceChannelId, messageId: input.sourceMessageId }
+          : null,
       createdAt: Date.now(),
     });
 
@@ -2857,37 +2854,31 @@ export class InteractionHandler implements IInteractionHandler {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     try {
-      const guild = await this.client.guilds.fetch(interaction.guildId);
-      if (pending.action === 'ban') {
-        const member = await guild.members.fetch(pending.targetUserId).catch(() => null);
-        if (member) {
-          await this.userModerationService.banUser(member, pending.reason, interaction.user);
-        } else {
-          await this.userModerationService.banUserById(
-            guild,
-            pending.targetUserId,
-            pending.reason,
-            interaction.user
-          );
-        }
-        await interaction.editReply({
-          content: `Banned <@${pending.targetUserId}> from this server.`,
-          allowedMentions: { parse: [] },
-        });
-        return;
-      }
-
-      const member = await guild.members.fetch(pending.targetUserId).catch(() => null);
-      if (!member) {
+      const command =
+        pending.action === 'ban'
+          ? ({
+              kind: 'ban_user',
+              intent: 'native_action',
+              targetUserId: pending.targetUserId,
+              reason: pending.reason,
+              selectedMessage: pending.selectedMessage,
+            } as const)
+          : ({
+              kind: 'kick_user',
+              targetUserId: pending.targetUserId,
+              reason: pending.reason,
+              selectedMessage: pending.selectedMessage,
+            } as const);
+      const outcome = await this.executeConfirmedCaseAction(interaction, command);
+      if (outcome.kind === 'kick_user' && !outcome.succeeded) {
         await interaction.editReply({
           content: `Could not find user <@${pending.targetUserId}> in this server.`,
           allowedMentions: { parse: [] },
         });
         return;
       }
-      await this.userModerationService.kickUser(member, pending.reason, interaction.user);
       await interaction.editReply({
-        content: `Kicked <@${pending.targetUserId}> from this server.`,
+        content: `${pending.action === 'ban' ? 'Banned' : 'Kicked'} <@${pending.targetUserId}> from this server.`,
         allowedMentions: { parse: [] },
       });
     } catch (error) {

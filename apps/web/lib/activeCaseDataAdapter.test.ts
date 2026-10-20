@@ -671,3 +671,40 @@ describe('activeCaseDataAdapter CAPTCHA recovery actions', () => {
     expect(failed.allowedActions).toContain('bypass_captcha');
   });
 });
+
+describe('shared case moderation policy availability', () => {
+  it.each(['review_required', 'parked'] as const)(
+    'hides disabled moderation for %s cases',
+    (attention_state) => {
+      const summary = parseCaseSummaryRow({
+        ...baseRow,
+        attention_state,
+        server_settings: {
+          moderator_ban_action_enabled: false,
+          moderator_kick_action_enabled: false,
+        },
+      });
+      expect(summary.allowedActions).not.toContain('ban_user');
+      expect(summary.allowedActions).not.toContain('kick_user');
+      const departed = parseCaseSummaryRow({
+        ...baseRow,
+        attention_state,
+        member_user_id: null,
+        latest_outcome_type: 'member_left',
+        server_settings: { moderator_ban_action_enabled: false },
+      });
+      expect(departed.allowedActions).not.toContain('ban_by_id');
+    }
+  );
+  it('keeps reason-required actions available so the user can supply a reason', () => {
+    const summary = parseCaseSummaryRow({
+      ...baseRow,
+      server_settings: {
+        moderator_ban_action_requires_reason: true,
+        moderator_kick_action_requires_reason: true,
+      },
+    });
+    expect(summary.allowedActions).toContain('ban_user');
+    expect(summary.allowedActions).toContain('kick_user');
+  });
+});

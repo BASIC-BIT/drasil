@@ -48,6 +48,11 @@ export interface CaseActions {
 export function createCaseActions(deps: CaseDependencies): CaseActions {
   return {
     async execute(context, command): Promise<ActionResult<CaseOutcome>> {
+      // Consume per-attempt evidence even when fresh policy or authority later denies execution.
+      const confirmationVerified =
+        command.kind === 'repair_active_case' ||
+        command.kind === 'refresh_case_notification' ||
+        (await deps.confirmations.verify(context, command));
       if (context.actor.kind !== 'user') return { kind: 'denied', code: 'permission_denied' };
       const actor = await deps.authority.loadFresh(context.guildId, context.actor.userId);
       if (!actor || !actor.present) return { kind: 'denied', code: 'actor_unavailable' };
@@ -64,15 +69,21 @@ export function createCaseActions(deps: CaseDependencies): CaseActions {
             ? command.intent === 'native_case_open'
               ? 1n << 40n
               : 1n << 5n
-            : command.kind === 'kick_case_user'
+            : command.kind === 'kick_case_user' || command.kind === 'kick_user'
               ? 1n << 1n
-              : command.kind === 'ban_case_user' ||
+              : command.kind === 'ban_user' ||
+                  command.kind === 'ban_case_user' ||
                   command.kind === 'ban_case_user_by_id' ||
                   command.kind === 'sync_existing_ban'
                 ? 1n << 2n
                 : (1n << 5n) | (1n << 40n);
       if (!admin && (bits & required) === 0n) return { kind: 'denied', code: 'permission_denied' };
 
+      if (
+        (command.kind === 'ban_user' || command.kind === 'kick_user') &&
+        command.targetUserId === context.actor.userId
+      )
+        return { kind: 'denied', code: 'permission_denied' };
       if ('caseId' in command) {
         const state = await deps.repository.findById(command.caseId);
         if (!state || state.server_id !== context.guildId || state.user_id !== command.targetUserId)
@@ -105,7 +116,7 @@ export function createCaseActions(deps: CaseDependencies): CaseActions {
         )
           return { kind: 'denied', code: 'binding_mismatch' };
       }
-      if (command.kind === 'open_admin_case' && command.selectedMessage) {
+      if ('selectedMessage' in command && command.selectedMessage) {
         const source = await deps.repository.findSourceMessage(
           command.selectedMessage.channelId,
           command.selectedMessage.messageId
@@ -120,17 +131,7 @@ export function createCaseActions(deps: CaseDependencies): CaseActions {
       const reason = 'reason' in command ? command.reason?.trim() || undefined : undefined;
       const policyDenial = evaluateCasePolicy(command, policy);
       if (policyDenial) return { kind: 'denied', code: policyDenial };
-      if (command.kind !== 'repair_active_case' && command.kind !== 'refresh_case_notification') {
-        const proof = await deps.confirmations.loadVerified(context, command);
-        if (
-          !proof ||
-          proof.guildId !== context.guildId ||
-          proof.actorId !== context.actor.userId ||
-          proof.action !== command.kind ||
-          proof.targetId !== ('caseId' in command ? command.caseId : command.targetUserId)
-        )
-          return { kind: 'denied', code: 'confirmation_required' };
-      }
+      if (!confirmationVerified) return { kind: 'denied', code: 'confirmation_required' };
       const input = {
         guildId: context.guildId,
         actorId: context.actor.userId,
@@ -145,6 +146,30 @@ export function createCaseActions(deps: CaseDependencies): CaseActions {
           : null;
       let outcome: CaseOutcome;
       switch (command.kind) {
+        case 'ban_user':
+          outcome = {
+            kind: command.kind,
+            succeeded: await deps.workflows.ban({
+              ...input,
+              reason:
+                reason ||
+                (command.intent === 'slash_command'
+                  ? 'No reason provided'
+                  : 'Banned by moderator action'),
+              detectionEventId: undefined,
+            }),
+          };
+          break;
+        case 'kick_user':
+          outcome = {
+            kind: command.kind,
+            succeeded: await deps.workflows.kick({
+              ...input,
+              reason: reason || 'Kicked by moderator action',
+              detectionEventId: undefined,
+            }),
+          };
+          break;
         case 'open_admin_case':
           outcome = {
             kind: command.kind,

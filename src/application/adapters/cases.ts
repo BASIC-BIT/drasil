@@ -2,14 +2,11 @@ import type { IRoleGateService } from '../../services/RoleGateService';
 import {
   readCasePolicy,
   createCaseActions,
-  type ActionContext,
   type ActionDenialCode,
   type CaseActions,
-  type CaseCommand,
   type CaseDependencies,
   type CaseWorkflows,
   type CaseOutcome,
-  type ConfirmationBinding,
 } from '@drasil/application';
 import {
   PermissionFlagsBits,
@@ -26,31 +23,6 @@ import type { ISecurityActionService } from '../../services/SecurityActionServic
 import type { IUserModerationService } from '../../services/UserModerationService';
 import { createBotAuthority } from './attention';
 
-// Runtime adapters issue evidence only after their shipped authenticated confirmation path.
-export function createCaseConfirmationStore(): {
-  readonly confirmations: CaseDependencies['confirmations'];
-  recordVerified(context: ActionContext, command: CaseCommand): void;
-} {
-  const bindings = new Map<string, ConfirmationBinding>();
-  return {
-    recordVerified(context, command): void {
-      if (context.actor.kind !== 'user') throw new Error('A case confirmation needs a user actor.');
-      bindings.set(context.requestId, {
-        guildId: context.guildId,
-        actorId: context.actor.userId,
-        action: command.kind,
-        targetId: 'caseId' in command ? command.caseId : command.targetUserId,
-      });
-    },
-    confirmations: {
-      async loadVerified(context): Promise<ConfirmationBinding | null> {
-        const binding = bindings.get(context.requestId) ?? null;
-        bindings.delete(context.requestId);
-        return binding;
-      },
-    },
-  };
-}
 export interface BotCaseDependencies {
   readonly roleGateService: IRoleGateService | null;
   readonly client: Client;
@@ -75,7 +47,7 @@ export function createBotCaseDependencies(deps: BotCaseDependencies): CaseDepend
     label: string
   ): Promise<void> => {
     const target = await guild(guildId);
-    const bot = target.members.me ?? (await target.members.fetchMe());
+    const bot = await target.members.fetchMe({ force: true });
     if (!bot.permissions.has(permission))
       throw new Error(`Drasil is missing ${label} permission in this guild.`);
   };
@@ -204,8 +176,12 @@ export function createBotCaseDependencies(deps: BotCaseDependencies): CaseDepend
       },
       async kick(input): ReturnType<CaseWorkflows['kick']> {
         await enforcePermission(input.guildId, PermissionFlagsBits.KickMembers, 'Kick Members');
+        const target = input.caseId
+          ? await member(input.guildId, input.targetUserId)
+          : await member(input.guildId, input.targetUserId).catch(() => null);
+        if (!target) return false;
         return deps.userModerationService.kickUser(
-          await member(input.guildId, input.targetUserId),
+          target,
           input.reason,
           await moderator(input.actorId),
           ...(input.detectionEventId || input.sourceSurface === 'web'
@@ -215,8 +191,19 @@ export function createBotCaseDependencies(deps: BotCaseDependencies): CaseDepend
       },
       async ban(input): ReturnType<CaseWorkflows['ban']> {
         await enforcePermission(input.guildId, PermissionFlagsBits.BanMembers, 'Ban Members');
+        const target = input.caseId
+          ? await member(input.guildId, input.targetUserId)
+          : await member(input.guildId, input.targetUserId).catch(() => null);
+        if (!target) {
+          return deps.userModerationService.banUserById(
+            await guild(input.guildId),
+            input.targetUserId,
+            input.reason,
+            await moderator(input.actorId)
+          );
+        }
         return deps.userModerationService.banUser(
-          await member(input.guildId, input.targetUserId),
+          target,
           input.reason,
           await moderator(input.actorId),
           ...(input.detectionEventId || input.sourceSurface === 'web'

@@ -4,9 +4,7 @@ import type {
   RoleGateResolutionAction,
 } from './roleGate';
 import type { AuthorityPort } from '../authorization';
-import type { ActionContext } from '../context';
-import type { ConfirmationBinding } from '../confirmation';
-import type { CaseCommand } from './commands';
+import type { ConfirmationPort } from '../confirmation';
 
 export interface CaseState {
   readonly id: string;
@@ -73,13 +71,15 @@ export interface CaseWorkflows {
   verify(input: BoundCaseWorkflowInput): Promise<boolean>;
   closeNoAction(input: BoundCaseWorkflowInput): Promise<number>;
   kick(
-    input: BoundCaseWorkflowInput & {
+    input: CaseWorkflowInput & {
+      readonly caseId?: string;
       readonly reason: string;
       readonly detectionEventId: string | undefined;
     }
   ): Promise<boolean>;
   ban(
-    input: BoundCaseWorkflowInput & {
+    input: CaseWorkflowInput & {
+      readonly caseId?: string;
       readonly reason: string;
       readonly detectionEventId: string | undefined;
     }
@@ -119,8 +119,6 @@ export interface CaseDependencies {
     } | null>;
   };
   readonly settings: { loadFresh(guildId: string): Promise<CasePolicy> };
-  readonly confirmations: {
-    loadVerified(context: ActionContext, command: CaseCommand): Promise<ConfirmationBinding | null>;
-  };
+  readonly confirmations: ConfirmationPort;
   readonly workflows: CaseWorkflows;
 }

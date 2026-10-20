@@ -208,19 +208,25 @@ export const buildHandler = (overrides: HandlerOverrides = {}) => {
   } as any;
   const application = buildCaseApplication(
     {
-      client: {
-        guilds: {
-          fetch: jest.fn(async () => ({
-            id: 'guild-1',
-            members: { fetch: jest.fn(async (id: string) => ({ id })) },
-          })),
-        },
-        users: {
-          fetch: jest.fn(async (id: string) =>
-            id.startsWith('user-') ? { id, tag: 'target#0001' } : { id }
-          ),
-        },
-      } as any,
+      client:
+        overrides.client ??
+        ({
+          guilds: {
+            fetch: jest.fn(async () => ({
+              id: 'guild-1',
+              members: {
+                me: { permissions: { has: () => true } },
+                fetchMe: jest.fn().mockResolvedValue({ permissions: { has: () => true } }),
+                fetch: jest.fn(async (id: string) => ({ id })),
+              },
+            })),
+          },
+          users: {
+            fetch: jest.fn(async (id: string) =>
+              id.startsWith('user-') ? { id, tag: 'target#0001' } : { id }
+            ),
+          },
+        } as any),
       configService,
       verificationEventRepository: caseRepository,
       detectionEventsRepository: { findById: jest.fn() } as any,

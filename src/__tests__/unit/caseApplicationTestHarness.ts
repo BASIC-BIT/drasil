@@ -1,8 +1,8 @@
+import { createCaseConfirmationStore } from '../../application/context';
 import { createCaseActions, type AuthorityPort } from '@drasil/application';
 import type { BotApplication } from '../../application/createBotApplication';
 import {
   createBotCaseDependencies,
-  createCaseConfirmationStore,
   type BotCaseDependencies,
 } from '../../application/adapters/cases';
 

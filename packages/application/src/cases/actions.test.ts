@@ -63,12 +63,7 @@ function arrange(): Fixture {
       }),
     },
     confirmations: {
-      loadVerified: async (_context, command) => ({
-        guildId: context.guildId,
-        actorId: 'actor-1',
-        action: command.kind,
-        targetId: 'caseId' in command ? command.caseId : command.targetUserId,
-      }),
+      verify: async () => true,
     },
     workflows: {
       verify: async () => {
@@ -171,14 +166,7 @@ test('stale_reopen_does_not_replace_a_new_active_case', async () => {
 });
 test('confirmation_is_bound_to_the_case_and_operation', async () => {
   const fixture = arrange();
-  fixture.deps.confirmations.loadVerified = async (): ReturnType<
-    CaseDependencies['confirmations']['loadVerified']
-  > => ({
-    guildId: 'guild-1',
-    actorId: 'actor-1',
-    action: 'verify_case_user',
-    targetId: 'older-case',
-  });
+  fixture.deps.confirmations.verify = async (): Promise<boolean> => false;
   expect(await fixture.actions.execute(context, verify)).toEqual({
     kind: 'denied',
     code: 'confirmation_required',

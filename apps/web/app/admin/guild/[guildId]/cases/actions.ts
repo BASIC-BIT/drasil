@@ -1,6 +1,7 @@
 'use server';
 
-import { evaluateCasePolicy, readCasePolicy } from '@drasil/application';
+import { evaluateCasePolicy, readCasePolicy, type ActionContext } from '@drasil/application';
+import { createWebActionContext, createWebConfirmationPort } from '@/lib/application/context';
 import { randomUUID } from 'node:crypto';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
@@ -172,7 +173,8 @@ async function assertCanQueueCaseAction(
   action: WebCaseAction,
   guild: { readonly id: string; readonly owner: boolean; readonly permissions: string },
   caseId: string,
-  formData: FormData | undefined
+  formData: FormData | undefined,
+  actionContext: ActionContext
 ): Promise<CaseActionOptions> {
   assertActorPermission(action, guild);
 
@@ -266,7 +268,18 @@ async function assertCanQueueCaseAction(
     };
   }
 
-  if (formData?.get('confirmAction') !== 'on') {
+  const confirmationKinds = {
+    ban_user: 'ban_case_user',
+    ban_by_id: 'ban_case_user_by_id',
+    kick_user: 'kick_case_user',
+  };
+  const confirmationCommand = { kind: confirmationKinds[destructiveContext.action], caseId };
+  if (
+    !(await createWebConfirmationPort(actionContext, confirmationCommand, formData).verify(
+      actionContext,
+      confirmationCommand
+    ))
+  ) {
     throw new Error('Confirm the moderation action before queueing it.');
   }
 
@@ -317,7 +330,8 @@ async function performQueueCaseAction(
     parsedAction as WebCaseAction,
     guild,
     caseId,
-    formData
+    formData,
+    createWebActionContext({ guildId, userId: session.userId })
   );
   const result = await createActiveCaseDataAdapter().queueCaseAction({
     action: parsedAction as WebCaseAction,
