@@ -1,12 +1,13 @@
+import type { BotApplication } from '../application/createBotApplication';
+import { requireSetupOutcome } from '../application/adapters/setup';
+import { createDiscordActionContext } from '../application/context';
 import {
   ChannelType,
   Client,
   MessageFlags,
   ModalSubmitInteraction,
   PermissionFlagsBits,
-  Role,
 } from 'discord.js';
-import { IConfigService } from '../config/ConfigService';
 import {
   parseChannelId,
   parseRoleId,
@@ -14,36 +15,17 @@ import {
   SETUP_VERIFICATION_CHANNEL_FIELD_ID,
   SETUP_VERIFICATION_RESTRICTED_ROLE_FIELD_ID,
 } from '../constants/setupVerificationWizard';
-import { INotificationManager } from '../services/NotificationManager';
 import {
   ISetupDiagnosticsService,
   SetupDiagnosticReport,
 } from '../services/SetupDiagnosticsService';
-import {
-  IProductAnalyticsService,
-  NOOP_PRODUCT_ANALYTICS_SERVICE,
-} from '../services/ProductAnalyticsService';
-import { SetupWorkflowService } from '../services/SetupWorkflowService';
 
 export class SetupVerificationModalHandler {
-  private readonly setupWorkflowService?: SetupWorkflowService;
-
   public constructor(
     private readonly client: Client,
-    notificationManager: INotificationManager,
-    configService: IConfigService,
-    setupDiagnosticsService?: ISetupDiagnosticsService,
-    productAnalyticsService: IProductAnalyticsService = NOOP_PRODUCT_ANALYTICS_SERVICE
-  ) {
-    this.setupWorkflowService = setupDiagnosticsService
-      ? new SetupWorkflowService(
-          configService,
-          notificationManager,
-          productAnalyticsService,
-          setupDiagnosticsService
-        )
-      : undefined;
-  }
+    private readonly setupDiagnosticsService?: ISetupDiagnosticsService,
+    private readonly application?: BotApplication
+  ) {}
 
   public async handleSetupVerificationModalSubmit(
     interaction: ModalSubmitInteraction
@@ -111,7 +93,7 @@ export class SetupVerificationModalHandler {
         return;
       }
 
-      if (!this.setupWorkflowService) {
+      if (!this.setupDiagnosticsService || !this.application) {
         await interaction.reply({
           content: 'Setup diagnostics are not available in this runtime.',
           flags: MessageFlags.Ephemeral,
@@ -148,15 +130,43 @@ export class SetupVerificationModalHandler {
         }
       }
 
-      const setupResult = await this.setupWorkflowService.completeSetup({
-        guild,
-        guildId: interaction.guildId,
-        caseRole: caseRole as Role,
-        adminChannelId,
-        initialVerificationChannelId: providedVerificationChannelId,
-        candidateVerificationChannelId: providedVerificationChannelId,
-        reportInstructionsChannelId: null,
-      });
+      const outcome = requireSetupOutcome(
+        await this.application.setupRuntime.execute(
+          createDiscordActionContext({
+            guildId: interaction.guildId,
+            userId: interaction.user.id,
+            requestId: interaction.id,
+          }),
+          {
+            kind: 'complete_setup_verification',
+            mode: 'verification_modal',
+            adminChannelId,
+            caseRoleId,
+            verificationChannelId: providedVerificationChannelId,
+            reportInstructionsChannelId: null,
+            onboardingWizard: false,
+          },
+          {
+            kind: 'direct',
+            guild,
+            caseRole,
+            verificationChannel: null,
+            reportChannel: null,
+            actorLabel: interaction.user.username,
+            captureAnalytics: false,
+            publishPanel: false,
+          }
+        )
+      );
+      if (outcome.kind !== 'complete_setup_verification')
+        throw new Error('Setup outcome mismatch.');
+      const setupResult = outcome.result;
+      if (setupResult.status === 'invalid_selection') throw new Error(setupResult.detail);
+      if (
+        setupResult.status === 'ambiguous_case_role' ||
+        setupResult.status === 'ambiguous_verification_channel'
+      )
+        throw new Error('Choose setup resources before continuing.');
 
       if (setupResult.status === 'candidate_validation_failed') {
         await interaction.reply({

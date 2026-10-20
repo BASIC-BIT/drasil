@@ -28,8 +28,16 @@ export function prepareReportClient(client: any, interaction: any): void {
   const oldChannelFetch = client.channels?.fetch;
   client.channels ??= {};
   client.channels.fetch = jest.fn(async (id: string) => {
+    const selected =
+      interaction.commandName === 'setupreportbutton'
+        ? interaction.options.getChannel('channel')
+        : null;
     const channel =
-      interaction.channel?.id === id ? interaction.channel : await oldChannelFetch?.(id);
+      interaction.channel?.id === id
+        ? interaction.channel
+        : selected?.id === id
+          ? selected
+          : await oldChannelFetch?.(id);
     if (channel) {
       channel.guildId ??= interaction.guildId;
     }

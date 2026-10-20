@@ -1,3 +1,5 @@
+import { buildSetupSettingsPatch, normalizeOptionalId } from '@drasil/application/setup-settings';
+export { buildSetupSettingsPatch } from '@drasil/application/setup-settings';
 import { Pool, type PoolConfig } from 'pg';
 import {
   guildSetupUpdateSchema,
@@ -145,97 +147,12 @@ function parseServerRow(row: Record<string, unknown>): SetupServerRecord {
   });
 }
 
-function normalizeOptionalId(value: string | null | undefined): string | null | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : null;
-}
-
 function nextOptionalId(
   value: string | null | undefined,
   current: string | null | undefined
 ): string | null {
   const normalized = normalizeOptionalId(value);
   return normalized === undefined ? (current ?? null) : normalized;
-}
-
-export function buildSetupSettingsPatch(update: GuildSetupUpdate): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries({
-      observed_detection_notification_channel_id: normalizeOptionalId(
-        update.observedNotificationChannelId
-      ),
-      moderation_queue_channel_id: normalizeOptionalId(update.moderationQueueChannelId),
-      report_instructions_channel_id: normalizeOptionalId(update.reportInstructionsChannelId),
-      detection_response_mode: update.detectionResponseMode,
-      message_detection_response_mode: update.messageDetectionResponseMode,
-      join_detection_response_mode: update.joinDetectionResponseMode,
-      observed_detection_min_confidence_threshold: update.observedDetectionMinConfidenceThreshold,
-      observed_detection_notification_window_minutes:
-        update.observedDetectionNotificationWindowMinutes,
-      automatic_detection_exempt_moderators: update.automaticDetectionExemptModerators,
-      admin_case_open_requires_reason: update.adminCaseOpenRequiresReason,
-      moderator_ban_action_requires_reason: update.moderatorBanActionRequiresReason,
-      moderator_kick_action_requires_reason: update.moderatorKickActionRequiresReason,
-      moderator_ban_action_enabled: update.moderatorBanActionEnabled,
-      moderator_kick_action_enabled: update.moderatorKickActionEnabled,
-      observed_action_kick_enabled: update.observedActionKickEnabled,
-      message_detection_auto_kick_enabled: update.messageDetectionAutoKickEnabled,
-      join_detection_auto_kick_enabled: update.joinDetectionAutoKickEnabled,
-      report_intake_auto_kick_enabled: update.reportIntakeAutoKickEnabled,
-      auto_kick_min_confidence_threshold: update.autoKickMinConfidenceThreshold,
-      manual_intake_enabled: update.manualIntakeEnabled,
-      manual_intake_role_id: normalizeOptionalId(update.manualIntakeRoleId),
-      manual_intake_grace_period_seconds: update.manualIntakeGracePeriodSeconds,
-      case_role_lockdown_allowed_channel_ids: update.caseRoleLockdownAllowedChannelIds,
-      case_role_lockdown_allowed_category_ids: update.caseRoleLockdownAllowedCategoryIds,
-      user_report_reason_required: update.userReportReasonRequired,
-      user_report_external_response_mode: update.userReportExternalResponseMode,
-      report_intake_confirmed_response_mode: update.reportIntakeConfirmedResponseMode,
-      analytics_consent_level: update.analyticsConsentLevel,
-      case_review_reminders_enabled: update.caseReviewRemindersEnabled,
-      case_review_reminder_stale_hours: update.caseReviewReminderStaleHours,
-      case_review_reminder_repeat_hours: update.caseReviewReminderRepeatHours,
-      case_review_very_stale_days: update.caseReviewVeryStaleDays,
-      report_ai_triage_enabled: update.reportAiTriageEnabled,
-      report_ai_analyze_text: update.reportAiAnalyzeText,
-      report_ai_analyze_images: update.reportAiAnalyzeImages,
-      report_ai_max_action: update.reportAiMaxAction,
-      report_ai_open_case_threshold: update.reportAiOpenCaseThreshold,
-      report_ai_max_images: update.reportAiMaxImages,
-      report_ai_max_image_bytes: update.reportAiMaxImageBytes,
-      role_gate_enabled: update.roleGateEnabled,
-      honeypot_role_id: normalizeOptionalId(update.honeypotRoleId),
-      member_access_role_id: normalizeOptionalId(update.memberAccessRoleId),
-      honeypot_role_response_mode: update.honeypotRoleResponseMode,
-      role_quarantine_mode: update.roleQuarantineMode,
-      role_quarantine_exempt_role_ids: update.roleQuarantineExemptRoleIds,
-      account_quarantine_enabled: update.accountQuarantineEnabled,
-      captcha_mode: update.captchaMode,
-      captcha_pass_action: update.captchaPassAction,
-      captcha_challenge_lifetime_hours: update.captchaChallengeLifetimeHours,
-      captcha_max_submissions: update.captchaMaxSubmissions,
-      verification_ai_thread_analysis_enabled: update.verificationAnalysisEnabled,
-      verification_ai_thread_analysis_message_limit: update.verificationAnalysisMessageLimit,
-      verification_ai_max_action: update.verificationAnalysisMaxAction,
-      verification_ai_restrict_threshold: update.verificationAnalysisRestrictThreshold,
-      verification_prompt_template: update.verificationPromptTemplate,
-      server_about: update.serverAbout,
-      verification_context: update.verificationContext,
-      expected_topics: update.expectedTopics,
-      case_responder_role_ids: update.caseResponderRoleIds,
-      case_responder_routing_mode: update.caseResponderRoutingMode,
-      case_responder_thread_member_cap: update.caseResponderThreadMemberCap,
-      message_deletion_enabled: update.messageDeletionEnabled,
-      message_deletion_source_message_enabled: update.messageDeletionSourceMessageEnabled,
-      message_deletion_watchlist_enabled: update.messageDeletionWatchlistEnabled,
-      message_deletion_watchlist_disabled_default_ids:
-        update.messageDeletionWatchlistDisabledDefaultIds,
-      message_deletion_watchlist_custom_terms: update.messageDeletionWatchlistCustomTerms,
-    }).filter((entry) => entry[1] !== undefined)
-  );
 }
 
 function hasHeuristicColumnsPatch(update: GuildSetupUpdate): boolean {

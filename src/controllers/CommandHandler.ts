@@ -1,3 +1,6 @@
+import { setupCommandSchema } from '@drasil/application';
+import { requireSetupOutcome } from '../application/adapters/setup';
+import { createDiscordActionContext } from '../application/context';
 import type { BotApplication } from '../application/createBotApplication';
 import {
   Client,
@@ -118,7 +121,7 @@ export class CommandHandler implements ICommandHandler {
     @inject(TYPES.CaseThreadClosureSweepService)
     @optional()
     caseThreadClosureSweepService?: ICaseThreadClosureSweepService,
-    @inject(TYPES.BotApplication) @optional() application?: BotApplication
+    @inject(TYPES.BotApplication) @optional() private readonly application?: BotApplication
   ) {
     this.client = client;
     this.configService = configService;
@@ -162,15 +165,14 @@ export class CommandHandler implements ICommandHandler {
       reportSubmissionService,
       reportInstructionsManager,
       (interaction) => this.replyGuildInstallRequired(interaction),
-      application?.reports
+      application?.reports,
+      application
     );
     this.setupCommandHandler = new SetupCommandHandler(
       this.configService,
-      notificationManager,
-      resolvedProductAnalyticsService,
       setupDiagnosticsService,
-      reportInstructionsManager,
-      (interaction) => this.replyGuildInstallRequired(interaction)
+      (interaction) => this.replyGuildInstallRequired(interaction),
+      application
     );
 
     this.commands = buildApplicationCommands({
@@ -416,9 +418,25 @@ export class CommandHandler implements ICommandHandler {
     const value = interaction.options.getString('value', true);
 
     try {
-      await this.configService.updateServerConfig(guild.id, {
-        [key]: value,
-      });
+      const settingKeys = {
+        case_role_id: 'caseRoleId',
+        admin_channel_id: 'adminChannelId',
+        verification_channel_id: 'verificationChannelId',
+        admin_notification_role_id: 'adminNotificationRoleId',
+      };
+      if (!(key in settingKeys)) throw new Error('Unsupported configuration key.');
+      if (!this.application) throw new Error('Setup application is unavailable.');
+      const field = settingKeys[key as keyof typeof settingKeys];
+      requireSetupOutcome(
+        await this.application.setup.execute(
+          createDiscordActionContext({
+            guildId: guild.id,
+            userId: interaction.user.id,
+            requestId: interaction.id,
+          }),
+          setupCommandSchema.parse({ kind: 'update_setup', changes: { [field]: value } })
+        )
+      );
 
       await interaction.reply({
         content: `✅ Configuration updated successfully!\n\`${key}\` has been set to \`${value}\``,

@@ -1,3 +1,5 @@
+import { isQueuedSetupKind } from '../setup/commands';
+import { decodeSetupCommand } from './setup';
 import { isQueuedReportKind } from '../reports/commands';
 import { decodeReportCommand } from './reports';
 import { isQueuedOperationKind } from '../operations/commands';
@@ -27,7 +29,8 @@ const queuedRowSchema = z
     if (
       row.target_user_id === null &&
       !isQueuedOperationKind(row.action_type) &&
-      !isQueuedReportKind(row.action_type)
+      !isQueuedReportKind(row.action_type) &&
+      !isQueuedSetupKind(row.action_type)
     )
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -123,6 +126,7 @@ export function decodeQueuedAction(row: unknown): DecodedQueuedAction {
 
 function decodeFamilyCommand(row: QueuedRow, reason: string | null): QueuedCommand | null {
   return (
+    decodeSetupCommand(row) ??
     decodeReportCommand(row) ??
     decodeOperationCommand(row) ??
     decodeMessageCleanupCommand(row) ??

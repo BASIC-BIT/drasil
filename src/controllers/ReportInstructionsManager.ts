@@ -75,6 +75,19 @@ export class ReportInstructionsManager {
     private readonly configService: IConfigService
   ) {}
 
+  public async readRepostBinding(
+    guildId: string
+  ): Promise<{ expectedMessageId: string | null; expectedChannelId: string | null }> {
+    const config = await this.configService.getServerConfig(guildId, {
+      forceRefresh: true,
+      failOnReadError: true,
+    });
+    return {
+      expectedMessageId: config.settings.report_instructions_message_id ?? null,
+      expectedChannelId: config.settings.report_instructions_channel_id ?? null,
+    };
+  }
+
   public async upsertReportInstructionsMessage(
     guildId: string,
     targetChannel: TextChannel,

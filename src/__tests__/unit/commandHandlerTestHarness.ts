@@ -60,8 +60,10 @@ export const buildHandler = (overrides: HandlerOverrides = {}) => {
     jest.fn().mockResolvedValue({});
   const configService = {
     updateSetupConfiguration,
-    updateServerConfig: overrides.updateServerConfig ?? jest.fn().mockResolvedValue({}),
-    updateServerSettings: overrides.updateServerSettings ?? jest.fn().mockResolvedValue({}),
+    updateServerConfig:
+      overrides.updateServerConfig ?? jest.fn().mockResolvedValue({ settings: {} }),
+    updateServerSettings:
+      overrides.updateServerSettings ?? jest.fn().mockResolvedValue({ settings: {} }),
     getCachedServerConfig: overrides.getCachedServerConfig ?? jest.fn().mockReturnValue(null),
     getServerConfig:
       overrides.getServerConfig ??
@@ -189,6 +191,21 @@ export const buildHandler = (overrides: HandlerOverrides = {}) => {
     overrides.client ??
     ({
       user: { id: 'client-1' },
+      guilds: {
+        fetch: jest.fn(async () => ({
+          id: 'guild-1',
+          members: {
+            me: { permissions: { has: () => true } },
+            fetchMe: jest.fn().mockResolvedValue({ permissions: { has: () => true } }),
+            fetch: jest.fn(async (id: string) => ({ id })),
+          },
+        })),
+      },
+      users: {
+        fetch: jest.fn(async (id: string) =>
+          id.startsWith('user-') ? { id, tag: 'target#0001' } : { id }
+        ),
+      },
     } as any);
 
   const caseRepository = {
@@ -210,26 +227,10 @@ export const buildHandler = (overrides: HandlerOverrides = {}) => {
   } as any;
   const application = buildCaseApplication(
     {
-      client:
-        overrides.client ??
-        ({
-          guilds: {
-            fetch: jest.fn(async () => ({
-              id: 'guild-1',
-              members: {
-                me: { permissions: { has: () => true } },
-                fetchMe: jest.fn().mockResolvedValue({ permissions: { has: () => true } }),
-                fetch: jest.fn(async (id: string) => ({ id })),
-              },
-            })),
-          },
-          users: {
-            fetch: jest.fn(async (id: string) =>
-              id.startsWith('user-') ? { id, tag: 'target#0001' } : { id }
-            ),
-          },
-        } as any),
+      client,
       configService,
+      notificationManager,
+      setupDiagnosticsService,
       queueService: overrides.moderationQueueService,
       caseRoleLockdownService: overrides.caseRoleLockdownService,
       integrityAuditService: overrides.integrityAuditService,

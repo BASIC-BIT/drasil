@@ -13,7 +13,7 @@ import { buildHandler } from './commandHandlerTestHarness';
 
 describe('CommandHandler verification config commands (unit)', () => {
   it('handles /config verification prompt-set with escaped newlines', async () => {
-    const updateServerSettings = jest.fn().mockResolvedValue({});
+    const updateServerSettings = jest.fn().mockResolvedValue({ settings: {} });
     const { handler, configService } = buildHandler({ updateServerSettings });
 
     const guild = {
@@ -139,7 +139,7 @@ describe('CommandHandler verification config commands (unit)', () => {
         [VERIFICATION_PROMPT_TEMPLATE_SETTING_KEY]: 'custom',
       },
     });
-    const updateServerConfig = jest.fn().mockResolvedValue({});
+    const updateServerConfig = jest.fn().mockResolvedValue({ settings: {} });
     const { handler, configService } = buildHandler({ getServerConfig, updateServerConfig });
 
     const guild = {
@@ -351,7 +351,7 @@ describe('CommandHandler verification config commands (unit)', () => {
         [EXPECTED_TOPICS_SETTING_KEY]: ['doom'],
       },
     });
-    const updateServerConfig = jest.fn().mockResolvedValue({});
+    const updateServerConfig = jest.fn().mockResolvedValue({ settings: {} });
     const { handler, configService } = buildHandler({ getServerConfig, updateServerConfig });
 
     const guild = {

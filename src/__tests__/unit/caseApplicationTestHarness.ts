@@ -1,3 +1,4 @@
+import { createBotSetupRuntime, type BotSetupDependencies } from '../../application/adapters/setup';
 import { buildReportActions } from './reportApplicationTestHarness';
 import { mock } from 'jest-mock-extended';
 import {
@@ -26,6 +27,8 @@ import {
 // actual Discord authority adapter in CaseActions.unit.test.ts.
 export function buildCaseApplication(
   deps: Omit<BotCaseDependencies, 'confirmations'> & {
+    readonly setupDiagnosticsService?: BotSetupDependencies['setupDiagnosticsService'];
+    readonly productAnalyticsService?: BotSetupDependencies['productAnalyticsService'];
     readonly queueService?: BotOperationsDependencies['queueService'];
     readonly integrityAuditService?: BotOperationsDependencies['integrityAuditService'];
     readonly caseRoleLockdownService?: BotOperationsDependencies['caseRoleLockdownService'];
@@ -37,6 +40,23 @@ export function buildCaseApplication(
   },
   authority?: AuthorityPort
 ): BotApplication {
+  const setupRuntime = createBotSetupRuntime(
+    {
+      ...deps,
+      notificationManager:
+        deps.notificationManager ?? mock<BotSetupDependencies['notificationManager']>(),
+      setupDiagnosticsService:
+        deps.setupDiagnosticsService ?? mock<BotSetupDependencies['setupDiagnosticsService']>(),
+      productAnalyticsService:
+        deps.productAnalyticsService ?? mock<BotSetupDependencies['productAnalyticsService']>(),
+      actionRequests: mock<BotSetupDependencies['actionRequests']>(),
+    },
+    authority ?? {
+      async loadFresh(guildId, userId) {
+        return { guildId, userId, present: true, owner: false, permissions: '8', roleIds: [] };
+      },
+    }
+  );
   const caseConfirmations = createCaseConfirmationStore();
   const operationsRuntime = createBotOperationsRuntime(
     {
@@ -120,6 +140,8 @@ export function buildCaseApplication(
     }
   );
   return {
+    setup: setupRuntime.actions,
+    setupRuntime,
     reports: buildReportActions({
       ...deps,
       reportIntakeService: {} as never,

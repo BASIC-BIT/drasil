@@ -36,9 +36,9 @@ export interface ServerSettings {
   gpt_message_check_count?: number; // Number of messages to check with GPT
   message_retention_days?: number; // Days to retain message history
   detection_retention_days?: number; // Days to retain detection history
-  verification_prompt_template?: string; // Custom verification thread prompt template
-  server_about?: string; // Short description of the server/community for GPT context
-  verification_context?: string; // Moderator-provided guidance for what legitimate users know
+  verification_prompt_template?: string | null; // Custom verification thread prompt template
+  server_about?: string | null; // Short description of the server/community for GPT context
+  verification_context?: string | null; // Moderator-provided guidance for what legitimate users know
   expected_topics?: string[]; // Topics, keywords, or links expected from legitimate users
   verification_ai_thread_analysis_enabled?: boolean; // Whether to analyze replies in verification threads
   verification_ai_thread_analysis_message_limit?: number; // Max flagged-user thread messages to analyze

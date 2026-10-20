@@ -76,6 +76,7 @@ function buildHandler(
       captchaChallengeService: args[16] ?? null,
       threadManager: args[6],
       notificationManager: args[1],
+      setupDiagnosticsService: args[8],
       accountQuarantineService: args[15] ?? null,
       configService: args[4],
       verificationEventRepository: args[5],

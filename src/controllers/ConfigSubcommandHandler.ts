@@ -1,10 +1,18 @@
-import { operationConfirmationCommand } from '@drasil/application';
+import {
+  operationConfirmationCommand,
+  setupCommandSchema,
+  type SetupCommand,
+  type SettingsSection,
+  type SetupOutcome,
+  type SetupConfigurationState,
+  type SetupHeuristics,
+} from '@drasil/application';
+import { requireSetupOutcome } from '../application/adapters/setup';
 import type { BotApplication } from '../application/createBotApplication';
 import { createDiscordActionContext } from '../application/context';
 import { requireOperationsOutcome } from '../application/adapters/operations';
 import { ChatInputCommandInteraction, MessageFlags } from 'discord.js';
 import { HeuristicSettings, IConfigService } from '../config/ConfigService';
-import { globalConfig } from '../config/GlobalConfig';
 import { IHeuristicService } from '../services/HeuristicService';
 import { IProductAnalyticsService } from '../services/ProductAnalyticsService';
 import {
@@ -132,6 +140,64 @@ export class ConfigSubcommandHandler {
     private readonly moderationQueueService?: IModerationQueueService,
     private readonly application?: BotApplication
   ) {}
+
+  private async executeSetup(
+    interaction: ChatInputCommandInteraction,
+    guildId: string,
+    command: SetupCommand
+  ): Promise<SetupOutcome> {
+    if (!this.application) throw new Error('Setup application is unavailable.');
+    return requireSetupOutcome(
+      await this.application.setup.execute(
+        createDiscordActionContext({
+          guildId,
+          userId: interaction.user.id,
+          requestId: interaction.id,
+        }),
+        command
+      ),
+      command
+    );
+  }
+  private async updateSettings(
+    interaction: ChatInputCommandInteraction,
+    guildId: string,
+    section: SettingsSection,
+    changes: unknown
+  ): Promise<SetupConfigurationState> {
+    const outcome = await this.executeSetup(
+      interaction,
+      guildId,
+      setupCommandSchema.parse({ kind: 'update_settings', section, changes })
+    );
+    if (!('server' in outcome)) throw new Error('Settings outcome mismatch.');
+    return outcome.server;
+  }
+  private async updateHeuristics(
+    interaction: ChatInputCommandInteraction,
+    guildId: string,
+    changes: unknown
+  ): Promise<SetupHeuristics> {
+    const outcome = await this.executeSetup(
+      interaction,
+      guildId,
+      setupCommandSchema.parse({ kind: 'update_heuristics', changes })
+    );
+    if (!('settings' in outcome)) throw new Error('Heuristics outcome mismatch.');
+    return outcome.settings;
+  }
+  private async resetHeuristics(
+    interaction: ChatInputCommandInteraction,
+    guildId: string,
+    scope: 'all' | 'keywords'
+  ): Promise<SetupHeuristics> {
+    const outcome = await this.executeSetup(interaction, guildId, {
+      kind: 'reset_heuristics',
+      scope,
+    });
+    if (!('settings' in outcome)) throw new Error('Heuristics outcome mismatch.');
+    return outcome.settings;
+  }
 
   private formatKeywordSummary(keywords: readonly string[]): string {
     if (keywords.length === 0) {
@@ -303,7 +369,7 @@ export class ConfigSubcommandHandler {
         case 'enable':
         case 'disable': {
           const enabled = subcommand === 'enable';
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'roleGate', {
             [ROLE_GATE_ENABLED_SETTING_KEY]: enabled,
           });
           const settings = getRoleGateSettings(updated.settings);
@@ -324,7 +390,7 @@ export class ConfigSubcommandHandler {
             subcommand === 'set-honeypot-role'
               ? HONEYPOT_ROLE_ID_SETTING_KEY
               : MEMBER_ACCESS_ROLE_ID_SETTING_KEY;
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'roleGate', {
             [key]: role.id,
           });
           const settings = getRoleGateSettings(updated.settings);
@@ -344,7 +410,7 @@ export class ConfigSubcommandHandler {
             subcommand === 'clear-honeypot-role'
               ? HONEYPOT_ROLE_ID_SETTING_KEY
               : MEMBER_ACCESS_ROLE_ID_SETTING_KEY;
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'roleGate', {
             [key]: null,
           });
           const settings = getRoleGateSettings(updated.settings);
@@ -366,7 +432,7 @@ export class ConfigSubcommandHandler {
             );
           }
 
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'roleGate', {
             [HONEYPOT_ROLE_RESPONSE_MODE_SETTING_KEY]: mode,
           });
           const settings = getRoleGateSettings(updated.settings);
@@ -431,7 +497,7 @@ export class ConfigSubcommandHandler {
             return;
           }
 
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'roleQuarantine', {
             [ROLE_QUARANTINE_MODE_SETTING_KEY]: mode,
           });
           const settings = getRoleQuarantineSettings(updated.settings);
@@ -460,7 +526,7 @@ export class ConfigSubcommandHandler {
             existingIds.delete(role.id);
           }
 
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'roleQuarantine', {
             [ROLE_QUARANTINE_EXEMPT_ROLE_IDS_SETTING_KEY]: [...existingIds],
           });
           const settings = getRoleQuarantineSettings(updated.settings);
@@ -542,7 +608,7 @@ export class ConfigSubcommandHandler {
         case 'set-channel': {
           await interaction.deferReply({ flags: MessageFlags.Ephemeral });
           const channel = interaction.options.getChannel('channel', true);
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'queue', {
             [MODERATION_QUEUE_CHANNEL_ID_SETTING_KEY]: channel.id,
           });
           await this.executeQueueOperation(interaction, guildId, 'sync_moderation_queue');
@@ -563,7 +629,7 @@ export class ConfigSubcommandHandler {
             guildId,
             'clear_moderation_queue'
           );
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'queue', {
             [MODERATION_QUEUE_CHANNEL_ID_SETTING_KEY]: null,
           });
           const settings = getModerationQueueSettings(updated.settings);
@@ -713,7 +779,7 @@ export class ConfigSubcommandHandler {
             return;
           }
 
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'manualIntake', {
             [MANUAL_INTAKE_ROLE_ID_SETTING_KEY]: role.id,
             [MANUAL_INTAKE_ENABLED_SETTING_KEY]: true,
           });
@@ -729,7 +795,7 @@ export class ConfigSubcommandHandler {
         }
 
         case 'clear-role': {
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'manualIntake', {
             [MANUAL_INTAKE_ROLE_ID_SETTING_KEY]: null,
             [MANUAL_INTAKE_ENABLED_SETTING_KEY]: false,
           });
@@ -757,7 +823,7 @@ export class ConfigSubcommandHandler {
             return;
           }
 
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'manualIntake', {
             [MANUAL_INTAKE_ENABLED_SETTING_KEY]: enabled,
           });
           const settings = getManualIntakeSettings(updated.settings);
@@ -773,7 +839,7 @@ export class ConfigSubcommandHandler {
 
         case 'set-grace-period': {
           const seconds = interaction.options.getInteger('seconds', true);
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'manualIntake', {
             [MANUAL_INTAKE_GRACE_PERIOD_SECONDS_SETTING_KEY]: seconds,
           });
           const settings = getManualIntakeSettings(updated.settings);
@@ -838,7 +904,7 @@ export class ConfigSubcommandHandler {
             return;
           }
 
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'detection', {
             [DETECTION_RESPONSE_MODE_SETTING_KEY]: mode,
           });
           const settings = getDetectionResponseSettings(updated.settings);
@@ -866,7 +932,7 @@ export class ConfigSubcommandHandler {
             return;
           }
 
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'detection', {
             [event === 'message'
               ? MESSAGE_DETECTION_RESPONSE_MODE_SETTING_KEY
               : JOIN_DETECTION_RESPONSE_MODE_SETTING_KEY]: mode,
@@ -888,7 +954,7 @@ export class ConfigSubcommandHandler {
             throw new Error('Invalid event. Use message or join.');
           }
 
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'detection', {
             [event === 'message'
               ? MESSAGE_DETECTION_RESPONSE_MODE_SETTING_KEY
               : JOIN_DETECTION_RESPONSE_MODE_SETTING_KEY]: null,
@@ -906,7 +972,7 @@ export class ConfigSubcommandHandler {
 
         case 'set-notification-channel': {
           const channel = interaction.options.getChannel('channel', true);
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'detection', {
             [OBSERVED_DETECTION_NOTIFICATION_CHANNEL_ID_SETTING_KEY]: channel.id,
           });
           const settings = getDetectionResponseSettings(updated.settings);
@@ -921,7 +987,7 @@ export class ConfigSubcommandHandler {
         }
 
         case 'clear-notification-channel': {
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'detection', {
             [OBSERVED_DETECTION_NOTIFICATION_CHANNEL_ID_SETTING_KEY]: null,
           });
           const settings = getDetectionResponseSettings(updated.settings);
@@ -937,7 +1003,7 @@ export class ConfigSubcommandHandler {
 
         case 'set-notification-threshold': {
           const value = interaction.options.getInteger('value', true);
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'detection', {
             [OBSERVED_DETECTION_MIN_CONFIDENCE_THRESHOLD_SETTING_KEY]: value,
           });
           const settings = getDetectionResponseSettings(updated.settings);
@@ -953,7 +1019,7 @@ export class ConfigSubcommandHandler {
 
         case 'set-notification-window': {
           const minutes = interaction.options.getInteger('minutes', true);
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'detection', {
             [OBSERVED_DETECTION_NOTIFICATION_WINDOW_MINUTES_SETTING_KEY]: minutes,
           });
           const settings = getDetectionResponseSettings(updated.settings);
@@ -970,7 +1036,7 @@ export class ConfigSubcommandHandler {
         case 'moderator-exemption-enable':
         case 'moderator-exemption-disable': {
           const enabled = subcommand === 'moderator-exemption-enable';
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'detection', {
             [AUTOMATIC_DETECTION_EXEMPT_MODERATORS_SETTING_KEY]: enabled,
           });
           const settings = getDetectionResponseSettings(updated.settings);
@@ -987,7 +1053,7 @@ export class ConfigSubcommandHandler {
         case 'case-reason-require':
         case 'case-reason-optional': {
           const required = subcommand === 'case-reason-require';
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'detection', {
             [ADMIN_CASE_OPEN_REQUIRES_REASON_SETTING_KEY]: required,
           });
           const settings = getDetectionResponseSettings(updated.settings);
@@ -1004,7 +1070,7 @@ export class ConfigSubcommandHandler {
         case 'ban-reason-require':
         case 'ban-reason-optional': {
           const required = subcommand === 'ban-reason-require';
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'detection', {
             [MODERATOR_BAN_ACTION_REQUIRES_REASON_SETTING_KEY]: required,
           });
           const settings = getDetectionResponseSettings(updated.settings);
@@ -1021,7 +1087,7 @@ export class ConfigSubcommandHandler {
         case 'kick-reason-require':
         case 'kick-reason-optional': {
           const required = subcommand === 'kick-reason-require';
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'detection', {
             [MODERATOR_KICK_ACTION_REQUIRES_REASON_SETTING_KEY]: required,
           });
           const settings = getDetectionResponseSettings(updated.settings);
@@ -1038,7 +1104,7 @@ export class ConfigSubcommandHandler {
         case 'ban-action-enable':
         case 'ban-action-disable': {
           const enabled = subcommand === 'ban-action-enable';
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'detection', {
             [MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY]: enabled,
           });
           const settings = getDetectionResponseSettings(updated.settings);
@@ -1055,7 +1121,7 @@ export class ConfigSubcommandHandler {
         case 'kick-action-enable':
         case 'kick-action-disable': {
           const enabled = subcommand === 'kick-action-enable';
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'detection', {
             [MODERATOR_KICK_ACTION_ENABLED_SETTING_KEY]: enabled,
           });
           const settings = getDetectionResponseSettings(updated.settings);
@@ -1072,7 +1138,7 @@ export class ConfigSubcommandHandler {
         case 'observed-kick-enable':
         case 'observed-kick-disable': {
           const enabled = subcommand === 'observed-kick-enable';
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'detection', {
             [OBSERVED_ACTION_KICK_ENABLED_SETTING_KEY]: enabled,
           });
           const settings = getDetectionResponseSettings(updated.settings);
@@ -1103,7 +1169,7 @@ export class ConfigSubcommandHandler {
             throw new Error('Invalid auto-kick source. Use message, join, or report_intake.');
           }
 
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'detection', {
             [sourceSettingKey]: enabled,
           });
           const settings = getDetectionResponseSettings(updated.settings);
@@ -1119,7 +1185,7 @@ export class ConfigSubcommandHandler {
 
         case 'set-auto-kick-threshold': {
           const value = interaction.options.getInteger('value', true);
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'detection', {
             [AUTO_KICK_MIN_CONFIDENCE_THRESHOLD_SETTING_KEY]: value,
           });
           const settings = getDetectionResponseSettings(updated.settings);
@@ -1184,7 +1250,7 @@ export class ConfigSubcommandHandler {
               ? Array.from(new Set([...currentRoleIds, role.id]))
               : currentRoleIds.filter((roleId) => roleId !== role.id);
 
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'caseStaff', {
             [CASE_RESPONDER_ROLE_IDS_SETTING_KEY]: nextRoleIds,
           });
           const settings = getCaseResponderSettings(updated.settings);
@@ -1206,7 +1272,7 @@ export class ConfigSubcommandHandler {
             );
           }
 
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'caseStaff', {
             [CASE_RESPONDER_ROUTING_MODE_SETTING_KEY]: mode,
           });
           const settings = getCaseResponderSettings(updated.settings);
@@ -1222,7 +1288,7 @@ export class ConfigSubcommandHandler {
 
         case 'set-member-cap': {
           const value = interaction.options.getInteger('value', true);
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'caseStaff', {
             [CASE_RESPONDER_THREAD_MEMBER_CAP_SETTING_KEY]: value,
           });
           const settings = getCaseResponderSettings(updated.settings);
@@ -1277,7 +1343,7 @@ export class ConfigSubcommandHandler {
         case 'enable':
         case 'disable': {
           const enabled = subcommand === 'enable';
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'caseReview', {
             [CASE_REVIEW_REMINDERS_ENABLED_SETTING_KEY]: enabled,
           });
           const settings = getCaseReviewReminderSettings(updated.settings);
@@ -1292,7 +1358,7 @@ export class ConfigSubcommandHandler {
 
         case 'set-stale-hours': {
           const hours = interaction.options.getInteger('hours', true);
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'caseReview', {
             [CASE_REVIEW_REMINDER_STALE_HOURS_SETTING_KEY]: hours,
           });
           const settings = getCaseReviewReminderSettings(updated.settings);
@@ -1307,7 +1373,7 @@ export class ConfigSubcommandHandler {
 
         case 'set-repeat-hours': {
           const hours = interaction.options.getInteger('hours', true);
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'caseReview', {
             [CASE_REVIEW_REMINDER_REPEAT_HOURS_SETTING_KEY]: hours,
           });
           const settings = getCaseReviewReminderSettings(updated.settings);
@@ -1322,7 +1388,7 @@ export class ConfigSubcommandHandler {
 
         case 'set-very-stale-days': {
           const days = interaction.options.getInteger('days', true);
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'caseReview', {
             [CASE_REVIEW_VERY_STALE_DAYS_SETTING_KEY]: days,
           });
           const settings = getCaseReviewReminderSettings(updated.settings);
@@ -1396,7 +1462,7 @@ export class ConfigSubcommandHandler {
         case 'reason-require':
         case 'reason-optional': {
           const required = subcommand === 'reason-require';
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'report', {
             [USER_REPORT_REASON_REQUIRED_SETTING_KEY]: required,
           });
           const settings = getUserReportSettings(updated.settings);
@@ -1416,7 +1482,7 @@ export class ConfigSubcommandHandler {
               `Invalid external report mode. Use one of: ${USER_REPORT_EXTERNAL_RESPONSE_MODES.join(', ')}`
             );
           }
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'report', {
             [USER_REPORT_EXTERNAL_RESPONSE_MODE_SETTING_KEY]: mode,
           });
           const settings = getUserReportSettings(updated.settings);
@@ -1436,7 +1502,7 @@ export class ConfigSubcommandHandler {
               `Invalid report intake response mode. Use one of: ${REPORT_INTAKE_CONFIRMED_RESPONSE_MODES.join(', ')}`
             );
           }
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'report', {
             [REPORT_INTAKE_CONFIRMED_RESPONSE_MODE_SETTING_KEY]: mode,
           });
           const settings = getReportIntakeSettings(updated.settings);
@@ -1462,7 +1528,7 @@ export class ConfigSubcommandHandler {
         case 'ai-enable':
         case 'ai-disable': {
           const enabled = subcommand === 'ai-enable';
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'report', {
             [REPORT_AI_TRIAGE_ENABLED_SETTING_KEY]: enabled,
           });
           const settings = getReportAiSettings(updated.settings);
@@ -1478,7 +1544,7 @@ export class ConfigSubcommandHandler {
         case 'ai-text-enable':
         case 'ai-text-disable': {
           const enabled = subcommand === 'ai-text-enable';
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'report', {
             [REPORT_AI_ANALYZE_TEXT_SETTING_KEY]: enabled,
           });
           const settings = getReportAiSettings(updated.settings);
@@ -1494,7 +1560,7 @@ export class ConfigSubcommandHandler {
         case 'ai-images-enable':
         case 'ai-images-disable': {
           const enabled = subcommand === 'ai-images-enable';
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'report', {
             [REPORT_AI_ANALYZE_IMAGES_SETTING_KEY]: enabled,
           });
           const settings = getReportAiSettings(updated.settings);
@@ -1514,7 +1580,7 @@ export class ConfigSubcommandHandler {
               `Invalid AI report max action. Use one of: ${REPORT_AI_MAX_ACTIONS.join(', ')}`
             );
           }
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'report', {
             [REPORT_AI_MAX_ACTION_SETTING_KEY]: action,
           });
           const settings = getReportAiSettings(updated.settings);
@@ -1528,7 +1594,7 @@ export class ConfigSubcommandHandler {
 
         case 'ai-set-max-images': {
           const value = interaction.options.getInteger('value', true);
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'report', {
             [REPORT_AI_MAX_IMAGES_SETTING_KEY]: value,
           });
           const settings = getReportAiSettings(updated.settings);
@@ -1542,7 +1608,7 @@ export class ConfigSubcommandHandler {
 
         case 'ai-set-max-image-mb': {
           const value = interaction.options.getInteger('value', true);
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'report', {
             [REPORT_AI_MAX_IMAGE_BYTES_SETTING_KEY]: value * 1024 * 1024,
           });
           const settings = getReportAiSettings(updated.settings);
@@ -1602,18 +1668,9 @@ export class ConfigSubcommandHandler {
             );
           }
 
-          if (level === 'full' && interaction.guild?.ownerId !== interaction.user.id) {
-            await interaction.reply({
-              content:
-                'Only the server owner can enable full analytics sharing because it may include raw Discord IDs.',
-              flags: MessageFlags.Ephemeral,
-            });
-            return;
-          }
-
           const currentConfig = await this.configService.getServerConfig(guildId);
           const previousSettings = getAnalyticsSettings(currentConfig.settings);
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'analytics', {
             [ANALYTICS_CONSENT_SETTING_KEY]: level,
           });
           const settings = getAnalyticsSettings(updated.settings);
@@ -1705,7 +1762,7 @@ export class ConfigSubcommandHandler {
             return;
           }
 
-          await this.configService.updateServerSettings(guildId, {
+          await this.updateSettings(interaction, guildId, 'verification', {
             verification_prompt_template: template,
           });
 
@@ -1720,12 +1777,11 @@ export class ConfigSubcommandHandler {
         }
 
         case 'prompt-reset': {
-          const serverConfig = await this.configService.getServerConfig(guildId);
-          const updatedSettings = { ...serverConfig.settings };
-          delete updatedSettings.verification_prompt_template;
-
-          await this.configService.updateServerConfig(guildId, {
-            settings: updatedSettings,
+          await this.executeSetup(interaction, guildId, {
+            kind: 'update_settings',
+            section: 'verification',
+            changes: {},
+            reset: 'prompt',
           });
 
           await interaction.reply({
@@ -1786,7 +1842,7 @@ export class ConfigSubcommandHandler {
             return;
           }
 
-          const updated = await this.configService.updateServerSettings(guildId, updates);
+          const updated = await this.updateSettings(interaction, guildId, 'verification', updates);
           const contextSettings = getServerContextSettings(updated.settings);
 
           await interaction.reply({
@@ -1800,14 +1856,11 @@ export class ConfigSubcommandHandler {
         }
 
         case 'context-reset': {
-          const serverConfig = await this.configService.getServerConfig(guildId);
-          const updatedSettings = { ...serverConfig.settings };
-          delete updatedSettings[SERVER_ABOUT_SETTING_KEY];
-          delete updatedSettings[VERIFICATION_CONTEXT_SETTING_KEY];
-          delete updatedSettings[EXPECTED_TOPICS_SETTING_KEY];
-
-          await this.configService.updateServerConfig(guildId, {
-            settings: updatedSettings,
+          await this.executeSetup(interaction, guildId, {
+            kind: 'update_settings',
+            section: 'verification',
+            changes: {},
+            reset: 'context',
           });
 
           await interaction.reply({
@@ -1831,7 +1884,7 @@ export class ConfigSubcommandHandler {
         }
 
         case 'analysis-enable': {
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'verification', {
             [VERIFICATION_AI_THREAD_ANALYSIS_ENABLED_SETTING_KEY]: true,
           });
           const analysisSettings = getVerificationThreadAnalysisSettings(updated.settings);
@@ -1846,7 +1899,7 @@ export class ConfigSubcommandHandler {
         }
 
         case 'analysis-disable': {
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'verification', {
             [VERIFICATION_AI_THREAD_ANALYSIS_ENABLED_SETTING_KEY]: false,
           });
           const analysisSettings = getVerificationThreadAnalysisSettings(updated.settings);
@@ -1862,7 +1915,7 @@ export class ConfigSubcommandHandler {
 
         case 'analysis-set-limit': {
           const value = interaction.options.getInteger('value', true);
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'verification', {
             [VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT_SETTING_KEY]: value,
           });
           const analysisSettings = getVerificationThreadAnalysisSettings(updated.settings);
@@ -1883,7 +1936,7 @@ export class ConfigSubcommandHandler {
               `Invalid verification AI max action. Use one of: ${VERIFICATION_AI_MAX_ACTIONS.join(', ')}`
             );
           }
-          const updated = await this.configService.updateServerSettings(guildId, {
+          const updated = await this.updateSettings(interaction, guildId, 'verification', {
             [VERIFICATION_AI_MAX_ACTION_SETTING_KEY]: action,
           });
           const analysisSettings = getVerificationThreadAnalysisSettings(updated.settings);
@@ -1934,7 +1987,7 @@ export class ConfigSubcommandHandler {
 
         case 'set-threshold': {
           const value = interaction.options.getInteger('value', true);
-          const settings = await this.configService.updateHeuristicSettings(guildId, {
+          const settings = await this.updateHeuristics(interaction, guildId, {
             messageThreshold: value,
           });
           await interaction.reply({
@@ -1946,7 +1999,7 @@ export class ConfigSubcommandHandler {
 
         case 'set-timeframe': {
           const value = interaction.options.getInteger('value', true);
-          const settings = await this.configService.updateHeuristicSettings(guildId, {
+          const settings = await this.updateHeuristics(interaction, guildId, {
             timeframeSeconds: value,
           });
           await interaction.reply({
@@ -1978,7 +2031,7 @@ export class ConfigSubcommandHandler {
           }
 
           const current = await this.configService.getHeuristicSettings(guildId);
-          const settings = await this.configService.updateHeuristicSettings(guildId, {
+          const settings = await this.updateHeuristics(interaction, guildId, {
             suspiciousKeywords: [...current.suspiciousKeywords, keyword],
           });
           await interaction.reply({
@@ -2009,7 +2062,7 @@ export class ConfigSubcommandHandler {
             return;
           }
 
-          const settings = await this.configService.updateHeuristicSettings(guildId, {
+          const settings = await this.updateHeuristics(interaction, guildId, {
             suspiciousKeywords: remaining,
           });
           await interaction.reply({
@@ -2020,9 +2073,7 @@ export class ConfigSubcommandHandler {
         }
 
         case 'keywords-reset': {
-          const settings = await this.configService.updateHeuristicSettings(guildId, {
-            suspiciousKeywords: [...globalConfig.getSettings().defaultSuspiciousKeywords],
-          });
+          const settings = await this.resetHeuristics(interaction, guildId, 'keywords');
           await interaction.reply({
             content: `✅ Reset suspicious keywords to defaults.\n${this.formatHeuristicSettings(settings)}`,
             flags: MessageFlags.Ephemeral,
@@ -2031,7 +2082,7 @@ export class ConfigSubcommandHandler {
         }
 
         case 'reset': {
-          const settings = await this.configService.resetHeuristicSettings(guildId);
+          const settings = await this.resetHeuristics(interaction, guildId, 'all');
           await interaction.reply({
             content: `✅ Reset all heuristic settings to defaults.\n${this.formatHeuristicSettings(settings)}`,
             flags: MessageFlags.Ephemeral,

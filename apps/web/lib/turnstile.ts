@@ -1,3 +1,4 @@
+import { setupCaptchaProviderIssues } from '@drasil/application/setup-settings';
 import { z } from 'zod';
 import { readOptionalEnv, requireEnv } from './env';
 
@@ -41,40 +42,16 @@ export interface SanitizedTurnstileResult {
 }
 
 export function captchaProviderConfigurationIssues(): string[] {
-  const issues = [
-    'NEXT_PUBLIC_TURNSTILE_SITE_KEY',
-    'TURNSTILE_SECRET_KEY',
-    'TURNSTILE_EXPECTED_HOSTNAME',
-    'DRASIL_CAPTCHA_BINDING_SECRET',
-  ].filter((name) => !readOptionalEnv(name));
-  const publicUrl =
-    readOptionalEnv('NEXT_PUBLIC_APP_URL') ?? readOptionalEnv('DRASIL_WEB_PUBLIC_URL');
-  if (!publicUrl) {
-    issues.push('NEXT_PUBLIC_APP_URL or DRASIL_WEB_PUBLIC_URL');
-    return issues;
-  }
-  try {
-    const parsed = new URL(publicUrl);
-    if (
-      parsed.username ||
-      parsed.password ||
-      parsed.pathname !== '/' ||
-      parsed.search ||
-      parsed.hash
-    ) {
-      issues.push('public web URL must be a bare origin');
-    }
-    if (parsed.protocol !== 'https:' && parsed.hostname !== 'localhost') {
-      issues.push('public web URL must use HTTPS');
-    }
-    const expectedHostname = readOptionalEnv('TURNSTILE_EXPECTED_HOSTNAME');
-    if (expectedHostname && parsed.hostname.toLowerCase() !== expectedHostname.toLowerCase()) {
-      issues.push('TURNSTILE_EXPECTED_HOSTNAME must match the public web URL hostname');
-    }
-  } catch {
-    issues.push('public web URL must be a valid URL');
-  }
-  return issues;
+  return setupCaptchaProviderIssues({
+    siteKeyConfigured: Boolean(readOptionalEnv('NEXT_PUBLIC_TURNSTILE_SITE_KEY')),
+    secretKeyConfigured: Boolean(readOptionalEnv('TURNSTILE_SECRET_KEY')),
+    bindingSecretConfigured: Boolean(readOptionalEnv('DRASIL_CAPTCHA_BINDING_SECRET')),
+    expectedHostname: readOptionalEnv('TURNSTILE_EXPECTED_HOSTNAME') ?? undefined,
+    publicUrl:
+      readOptionalEnv('NEXT_PUBLIC_APP_URL') ??
+      readOptionalEnv('DRASIL_WEB_PUBLIC_URL') ??
+      undefined,
+  });
 }
 
 export function assertCaptchaProviderConfigured(mode: string | undefined): void {

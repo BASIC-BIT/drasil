@@ -1,3 +1,4 @@
+import { dispatchSetupAction, type QueuedSetupOutcome } from './setupDispatch';
 import { dispatchReportAction, type QueuedReportOutcome } from './reportDispatch';
 import { dispatchOperationsAction, type QueuedOperationsOutcome } from './operationsDispatch';
 import {
@@ -6,6 +7,7 @@ import {
 } from './messageCleanupDispatch';
 import { requireCaptchaOutcome } from './adapters/captcha';
 import {
+  isQueuedSetupCommand,
   isQueuedReportCommand,
   isQueuedOperationCommand,
   isQueuedCaptchaCommand,
@@ -23,6 +25,7 @@ import { requireCaseOutcome } from './adapters/cases';
 
 type CaseReceipt = { readonly target_user_id: string; readonly verification_event_id: string };
 export type QueuedActionOutcome =
+  | QueuedSetupOutcome
   | QueuedReportOutcome
   | QueuedOperationsOutcome
   | QueuedMessageCleanupOutcome
@@ -82,6 +85,8 @@ export async function dispatchQueuedAction(
   action: DecodedQueuedAction
 ): Promise<QueuedActionOutcome> {
   const { command, context } = action;
+  if (isQueuedSetupCommand(command))
+    return dispatchSetupAction(application.setupRuntime, context, command);
   if (isQueuedReportCommand(command))
     return dispatchReportAction(application.reports, context, command);
   if (isQueuedOperationCommand(command))

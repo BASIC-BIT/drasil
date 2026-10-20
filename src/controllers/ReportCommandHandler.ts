@@ -1,4 +1,6 @@
-import type { ReportActions } from '@drasil/application';
+import type { BotApplication } from '../application/createBotApplication';
+import { requireSetupOutcome } from '../application/adapters/setup';
+import { setupConfirmationCommand, type ReportActions } from '@drasil/application';
 import { createDiscordActionContext } from '../application/context';
 import { requireReportOutcome } from '../application/adapters/reports';
 import { formatInlineIdentifier } from '../utils/discordUserIdentity';
@@ -36,7 +38,8 @@ export class ReportCommandHandler {
     private readonly reportSubmissionService: ReportSubmissionService,
     private readonly reportInstructionsManager: ReportInstructionsManager,
     private readonly replyGuildInstallRequired: ReplyGuildInstallRequired,
-    private readonly reports?: ReportActions
+    private readonly reports?: ReportActions,
+    private readonly application?: BotApplication
   ) {}
 
   public async handleReportCommand(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -172,11 +175,37 @@ export class ReportCommandHandler {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     try {
-      const result = await this.reportInstructionsManager.upsertReportInstructionsMessage(
-        guild.id,
-        targetChannel,
-        { repost: interaction.options.getBoolean('repost') === true }
+      if (!this.application) throw new Error('Setup application is unavailable.');
+      const repost = interaction.options.getBoolean('repost') === true;
+      const command = repost
+        ? {
+            kind: 'upsert_report_instructions' as const,
+            channelId: targetChannel.id,
+            repost: true as const,
+            ...(await this.reportInstructionsManager.readRepostBinding(guild.id)),
+            submissionId: interaction.id,
+          }
+        : {
+            kind: 'upsert_report_instructions' as const,
+            channelId: targetChannel.id,
+            repost: false as const,
+          };
+      const context = createDiscordActionContext({
+        guildId: guild.id,
+        userId: interaction.user.id,
+        requestId: interaction.id,
+      });
+      if (command.repost)
+        this.application.setupRuntime.confirmations.recordVerified(
+          context,
+          setupConfirmationCommand(context, command)
+        );
+      const outcome = requireSetupOutcome(
+        await this.application.setup.execute(context, command),
+        command
       );
+      if (outcome.kind !== 'upsert_report_instructions') throw new Error('Panel outcome mismatch.');
+      const result = outcome.result;
 
       await interaction.editReply({
         content: `Report instructions ${result.action} successfully in ${channel}.`,

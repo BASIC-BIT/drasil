@@ -1,4 +1,6 @@
 import { mock } from 'jest-mock-extended';
+import type { IProductAnalyticsService } from '../../services/ProductAnalyticsService';
+import type { ISetupDiagnosticsService } from '../../services/SetupDiagnosticsService';
 import type { IIntegrityAuditService } from '../../services/IntegrityAuditService';
 import type { ICaseRoleLockdownService } from '../../services/CaseRoleLockdownService';
 import type { ICaseThreadClosureSweepService } from '../../services/CaseThreadClosureSweepService';
@@ -126,6 +128,8 @@ async function arrange() {
     }),
   } as unknown as ISecurityActionService;
   const application = createBotApplication({
+    productAnalyticsService: mock<IProductAnalyticsService>(),
+    setupDiagnosticsService: mock<ISetupDiagnosticsService>(),
     reportIntakeService: {} as any,
     integrityAuditService: mock<IIntegrityAuditService>(),
     caseRoleLockdownService: mock<ICaseRoleLockdownService>(),

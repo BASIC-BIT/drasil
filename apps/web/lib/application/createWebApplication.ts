@@ -1,3 +1,5 @@
+import { createWebSetupActions } from './adapters/setup';
+import type { SetupUpdateActions } from '@drasil/application';
 import { createWebCaptchaActions } from './adapters/captcha';
 import type { CaptchaBrowserDependencies, CaptchaBrowserActions } from '@drasil/application';
 import {
@@ -22,12 +24,14 @@ import {
 import { createSetupDataAdapter } from '../setupDataAdapter';
 
 export interface WebApplication {
+  readonly setup: SetupUpdateActions;
   readonly reportReview: ReportReviewActions;
   readonly attention: AttentionActions;
 }
 export function createWebApplication(): WebApplication {
   const authority = createWebAuthority();
   return {
+    setup: createWebSetupActions(),
     reportReview: createReportReviewActions({
       authority,
       staffRoles: {

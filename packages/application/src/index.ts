@@ -46,3 +46,8 @@ export type {
 } from './reports/ports';
 
 export * from './reports/submission';
+
+export * from './setup/settings';
+export * from './setup/commands';
+export * from './setup/ports';
+export * from './setup/actions';

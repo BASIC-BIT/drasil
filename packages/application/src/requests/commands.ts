@@ -1,3 +1,4 @@
+import { queuedSetupCommandSchema, type QueuedSetupCommand } from '../setup/commands';
 import { queuedReportCommandSchema, type QueuedReportCommand } from '../reports/commands';
 import { queuedOperationCommandSchema, type QueuedOperationCommand } from '../operations/commands';
 import {
@@ -35,6 +36,7 @@ const queuedCaseCommandSchema = caseCommandSchema.refine(
 );
 
 export type QueuedCommand =
+  | QueuedSetupCommand
   | QueuedReportCommand
   | QueuedOperationCommand
   | CaptchaCommand
@@ -43,6 +45,7 @@ export type QueuedCommand =
   | QueuedDetectionCommand
   | QueuedQuarantineCommand;
 export const queuedCommandSchema = z.union([
+  queuedSetupCommandSchema,
   queuedReportCommandSchema,
   queuedOperationCommandSchema,
   messageCleanupCommandSchema,

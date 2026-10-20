@@ -1,3 +1,5 @@
+import { isQueuedSetupCommand } from '../setup/commands';
+import { encodeSetupAction } from './setup';
 import { isQueuedReportCommand } from '../reports/commands';
 import { encodeReportAction } from './reports';
 import { encodeOperationAction } from './operations';
@@ -21,6 +23,7 @@ const caseAction = {
 } as const;
 export function encodeQueuedAction(context: ActionContext, input: QueuedCommand): EnqueueInput {
   const command = queuedCommandSchema.parse(input);
+  if (isQueuedSetupCommand(command)) return encodeSetupAction(context, command);
   if (isQueuedReportCommand(command)) return encodeReportAction(context, command);
   if (isQueuedOperationCommand(command)) return encodeOperationAction(context, command);
   if (isQueuedCaptchaCommand(command)) return encodeCaptchaAction(context, command);

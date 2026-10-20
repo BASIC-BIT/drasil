@@ -581,7 +581,11 @@ describe('CommandHandler report commands (unit)', () => {
     };
     prepareReportClient(client, interaction);
     await handler.handleSlashCommand(interaction as any);
-    expect(upsert).toHaveBeenCalledWith('guild-1', channel, { repost: true });
+    expect(upsert).toHaveBeenCalledWith('guild-1', channel, {
+      repost: true,
+      expectedMessageId: null,
+      expectedChannelId: null,
+    });
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: 'Report instructions reposted successfully in <#channel-1>.',
     });

@@ -2,47 +2,27 @@ import {
   operationConfirmationCommand,
   isQueuedOperationCommand,
   isQueuedReportCommand,
+  isQueuedSetupCommand,
   decodeQueuedAction,
 } from '@drasil/application';
 import type { BotApplication } from '../application/createBotApplication';
 import { dispatchQueuedAction } from '../application/requestDispatch';
-import {
-  ChannelType,
-  Client,
-  Guild,
-  GuildMember,
-  Message,
-  PermissionFlagsBits,
-  TextChannel,
-  User,
-} from 'discord.js';
+import { Client, Guild, GuildMember, Message, User } from 'discord.js';
 import { inject, injectable, optional } from 'inversify';
-import type { DetectionResponseMode } from '../contracts/setup';
 import { IConfigService } from '../config/ConfigService';
-import {
-  ReportInstructionsManager,
-  ReportInstructionsRollbackRequiredError,
-} from '../controllers/ReportInstructionsManager';
-import { Prisma } from '../db/prisma';
 import { TYPES } from '../di/symbols';
 import {
   getReportBanAttemptToken,
   IModerationActionRequestRepository,
 } from '../repositories/ModerationActionRequestRepository';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
-import {
-  ModerationActionRequest,
-  ModerationActionRequestType,
-  type VerificationChannelPermissionSyncState,
-} from '../repositories/types';
+import { ModerationActionRequest, ModerationActionRequestType } from '../repositories/types';
 import { IModerationQueueService } from './ModerationQueueService';
 import { INotificationManager } from './NotificationManager';
 import { IProductAnalyticsService } from './ProductAnalyticsService';
 import { IReportIntakeService } from './ReportIntakeService';
 import { ISecurityActionService } from './SecurityActionService';
-import { ISetupDiagnosticsService, SetupDiagnosticReport } from './SetupDiagnosticsService';
-import { SetupWorkflowService } from './SetupWorkflowService';
-import { SetupProvisioningService } from './SetupProvisioningService';
+import { ISetupDiagnosticsService } from './SetupDiagnosticsService';
 import { IThreadManager } from './ThreadManager';
 import { ICombinedBanLifecycleService, IUserModerationService } from './UserModerationService';
 import { ICaseThreadClosureSweepService } from './CaseThreadClosureSweepService';
@@ -124,9 +104,9 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       this.executeOperationsRequest(request),
     [ModerationActionRequestType.SYNC_EXISTING_BAN]: (request) => this.executeCaseRequest(request),
     [ModerationActionRequestType.COMPLETE_SETUP_VERIFICATION]: (request) =>
-      this.completeSetupVerification(request),
+      this.executeSetupRequest(request),
     [ModerationActionRequestType.UPSERT_REPORT_INSTRUCTIONS]: (request) =>
-      this.upsertReportInstructions(request),
+      this.executeSetupRequest(request),
     [ModerationActionRequestType.REQUEST_CAPTCHA_CHALLENGE]: (request) =>
       this.executeCaptchaRequest(request),
     [ModerationActionRequestType.RETRY_CAPTCHA_CHALLENGE]: (request) =>
@@ -290,7 +270,11 @@ export class ModerationActionRequestService implements IModerationActionRequestS
           },
         }
       : decoded;
-    if (isQueuedOperationCommand(action.command) || isQueuedReportCommand(action.command))
+    if (
+      isQueuedOperationCommand(action.command) ||
+      isQueuedReportCommand(action.command) ||
+      isQueuedSetupCommand(action.command)
+    )
       throw new Error('Detection request mismatch.');
     if (!recovery)
       this.application.caseConfirmations.recordVerified(action.context, action.command);
@@ -309,7 +293,11 @@ export class ModerationActionRequestService implements IModerationActionRequestS
 
   private async executeCaseRequest(request: ModerationActionRequest): Promise<void> {
     const action = decodeQueuedAction(request);
-    if (isQueuedOperationCommand(action.command) || isQueuedReportCommand(action.command))
+    if (
+      isQueuedOperationCommand(action.command) ||
+      isQueuedReportCommand(action.command) ||
+      isQueuedSetupCommand(action.command)
+    )
       throw new Error('Case request mismatch.');
     if (!this.application) throw new Error('Case application is unavailable.');
     // The persisted form submission supplies confirmation evidence; the shared
@@ -343,7 +331,11 @@ export class ModerationActionRequestService implements IModerationActionRequestS
   private async executeCaptchaRequest(request: ModerationActionRequest): Promise<void> {
     if (!this.application) throw new Error('CAPTCHA application is unavailable.');
     const action = await this.application.captchaRuntime.decodeRequest(request);
-    if (isQueuedOperationCommand(action.command) || isQueuedReportCommand(action.command))
+    if (
+      isQueuedOperationCommand(action.command) ||
+      isQueuedReportCommand(action.command) ||
+      isQueuedSetupCommand(action.command)
+    )
       throw new Error('CAPTCHA request mismatch.');
     if (action.context.actor.kind === 'user')
       this.application.caseConfirmations.recordVerified(action.context, action.command);
@@ -376,275 +368,17 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     await runtime.afterComplete(request);
   }
 
-  private async completeSetupVerification(request: ModerationActionRequest): Promise<void> {
-    const isOnboardingWizard =
-      this.readMetadataBoolean(request.metadata, 'onboarding_wizard') === true;
-    const caseRoleId = this.readMetadataString(request.metadata, 'case_role_id');
-    const adminChannelId = this.readMetadataString(request.metadata, 'admin_channel_id');
-    if (!adminChannelId) {
-      throw new Error('Setup verification request is missing the admin channel.');
-    }
-
-    const verificationChannelId = this.readMetadataString(
-      request.metadata,
-      'verification_channel_id'
-    );
-    const reportInstructionsChannelId = this.readMetadataString(
-      request.metadata,
-      'report_instructions_channel_id'
-    );
-    const caseRoleName = this.readMetadataString(request.metadata, 'case_role_name');
-    const detectionResponseMode = this.readSetupDetectionResponseMode(request.metadata);
-    const previousPermissionSyncState = this.readVerificationPermissionSyncState(
-      request.metadata,
-      'previous_verification_channel_permission_sync'
-    );
-    const candidatePermissionSyncState = this.readVerificationPermissionSyncState(
-      request.metadata,
-      'candidate_verification_channel_permission_sync'
-    );
-    const guild = await this.fetchGuild(request.server_id);
-    const administrator = await guild.members
-      .fetch({ user: request.actor_id, force: true })
-      .catch(() => null);
-    if (!administrator?.permissions.has(PermissionFlagsBits.Administrator)) {
-      throw new Error('Setup requires current Administrator permission.');
-    }
-    await this.fetchRequestTextChannel(request.server_id, adminChannelId, 'Admin channel');
-
-    const setupWorkflowService = new SetupWorkflowService(
-      this.configService,
-      this.notificationManager,
-      this.productAnalyticsService,
-      this.setupDiagnosticsService
-    );
-    let reportInstructionsAction: string | null = null;
-    let reportInstructionsMessageId: string | null = null;
-    let reportInstructionsError: string | null = null;
-    const setupResult = await new SetupProvisioningService(
-      this.configService,
-      this.setupDiagnosticsService,
-      setupWorkflowService
-    ).provision({
-      adminChannelId,
-      actorLabel: `web administrator ${request.actor_id}`,
-      captureAnalytics: true,
-      caseRoleId,
-      caseRoleName,
-      candidatePermissionSyncState,
-      detectionResponseMode,
-      guild,
-      previousPermissionSyncState,
-      persistPermissionSyncState: async (state, previousState) => {
-        const updated = await this.repository.mergeMetadata(request.id, {
-          previous_verification_channel_permission_sync: previousState
-            ? (previousState as unknown as Prisma.JsonObject)
-            : null,
-          candidate_verification_channel_permission_sync: state as unknown as Prisma.JsonObject,
-        });
-        if (!updated) {
-          throw new Error('Setup request disappeared while saving permission provenance.');
-        }
-      },
-      reportInstructionsChannelId,
-      verificationChannelId,
-      afterSetupCompleted: async () => {
-        if (!reportInstructionsChannelId && !isOnboardingWizard) {
-          return;
-        }
-        try {
-          const reportInstructionsManager = new ReportInstructionsManager(
-            this.client,
-            this.configService
-          );
-          const reportInstructionsResult = reportInstructionsChannelId
-            ? await reportInstructionsManager.upsertReportInstructionsMessage(
-                request.server_id,
-                await this.fetchRequestTextChannel(
-                  request.server_id,
-                  reportInstructionsChannelId,
-                  'Report instructions channel'
-                )
-              )
-            : await reportInstructionsManager.clearReportInstructions(request.server_id);
-          reportInstructionsAction = reportInstructionsResult.action;
-          reportInstructionsMessageId =
-            'messageId' in reportInstructionsResult ? reportInstructionsResult.messageId : null;
-        } catch (error) {
-          if (error instanceof ReportInstructionsRollbackRequiredError) {
-            throw error;
-          }
-          reportInstructionsError = this.errorMessage(error);
-        }
-      },
-    });
-
-    if (setupResult.status !== 'completed') {
-      if (isOnboardingWizard) {
-        void this.productAnalyticsService.captureGuildEvent(
-          request.server_id,
-          'setup wizard blocked',
-          {
-            diagnostic_codes:
-              'report' in setupResult
-                ? setupResult.report.issues
-                    .filter((issue) => issue.severity === 'error')
-                    .map((issue) => issue.code)
-                : [],
-            reason: setupResult.status,
-            surface: 'web',
-          }
-        );
-      }
-      if (setupResult.status === 'ambiguous_case_role') {
-        throw new Error(
-          `Multiple roles named ${setupResult.roleName} exist; choose one before retrying.`
-        );
-      }
-      if (setupResult.status === 'ambiguous_verification_channel') {
-        throw new Error('Multiple verification channels exist; choose one before retrying.');
-      }
-      if (setupResult.status === 'invalid_selection') {
-        throw new Error(setupResult.detail);
-      }
-      throw new Error(this.describeSetupWorkflowFailure(setupResult));
-    }
-
-    await this.repository.complete(request.id, {
-      action_type: request.action_type,
-      admin_channel_id: setupResult.adminChannelId,
-      case_role_created: setupResult.caseRoleWasCreated,
-      case_role_id: setupResult.caseRoleId,
-      report_instructions_action: reportInstructionsAction,
-      report_instructions_channel_id: reportInstructionsChannelId,
-      report_instructions_error: reportInstructionsError,
-      report_instructions_message_id: reportInstructionsMessageId,
-      server_id: request.server_id,
-      verification_channel_action: setupResult.verificationChannelAction,
-      verification_channel_id: setupResult.verificationChannelId,
-    });
-    if (isOnboardingWizard) {
+  private async executeSetupRequest(request: ModerationActionRequest): Promise<void> {
+    if (!this.application) throw new Error('Setup application is unavailable.');
+    const action = decodeQueuedAction(request);
+    const outcome = await dispatchQueuedAction(this.application, action);
+    await this.repository.complete(request.id, outcome);
+    if (action.command.kind === 'complete_setup_verification' && action.command.onboardingWizard)
       void this.productAnalyticsService.captureGuildEvent(
         request.server_id,
         'setup wizard completed',
         { surface: 'web' }
       );
-    }
-  }
-
-  private readSetupDetectionResponseMode(
-    metadata: Prisma.JsonValue
-  ): DetectionResponseMode | undefined {
-    const value = this.readMetadataString(metadata, 'detection_response_mode');
-    return value === 'off' ||
-      value === 'record_only' ||
-      value === 'notify_only' ||
-      value === 'restrict'
-      ? value
-      : undefined;
-  }
-
-  private readVerificationPermissionSyncState(
-    metadata: Prisma.JsonValue,
-    key: string
-  ): VerificationChannelPermissionSyncState | undefined {
-    const value = this.readMetadataRecord(metadata, key);
-    return value && typeof value.channel_id === 'string' && Array.isArray(value.managed_overwrites)
-      ? (value as unknown as VerificationChannelPermissionSyncState)
-      : undefined;
-  }
-
-  private async upsertReportInstructions(request: ModerationActionRequest): Promise<void> {
-    const channelId = this.readMetadataString(request.metadata, 'channel_id');
-    if (!channelId) {
-      throw new Error('Report instructions request is missing target channel.');
-    }
-
-    const repost = this.readMetadataBoolean(request.metadata, 'repost') === true;
-    if (repost) {
-      const guild = await this.fetchGuild(request.server_id);
-      const administrator = await guild.members
-        .fetch({ user: request.actor_id, force: true })
-        .catch(() => null);
-      if (!administrator?.permissions.has(PermissionFlagsBits.Administrator)) {
-        throw new Error('Report panel repost requires current Administrator permission.');
-      }
-    }
-
-    const targetChannel = await this.fetchRequestTextChannel(
-      request.server_id,
-      channelId,
-      'Report instructions channel'
-    );
-    const manager = new ReportInstructionsManager(this.client, this.configService);
-    const result = await manager.upsertReportInstructionsMessage(request.server_id, targetChannel, {
-      repost,
-      ...(repost
-        ? {
-            expectedMessageId:
-              this.readMetadataString(request.metadata, 'expected_message_id') ?? null,
-            expectedChannelId:
-              this.readMetadataString(request.metadata, 'expected_channel_id') ?? null,
-          }
-        : {}),
-    });
-
-    await this.repository.complete(request.id, {
-      action: result.action,
-      action_type: request.action_type,
-      channel_id: targetChannel.id,
-      message_id: result.messageId,
-      server_id: request.server_id,
-    });
-  }
-
-  private async fetchRequestTextChannel(
-    serverId: string,
-    channelId: string,
-    label: string
-  ): Promise<TextChannel> {
-    const channel = await this.client.channels.fetch(channelId).catch(() => null);
-    if (!channel || channel.type !== ChannelType.GuildText) {
-      throw new Error(`${label} ${channelId} was not found as a text channel.`);
-    }
-
-    const targetChannel = channel as TextChannel;
-    if (targetChannel.guildId !== serverId) {
-      throw new Error(`${label} does not belong to the request guild.`);
-    }
-
-    return targetChannel;
-  }
-
-  private describeSetupWorkflowFailure(result: {
-    error?: unknown;
-    report?: SetupDiagnosticReport;
-    setupFailureDetail?: string;
-    status: string;
-  }): string {
-    if (result.report) {
-      return `Setup validation failed. ${this.formatSetupDiagnosticSummary(result.report)}${
-        result.setupFailureDetail ? ` ${result.setupFailureDetail}` : ''
-      }`;
-    }
-
-    if (result.setupFailureDetail) {
-      return result.setupFailureDetail;
-    }
-
-    if (result.error) {
-      return this.errorMessage(result.error);
-    }
-
-    return `Setup workflow failed with status ${result.status}.`;
-  }
-
-  private formatSetupDiagnosticSummary(report: SetupDiagnosticReport): string {
-    const firstError = report.issues.find((issue) => issue.severity === 'error');
-    const firstWarning = report.issues.find((issue) => issue.severity === 'warning');
-    const firstIssue = firstError ?? firstWarning;
-    const firstIssueMessage = firstIssue ? ` First issue: ${firstIssue.message}` : '';
-    return `${report.errorCount} error(s), ${report.warningCount} warning(s).${firstIssueMessage}`;
   }
 
   private async fetchGuild(serverId: string): Promise<Guild> {

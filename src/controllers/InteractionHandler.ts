@@ -58,10 +58,7 @@ import { ISecurityActionService } from '../services/SecurityActionService';
 import { IConfigService } from '../config/ConfigService';
 import { ISetupDiagnosticsService } from '../services/SetupDiagnosticsService';
 import { IReportIntakeService } from '../services/ReportIntakeService';
-import {
-  IProductAnalyticsService,
-  NOOP_PRODUCT_ANALYTICS_SERVICE,
-} from '../services/ProductAnalyticsService';
+import { IProductAnalyticsService } from '../services/ProductAnalyticsService';
 import { ReportSubmissionService } from '../services/ReportSubmissionService';
 import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
 import { REPORT_MESSAGE_MODAL_PREFIX } from '../utils/userReportSettings';
@@ -262,10 +259,8 @@ export class InteractionHandler implements IInteractionHandler {
     );
     this.setupVerificationModalHandler = new SetupVerificationModalHandler(
       this.client,
-      this.notificationManager,
-      this.configService,
       setupDiagnosticsService,
-      productAnalyticsService ?? NOOP_PRODUCT_ANALYTICS_SERVICE
+      application
     );
   }
 

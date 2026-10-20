@@ -1160,6 +1160,8 @@ describe('ModerationActionRequestService', () => {
       })),
     };
     const application = createBotApplication({
+      productAnalyticsService: productAnalyticsService as any,
+      setupDiagnosticsService: setupDiagnosticsService as any,
       reportIntakeService: reportIntakeService as any,
       caseThreadClosureSweepService: caseThreadClosureSweepService as never,
       caseRoleLockdownService: caseRoleLockdownService as never,
@@ -3749,7 +3751,13 @@ describe('ModerationActionRequestService', () => {
         guild.members.fetch.mockRejectedValue(new Error('Discord unavailable'));
       else
         guild.members.fetch.mockResolvedValue(
-          state === 'departed' ? null : { permissions: { has: () => false } }
+          state === 'departed'
+            ? null
+            : {
+                id: upsertReportInstructionsRequest.actor_id,
+                roles: { cache: new Map() },
+                permissions: { bitfield: 0n, has: () => false },
+              }
         );
       await service.processPendingRequests();
       expect(upsert).not.toHaveBeenCalled();

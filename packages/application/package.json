@@ -15,6 +15,11 @@
       "types": "./dist/postgres/index.d.ts",
       "require": "./dist/postgres/index.js",
       "import": "./dist/postgres/index.js"
+    },
+    "./setup-settings": {
+      "types": "./dist/setup/settings.d.ts",
+      "require": "./dist/setup/settings.js",
+      "import": "./dist/setup/settings.js"
     }
   },
   "scripts": {
@@ -26,5 +31,12 @@
   },
   "dependencies": {
     "zod": "^3.25.76"
+  },
+  "typesVersions": {
+    "*": {
+      "setup-settings": [
+        "dist/setup/settings.d.ts"
+      ]
+    }
   }
 }
