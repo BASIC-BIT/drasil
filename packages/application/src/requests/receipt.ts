@@ -17,6 +17,7 @@ export interface EnqueueInput {
   readonly actorSurface: string;
   readonly serverId: string;
   readonly targetUserId: string;
+  readonly messageDeletionJobId?: string;
   readonly detectionEventId?: string | null;
   readonly reportIntakeId?: string | null;
   readonly verificationEventId?: string | null;

@@ -1,3 +1,4 @@
+import { encodeMessageCleanupAction } from './messageCleanup';
 import { encodeCaptchaAction } from './captcha';
 import { encodeDetectionAction } from './detections';
 import type { ActionContext } from '../context';
@@ -33,6 +34,10 @@ export function encodeQueuedAction(context: ActionContext, input: QueuedCommand)
     targetUserId: command.targetUserId,
   };
   switch (command.kind) {
+    case 'preview_case_message_deletion':
+    case 'execute_case_message_deletion':
+    case 'ban_case_user_with_message_cleanup':
+      return encodeMessageCleanupAction(context, command);
     case 'preview_account_quarantine':
     case 'quarantine_compromised_account':
       return {

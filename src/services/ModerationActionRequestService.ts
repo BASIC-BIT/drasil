@@ -28,14 +28,8 @@ import {
   getReportBanAttemptToken,
   IModerationActionRequestRepository,
 } from '../repositories/ModerationActionRequestRepository';
-import { IMessageDeletionJobRepository } from '../repositories/MessageDeletionJobRepository';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import {
-  MessageDeletionBanStatus,
-  MessageDeletionCaseFinalizationStatus,
-  MessageDeletionJobMode,
-  MessageDeletionJobStatus,
-  MessageDeletionJobWithItems,
   ModerationActionRequest,
   ModerationActionRequestType,
   type VerificationChannelPermissionSyncState,
@@ -54,7 +48,6 @@ import { SetupWorkflowService } from './SetupWorkflowService';
 import { SetupProvisioningService } from './SetupProvisioningService';
 import { IThreadManager } from './ThreadManager';
 import { ICombinedBanLifecycleService, IUserModerationService } from './UserModerationService';
-import { MessageCleanupService } from './MessageCleanupService';
 import { ICaseThreadClosureSweepService } from './CaseThreadClosureSweepService';
 import { CaseRoleLockdownReport, ICaseRoleLockdownService } from './CaseRoleLockdownService';
 
@@ -107,11 +100,11 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     [ModerationActionRequestType.KICK_CASE_USER]: (request) => this.executeCaseRequest(request),
     [ModerationActionRequestType.BAN_CASE_USER]: (request) => this.executeCaseRequest(request),
     [ModerationActionRequestType.PREVIEW_CASE_MESSAGE_DELETION]: (request) =>
-      this.previewCaseMessageDeletion(request),
+      this.executeMessageCleanupRequest(request),
     [ModerationActionRequestType.EXECUTE_CASE_MESSAGE_DELETION]: (request) =>
-      this.executeCaseMessageDeletion(request),
+      this.executeMessageCleanupRequest(request),
     [ModerationActionRequestType.BAN_CASE_USER_WITH_MESSAGE_CLEANUP]: (request) =>
-      this.banCaseUserWithMessageCleanup(request),
+      this.executeMessageCleanupRequest(request),
     [ModerationActionRequestType.BAN_CASE_USER_BY_ID]: (request) =>
       this.executeCaseRequest(request),
     [ModerationActionRequestType.REPAIR_ACTIVE_CASE]: (request) => this.executeCaseRequest(request),
@@ -173,10 +166,6 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     private readonly productAnalyticsService: IProductAnalyticsService,
     @inject(TYPES.SetupDiagnosticsService)
     private readonly setupDiagnosticsService: ISetupDiagnosticsService,
-    @inject(TYPES.MessageDeletionJobRepository)
-    private readonly messageDeletionJobs: IMessageDeletionJobRepository,
-    @inject(TYPES.MessageCleanupService)
-    private readonly messageCleanupService: MessageCleanupService,
     @inject(TYPES.BotApplication)
     @optional()
     private readonly application?: BotApplication
@@ -662,144 +651,16 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     await this.repository.complete(request.id, outcome);
   }
 
-  private async previewCaseMessageDeletion(request: ModerationActionRequest): Promise<void> {
-    const job = await this.requireMessageDeletionJob(request);
-    try {
-      await this.requireCleanupAdministrator(request);
-    } catch (error) {
-      await this.messageDeletionJobs.fail(job.id, this.errorMessage(error));
-      throw error;
-    }
-    const preview = await this.messageCleanupService.previewJob(job.id);
-
-    await this.repository.complete(request.id, {
-      action_type: request.action_type,
-      candidate_count: preview.candidate_count,
-      coverage: preview.coverage,
-      message_deletion_job_id: preview.id,
-      mode: preview.mode,
-      scope: preview.scope,
-      status: preview.status,
-      target_user_id: preview.user_id,
-      verification_event_id: preview.verification_event_id,
-    });
-  }
-
-  private async executeCaseMessageDeletion(request: ModerationActionRequest): Promise<void> {
-    const job = await this.requireMessageDeletionJob(request, MessageDeletionJobMode.DELETE_ONLY);
-    const administrator = await this.requireCleanupAdministrator(request);
-    await this.assertBotPermission(
-      administrator.guild,
-      PermissionFlagsBits.ManageMessages,
-      'Manage Messages'
+  private async executeMessageCleanupRequest(request: ModerationActionRequest): Promise<void> {
+    if (!this.application) throw new Error('Message cleanup application is unavailable.');
+    const runtime = this.application.messageCleanupRuntime;
+    const action = await runtime.decodeRequest(request);
+    const outcome = await dispatchQueuedAction(
+      { ...this.application, messageCleanup: runtime.forRequest(request) },
+      action
     );
-    const result = await this.messageCleanupService.executeJob(job.id);
-
-    await this.repository.complete(request.id, {
-      action_type: request.action_type,
-      message_deletion_job_id: job.id,
-      mode: job.mode,
-      ...this.messageCleanupReceipt(result),
-    });
-  }
-
-  private async banCaseUserWithMessageCleanup(request: ModerationActionRequest): Promise<void> {
-    const job = await this.requireMessageDeletionJob(
-      request,
-      MessageDeletionJobMode.BAN_WITH_CLEANUP
-    );
-    const administrator = await this.requireCleanupAdministrator(request);
-    const guild = administrator.guild;
-    const moderator = administrator.user;
-    if (job.ban_status !== MessageDeletionBanStatus.SUCCEEDED) {
-      await this.assertModeratorBanActionEnabled(request.server_id);
-      await this.assertBotPermission(guild, PermissionFlagsBits.BanMembers, 'Ban Members');
-    }
-    if (job.status !== MessageDeletionJobStatus.COMPLETED) {
-      await this.assertBotPermission(guild, PermissionFlagsBits.ManageMessages, 'Manage Messages');
-    }
-
-    await this.userModerationService.markCombinedBanCleanupPending(
-      job.verification_event_id,
-      job.id
-    );
-    if (job.ban_status !== MessageDeletionBanStatus.SUCCEEDED) {
-      await this.messageDeletionJobs.updateBanStatus(job.id, MessageDeletionBanStatus.PENDING);
-      try {
-        // Discord's PUT ban operation is idempotent, so a stale request can safely resume here.
-        await this.userModerationService.performDiscordBanById(guild, job.user_id, job.reason);
-      } catch (error) {
-        await Promise.all([
-          this.messageDeletionJobs.updateBanStatus(job.id, MessageDeletionBanStatus.FAILED),
-          this.userModerationService.clearCombinedBanCleanupMarker(
-            job.verification_event_id,
-            job.id
-          ),
-        ]);
-        throw error;
-      }
-      await this.messageDeletionJobs.updateBanStatus(job.id, MessageDeletionBanStatus.SUCCEEDED);
-    }
-
-    let cleanupResult: Awaited<ReturnType<MessageCleanupService['executeJob']>>;
-    try {
-      cleanupResult = await this.messageCleanupService.executeJob(job.id);
-    } catch (error) {
-      await this.userModerationService.clearCombinedBanCleanupMarker(
-        job.verification_event_id,
-        job.id
-      );
-      throw error;
-    }
-
-    if (job.case_finalization_status !== MessageDeletionCaseFinalizationStatus.SUCCEEDED) {
-      await this.messageDeletionJobs.updateCaseFinalizationStatus(
-        job.id,
-        MessageDeletionCaseFinalizationStatus.PENDING
-      );
-      try {
-        await this.userModerationService.finalizeSuccessfulCombinedBan(
-          guild,
-          job.user_id,
-          job.verification_event_id,
-          job.id,
-          job.reason,
-          moderator,
-          request.detection_event_id ?? undefined
-        );
-        await this.messageDeletionJobs.updateCaseFinalizationStatus(
-          job.id,
-          MessageDeletionCaseFinalizationStatus.SUCCEEDED
-        );
-      } catch (error) {
-        await this.messageDeletionJobs.updateCaseFinalizationStatus(
-          job.id,
-          MessageDeletionCaseFinalizationStatus.FAILED
-        );
-        await this.userModerationService.clearCombinedBanCleanupMarker(
-          job.verification_event_id,
-          job.id
-        );
-        throw error;
-      }
-    }
-
-    await this.repository.complete(request.id, {
-      action_type: request.action_type,
-      banned: true,
-      case_finalized: true,
-      message_deletion_job_id: job.id,
-      mode: job.mode,
-      ...this.messageCleanupReceipt(cleanupResult),
-    });
-    try {
-      await this.userModerationService.clearCombinedBanCleanupMarker(
-        job.verification_event_id,
-        job.id
-      );
-    } catch (error) {
-      console.warn(`Failed to clear completed cleanup marker for job ${job.id}:`, error);
-    }
+    await this.repository.complete(request.id, outcome, getReportBanAttemptToken(request));
+    await runtime.afterComplete(request);
   }
 
   private async completeSetupVerification(request: ModerationActionRequest): Promise<void> {
@@ -1179,70 +1040,6 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     return guild.members.fetch(userId);
   }
 
-  private async requireCleanupAdministrator(
-    request: ModerationActionRequest
-  ): Promise<GuildMember> {
-    const administrator = await this.fetchGuildMember(request.server_id, request.actor_id);
-    if (!administrator.permissions.has(PermissionFlagsBits.Administrator)) {
-      throw new Error('Message cleanup requires current Administrator permission.');
-    }
-    return administrator;
-  }
-
-  private async requireMessageDeletionJob(
-    request: ModerationActionRequest,
-    expectedMode?: MessageDeletionJobMode
-  ): Promise<MessageDeletionJobWithItems> {
-    if (
-      !request.message_deletion_job_id ||
-      !request.target_user_id ||
-      !request.verification_event_id
-    ) {
-      throw new Error('Message cleanup request is missing its job, target user, or case id.');
-    }
-
-    const job = await this.messageDeletionJobs.findById(request.message_deletion_job_id);
-    if (!job) {
-      throw new Error('Message cleanup job was not found.');
-    }
-    if (
-      job.server_id !== request.server_id ||
-      job.user_id !== request.target_user_id ||
-      job.verification_event_id !== request.verification_event_id ||
-      (request.action_type === ModerationActionRequestType.PREVIEW_CASE_MESSAGE_DELETION &&
-        job.requested_by !== request.actor_id) ||
-      job.actor_surface !== request.actor_surface
-    ) {
-      throw new Error('Message cleanup job does not match the queued request.');
-    }
-    if (expectedMode && job.mode !== expectedMode) {
-      throw new Error(`Message cleanup job mode must be ${expectedMode}.`);
-    }
-    return job;
-  }
-
-  private messageCleanupReceipt(result: {
-    alreadyCompleted: boolean;
-    preservedCount: number;
-    deletedCount: number;
-    alreadyMissingCount: number;
-    changedCount: number;
-    evidenceFailedCount: number;
-    deleteFailedCount: number;
-    permissionDeniedCount: number;
-  }): Record<string, boolean | number> {
-    return {
-      already_completed: result.alreadyCompleted,
-      preserved_count: result.preservedCount,
-      deleted_count: result.deletedCount,
-      already_missing_count: result.alreadyMissingCount,
-      changed_since_preview_count: result.changedCount,
-      evidence_failed_count: result.evidenceFailedCount,
-      delete_failed_count: result.deleteFailedCount,
-      permission_denied_count: result.permissionDeniedCount,
-    };
-  }
-
   private async assertBotPermission(
     guild: Guild,
     permission: bigint,
@@ -1276,14 +1073,6 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     }
 
     return (await messageChannel.messages.fetch(sourceMessageId).catch(() => null)) ?? undefined;
-  }
-
-  private async assertModeratorBanActionEnabled(serverId: string): Promise<void> {
-    const config = await this.configService.getServerConfig(serverId);
-    const settings = getDetectionResponseSettings(config.settings);
-    if (!settings.moderatorBanActionEnabled) {
-      throw new Error('Moderator ban action is disabled for this server.');
-    }
   }
 
   private readMetadataString(metadata: unknown, key: string): string | null {

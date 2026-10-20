@@ -122,6 +122,8 @@ async function arrange() {
     }),
   } as unknown as ISecurityActionService;
   const application = createBotApplication({
+    messageDeletionJobs: {} as never,
+    messageCleanupService: {} as never,
     captchaChallengeService: null,
     threadManager: {} as any,
     notificationManager: {} as any,

@@ -1048,6 +1048,7 @@ describe('ModerationActionRequestService', () => {
       validateSetupCandidate: jest.fn(async () => setupDiagnosticsReport),
     };
     const messageDeletionJobs = {
+      recordCombinedOperation: jest.fn(async () => undefined),
       fail: jest.fn(async () => null),
       findById: jest.fn(async (id: string): Promise<MessageDeletionJobWithItems | null> => {
         void id;
@@ -1072,6 +1073,7 @@ describe('ModerationActionRequestService', () => {
     };
     const pendingVerificationEvent = {
       id: 'ver-1',
+      private_evidence_thread_id: 'evidence-thread-1',
       attention_state: CaseAttentionState.REVIEW_REQUIRED,
       case_kind: CaseKind.STANDARD,
       case_revision: 2,
@@ -1154,6 +1156,8 @@ describe('ModerationActionRequestService', () => {
       })),
     };
     const application = createBotApplication({
+      messageDeletionJobs: messageDeletionJobs as any,
+      messageCleanupService: messageCleanupService as any,
       captchaChallengeService: captchaChallengeService as any,
       threadManager: threadManager as any,
       notificationManager: notificationManager as any,
@@ -1191,8 +1195,6 @@ describe('ModerationActionRequestService', () => {
       notificationManager as any,
       productAnalyticsService as any,
       setupDiagnosticsService as any,
-      messageDeletionJobs as any,
-      messageCleanupService as any,
       application
     );
 
@@ -2190,6 +2192,7 @@ describe('ModerationActionRequestService', () => {
     } as any);
     const compromisedCase = {
       id: 'ver-1',
+      private_evidence_thread_id: 'evidence-thread-1',
       attention_state: CaseAttentionState.REVIEW_REQUIRED,
       case_kind: CaseKind.COMPROMISED_ACCOUNT,
       case_revision: 2,
@@ -4155,6 +4158,13 @@ describe('ModerationActionRequestService', () => {
     messageDeletionJobs.findById.mockResolvedValue({
       ...messageCleanupJob,
       ban_status: MessageDeletionBanStatus.SUCCEEDED,
+      metadata: {
+        combined_operation: {
+          requestId: 'combined-cleanup-request-1',
+          actorId: 'moderator-1',
+          source: 'web',
+        },
+      },
       mode: MessageDeletionJobMode.BAN_WITH_CLEANUP,
       status: MessageDeletionJobStatus.EXECUTING,
     });
@@ -4179,6 +4189,13 @@ describe('ModerationActionRequestService', () => {
     messageDeletionJobs.findById.mockResolvedValue({
       ...messageCleanupJob,
       ban_status: MessageDeletionBanStatus.SUCCEEDED,
+      metadata: {
+        combined_operation: {
+          requestId: 'combined-cleanup-request-1',
+          actorId: 'moderator-1',
+          source: 'web',
+        },
+      },
       case_finalization_status: MessageDeletionCaseFinalizationStatus.FAILED,
       mode: MessageDeletionJobMode.BAN_WITH_CLEANUP,
       status: MessageDeletionJobStatus.COMPLETED,
@@ -4192,6 +4209,76 @@ describe('ModerationActionRequestService', () => {
     expect(repository.completed).toHaveLength(1);
   });
 
+  it('continues the owned committed cleanup after Administrator permission is revoked', async () => {
+    const {
+      messageCleanupService,
+      messageDeletionJobs,
+      reporterMember,
+      repository,
+      service,
+      userModerationService,
+    } = buildService([combinedBanCleanupRequest]);
+    messageDeletionJobs.findById.mockResolvedValue({
+      ...messageCleanupJob,
+      ban_status: MessageDeletionBanStatus.SUCCEEDED,
+      metadata: {
+        combined_operation: {
+          requestId: 'combined-cleanup-request-1',
+          actorId: 'moderator-1',
+          source: 'web',
+        },
+      },
+      mode: MessageDeletionJobMode.BAN_WITH_CLEANUP,
+    });
+    reporterMember.permissions.has.mockReturnValue(false);
+    reporterMember.permissions.bitfield = 0n;
+    await service.processPendingRequests();
+    expect(userModerationService.performDiscordBanById).not.toHaveBeenCalled();
+    expect(messageCleanupService.executeJob).toHaveBeenCalledWith('cleanup-job-1');
+    expect(repository.completed).toHaveLength(1);
+  });
+
+  it('a later job update cannot let a new request adopt legacy committed cleanup after Administrator revocation', async () => {
+    const { messageCleanupService, messageDeletionJobs, reporterMember, repository, service } =
+      buildService([{ ...combinedBanCleanupRequest, id: 'foreign-new-request' }]);
+    messageDeletionJobs.findById.mockResolvedValue({
+      ...messageCleanupJob,
+      ban_status: MessageDeletionBanStatus.SUCCEEDED,
+      metadata: {},
+      updated_at: new Date('2099-01-01T00:00:00.000Z'),
+      mode: MessageDeletionJobMode.BAN_WITH_CLEANUP,
+    });
+    reporterMember.permissions.has.mockReturnValue(false);
+    reporterMember.permissions.bitfield = 0n;
+    await service.processPendingRequests();
+    expect(messageCleanupService.executeJob).not.toHaveBeenCalled();
+    expect(repository.failed).toEqual([
+      {
+        id: 'foreign-new-request',
+        error: 'Message cleanup requires current Administrator permission.',
+      },
+    ]);
+  });
+
+  it('rejects a queued cleanup when its saved frozen generation changed', async () => {
+    const request = {
+      ...executeMessageCleanupRequest,
+      metadata: {
+        cleanup_mode: 'delete_only',
+        cleanup_scope: 'last_day',
+        reason: messageCleanupJob.reason,
+        cleanup_preview_generation: 'old-generation',
+      },
+    };
+    const { messageCleanupService, messageDeletionJobs, repository, service } = buildService([
+      request,
+    ]);
+    messageDeletionJobs.findById.mockResolvedValue(messageCleanupJob);
+    await service.processPendingRequests();
+    expect(messageCleanupService.executeJob).not.toHaveBeenCalled();
+    expect(repository.failed[0]?.error).toContain('cleanup preview changed');
+  });
+
   it('completes a recovered request without repeating durable case finalization', async () => {
     const {
       messageCleanupService,
@@ -4203,6 +4290,13 @@ describe('ModerationActionRequestService', () => {
     messageDeletionJobs.findById.mockResolvedValue({
       ...messageCleanupJob,
       ban_status: MessageDeletionBanStatus.SUCCEEDED,
+      metadata: {
+        combined_operation: {
+          requestId: 'combined-cleanup-request-1',
+          actorId: 'moderator-1',
+          source: 'web',
+        },
+      },
       case_finalization_status: MessageDeletionCaseFinalizationStatus.SUCCEEDED,
       mode: MessageDeletionJobMode.BAN_WITH_CLEANUP,
       status: MessageDeletionJobStatus.COMPLETED,

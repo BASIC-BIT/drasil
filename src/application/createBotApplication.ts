@@ -1,4 +1,9 @@
 import {
+  createBotMessageCleanupRuntime,
+  type BotMessageCleanupDependencies,
+  type BotMessageCleanupRuntime,
+} from './adapters/messageCleanup';
+import {
   createBotCaptchaRuntime,
   type BotCaptchaRuntime,
   type BotCaptchaDependencies,
@@ -19,6 +24,7 @@ import {
   createAttentionActions,
   type AttentionActions,
   type CaseActions,
+  type MessageCleanupActions,
 } from '@drasil/application';
 import type { Client } from 'discord.js';
 import type { IModerationQueueRepository } from '../repositories/ModerationQueueRepository';
@@ -26,6 +32,8 @@ import type { IModerationQueueService } from '../services/ModerationQueueService
 import { createBotAuthority, createBotAttentionMessageDeleter } from './adapters/attention';
 
 export interface BotApplication {
+  readonly messageCleanup: MessageCleanupActions;
+  readonly messageCleanupRuntime: BotMessageCleanupRuntime;
   readonly captcha: BotCaptchaRuntime['actions'];
   readonly captchaRuntime: BotCaptchaRuntime;
   readonly quarantine: BotQuarantineRuntime['actions'];
@@ -39,6 +47,7 @@ export interface BotApplication {
 }
 export function createBotApplication(
   deps: Omit<BotCaseDependencies, 'confirmations'> &
+    BotMessageCleanupDependencies &
     Pick<
       BotCaptchaDependencies,
       'captchaChallengeService' | 'threadManager' | 'notificationManager'
@@ -59,8 +68,15 @@ export function createBotApplication(
     ...deps,
     confirmations: caseConfirmations.confirmations,
   });
+  const messageCleanupRuntime = createBotMessageCleanupRuntime(deps);
   const quarantineRuntime = createBotQuarantineRuntime(deps);
   return {
+    messageCleanupRuntime,
+    messageCleanup: {
+      async execute(): ReturnType<MessageCleanupActions['execute']> {
+        throw new Error('Cleanup requires a persisted request runtime.');
+      },
+    },
     captcha: captchaRuntime.actions,
     captchaRuntime,
     quarantine: quarantineRuntime.actions,

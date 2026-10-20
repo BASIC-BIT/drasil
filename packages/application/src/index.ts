@@ -27,3 +27,8 @@ export * from './containment/commands';
 
 export * from './containment/captcha';
 export * from './containment/captchaBrowser';
+export * from './messageCleanup/commands';
+export * from './messageCleanup/ports';
+export * from './messageCleanup/actions';
+export * from './messageCleanup/submission';
+export { messageCleanupSubmissionKey } from './requests/messageCleanup';

@@ -191,6 +191,10 @@ class FakeJobRepository implements IMessageDeletionJobRepository {
     return this.job;
   }
 
+  public async recordCombinedOperation(): Promise<void> {
+    throw new Error('not used');
+  }
+
   public async updateBanStatus(): Promise<MessageDeletionJobWithItems> {
     throw new Error('not used');
   }
@@ -455,11 +459,11 @@ describe('MessageCleanupService', () => {
       ['message-2', buildMessage('message-2')],
     ]);
     const fetchMessage = jest.fn((id: string) => Promise.resolve(messages.get(id)));
-    const preserve = jest
-      .fn()
-      .mockImplementation(({ itemId }: { itemId: string }) =>
-        Promise.resolve({ preserved: true, evidenceMessageId: `evidence-${itemId}` })
-      );
+    let deleteCallsBeforeEvidencePreserved = 0;
+    const preserve = jest.fn().mockImplementation(({ itemId }: { itemId: string }) => {
+      deleteCallsBeforeEvidencePreserved += bulkDelete.mock.calls.length;
+      return Promise.resolve({ preserved: true, evidenceMessageId: `evidence-${itemId}` });
+    });
     const bulkDelete = jest.fn().mockResolvedValue(undefined);
     const harness = createHarness({
       job: buildJob({
@@ -475,6 +479,7 @@ describe('MessageCleanupService', () => {
 
     const result = await harness.service.executeJob('job-1');
 
+    expect(deleteCallsBeforeEvidencePreserved).toBe(0);
     expect(preserve).toHaveBeenCalledTimes(2);
     expect(preserve).toHaveBeenNthCalledWith(
       1,

@@ -1,3 +1,7 @@
+import {
+  messageCleanupCommandSchema,
+  type MessageCleanupCommand,
+} from '../messageCleanup/commands';
 import { captchaCommandSchema, type CaptchaCommand } from '../containment/captcha';
 import {
   queuedQuarantineCommandSchema,
@@ -30,10 +34,12 @@ const queuedCaseCommandSchema = caseCommandSchema.refine(
 
 export type QueuedCommand =
   | CaptchaCommand
+  | MessageCleanupCommand
   | QueuedCaseCommand
   | QueuedDetectionCommand
   | QueuedQuarantineCommand;
 export const queuedCommandSchema = z.union([
+  messageCleanupCommandSchema,
   captchaCommandSchema,
   queuedCaseCommandSchema,
   queuedDetectionCommandSchema,
@@ -51,4 +57,14 @@ export function isQueuedCaptchaCommand(command: QueuedCommand): command is Captc
     default:
       return false;
   }
+}
+
+export function isQueuedMessageCleanupCommand(
+  command: QueuedCommand
+): command is MessageCleanupCommand {
+  return (
+    command.kind === 'preview_case_message_deletion' ||
+    command.kind === 'execute_case_message_deletion' ||
+    command.kind === 'ban_case_user_with_message_cleanup'
+  );
 }

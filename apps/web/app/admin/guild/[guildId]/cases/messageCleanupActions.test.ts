@@ -83,6 +83,7 @@ const readyJob = {
   reason: 'Reviewed spam cleanup.',
   evidence_thread_id: 'evidence-thread-1',
   candidate_count: 4,
+  previewed_at: '2026-07-08T18:00:00.000Z',
   ban_status: 'not_requested',
   case_finalization_status: 'not_applicable',
 };
@@ -161,6 +162,16 @@ describe('messageCleanupActions', () => {
     );
     expect(statements.at(-1)).toBe('commit');
     expect(release).toHaveBeenCalledOnce();
+    const insertion = query.mock.calls.find(([text]) =>
+      (text as string).includes('insert into moderation_action_requests')
+    );
+    const metadata = JSON.parse((insertion?.[1] as unknown[])[9] as string);
+    expect(metadata).toMatchObject({
+      cleanup_mode: 'delete_only',
+      cleanup_scope: 'last_day',
+      reason: 'Reviewed spam cleanup.',
+      cleanup_preview_generation: null,
+    });
   });
 
   it('rejects a current guild manager who is not an Administrator', async () => {

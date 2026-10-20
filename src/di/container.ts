@@ -31,7 +31,11 @@ import {
 import { DetectionOrchestrator, IDetectionOrchestrator } from '../services/DetectionOrchestrator';
 import { ConfigService, IConfigService } from '../config/ConfigService';
 import { SecurityActionService, ISecurityActionService } from '../services/SecurityActionService';
-import { UserModerationService, IUserModerationService } from '../services/UserModerationService';
+import {
+  UserModerationService,
+  IUserModerationService,
+  type ICombinedBanLifecycleService,
+} from '../services/UserModerationService';
 import { Bot, IBot } from '../Bot';
 import {
   IVerificationEventRepository,
@@ -281,6 +285,10 @@ function configureServices(container: Container): void {
     .bind<BotApplication>(TYPES.BotApplication)
     .toDynamicValue((context) =>
       createBotApplication({
+        messageDeletionJobs: context.get<IMessageDeletionJobRepository>(
+          TYPES.MessageDeletionJobRepository
+        ),
+        messageCleanupService: context.get<MessageCleanupService>(TYPES.MessageCleanupService),
         captchaChallengeService: context.get<ICaptchaChallengeService>(
           TYPES.CaptchaChallengeService
         ),
@@ -304,7 +312,9 @@ function configureServices(container: Container): void {
           TYPES.DetectionEventsRepository
         ),
         securityActionService: context.get<ISecurityActionService>(TYPES.SecurityActionService),
-        userModerationService: context.get<IUserModerationService>(TYPES.UserModerationService),
+        userModerationService: context.get<IUserModerationService & ICombinedBanLifecycleService>(
+          TYPES.UserModerationService
+        ),
       })
     )
     .inSingletonScope();

@@ -6,6 +6,7 @@ import { ServerRepository } from '../../repositories/ServerRepository';
 import {
   DetectionType,
   MessageDeletionCoverage,
+  MessageDeletionBanStatus,
   MessageDeletionDiscoverySource,
   MessageDeletionEvidenceStatus,
   MessageDeletionItemStatus,
@@ -244,6 +245,57 @@ describeIntegration('MessageDeletionJobRepository (integration)', () => {
     ).resolves.toMatchObject({
       status: ModerationActionRequestStatus.QUEUED,
       verification_event_id: verification.id,
+    });
+  });
+
+  it('preserves committed combined operation ownership against later requests and job updates', async () => {
+    const verification = await createPendingCase();
+    const job = await jobs.create({
+      serverId: 'guild-1',
+      userId: 'user-1',
+      verificationEventId: verification.id,
+      requestedBy: 'administrator-1',
+      actorSurface: 'web',
+      mode: MessageDeletionJobMode.BAN_WITH_CLEANUP,
+      scope: MessageDeletionScope.LAST_HOUR,
+      reason: 'Reviewed cleanup',
+      evidenceThreadId: 'evidence-thread-1',
+    });
+    const original = await requests.enqueue({
+      serverId: 'guild-1',
+      actionType: ModerationActionRequestType.BAN_CASE_USER_WITH_MESSAGE_CLEANUP,
+      actorId: 'administrator-1',
+      actorSurface: 'web',
+      targetUserId: 'user-1',
+      verificationEventId: verification.id,
+      messageDeletionJobId: job.id,
+      idempotencyKey: `test:original:${job.id}`,
+    });
+    const operation = { requestId: original.id, actorId: 'administrator-1', source: 'web' };
+    await jobs.recordCombinedOperation(job.id, operation);
+    await jobs.updateBanStatus(job.id, MessageDeletionBanStatus.SUCCEEDED);
+    await requests.fail(original.id, 'interrupted after ban');
+    const foreign = await requests.enqueue({
+      serverId: 'guild-1',
+      actionType: ModerationActionRequestType.BAN_CASE_USER_WITH_MESSAGE_CLEANUP,
+      actorId: 'administrator-2',
+      actorSurface: 'web',
+      targetUserId: 'user-1',
+      verificationEventId: verification.id,
+      messageDeletionJobId: job.id,
+      idempotencyKey: `test:foreign:${job.id}`,
+    });
+    await jobs.recordCombinedOperation(job.id, {
+      requestId: foreign.id,
+      actorId: 'administrator-2',
+      source: 'web',
+    });
+    expect((await jobs.findById(job.id))?.metadata).toMatchObject({
+      combined_operation: operation,
+    });
+    await prisma.$executeRaw`update message_deletion_jobs set updated_at = now() + interval '1 second' where id = ${job.id}::uuid`;
+    expect((await jobs.findById(job.id))?.metadata).toMatchObject({
+      combined_operation: operation,
     });
   });
 

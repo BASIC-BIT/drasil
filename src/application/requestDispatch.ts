@@ -1,6 +1,11 @@
+import {
+  dispatchMessageCleanupAction,
+  type QueuedMessageCleanupOutcome,
+} from './messageCleanupDispatch';
 import { requireCaptchaOutcome } from './adapters/captcha';
 import {
   isQueuedCaptchaCommand,
+  isQueuedMessageCleanupCommand,
   type CaptchaOutcome,
   type CaseCommand,
   type CaseOutcome,
@@ -13,6 +18,7 @@ import { requireCaseOutcome } from './adapters/cases';
 
 type CaseReceipt = { readonly target_user_id: string; readonly verification_event_id: string };
 export type QueuedActionOutcome =
+  | QueuedMessageCleanupOutcome
   | CaptchaOutcome
   | QueuedQuarantineOutcome
   | QueuedDetectionOutcome
@@ -71,6 +77,8 @@ export async function dispatchQueuedAction(
   const { command, context } = action;
   if (isQueuedCaptchaCommand(command))
     return requireCaptchaOutcome(await application.captcha.execute(context, command));
+  if (isQueuedMessageCleanupCommand(command))
+    return dispatchMessageCleanupAction(application.messageCleanup, context, command);
   switch (command.kind) {
     case 'preview_account_quarantine':
     case 'quarantine_compromised_account':

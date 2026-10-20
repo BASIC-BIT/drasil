@@ -1,3 +1,4 @@
+import { decodeMessageCleanupCommand } from './messageCleanup';
 import { decodeCaptchaCommand } from './captcha';
 import { decodeDetectionCommand } from './detections';
 import { z } from 'zod';
@@ -14,6 +15,7 @@ const queuedRowSchema = z.object({
   detection_event_id: id.nullable().optional(),
   report_intake_id: id.nullable().optional(),
   verification_event_id: id.nullable().optional(),
+  message_deletion_job_id: id.nullable().optional(),
   metadata: z.record(z.unknown()).nullable().optional(),
 });
 export type QueuedRow = z.infer<typeof queuedRowSchema>;
@@ -103,5 +105,9 @@ export function decodeQueuedAction(row: unknown): DecodedQueuedAction {
 }
 
 function decodeFamilyCommand(row: QueuedRow, reason: string | null): QueuedCommand | null {
-  return decodeCaptchaCommand(row) ?? decodeDetectionCommand(row, reason);
+  return (
+    decodeMessageCleanupCommand(row) ??
+    decodeCaptchaCommand(row) ??
+    decodeDetectionCommand(row, reason)
+  );
 }
