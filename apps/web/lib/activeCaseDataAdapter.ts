@@ -1,3 +1,4 @@
+import { buildQueuedCaptchaCommand } from './application/adapters/captcha';
 import {
   evaluateCasePolicy,
   readCasePolicy,
@@ -241,7 +242,11 @@ const requestTypeByCaseAction: Record<WebCaseAction, ModerationActionRequestActi
   bypass_captcha: 'bypass_captcha_challenge',
 };
 
-function buildQueuedCaseCommand(input: QueueCaseActionInput, userId: string): QueuedCommand | null {
+type QueuedCaseAction = QueuedCommand | null;
+
+function buildQueuedCaseCommand(input: QueueCaseActionInput, userId: string): QueuedCaseAction {
+  const captcha = buildQueuedCaptchaCommand(input, userId);
+  if (captcha) return captcha;
   const binding = { caseId: input.caseId, targetUserId: userId };
   const destructive = { ...binding, reason: input.reason ?? null, detectionEventId: null };
   switch (input.action) {

@@ -1,3 +1,4 @@
+import { encodeCaptchaAction } from './captcha';
 import { encodeDetectionAction } from './detections';
 import type { ActionContext } from '../context';
 import { queuedCommandSchema, type QueuedCommand } from './commands';
@@ -15,6 +16,14 @@ const caseAction = {
 } as const;
 export function encodeQueuedAction(context: ActionContext, input: QueuedCommand): EnqueueInput {
   const command = queuedCommandSchema.parse(input);
+  if (
+    command.kind === 'request_captcha_challenge' ||
+    command.kind === 'retry_captcha_challenge' ||
+    command.kind === 'bypass_captcha_challenge' ||
+    command.kind === 'apply_captcha_pass' ||
+    command.kind === 'notify_captcha_attention'
+  )
+    return encodeCaptchaAction(context, command);
   if (context.actor.kind !== 'user') throw new Error('Case submission requires a user actor.');
   const base = {
     actionType: command.kind,

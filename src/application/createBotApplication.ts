@@ -1,4 +1,9 @@
 import {
+  createBotCaptchaRuntime,
+  type BotCaptchaRuntime,
+  type BotCaptchaDependencies,
+} from './adapters/captcha';
+import {
   createBotQuarantineRuntime,
   type BotQuarantineRuntime,
   type BotQuarantineDependencies,
@@ -21,6 +26,8 @@ import type { IModerationQueueService } from '../services/ModerationQueueService
 import { createBotAuthority, createBotAttentionMessageDeleter } from './adapters/attention';
 
 export interface BotApplication {
+  readonly captcha: BotCaptchaRuntime['actions'];
+  readonly captchaRuntime: BotCaptchaRuntime;
   readonly quarantine: BotQuarantineRuntime['actions'];
   readonly quarantineRuntime: BotQuarantineRuntime;
   readonly detections: BotDetectionRuntime['actions'];
@@ -31,21 +38,31 @@ export interface BotApplication {
   readonly caseRepository: BotCaseDependencies['verificationEventRepository'];
 }
 export function createBotApplication(
-  deps: Omit<BotCaseDependencies, 'confirmations'> & {
-    readonly client: Client;
-    readonly accountQuarantineService: BotQuarantineDependencies['accountQuarantineService'];
-    readonly actionRequests: BotDetectionDependencies['actionRequests'];
-    readonly queueRepository: IModerationQueueRepository;
-    readonly queueService: IModerationQueueService;
-  }
+  deps: Omit<BotCaseDependencies, 'confirmations'> &
+    Pick<
+      BotCaptchaDependencies,
+      'captchaChallengeService' | 'threadManager' | 'notificationManager'
+    > & {
+      readonly client: Client;
+      readonly accountQuarantineService: BotQuarantineDependencies['accountQuarantineService'];
+      readonly actionRequests: BotDetectionDependencies['actionRequests'];
+      readonly queueRepository: IModerationQueueRepository;
+      readonly queueService: IModerationQueueService;
+    }
 ): BotApplication {
   const caseConfirmations = createCaseConfirmationStore();
   const detectionRuntime = createBotDetectionRuntime({
     ...deps,
     confirmations: caseConfirmations.confirmations,
   });
+  const captchaRuntime = createBotCaptchaRuntime({
+    ...deps,
+    confirmations: caseConfirmations.confirmations,
+  });
   const quarantineRuntime = createBotQuarantineRuntime(deps);
   return {
+    captcha: captchaRuntime.actions,
+    captchaRuntime,
     quarantine: quarantineRuntime.actions,
     quarantineRuntime,
     detections: detectionRuntime.actions,

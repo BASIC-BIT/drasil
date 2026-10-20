@@ -1,3 +1,4 @@
+import { captchaCommandSchema, type CaptchaCommand } from '../containment/captcha';
 import {
   queuedQuarantineCommandSchema,
   type QueuedQuarantineCommand,
@@ -27,9 +28,27 @@ const queuedCaseCommandSchema = caseCommandSchema.refine(
   'Ordinary staff moderation, native case openings and administrator slash repairs execute directly.'
 );
 
-export type QueuedCommand = QueuedCaseCommand | QueuedDetectionCommand | QueuedQuarantineCommand;
+export type QueuedCommand =
+  | CaptchaCommand
+  | QueuedCaseCommand
+  | QueuedDetectionCommand
+  | QueuedQuarantineCommand;
 export const queuedCommandSchema = z.union([
+  captchaCommandSchema,
   queuedCaseCommandSchema,
   queuedDetectionCommandSchema,
   queuedQuarantineCommandSchema,
 ]);
+
+export function isQueuedCaptchaCommand(command: QueuedCommand): command is CaptchaCommand {
+  switch (command.kind) {
+    case 'request_captcha_challenge':
+    case 'retry_captcha_challenge':
+    case 'bypass_captcha_challenge':
+    case 'apply_captcha_pass':
+    case 'notify_captcha_attention':
+      return true;
+    default:
+      return false;
+  }
+}

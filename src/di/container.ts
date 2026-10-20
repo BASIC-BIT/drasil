@@ -281,6 +281,11 @@ function configureServices(container: Container): void {
     .bind<BotApplication>(TYPES.BotApplication)
     .toDynamicValue((context) =>
       createBotApplication({
+        captchaChallengeService: context.get<ICaptchaChallengeService>(
+          TYPES.CaptchaChallengeService
+        ),
+        threadManager: context.get<IThreadManager>(TYPES.ThreadManager),
+        notificationManager: context.get<INotificationManager>(TYPES.NotificationManager),
         accountQuarantineService: context.get<IAccountQuarantineService>(
           TYPES.AccountQuarantineService
         ),

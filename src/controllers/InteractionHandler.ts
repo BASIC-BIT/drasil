@@ -1,7 +1,10 @@
+import { requireCaptchaOutcome } from '../application/adapters/captcha';
 import { requireQuarantineOutcome } from '../application/adapters/quarantine';
 import { requireDetectionOutcome } from '../application/adapters/detections';
 import {
   encodeQueuedAction,
+  type CaptchaCommand,
+  type CaptchaOutcome,
   type DetectionCommand,
   type DetectionOutcome,
   type CaseCommand,
@@ -38,7 +41,6 @@ import {
   AdminActionType,
   CaseAttentionState,
   CaseKind,
-  CaptchaChallengeRequestSource,
   CaptchaChallengeStatus,
   DetectionType,
   VerificationStatus,
@@ -1774,9 +1776,10 @@ export class InteractionHandler implements IInteractionHandler {
         throw new Error('The bound case changed before the security check could be bypassed.');
       }
       const reason = interaction.fields.getTextInputValue(CAPTCHA_BYPASS_REASON_FIELD_ID).trim();
-      await this.captchaChallengeService.bypassChallenge({
-        verificationEventId,
-        moderatorId: interaction.user.id,
+      await this.executeCaptchaAction(interaction, {
+        kind: 'bypass_captcha_challenge',
+        caseId: verificationEventId,
+        targetUserId: verificationEvent.user_id,
         reason,
         expectedChallengeId: challengeId,
         expectedGeneration: generation,
@@ -1791,6 +1794,21 @@ export class InteractionHandler implements IInteractionHandler {
             : 'The security check bypass could not be recorded.',
       });
     }
+  }
+
+  private async executeCaptchaAction(
+    interaction: ButtonInteraction | ModalSubmitInteraction,
+    command: CaptchaCommand
+  ): Promise<CaptchaOutcome> {
+    if (!this.application || !interaction.guildId)
+      throw new Error('CAPTCHA application is unavailable.');
+    const context = createDiscordActionContext({
+      guildId: interaction.guildId,
+      userId: interaction.user.id,
+      requestId: interaction.id,
+    });
+    this.application.caseConfirmations.recordVerified(context, command);
+    return requireCaptchaOutcome(await this.application.captcha.execute(context, command));
   }
 
   private async executeConfirmedAdminAction(
@@ -1956,23 +1974,24 @@ export class InteractionHandler implements IInteractionHandler {
         ) {
           throw new Error('The security check changed. Refresh the case and try again.');
         }
-        const result = await this.captchaChallengeService.requestChallenge({
-          verificationEventId:
-            displayedChallenge?.verification_event_id ?? (parsed.verificationEventId as string),
-          requestSource: CaptchaChallengeRequestSource.MODERATOR,
-          requestedBy: interaction.user.id,
-          retry: action === 'captcha_retry',
-          ...(action === 'captcha_retry'
+        const caseId = displayedChallenge?.verification_event_id ?? parsed.verificationEventId;
+        if (!caseId) throw new Error('The bound case is unavailable.');
+        const command: CaptchaCommand =
+          action === 'captcha_retry' && displayedChallenge
             ? {
-                expectedChallengeId: parsed.captchaChallengeId as string,
-                expectedGeneration: parsed.captchaGeneration as number,
+                kind: 'retry_captcha_challenge',
+                caseId,
+                targetUserId: parsed.userId,
+                expectedChallengeId: displayedChallenge.id,
+                expectedGeneration: displayedChallenge.generation,
               }
-            : {}),
-        });
+            : { kind: 'request_captcha_challenge', caseId, targetUserId: parsed.userId };
+        const result = await this.executeCaptchaAction(interaction, command);
         await interaction.followUp({
-          content: result.delivered
-            ? 'Security check sent in the case thread.'
-            : 'Security check created, but its case-thread link could not be delivered. Repair the public URL or case thread, then retry.',
+          content:
+            'delivered' in result && result.delivered
+              ? 'Security check sent in the case thread.'
+              : 'Security check created, but its case-thread link could not be delivered. Repair the public URL or case thread, then retry.',
           flags: MessageFlags.Ephemeral,
         });
       } catch (error) {

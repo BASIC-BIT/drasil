@@ -1,3 +1,4 @@
+import { decodeCaptchaCommand } from './captcha';
 import { decodeDetectionCommand } from './detections';
 import { z } from 'zod';
 import type { ActionContext } from '../context';
@@ -26,7 +27,7 @@ export function decodeQueuedAction(row: unknown): DecodedQueuedAction {
   const reason = typeof metadata.reason === 'string' ? metadata.reason : null;
   const target = { kind: parsed.action_type, targetUserId: parsed.target_user_id };
   let command: QueuedCommand;
-  const detectionCommand = decodeDetectionCommand(parsed, reason);
+  const detectionCommand = decodeFamilyCommand(parsed, reason);
   if (detectionCommand) {
     command = detectionCommand;
   } else {
@@ -99,4 +100,8 @@ export function decodeQueuedAction(row: unknown): DecodedQueuedAction {
     },
     command,
   };
+}
+
+function decodeFamilyCommand(row: QueuedRow, reason: string | null): QueuedCommand | null {
+  return decodeCaptchaCommand(row) ?? decodeDetectionCommand(row, reason);
 }

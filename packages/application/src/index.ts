@@ -24,3 +24,6 @@ export * from './containment/ports';
 export * from './containment/quarantine';
 export * from './containment/fingerprint';
 export * from './containment/commands';
+
+export * from './containment/captcha';
+export * from './containment/captchaBrowser';

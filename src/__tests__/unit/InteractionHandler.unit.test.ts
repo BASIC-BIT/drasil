@@ -73,6 +73,9 @@ function buildHandler(
   if (!args[12])
     args[12] = buildCaseApplication({
       client: args[0],
+      captchaChallengeService: args[16] ?? null,
+      threadManager: args[6],
+      notificationManager: args[1],
       accountQuarantineService: args[15] ?? null,
       configService: args[4],
       verificationEventRepository: args[5],
@@ -1415,7 +1418,19 @@ describe('InteractionHandler (unit)', () => {
       challenge: { id: challengeId, generation: 5 },
       delivered: true,
     });
+    configService.getServerConfig.mockResolvedValue({
+      settings: { captcha_mode: 'manual' },
+    } as any);
     const captchaChallengeService = {
+      findByCaseId: jest.fn().mockResolvedValue({
+        id: challengeId,
+        generation: 4,
+        server_id: 'guild-1',
+        user_id: 'user-1',
+        verification_event_id: 'ver-1',
+        status: 'failed',
+        case_revision_at_issue: 2,
+      }),
       findById: jest.fn().mockResolvedValue({
         id: challengeId,
         generation: 4,
@@ -1523,7 +1538,18 @@ describe('InteractionHandler (unit)', () => {
       generation: 2,
       id: '11111111-1111-4111-8111-111111111111',
     });
-    const captchaChallengeService = { bypassChallenge } as any;
+    const captchaChallengeService = {
+      bypassChallenge,
+      findByCaseId: jest.fn().mockResolvedValue({
+        id: '11111111-1111-4111-8111-111111111111',
+        generation: 2,
+        server_id: 'guild-1',
+        user_id: 'user-1',
+        verification_event_id: 'ver-1',
+        status: 'pending',
+        case_revision_at_issue: 2,
+      }),
+    } as any;
     verificationEventRepository.findById.mockResolvedValue(
       buildVerificationEvent('ver-1', 'user-1')
     );

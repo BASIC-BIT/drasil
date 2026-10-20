@@ -986,7 +986,7 @@ describe('ModerationActionRequestService', () => {
       getAdminChannel: jest.fn(async () => adminChannel),
       getServerConfig: jest.fn(async () => ({
         guild_id: 'guild-1',
-        settings: { account_quarantine_enabled: true, ...serverSettings },
+        settings: { account_quarantine_enabled: true, captcha_mode: 'manual', ...serverSettings },
       })),
       updateSetupConfiguration: jest.fn(async () => undefined),
       updateServerConfig: jest.fn(async () => undefined),
@@ -1128,8 +1128,20 @@ describe('ModerationActionRequestService', () => {
     const captchaChallengeService = {
       bypassChallenge: jest.fn(async () => ({ generation: 1, id: 'challenge-1' })),
       evaluatePassedChallenge: jest.fn(async () => ({ status: 'eligible' as const })),
-      findById: jest.fn(async () => ({ generation: 1, id: 'challenge-1', status: 'passed' })),
+      findById: jest.fn(async () => ({
+        generation: 1,
+        id: 'challenge-1',
+        status: 'passed',
+        server_id: 'guild-1',
+        user_id: 'user-1',
+        verification_event_id: 'ver-1',
+        case_revision_at_issue: 2,
+      })),
       findByCaseId: jest.fn(async () => ({
+        server_id: 'guild-1',
+        user_id: 'user-1',
+        verification_event_id: 'ver-1',
+        case_revision_at_issue: 2,
         delivered_at: null as Date | null,
         delivery_error_code: null as string | null,
         generation: 1,
@@ -1142,6 +1154,9 @@ describe('ModerationActionRequestService', () => {
       })),
     };
     const application = createBotApplication({
+      captchaChallengeService: captchaChallengeService as any,
+      threadManager: threadManager as any,
+      notificationManager: notificationManager as any,
       accountQuarantineService: accountQuarantineService as any,
       actionRequests: repository,
       client: client as any,
@@ -1178,7 +1193,6 @@ describe('ModerationActionRequestService', () => {
       setupDiagnosticsService as any,
       messageDeletionJobs as any,
       messageCleanupService as any,
-      captchaChallengeService as any,
       application
     );
 
@@ -1818,6 +1832,7 @@ describe('ModerationActionRequestService', () => {
       requestCaptchaChallengeRequest,
     ]);
     reporterMember.permissions.has.mockReturnValue(false);
+    reporterMember.permissions.bitfield = 0n;
     guild.members.fetch.mockImplementation(async (value: string | { user: string }) => {
       const id = typeof value === 'string' ? value : value.user;
       return id === 'moderator-1' ? reporterMember : { guild, id: 'user-1' };
@@ -1862,6 +1877,23 @@ describe('ModerationActionRequestService', () => {
     const { captchaChallengeService, repository, service } = buildService([
       retryCaptchaChallengeRequest,
     ]);
+    captchaChallengeService.findByCaseId.mockResolvedValue({
+      ...{
+        server_id: 'guild-1',
+        user_id: 'user-1',
+        verification_event_id: 'ver-1',
+        case_revision_at_issue: 2,
+      },
+      server_id: 'guild-1',
+      user_id: 'user-1',
+      verification_event_id: 'ver-1',
+      case_revision_at_issue: 2,
+      id: 'challenge-1',
+      generation: 4,
+      status: 'failed',
+      delivered_at: null,
+      delivery_error_code: null,
+    });
 
     await expect(service.processPendingRequests()).resolves.toBe(1);
 
@@ -1932,6 +1964,12 @@ describe('ModerationActionRequestService', () => {
     };
     const { captchaChallengeService, repository, service } = buildService([request]);
     captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+      ...{
+        server_id: 'guild-1',
+        user_id: 'user-1',
+        verification_event_id: 'ver-1',
+        case_revision_at_issue: 2,
+      },
       bypass_reason: null,
       bypassed_by: null,
       delivered_at: new Date(),
@@ -2161,9 +2199,7 @@ describe('ModerationActionRequestService', () => {
       thread_id: 'thread-1',
       user_id: 'user-1',
     } as any;
-    verificationEventRepository.findById
-      .mockResolvedValueOnce(compromisedCase)
-      .mockResolvedValueOnce(compromisedCase);
+    verificationEventRepository.findById.mockResolvedValue(compromisedCase);
     verificationEventRepository.claimCaptchaPresentation.mockResolvedValueOnce(null);
 
     await expect(service.processPendingRequests()).resolves.toBe(1);
@@ -2203,7 +2239,7 @@ describe('ModerationActionRequestService', () => {
       status: 'held',
       reason: 'case_changed',
     } as any);
-    verificationEventRepository.findById.mockResolvedValueOnce({
+    verificationEventRepository.findById.mockResolvedValue({
       id: 'ver-1',
       server_id: 'guild-1',
       user_id: 'user-1',
@@ -2244,7 +2280,7 @@ describe('ModerationActionRequestService', () => {
       status: 'held',
       reason: 'case_changed',
     } as any);
-    verificationEventRepository.findById.mockResolvedValueOnce({
+    verificationEventRepository.findById.mockResolvedValue({
       id: 'ver-1',
       server_id: 'guild-1',
       user_id: 'user-1',
@@ -2447,6 +2483,12 @@ describe('ModerationActionRequestService', () => {
     const { captchaChallengeService, notificationManager, repository, service, threadManager } =
       buildService([notifyExpiredCaptchaAttentionRequest]);
     captchaChallengeService.findByCaseId.mockResolvedValue({
+      ...{
+        server_id: 'guild-1',
+        user_id: 'user-1',
+        verification_event_id: 'ver-1',
+        case_revision_at_issue: 2,
+      },
       delivered_at: new Date(),
       delivery_error_code: null,
       generation: 1,
@@ -2494,6 +2536,12 @@ describe('ModerationActionRequestService', () => {
       verificationEventRepository,
     } = buildService([notifyExpiredCaptchaAttentionRequest]);
     captchaChallengeService.findByCaseId.mockResolvedValue({
+      ...{
+        server_id: 'guild-1',
+        user_id: 'user-1',
+        verification_event_id: 'ver-1',
+        case_revision_at_issue: 2,
+      },
       delivered_at: new Date(),
       delivery_error_code: null,
       generation: 1,
@@ -2529,6 +2577,12 @@ describe('ModerationActionRequestService', () => {
     const { captchaChallengeService, notificationManager, repository, service, threadManager } =
       buildService([notifyDeliveryFailedCaptchaAttentionRequest]);
     captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+      ...{
+        server_id: 'guild-1',
+        user_id: 'user-1',
+        verification_event_id: 'ver-1',
+        case_revision_at_issue: 2,
+      },
       delivered_at: null,
       delivery_error_code: 'discord_delivery_failed',
       generation: 1,
@@ -2556,6 +2610,12 @@ describe('ModerationActionRequestService', () => {
     const { captchaChallengeService, notificationManager, repository, service, threadManager } =
       buildService([updateCancelledCaptchaPresentationRequest]);
     captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+      ...{
+        server_id: 'guild-1',
+        user_id: 'user-1',
+        verification_event_id: 'ver-1',
+        case_revision_at_issue: 2,
+      },
       delivered_at: new Date(),
       delivery_error_code: null,
       generation: 1,
@@ -2581,6 +2641,12 @@ describe('ModerationActionRequestService', () => {
     const { captchaChallengeService, notificationManager, repository, service, threadManager } =
       buildService([updateCancelledCaptchaPresentationRequest]);
     captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+      ...{
+        server_id: 'guild-1',
+        user_id: 'user-1',
+        verification_event_id: 'ver-1',
+        case_revision_at_issue: 2,
+      },
       delivered_at: new Date(),
       delivery_error_code: null,
       generation: 1,
@@ -2605,6 +2671,12 @@ describe('ModerationActionRequestService', () => {
     const { captchaChallengeService, notificationManager, repository, service, threadManager } =
       buildService([updateBypassedCaptchaPresentationRequest]);
     captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+      ...{
+        server_id: 'guild-1',
+        user_id: 'user-1',
+        verification_event_id: 'ver-1',
+        case_revision_at_issue: 2,
+      },
       delivered_at: new Date(),
       delivery_error_code: null,
       generation: 1,
@@ -2627,6 +2699,12 @@ describe('ModerationActionRequestService', () => {
     const { captchaChallengeService, notificationManager, repository, service, threadManager } =
       buildService([updateBypassedCaptchaPresentationRequest]);
     captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+      ...{
+        server_id: 'guild-1',
+        user_id: 'user-1',
+        verification_event_id: 'ver-1',
+        case_revision_at_issue: 2,
+      },
       delivered_at: new Date(),
       delivery_error_code: null,
       generation: 1,
@@ -2651,6 +2729,12 @@ describe('ModerationActionRequestService', () => {
     const { captchaChallengeService, notificationManager, repository, service, threadManager } =
       buildService([notifyCaptchaAttentionRequest]);
     captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+      ...{
+        server_id: 'guild-1',
+        user_id: 'user-1',
+        verification_event_id: 'ver-1',
+        case_revision_at_issue: 2,
+      },
       delivered_at: new Date(),
       delivery_error_code: null,
       generation: 2,
@@ -2741,6 +2825,7 @@ describe('ModerationActionRequestService', () => {
       accountQuarantinePreviewRequest,
     ]);
     reporterMember.permissions.has.mockReturnValue(false);
+    reporterMember.permissions.bitfield = 0n;
     reporterMember.permissions.bitfield = 0n;
 
     await expect(service.processPendingRequests()).resolves.toBe(1);
@@ -2981,6 +3066,7 @@ describe('ModerationActionRequestService', () => {
       accountQuarantineExecuteRequest,
     ]);
     reporterMember.permissions.has.mockReturnValue(false);
+    reporterMember.permissions.bitfield = 0n;
     reporterMember.permissions.bitfield = 0n;
 
     await expect(service.processPendingRequests()).resolves.toBe(1);
@@ -3397,6 +3483,7 @@ describe('ModerationActionRequestService', () => {
       completeSetupVerificationRequest,
     ]);
     reporterMember.permissions.has.mockReturnValue(false);
+    reporterMember.permissions.bitfield = 0n;
 
     await expect(service.processPendingRequests()).resolves.toBe(1);
 
@@ -3876,6 +3963,7 @@ describe('ModerationActionRequestService', () => {
       buildService([previewMessageCleanupRequest]);
     messageDeletionJobs.findById.mockResolvedValue(messageCleanupJob);
     reporterMember.permissions.has.mockReturnValue(false);
+    reporterMember.permissions.bitfield = 0n;
 
     await expect(service.processPendingRequests()).resolves.toBe(1);
 
@@ -3932,6 +4020,7 @@ describe('ModerationActionRequestService', () => {
       buildService([executeMessageCleanupRequest]);
     messageDeletionJobs.findById.mockResolvedValue(messageCleanupJob);
     reporterMember.permissions.has.mockReturnValue(false);
+    reporterMember.permissions.bitfield = 0n;
 
     await expect(service.processPendingRequests()).resolves.toBe(1);
 

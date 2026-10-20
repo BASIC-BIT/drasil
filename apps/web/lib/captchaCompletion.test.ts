@@ -16,8 +16,15 @@ import {
   getCaptchaFormConfiguration,
   getCaptchaPublicChallenge,
   requeueCaptchaPassEffect,
+  recordCaptchaIdentityMismatch,
 } from './captchaCompletion';
 
+const context = {
+  guildId: 'guild-1',
+  requestId: 'attempt',
+  source: 'captcha',
+  actor: { kind: 'user' as const, userId: 'user-1' },
+};
 const originalTurnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
 const originalCaptchaBindingSecret = process.env.DRASIL_CAPTCHA_BINDING_SECRET;
 
@@ -123,7 +130,7 @@ describe('captcha completion transaction', () => {
     mocked.getPostgresPool.mockReturnValue({ connect: vi.fn(async () => client) });
 
     await expect(
-      beginCaptchaAttempt({
+      beginCaptchaAttempt(context, {
         token: 'a'.repeat(43),
         identity: {
           challengeId: challengeRow.id,
@@ -186,7 +193,7 @@ describe('captcha completion transaction', () => {
     mocked.getPostgresPool.mockReturnValue({ connect: vi.fn(async () => client) });
 
     await expect(
-      beginCaptchaAttempt({
+      beginCaptchaAttempt(context, {
         token: 'a'.repeat(43),
         identity: {
           challengeId: challengeRow.id,
@@ -235,7 +242,7 @@ describe('captcha completion transaction', () => {
     mocked.getPostgresPool.mockReturnValue({ connect: vi.fn(async () => client) });
 
     await expect(
-      beginCaptchaAttempt({
+      beginCaptchaAttempt(context, {
         token: 'a'.repeat(43),
         identity: {
           challengeId: challengeRow.id,
@@ -261,7 +268,9 @@ describe('captcha completion transaction', () => {
     const { query } = createDatabaseHarness();
 
     await expect(
-      completeCaptchaAttempt({
+      completeCaptchaAttempt(context, {
+        challengeId: challengeRow.id,
+        generation: challengeRow.generation,
         attemptId: challengeRow.attempt_id,
         validation: {
           action: null,
@@ -292,7 +301,9 @@ describe('captcha completion transaction', () => {
     const { query } = createDatabaseHarness();
 
     await expect(
-      completeCaptchaAttempt({
+      completeCaptchaAttempt(context, {
+        challengeId: challengeRow.id,
+        generation: challengeRow.generation,
         attemptId: challengeRow.attempt_id,
         validation: {
           action: null,
@@ -319,7 +330,9 @@ describe('captcha completion transaction', () => {
     const { query } = createDatabaseHarness();
 
     await expect(
-      completeCaptchaAttempt({
+      completeCaptchaAttempt(context, {
+        challengeId: challengeRow.id,
+        generation: challengeRow.generation,
         attemptId: challengeRow.attempt_id,
         validation: {
           action: 'drasil_case_access',
@@ -356,7 +369,9 @@ describe('captcha completion transaction', () => {
     const { query } = createDatabaseHarness({ passUpdateSucceeds: false });
 
     await expect(
-      completeCaptchaAttempt({
+      completeCaptchaAttempt(context, {
+        challengeId: challengeRow.id,
+        generation: challengeRow.generation,
         attemptId: challengeRow.attempt_id,
         validation: {
           action: 'drasil_case_access',
@@ -377,8 +392,11 @@ describe('captcha completion transaction', () => {
   });
 
   it('requeues a failed exact-case pass effect with its stable idempotency key', async () => {
-    const pool = {};
-    mocked.getPostgresPool.mockReturnValue(pool);
+    const pool = {
+      query: vi.fn(async () => ({ rows: [{ ...challengeRow, status: 'passed' }] })),
+      release: vi.fn(),
+    };
+    mocked.getPostgresPool.mockReturnValue({ connect: vi.fn(async () => pool) });
 
     await requeueCaptchaPassEffect({
       id: challengeRow.id,
@@ -399,5 +417,105 @@ describe('captcha completion transaction', () => {
         verificationEventId: challengeRow.verification_event_id,
       })
     );
+  });
+  it('does not requeue a pass after the persisted generation changes', async () => {
+    const query = vi.fn(async (_sql: string) => ({
+      rows: [{ ...challengeRow, status: 'passed', generation: 2 }],
+    }));
+    const client = { query, release: vi.fn() };
+    mocked.getPostgresPool.mockReturnValue({ connect: vi.fn(async () => client) });
+    await requeueCaptchaPassEffect({
+      id: challengeRow.id,
+      verificationEventId: challengeRow.verification_event_id,
+      serverId: challengeRow.server_id,
+      userId: challengeRow.user_id,
+      status: 'passed',
+      generation: 1,
+      caseRevision: 2,
+      expiresAt: challengeRow.expires_at,
+    });
+    expect(mocked.insertModerationActionRequestWithReceipt).not.toHaveBeenCalled();
+    expect(query.mock.calls.at(-1)?.[0]).toBe('commit');
+  });
+  it('rejects completion for a different authenticated user before recording provider success', async () => {
+    const { query } = createDatabaseHarness();
+    const result = await completeCaptchaAttempt(
+      { ...context, actor: { kind: 'user', userId: 'other' } },
+      {
+        challengeId: challengeRow.id,
+        generation: 1,
+        attemptId: challengeRow.attempt_id,
+        validation: {
+          state: 'passed',
+          success: true,
+          action: 'drasil_case_access',
+          hostname: 'drasil.example',
+          errorCodes: [],
+        },
+      }
+    );
+    expect(result).toBe('stale');
+    expect(query.mock.calls.some(([sql]) => sql.includes('update captcha_'))).toBe(false);
+    expect(mocked.insertModerationActionRequestWithReceipt).not.toHaveBeenCalled();
+  });
+  it('records an authenticated OAuth mismatch without consuming a provider submission', async () => {
+    const query = vi.fn(async (sql: string, _parameters?: readonly unknown[]) => {
+      if (sql.includes('from captcha_challenges c')) return { rows: [challengeRow] };
+      if (sql.includes('generation_count'))
+        return {
+          rows: [{ generation_count: '0', recent_user_count: '0', recent_service_count: '100' }],
+        };
+      if (sql.includes('insert into captcha_challenge_attempts'))
+        return { rows: [{ id: 'attempt', validation_state: 'identity_mismatch' }] };
+      return { rows: [] };
+    });
+    mocked.getPostgresPool.mockReturnValue({
+      connect: vi.fn(async () => ({ query, release: vi.fn() })),
+    });
+    await recordCaptchaIdentityMismatch(
+      { ...context, actor: { kind: 'user', userId: 'other' } },
+      {
+        token: 'a'.repeat(43),
+        discordUserId: 'other',
+        challengeId: challengeRow.id,
+        generation: 1,
+        idempotencyKey: 'captcha-oauth:authenticated-state',
+      }
+    );
+    const insertion = query.mock.calls.find(([sql]) =>
+      sql.includes('insert into captcha_challenge_attempts')
+    );
+    expect(insertion?.[1]).toEqual([
+      challengeRow.id,
+      1,
+      'captcha-oauth:authenticated-state',
+      'identity_mismatch',
+      'other',
+    ]);
+    expect(insertion?.[0]).toContain('false,');
+    expect(query.mock.calls.some(([sql]) => sql.includes('update captcha_challenges'))).toBe(false);
+    expect(query.mock.calls.at(-1)?.[0]).toBe('commit');
+  });
+  it('rolls the pass transaction back when its durable effect cannot be inserted', async () => {
+    const { query } = createDatabaseHarness();
+    mocked.insertModerationActionRequestWithReceipt.mockRejectedValueOnce(
+      new Error('queue unavailable')
+    );
+    await expect(
+      completeCaptchaAttempt(context, {
+        challengeId: challengeRow.id,
+        generation: 1,
+        attemptId: challengeRow.attempt_id,
+        validation: {
+          state: 'passed',
+          success: true,
+          action: 'drasil_case_access',
+          hostname: 'drasil.example',
+          errorCodes: [],
+        },
+      })
+    ).rejects.toThrow('queue unavailable');
+    expect(query.mock.calls.at(-1)?.[0]).toBe('rollback');
+    expect(query.mock.calls.some(([sql]) => sql === 'commit')).toBe(false);
   });
 });

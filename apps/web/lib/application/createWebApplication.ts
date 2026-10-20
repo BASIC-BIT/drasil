@@ -1,3 +1,5 @@
+import { createWebCaptchaActions } from './adapters/captcha';
+import type { CaptchaBrowserDependencies, CaptchaBrowserActions } from '@drasil/application';
 import {
   createAttentionActions,
   createReportReviewActions,
@@ -48,4 +50,10 @@ export function createWebApplication(): WebApplication {
       messageDeleter: createWebAttentionMessageDeleter(),
     }),
   };
+}
+
+export function createWebCaptchaApplication(dependencies: CaptchaBrowserDependencies): {
+  readonly captcha: CaptchaBrowserActions;
+} {
+  return { captcha: createWebCaptchaActions(dependencies) };
 }

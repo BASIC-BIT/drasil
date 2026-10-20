@@ -1,4 +1,8 @@
 import {
+  createBotCaptchaRuntime,
+  type BotCaptchaDependencies,
+} from '../../application/adapters/captcha';
+import {
   createBotQuarantineRuntime,
   type BotQuarantineDependencies,
 } from '../../application/adapters/quarantine';
@@ -16,6 +20,9 @@ import {
 // actual Discord authority adapter in CaseActions.unit.test.ts.
 export function buildCaseApplication(
   deps: Omit<BotCaseDependencies, 'confirmations'> & {
+    readonly captchaChallengeService?: BotCaptchaDependencies['captchaChallengeService'];
+    readonly threadManager?: BotCaptchaDependencies['threadManager'];
+    readonly notificationManager?: BotCaptchaDependencies['notificationManager'];
     readonly accountQuarantineService?: BotQuarantineDependencies['accountQuarantineService'];
   },
   authority?: AuthorityPort
@@ -67,7 +74,24 @@ export function buildCaseApplication(
       },
     }
   );
+  const captchaRuntime = createBotCaptchaRuntime(
+    {
+      ...deps,
+      captchaChallengeService: deps.captchaChallengeService ?? null,
+      threadManager: deps.threadManager ?? ({} as never),
+      notificationManager: deps.notificationManager ?? ({} as never),
+      actionRequests: {} as never,
+      confirmations: caseConfirmations.confirmations,
+    },
+    authority ?? {
+      async loadFresh(guildId, userId) {
+        return { guildId, userId, present: true, owner: false, permissions: '8', roleIds: [] };
+      },
+    }
+  );
   return {
+    captcha: captchaRuntime.actions,
+    captchaRuntime,
     quarantine: quarantineRuntime.actions,
     quarantineRuntime,
     detections: detectionRuntime.actions,
