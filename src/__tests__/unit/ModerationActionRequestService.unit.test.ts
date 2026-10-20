@@ -1192,20 +1192,8 @@ describe('ModerationActionRequestService', () => {
     });
     const service = new ModerationActionRequestService(
       repository,
-      verificationEventRepository as any,
-      client as any,
-      threadManager as any,
-      reportIntakeService as any,
-      configService as any,
-      securityActionService as any,
-      userModerationService as any,
-      moderationQueueService as any,
-      caseThreadClosureSweepService as any,
-      caseRoleLockdownService as any,
-      notificationManager as any,
-      productAnalyticsService as any,
-      setupDiagnosticsService as any,
-      application
+      application,
+      productAnalyticsService as never
     );
 
     return {
@@ -4559,6 +4547,17 @@ describe('ModerationActionRequestService', () => {
         error: expect.stringContaining('caseId'),
       },
     ]);
+  });
+
+  it('fails unknown persisted actions before any external effect', async () => {
+    const { repository, service, client } = buildService([
+      { ...baseRequest, action_type: 'future_unknown_action' as ModerationActionRequestType },
+    ]);
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+    expect(repository.completed).toEqual([]);
+    expect(repository.failed).toHaveLength(1);
+    expect(client.guilds.fetch).not.toHaveBeenCalled();
+    expect(client.users.fetch).not.toHaveBeenCalled();
   });
 
   it('returns zero when no action request is queued', async () => {

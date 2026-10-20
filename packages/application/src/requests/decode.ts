@@ -59,6 +59,9 @@ export function decodeQueuedAction(row: unknown): DecodedQueuedAction {
           ...target,
           detectionEventId: parsed.detection_event_id,
           reportId: parsed.report_intake_id ?? null,
+          ...(metadata.inbox_action === 'open_case'
+            ? { origin: { kind: 'observed_alert', reason } }
+            : {}),
         });
         break;
       case 'open_admin_case':

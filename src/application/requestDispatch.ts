@@ -7,11 +7,7 @@ import {
 } from './messageCleanupDispatch';
 import { requireCaptchaOutcome } from './adapters/captcha';
 import {
-  isQueuedSetupCommand,
-  isQueuedReportCommand,
-  isQueuedOperationCommand,
-  isQueuedCaptchaCommand,
-  isQueuedMessageCleanupCommand,
+  type QueuedCommand,
   type ActionContext,
   type CaptchaOutcome,
   type CaseCommand,
@@ -80,35 +76,192 @@ export type QueuedActionOutcome =
           }
         | { readonly action_type: 'sync_existing_ban'; readonly synced_count: number }
       ));
-export async function dispatchQueuedAction(
+export type QueuedHandler = (
+  application: BotApplication,
+  action: DecodedQueuedAction
+) => Promise<QueuedActionOutcome>;
+
+function handler<K extends QueuedCommand['kind']>(
+  kind: K,
+  execute: (
+    application: BotApplication,
+    context: ActionContext,
+    command: Extract<QueuedCommand, { kind: K }>
+  ) => Promise<QueuedActionOutcome>
+): QueuedHandler {
+  return (application, action) => {
+    if (action.command.kind !== kind) throw new Error('Queued handler binding mismatch.');
+    // TypeScript cannot narrow a discriminated union against a generic parameter.
+    return execute(
+      application,
+      action.context,
+      action.command as Extract<QueuedCommand, { kind: K }>
+    );
+  };
+}
+export const queuedActionHandlers = {
+  open_case_from_observed_detection: handler(
+    'open_case_from_observed_detection',
+    (application, context, command) => dispatchCaseAction(application, context, command)
+  ),
+  open_admin_case: handler('open_admin_case', (application, context, command) =>
+    dispatchCaseAction(application, context, command)
+  ),
+  manual_flag_user: handler('manual_flag_user', (application, context, command) =>
+    dispatchCaseAction(application, context, command)
+  ),
+  verify_case_user: handler('verify_case_user', (application, context, command) =>
+    dispatchCaseAction(application, context, command)
+  ),
+  close_case_no_action: handler('close_case_no_action', (application, context, command) =>
+    dispatchCaseAction(application, context, command)
+  ),
+  kick_case_user: handler('kick_case_user', (application, context, command) =>
+    dispatchCaseAction(application, context, command)
+  ),
+  ban_case_user: handler('ban_case_user', (application, context, command) =>
+    dispatchCaseAction(application, context, command)
+  ),
+  ban_case_user_by_id: handler('ban_case_user_by_id', (application, context, command) =>
+    dispatchCaseAction(application, context, command)
+  ),
+  repair_active_case: handler('repair_active_case', (application, context, command) =>
+    dispatchCaseAction(application, context, command)
+  ),
+  reopen_case: handler('reopen_case', (application, context, command) =>
+    dispatchCaseAction(application, context, command)
+  ),
+  refresh_case_notification: handler('refresh_case_notification', (application, context, command) =>
+    dispatchCaseAction(application, context, command)
+  ),
+  sync_existing_ban: handler('sync_existing_ban', (application, context, command) =>
+    dispatchCaseAction(application, context, command)
+  ),
+  dismiss_observed_detection: handler(
+    'dismiss_observed_detection',
+    (application, context, command) =>
+      dispatchDetectionAction(application.detections, context, command)
+  ),
+  mark_observed_detection_false_positive: handler(
+    'mark_observed_detection_false_positive',
+    (application, context, command) =>
+      dispatchDetectionAction(application.detections, context, command)
+  ),
+  undo_observed_detection_action: handler(
+    'undo_observed_detection_action',
+    (application, context, command) =>
+      dispatchDetectionAction(application.detections, context, command)
+  ),
+  kick_observed_detection: handler('kick_observed_detection', (application, context, command) =>
+    dispatchDetectionAction(application.detections, context, command)
+  ),
+  ban_observed_detection: handler('ban_observed_detection', (application, context, command) =>
+    dispatchDetectionAction(application.detections, context, command)
+  ),
+  ignore_detection_accounting: handler(
+    'ignore_detection_accounting',
+    (application, context, command) =>
+      dispatchDetectionAction(application.detections, context, command)
+  ),
+  restore_detection_accounting: handler(
+    'restore_detection_accounting',
+    (application, context, command) =>
+      dispatchDetectionAction(application.detections, context, command)
+  ),
+  preview_account_quarantine: handler(
+    'preview_account_quarantine',
+    (application, context, command) =>
+      dispatchQuarantineAction(application.quarantine, context, command)
+  ),
+  quarantine_compromised_account: handler(
+    'quarantine_compromised_account',
+    (application, context, command) =>
+      dispatchQuarantineAction(application.quarantine, context, command)
+  ),
+  request_captcha_challenge: handler(
+    'request_captcha_challenge',
+    async (application, context, command) =>
+      requireCaptchaOutcome(await application.captcha.execute(context, command))
+  ),
+  retry_captcha_challenge: handler(
+    'retry_captcha_challenge',
+    async (application, context, command) =>
+      requireCaptchaOutcome(await application.captcha.execute(context, command))
+  ),
+  bypass_captcha_challenge: handler(
+    'bypass_captcha_challenge',
+    async (application, context, command) =>
+      requireCaptchaOutcome(await application.captcha.execute(context, command))
+  ),
+  apply_captcha_pass: handler('apply_captcha_pass', async (application, context, command) =>
+    requireCaptchaOutcome(await application.captcha.execute(context, command))
+  ),
+  notify_captcha_attention: handler(
+    'notify_captcha_attention',
+    async (application, context, command) =>
+      requireCaptchaOutcome(await application.captcha.execute(context, command))
+  ),
+  preview_case_message_deletion: handler(
+    'preview_case_message_deletion',
+    (application, context, command) =>
+      dispatchMessageCleanupAction(application.messageCleanup, context, command)
+  ),
+  execute_case_message_deletion: handler(
+    'execute_case_message_deletion',
+    (application, context, command) =>
+      dispatchMessageCleanupAction(application.messageCleanup, context, command)
+  ),
+  ban_case_user_with_message_cleanup: handler(
+    'ban_case_user_with_message_cleanup',
+    (application, context, command) =>
+      dispatchMessageCleanupAction(application.messageCleanup, context, command)
+  ),
+  sync_moderation_queue: handler('sync_moderation_queue', (application, context, command) =>
+    dispatchOperationsAction(application.operations, context, command)
+  ),
+  clear_moderation_queue: handler('clear_moderation_queue', (application, context, command) =>
+    dispatchOperationsAction(application.operations, context, command)
+  ),
+  close_resolved_case_threads: handler(
+    'close_resolved_case_threads',
+    (application, context, command) =>
+      dispatchOperationsAction(application.operations, context, command)
+  ),
+  audit_case_role_lockdown: handler('audit_case_role_lockdown', (application, context, command) =>
+    dispatchOperationsAction(application.operations, context, command)
+  ),
+  apply_case_role_lockdown: handler('apply_case_role_lockdown', (application, context, command) =>
+    dispatchOperationsAction(application.operations, context, command)
+  ),
+  intake_role_members: handler('intake_role_members', (application, context, command) =>
+    dispatchOperationsAction(application.operations, context, command)
+  ),
+  submit_user_report: handler('submit_user_report', (application, context, command) =>
+    dispatchReportAction(application.reports, context, command)
+  ),
+  start_report_intake: handler('start_report_intake', (application, context, command) =>
+    dispatchReportAction(application.reports, context, command)
+  ),
+  close_report_intake: handler('close_report_intake', (application, context, command) =>
+    dispatchReportAction(application.reports, context, command)
+  ),
+  complete_setup_verification: handler(
+    'complete_setup_verification',
+    (application, context, command) =>
+      dispatchSetupAction(application.setupRuntime, context, command)
+  ),
+  upsert_report_instructions: handler(
+    'upsert_report_instructions',
+    (application, context, command) =>
+      dispatchSetupAction(application.setupRuntime, context, command)
+  ),
+} satisfies Record<QueuedCommand['kind'], QueuedHandler>;
+
+export function dispatchQueuedAction(
   application: BotApplication,
   action: DecodedQueuedAction
 ): Promise<QueuedActionOutcome> {
-  const { command, context } = action;
-  if (isQueuedSetupCommand(command))
-    return dispatchSetupAction(application.setupRuntime, context, command);
-  if (isQueuedReportCommand(command))
-    return dispatchReportAction(application.reports, context, command);
-  if (isQueuedOperationCommand(command))
-    return dispatchOperationsAction(application.operations, context, command);
-  if (isQueuedCaptchaCommand(command))
-    return requireCaptchaOutcome(await application.captcha.execute(context, command));
-  if (isQueuedMessageCleanupCommand(command))
-    return dispatchMessageCleanupAction(application.messageCleanup, context, command);
-  switch (command.kind) {
-    case 'preview_account_quarantine':
-    case 'quarantine_compromised_account':
-      return dispatchQuarantineAction(application.quarantine, context, command);
-    case 'dismiss_observed_detection':
-    case 'mark_observed_detection_false_positive':
-    case 'undo_observed_detection_action':
-    case 'kick_observed_detection':
-    case 'ban_observed_detection':
-    case 'ignore_detection_accounting':
-    case 'restore_detection_accounting':
-      return dispatchDetectionAction(application.detections, context, command);
-  }
-  return dispatchCaseAction(application, context, command);
+  return queuedActionHandlers[action.command.kind](application, action);
 }
 async function dispatchCaseAction(
   application: BotApplication,

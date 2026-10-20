@@ -64,6 +64,20 @@ export function encodeQueuedAction(context: ActionContext, input: QueuedCommand)
     case 'restore_detection_accounting':
       return encodeDetectionAction(context, command);
     case 'open_case_from_observed_detection':
+      if (command.origin?.kind === 'observed_alert') {
+        if (command.reportId !== null)
+          throw new Error('Observed-alert origin cannot bind a report.');
+        return {
+          ...base,
+          detectionEventId: command.detectionEventId,
+          idempotencyKey: `web:observed-action:open_case:${context.guildId}:${command.detectionEventId}`,
+          metadata: {
+            inbox_action: 'open_case',
+            reason: command.origin.reason,
+            requested_surface: context.source,
+          },
+        };
+      }
       return {
         ...base,
         detectionEventId: command.detectionEventId,

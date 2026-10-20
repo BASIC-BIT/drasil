@@ -227,6 +227,8 @@ async function fixture(withReport = true, quarantine?: IRoleQuarantineService) {
       .mockResolvedValue({ settings: { moderator_ban_action_enabled: true } }),
   };
   const application = createBotApplication({
+    productAnalyticsService: {} as never,
+    setupDiagnosticsService: {} as never,
     reportIntakeService: {} as any,
     integrityAuditService: mock<IIntegrityAuditService>(),
     caseRoleLockdownService: mock<ICaseRoleLockdownService>(),
@@ -248,24 +250,7 @@ async function fixture(withReport = true, quarantine?: IRoleQuarantineService) {
     queueService: queue as never,
     queueRepository: {} as never,
   });
-  const worker = () =>
-    new ModerationActionRequestService(
-      requests,
-      cases,
-      client,
-      threads as never,
-      {} as never,
-      config as never,
-      security,
-      moderation,
-      queue as never,
-      {} as never,
-      {} as never,
-      notifications as never,
-      {} as never,
-      {} as never,
-      application
-    );
+  const worker = () => new ModerationActionRequestService(requests, application, {} as never);
   return {
     application,
     config,

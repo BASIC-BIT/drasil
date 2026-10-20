@@ -36,6 +36,9 @@
     "*": {
       "setup-settings": [
         "dist/setup/settings.d.ts"
+      ],
+      "postgres": [
+        "dist/postgres/index.d.ts"
       ]
     }
   }

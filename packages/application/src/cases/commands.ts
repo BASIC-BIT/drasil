@@ -29,6 +29,13 @@ export const caseCommandSchema = z.discriminatedUnion('kind', [
       ...target,
       detectionEventId: id,
       reportId: id.nullable(),
+      origin: z
+        .object({
+          kind: z.literal('observed_alert'),
+          reason: z.string().nullable(),
+        })
+        .strict()
+        .optional(),
     })
     .strict(),
   z

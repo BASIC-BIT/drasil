@@ -203,24 +203,7 @@ async function fixture() {
     queueService: queue as never,
     queueRepository: {} as never,
   });
-  const worker = () =>
-    new ModerationActionRequestService(
-      requests,
-      cases,
-      client,
-      threads as never,
-      {} as never,
-      config as never,
-      security,
-      moderation,
-      queue as never,
-      {} as never,
-      {} as never,
-      notifications as never,
-      {} as never,
-      {} as never,
-      application
-    );
+  const worker = () => new ModerationActionRequestService(requests, application, {} as never);
   return {
     analytics,
     detections,

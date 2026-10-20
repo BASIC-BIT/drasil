@@ -79,20 +79,23 @@ export async function queueObservedAlertActionRequest(input: {
       )
     );
   }
-  return queueModerationActionRequestWithReceipt({
-    actionType: observedAlertRequestTypes[input.action],
-    actorId: input.actorId,
-    actorSurface: input.actorSurface,
-    detectionEventId: input.detectionEventId,
-    idempotencyKey: `web:observed-action:${input.action}:${input.guildId}:${input.detectionEventId}`,
-    metadata: {
-      inbox_action: input.action,
-      reason: input.reason ?? null,
-      requested_surface: input.actorSurface,
-    },
-    serverId: input.guildId,
-    targetUserId: input.targetUserId,
-  });
+  return queueModerationActionRequestWithReceipt(
+    encodeQueuedAction(
+      {
+        guildId: input.guildId,
+        requestId: input.detectionEventId,
+        source: input.actorSurface,
+        actor: { kind: 'user', userId: input.actorId },
+      },
+      {
+        kind: 'open_case_from_observed_detection',
+        targetUserId: input.targetUserId,
+        detectionEventId: input.detectionEventId,
+        reportId: null,
+        origin: { kind: 'observed_alert', reason: input.reason ?? null },
+      }
+    )
+  );
 }
 
 export async function queueObservedAlertUndoActionRequest(input: {

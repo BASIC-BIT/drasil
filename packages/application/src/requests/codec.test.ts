@@ -212,5 +212,28 @@ it('decodes the shipped observed open-case wrapper without changing its intent',
       detection_event_id: 'det-1',
       metadata: { inbox_action: 'open_case', reason: null, requested_surface: 'web' },
     }).command
-  ).toEqual({ ...command, reportId: null });
+  ).toEqual({ ...command, reportId: null, origin: { kind: 'observed_alert', reason: null } });
+});
+
+it('preserves the distinct observed-alert codec origin, key and exact metadata', () => {
+  const decoded = decodeQueuedAction({
+    id: 'operation',
+    server_id: 'guild-1',
+    action_type: 'open_case_from_observed_detection',
+    actor_id: 'moderator-1',
+    actor_surface: 'web',
+    target_user_id: 'user-1',
+    detection_event_id: 'det-1',
+    metadata: { inbox_action: 'open_case', reason: null, requested_surface: 'web' },
+  });
+  expect(encodeQueuedAction(decoded.context, decoded.command)).toEqual({
+    actionType: 'open_case_from_observed_detection',
+    actorId: 'moderator-1',
+    actorSurface: 'web',
+    serverId: 'guild-1',
+    targetUserId: 'user-1',
+    detectionEventId: 'det-1',
+    idempotencyKey: 'web:observed-action:open_case:guild-1:det-1',
+    metadata: { inbox_action: 'open_case', reason: null, requested_surface: 'web' },
+  });
 });
