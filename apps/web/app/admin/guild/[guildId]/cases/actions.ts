@@ -1,5 +1,6 @@
 'use server';
 
+import { evaluateCasePolicy, readCasePolicy } from '@drasil/application';
 import { randomUUID } from 'node:crypto';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
@@ -127,35 +128,24 @@ function readFormString(formData: FormData | undefined, key: string): string | n
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
-function assertDestructiveActionEnabled(
-  settings: Record<string, unknown>,
-  context: DestructiveActionContext
-): void {
-  const enabled = context.isBanAction
-    ? settings.moderator_ban_action_enabled !== false
-    : settings.moderator_kick_action_enabled !== false;
-  if (!enabled) {
-    throw new Error(
-      context.isBanAction
-        ? 'Moderator ban actions are disabled for this server.'
-        : 'Moderator kick actions are disabled for this server.'
-    );
-  }
-}
-
 function readDestructiveReason(
   formData: FormData | undefined,
   settings: Record<string, unknown>,
   context: DestructiveActionContext
 ): string | null {
   const reason = readFormString(formData, 'reason');
-  const requiresReason = context.isBanAction
-    ? settings.moderator_ban_action_requires_reason === true
-    : settings.moderator_kick_action_requires_reason === true;
-  if (requiresReason && !reason) {
+  const denial = evaluateCasePolicy(
+    { kind: context.isBanAction ? 'ban_case_user' : 'kick_case_user', reason },
+    readCasePolicy(settings)
+  );
+  if (denial === 'policy_disabled')
+    throw new Error(
+      context.isBanAction
+        ? 'Moderator ban actions are disabled for this server.'
+        : 'Moderator kick actions are disabled for this server.'
+    );
+  if (denial === 'reason_required')
     throw new Error(context.isBanAction ? 'Ban reason is required.' : 'Kick reason is required.');
-  }
-
   return reason;
 }
 
@@ -283,7 +273,6 @@ async function assertCanQueueCaseAction(
   const setupAdapter = createSetupDataAdapter();
   const server = await setupAdapter.getServer(guild.id);
   const settings = server?.settings ?? {};
-  assertDestructiveActionEnabled(settings, destructiveContext);
 
   const reason = readDestructiveReason(formData, settings, destructiveContext);
   await assertBotCanRunDestructiveAction(guild.id, destructiveContext);

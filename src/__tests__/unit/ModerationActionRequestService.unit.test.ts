@@ -1,3 +1,4 @@
+import { createBotApplication } from '../../application/createBotApplication';
 import { ModerationActionRequestService } from '../../services/ModerationActionRequestService';
 import { ReportInstructionsManager } from '../../controllers/ReportInstructionsManager';
 import type { Prisma } from '../../db/prisma';
@@ -705,11 +706,14 @@ describe('ModerationActionRequestService', () => {
       guild,
       id: 'moderator-1',
       joinedAt: new Date('2026-01-01T00:00:00.000Z'),
-      permissions: { has: jest.fn(() => true) },
+      permissions: { has: jest.fn(() => true), bitfield: 8n },
+      roles: { cache: new Map() },
       user: { id: 'moderator-1', tag: 'moderator#0001', username: 'moderator' },
     };
     const role = { guild, id: 'role-1', name: 'Manual Intake' };
     const sourceMessage = {
+      guildId: 'guild-1',
+      author: targetUser,
       channelId: 'source-channel-1',
       id: 'source-message-1',
     };
@@ -1087,7 +1091,15 @@ describe('ModerationActionRequestService', () => {
           quarantine_attempt_id: input.attemptId,
         })
       ),
-      findById: jest.fn(async (): Promise<any> => pendingVerificationEvent),
+      findById: jest.fn(
+        async (): Promise<any> => ({
+          ...pendingVerificationEvent,
+          status:
+            requests[0]?.action_type === ModerationActionRequestType.REOPEN_CASE
+              ? 'verified'
+              : 'pending',
+        })
+      ),
       findActiveByUserAndServer: jest.fn(async () => ({
         id: 'ver-1',
         notification_channel_id: 'admin-channel-1',
@@ -1124,6 +1136,24 @@ describe('ModerationActionRequestService', () => {
         delivered: true,
       })),
     };
+    const application = createBotApplication({
+      client: client as any,
+      configService: configService as any,
+      verificationEventRepository: verificationEventRepository as any,
+      detectionEventsRepository: {
+        findById: jest.fn(async () => ({
+          id: 'det-1',
+          server_id: 'guild-1',
+          user_id: 'user-1',
+          metadata: { reportIntakeId: 'report-1' },
+        })),
+      } as any,
+      securityActionService: securityActionService as any,
+      userModerationService: userModerationService as any,
+      roleGateService: null,
+      queueService: moderationQueueService as any,
+      queueRepository: {} as any,
+    });
     const service = new ModerationActionRequestService(
       repository,
       verificationEventRepository as any,
@@ -1142,7 +1172,8 @@ describe('ModerationActionRequestService', () => {
       messageDeletionJobs as any,
       messageCleanupService as any,
       accountQuarantineService as any,
-      captchaChallengeService as any
+      captchaChallengeService as any,
+      application
     );
 
     return {
@@ -1180,6 +1211,49 @@ describe('ModerationActionRequestService', () => {
       verificationEventRepository,
     };
   }
+
+  it('denies a queued verification after actor permissions are revoked', async () => {
+    const { service, reporterMember, repository, userModerationService } = buildService([
+      verifyRequest,
+    ]);
+    reporterMember.permissions.bitfield = 0n;
+    await service.processPendingRequests();
+    expect(userModerationService.verifyUser).not.toHaveBeenCalled();
+    expect(repository.completed).toEqual([]);
+    expect(repository.failed).toEqual([
+      { id: verifyRequest.id, error: 'Case action denied: permission_denied' },
+    ]);
+  });
+
+  it('denies a queued verification for a different case subject', async () => {
+    const { service, repository, verificationEventRepository, userModerationService } =
+      buildService([verifyRequest]);
+    verificationEventRepository.findById.mockResolvedValue({
+      id: 'ver-1',
+      server_id: 'guild-1',
+      user_id: 'another-user',
+      status: 'pending',
+    });
+    await service.processPendingRequests();
+    expect(userModerationService.verifyUser).not.toHaveBeenCalled();
+    expect(repository.failed).toEqual([
+      { id: verifyRequest.id, error: 'Case action denied: binding_mismatch' },
+    ]);
+  });
+
+  it('fails closed when fresh case policy cannot be read', async () => {
+    const { service, repository, configService, userModerationService } = buildService([
+      verifyRequest,
+    ]);
+    configService.getServerConfig.mockRejectedValueOnce(new Error('Policy read failed'));
+    await service.processPendingRequests();
+    expect(userModerationService.verifyUser).not.toHaveBeenCalled();
+    expect(repository.failed).toEqual([{ id: verifyRequest.id, error: 'Policy read failed' }]);
+    expect(configService.getServerConfig).toHaveBeenCalledWith('guild-1', {
+      forceRefresh: true,
+      failOnReadError: true,
+    });
+  });
 
   it('opens observed cases through the logged-in bot Discord client', async () => {
     const { repository, securityActionService, service, member, moderator } = buildService();
@@ -1461,7 +1535,7 @@ describe('ModerationActionRequestService', () => {
     expect(repository.failed).toEqual([
       {
         id: 'manual-flag-request-1',
-        error: 'Manual-flag request is missing target user.',
+        error: expect.stringContaining('target_user_id'),
       },
     ]);
   });
@@ -3029,7 +3103,7 @@ describe('ModerationActionRequestService', () => {
     expect(repository.failed).toEqual([
       {
         id: 'ban-request-1',
-        error: 'Moderator ban action is disabled for this server.',
+        error: 'Case action denied: policy_disabled',
       },
     ]);
   });
@@ -3049,7 +3123,7 @@ describe('ModerationActionRequestService', () => {
     expect(repository.failed).toEqual([
       {
         id: 'kick-request-1',
-        error: 'Moderator kick action requires a reason.',
+        error: 'Case action denied: reason_required',
       },
     ]);
   });
@@ -3105,7 +3179,7 @@ describe('ModerationActionRequestService', () => {
     expect(repository.failed).toEqual([
       {
         id: 'open-admin-case-request-1',
-        error: 'Open case action requires a reason.',
+        error: 'Case action denied: reason_required',
       },
     ]);
   });
@@ -4125,7 +4199,7 @@ describe('ModerationActionRequestService', () => {
     expect(repository.failed).toEqual([
       {
         id: 'request-1',
-        error: 'Open-case request is missing target user or detection event.',
+        error: expect.stringContaining('target_user_id'),
       },
     ]);
   });
@@ -4148,7 +4222,7 @@ describe('ModerationActionRequestService', () => {
     expect(repository.failed).toEqual([
       {
         id: 'verify-request-1',
-        error: 'Verify-case request is missing target user or case id.',
+        error: expect.stringContaining('caseId'),
       },
     ]);
   });
@@ -4165,7 +4239,7 @@ describe('ModerationActionRequestService', () => {
     expect(repository.failed).toEqual([
       {
         id: 'refresh-notification-request-1',
-        error: 'Refresh-notification request is missing target user or case id.',
+        error: expect.stringContaining('caseId'),
       },
     ]);
   });

@@ -1,3 +1,6 @@
+import type { BotApplication } from '../application/createBotApplication';
+import { createDiscordActionContext } from '../application/context';
+import { requireCaseOutcome } from '../application/adapters/cases';
 import {
   ActionRowBuilder,
   ButtonStyle,
@@ -79,7 +82,8 @@ export class CaseCommandHandler {
   public constructor(
     private readonly configService: IConfigService,
     private readonly securityActionService: ISecurityActionService,
-    private readonly replyGuildInstallRequired: ReplyGuildInstallRequired
+    private readonly replyGuildInstallRequired: ReplyGuildInstallRequired,
+    private readonly application?: BotApplication
   ) {}
 
   private async requireAdministrator(
@@ -332,14 +336,25 @@ export class CaseCommandHandler {
           components: [],
         });
         try {
-          const result = await this.securityActionService.openAdminCase(
-            targetMember,
-            interaction.user,
-            {
-              action: 'open_case',
-              reason,
-            }
+          if (!this.application) throw new Error('Case application is unavailable.');
+          const context = createDiscordActionContext({
+            guildId: guild.id,
+            userId: interaction.user.id,
+            requestId: buttonInteraction.id,
+          });
+          const command = {
+            kind: 'open_admin_case',
+            targetUserId: targetUser.id,
+            reason: reason ?? null,
+            detectionEventId: null,
+            selectedMessage: null,
+          } as const;
+          this.application.caseConfirmations.recordVerified(context, command);
+          const outcome = requireCaseOutcome(
+            await this.application.cases.execute(context, command)
           );
+          if (outcome.kind !== command.kind) throw new Error('Case outcome mismatch.');
+          const result = outcome.result;
           if (!result.opened) {
             throw new Error('Case flow returned false');
           }
@@ -377,7 +392,30 @@ export class CaseCommandHandler {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     try {
-      const result = await this.securityActionService.repairActiveCase(targetMember);
+      if (!this.application) throw new Error('Case application is unavailable.');
+      const active = await this.application.caseRepository.findActiveByUserAndServer(
+        targetUser.id,
+        guild.id
+      );
+      if (!active) throw new Error('No active verification event found');
+      const outcome = requireCaseOutcome(
+        await this.application.cases.execute(
+          createDiscordActionContext({
+            guildId: guild.id,
+            userId: interaction.user.id,
+            requestId: interaction.id,
+          }),
+          {
+            kind: 'repair_active_case',
+            intent: 'administrator_repair',
+            mode: 'repair_thread',
+            caseId: active.id,
+            targetUserId: targetUser.id,
+          }
+        )
+      );
+      if (outcome.kind !== 'repair_active_case') throw new Error('Case outcome mismatch.');
+      const result = outcome.result;
       const lines = [result.message];
 
       if (result.threadId) {
@@ -414,11 +452,23 @@ export class CaseCommandHandler {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     try {
-      const result = await this.securityActionService.refreshCaseNotification(
-        guild.id,
-        targetUser,
-        caseId
+      if (!this.application) throw new Error('Case application is unavailable.');
+      const selected = caseId
+        ? await this.application.caseRepository.findById(caseId)
+        : (await this.application.caseRepository.findByUserAndServer(targetUser.id, guild.id))[0];
+      if (!selected) throw new Error('No verification event found');
+      const outcome = requireCaseOutcome(
+        await this.application.cases.execute(
+          createDiscordActionContext({
+            guildId: guild.id,
+            userId: interaction.user.id,
+            requestId: interaction.id,
+          }),
+          { kind: 'refresh_case_notification', caseId: selected.id, targetUserId: targetUser.id }
+        )
       );
+      if (outcome.kind !== 'refresh_case_notification') throw new Error('Case outcome mismatch.');
+      const result = outcome.result;
 
       const lines = [result.message];
       if (result.verificationEventId) {

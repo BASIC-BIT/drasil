@@ -284,6 +284,16 @@ function configureServices(container: Container): void {
         client: context.get<Client>(TYPES.DiscordClient),
         queueRepository: context.get<IModerationQueueRepository>(TYPES.ModerationQueueRepository),
         queueService: context.get<IModerationQueueService>(TYPES.ModerationQueueService),
+        configService: context.get<IConfigService>(TYPES.ConfigService),
+        roleGateService: context.get<IRoleGateService>(TYPES.RoleGateService),
+        verificationEventRepository: context.get<IVerificationEventRepository>(
+          TYPES.VerificationEventRepository
+        ),
+        detectionEventsRepository: context.get<IDetectionEventsRepository>(
+          TYPES.DetectionEventsRepository
+        ),
+        securityActionService: context.get<ISecurityActionService>(TYPES.SecurityActionService),
+        userModerationService: context.get<IUserModerationService>(TYPES.UserModerationService),
       })
     )
     .inSingletonScope();

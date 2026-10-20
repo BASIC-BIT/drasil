@@ -1,3 +1,5 @@
+import type { CaseCommand, CaseOutcome } from '@drasil/application';
+import { CaseActionDeniedError, requireCaseOutcome } from '../application/adapters/cases';
 import type { BotApplication } from '../application/createBotApplication';
 import { createDiscordActionContext } from '../application/context';
 import { isReportIntakeActionChannel } from '../utils/reportIntakeAdminActions';
@@ -9,7 +11,6 @@ import {
   ButtonBuilder,
   MessageFlags,
   GuildMember,
-  Message,
   PermissionFlagsBits,
   ModalBuilder,
   TextInputBuilder,
@@ -171,6 +172,10 @@ export class InteractionHandler implements IInteractionHandler {
   private detectionEventsRepository?: IDetectionEventsRepository;
   private accountQuarantineService?: IAccountQuarantineService;
   private captchaChallengeService?: ICaptchaChallengeService;
+  private readonly pendingCaseModalBindings = new Map<
+    string,
+    { readonly caseId: string; readonly expiresAt: number }
+  >();
   private moderationActionConfirmationCounter = 0;
   private readonly pendingModerationActionConfirmations = new Map<
     string,
@@ -1452,6 +1457,16 @@ export class InteractionHandler implements IInteractionHandler {
     confirmation: NonNullable<ReturnType<InteractionHandler['getAdminActionConfirmation']>>,
     options?: { update?: boolean }
   ): Promise<void> {
+    if (parsed.surface === 'case' && !parsed.verificationEventId) {
+      parsed = {
+        ...parsed,
+        verificationEventId: await this.resolveCaseControlBinding(
+          interaction,
+          interaction.guildId ?? '',
+          parsed.userId
+        ),
+      };
+    }
     const confirmAction = `confirm_${parsed.action}`;
     const quarantinePreview =
       parsed.surface === 'case' && parsed.action === 'quarantine'
@@ -2025,6 +2040,75 @@ export class InteractionHandler implements IInteractionHandler {
     }
   }
 
+  private async bindCaseModal(
+    interaction: ButtonInteraction,
+    guildId: string,
+    userId: string,
+    customId: string
+  ): Promise<void> {
+    const now = Date.now();
+    for (const [key, binding] of this.pendingCaseModalBindings) {
+      if (binding.expiresAt <= now) this.pendingCaseModalBindings.delete(key);
+    }
+    const key = `${guildId}:${interaction.user.id}:${customId}`;
+    const caseId = await this.resolveCaseControlBinding(interaction, guildId, userId);
+    const pending = this.pendingCaseModalBindings.get(key);
+    if (pending && pending.caseId !== caseId) {
+      throw new Error(
+        'A confirmation for another case is still pending. Let it expire before retrying.'
+      );
+    }
+    if (!pending)
+      this.pendingCaseModalBindings.set(key, {
+        caseId,
+        expiresAt: now + MODERATION_ACTION_CONFIRMATION_TTL_MS,
+      });
+  }
+
+  private consumeCaseModalBinding(interaction: ModalSubmitInteraction, userId: string): string {
+    const key = `${interaction.guildId}:${interaction.user.id}:${interaction.customId}`;
+    const binding = this.pendingCaseModalBindings.get(key);
+    this.pendingCaseModalBindings.delete(key);
+    if (!binding || binding.expiresAt <= Date.now() || !interaction.customId.endsWith(`:${userId}`))
+      throw new Error('The case confirmation expired. Return to the case and retry.');
+    return binding.caseId;
+  }
+
+  private async resolveCaseControlBinding(
+    interaction: ButtonInteraction | ModalSubmitInteraction,
+    guildId: string,
+    userId: string
+  ): Promise<string> {
+    const parsed = parseAdminActionCustomId(interaction.customId);
+    if (parsed?.verificationEventId) return parsed.verificationEventId;
+    const history = await this.verificationEventRepository.findByUserAndServer(userId, guildId);
+    const matched = history.find(
+      (event) =>
+        (interaction.message?.id && event.notification_message_id === interaction.message.id) ||
+        (interaction.channelId && event.thread_id === interaction.channelId)
+    );
+    if (!matched)
+      throw new Error(
+        'The case control is no longer bound to a stored case. Return to the case and retry.'
+      );
+    return matched.id;
+  }
+
+  private async executeConfirmedCaseAction(
+    interaction: ButtonInteraction | ModalSubmitInteraction,
+    command: CaseCommand
+  ): Promise<CaseOutcome> {
+    if (!this.application || !interaction.guildId)
+      throw new Error('Case application is unavailable.');
+    const context = createDiscordActionContext({
+      guildId: interaction.guildId,
+      userId: interaction.user.id,
+      requestId: interaction.id,
+    });
+    this.application.caseConfirmations.recordVerified(context, command);
+    return requireCaseOutcome(await this.application.cases.execute(context, command));
+  }
+
   private async handleRepairActiveCaseButton(
     interaction: ButtonInteraction,
     guildId: string,
@@ -2033,30 +2117,33 @@ export class InteractionHandler implements IInteractionHandler {
     await interaction.deferUpdate();
 
     try {
-      const activeCase = await this.verificationEventRepository.findActiveByUserAndServer(
-        userId,
-        guildId
-      );
-      if (activeCase?.attention_state === CaseAttentionState.PARKED) {
-        await interaction.followUp({
-          content:
-            'A parked account quarantine can only be released with Verify User, Kick User, or Ban User.',
-          flags: MessageFlags.Ephemeral,
-        });
-        return;
-      }
-      const guild = await this.client.guilds.fetch(guildId);
-      const member = await guild.members.fetch(userId).catch(() => null);
-      if (!member) {
-        throw new Error('Could not find member in guild');
-      }
-
-      const result = await this.securityActionService.repairActiveCase(member);
+      const outcome = await this.executeConfirmedCaseAction(interaction, {
+        kind: 'repair_active_case',
+        intent: 'moderator_repair',
+        mode: 'repair_thread',
+        caseId: await this.resolveCaseControlBinding(interaction, guildId, userId),
+        targetUserId: userId,
+      });
+      if (outcome.kind !== 'repair_active_case') throw new Error('Case outcome mismatch.');
+      const result = outcome.result;
       await interaction.followUp({
         content: result.message,
         flags: MessageFlags.Ephemeral,
       });
     } catch (error) {
+      if (error instanceof CaseActionDeniedError && error.code === 'stale_state') {
+        const current = await this.verificationEventRepository
+          .findActiveByUserAndServer(userId, guildId)
+          .catch(() => null);
+        if (current?.attention_state === CaseAttentionState.PARKED) {
+          await interaction.followUp({
+            content:
+              'A parked account quarantine can only be released with Verify User, Kick User, or Ban User.',
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+      }
       console.error('Error repairing active case:', error);
       const message = error instanceof Error && error.message ? error.message : 'Unknown error';
       await interaction.followUp({
@@ -2112,12 +2199,13 @@ export class InteractionHandler implements IInteractionHandler {
     await interaction.deferUpdate();
 
     try {
-      const guild = await this.client.guilds.fetch(guildId);
-      const syncedCount = await this.userModerationService.syncAlreadyBannedUser(
-        guild,
-        userId,
-        interaction.user
-      );
+      const outcome = await this.executeConfirmedCaseAction(interaction, {
+        kind: 'sync_existing_ban',
+        caseId: await this.resolveCaseControlBinding(interaction, guildId, userId),
+        targetUserId: userId,
+      });
+      if (outcome.kind !== 'sync_existing_ban') throw new Error('Case outcome mismatch.');
+      const syncedCount = outcome.count;
 
       const caseWord = syncedCount === 1 ? 'case' : 'cases';
       await interaction.followUp({
@@ -2159,6 +2247,7 @@ export class InteractionHandler implements IInteractionHandler {
       .setPlaceholder(VERIFICATION_KICK_DEFAULT_REASON);
 
     modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(reasonInput));
+    await this.bindCaseModal(interaction, guildId, userId, modal.data.custom_id ?? '');
     await interaction.showModal(modal);
   }
 
@@ -2170,39 +2259,14 @@ export class InteractionHandler implements IInteractionHandler {
     await interaction.deferUpdate();
 
     try {
-      const activeCase = await this.verificationEventRepository.findActiveByUserAndServer(
-        userId,
-        guildId
-      );
-      if (activeCase?.case_kind === CaseKind.COMPROMISED_ACCOUNT) {
-        await interaction.followUp({
-          content:
-            'An account quarantine can only be released with Verify User, Kick User, or Ban User.',
-          flags: MessageFlags.Ephemeral,
-        });
-        return;
-      }
-      const guild = await this.client.guilds.fetch(guildId);
-      const member = await guild.members.fetch(userId).catch(() => null);
-      const roleGatePreview =
-        member && this.roleGateService
-          ? await this.roleGateService.previewResolution(member).catch(() => undefined)
-          : undefined;
-      const closedCount = await this.userModerationService.closeCaseNoAction(
-        guild,
-        userId,
-        interaction.user,
-        'Closed with no action by moderator.'
-      );
-      const roleGateResult =
-        member && closedCount > 0 && roleGatePreview
-          ? await this.roleGateService?.applyResolution(
-              member,
-              interaction.user,
-              'close_no_action',
-              roleGatePreview
-            )
-          : undefined;
+      const outcome = await this.executeConfirmedCaseAction(interaction, {
+        kind: 'close_case_no_action',
+        caseId: await this.resolveCaseControlBinding(interaction, guildId, userId),
+        targetUserId: userId,
+      });
+      if (outcome.kind !== 'close_case_no_action') throw new Error('Case outcome mismatch.');
+      const closedCount = outcome.count;
+      const roleGateResult = outcome.roleGateResult;
 
       const caseWord = closedCount === 1 ? 'case' : 'cases';
       await interaction.followUp({
@@ -2214,6 +2278,19 @@ export class InteractionHandler implements IInteractionHandler {
         flags: MessageFlags.Ephemeral,
       });
     } catch (error) {
+      if (error instanceof CaseActionDeniedError && error.code === 'stale_state') {
+        const current = await this.verificationEventRepository
+          .findActiveByUserAndServer(userId, guildId)
+          .catch(() => null);
+        if (current?.case_kind === CaseKind.COMPROMISED_ACCOUNT) {
+          await interaction.followUp({
+            content:
+              'An account quarantine can only be released with Verify User, Kick User, or Ban User.',
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+      }
       console.error('Error closing case with no action:', error);
       await interaction.followUp({
         content:
@@ -2231,21 +2308,14 @@ export class InteractionHandler implements IInteractionHandler {
     await interaction.deferUpdate();
 
     try {
-      const guild = await this.client.guilds.fetch(guildId);
-      const member = await guild.members.fetch(userId);
-      const roleGatePreview = this.roleGateService
-        ? await this.roleGateService.previewResolution(member).catch(() => undefined)
-        : undefined;
-
-      await this.userModerationService.verifyUser(member, interaction.user);
-      const roleGateResult = roleGatePreview
-        ? await this.roleGateService?.applyResolution(
-            member,
-            interaction.user,
-            'verify',
-            roleGatePreview
-          )
-        : undefined;
+      const outcome = await this.executeConfirmedCaseAction(interaction, {
+        kind: 'verify_case_user',
+        caseId: await this.resolveCaseControlBinding(interaction, guildId, userId),
+        targetUserId: userId,
+      });
+      if (outcome.kind !== 'verify_case_user' || !outcome.succeeded)
+        throw new Error('Verification did not complete.');
+      const roleGateResult = outcome.roleGateResult;
 
       await interaction.followUp({
         content: `User <@${userId}> has been verified and can now access the server.${this.formatRoleGateResolutionResult(roleGateResult)}`,
@@ -2292,6 +2362,7 @@ export class InteractionHandler implements IInteractionHandler {
       .setPlaceholder('Submitting this form bans the user. Add notes for the audit log.');
 
     modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(notesInput));
+    await this.bindCaseModal(interaction, guildId, userId, modal.data.custom_id ?? '');
     await interaction.showModal(modal);
   }
 
@@ -2303,42 +2374,19 @@ export class InteractionHandler implements IInteractionHandler {
     await interaction.deferUpdate();
 
     try {
-      // Get the guild and member
-      const guild = await this.client.guilds.fetch(guildId);
-      const member = await guild.members.fetch(userId).catch(() => null);
-
-      if (!member) {
-        throw new Error('Could not find member in guild');
-      }
-
-      // Get the active verification event
-      const verificationEvent = await this.verificationEventRepository.findActiveByUserAndServer(
-        userId,
-        guildId
-      );
-
-      if (!verificationEvent) {
-        throw new Error('No active verification event found');
-      }
-
-      // Create the thread
-      const thread = await this.threadManager.createVerificationThread(member, verificationEvent);
-
-      // Update the buttons to hide the Create Thread button
-      await this.notificationManager.updateNotificationButtons(
-        verificationEvent,
-        VerificationStatus.PENDING
-      );
-
-      if (!thread) {
+      const outcome = await this.executeConfirmedCaseAction(interaction, {
+        kind: 'repair_active_case',
+        intent: 'moderator_repair',
+        mode: 'repair_thread',
+        caseId: await this.resolveCaseControlBinding(interaction, guildId, userId),
+        targetUserId: userId,
+      });
+      if (outcome.kind !== 'repair_active_case' || !outcome.result.threadId)
         throw new Error('Failed to create verification thread');
-      }
-
-      // Update the buttons (this will remove the Create Thread button)
-      await this.notificationManager.updateNotificationButtons(
-        verificationEvent,
-        VerificationStatus.PENDING
-      );
+      const thread = {
+        id: outcome.result.threadId,
+        url: `https://discord.com/channels/${guildId}/${outcome.result.threadId}`,
+      };
 
       await interaction.followUp({
         content: `Created verification thread: ${thread.url}`,
@@ -2415,22 +2463,11 @@ export class InteractionHandler implements IInteractionHandler {
     await interaction.deferUpdate();
 
     try {
-      // TODO: We unlock the thread, but what actually updates the status? Is this a user moderation service concern?
-      // Remind ourselves that the handler/controller layer should focus on user interaction concerns
-      // Should we have a whole "display" layer, separate from our service layer (which is our business logic)?
-      const verificationEvents = await this.verificationEventRepository.findByUserAndServer(
-        userId,
-        guildId
-      );
-
-      if (verificationEvents.length === 0) {
-        throw new Error('No active verification event found');
-      }
-
-      const verificationEvent = verificationEvents[0];
-
-      // Reopen the verification using VerificationService
-      await this.securityActionService.reopenVerification(verificationEvent, interaction.user);
+      await this.executeConfirmedCaseAction(interaction, {
+        kind: 'reopen_case',
+        caseId: await this.resolveCaseControlBinding(interaction, guildId, userId),
+        targetUserId: userId,
+      });
 
       await interaction.followUp({
         content: `Verification for <@${userId}> has been reopened. The case role has been reapplied.`,
@@ -2923,27 +2960,18 @@ export class InteractionHandler implements IInteractionHandler {
         return;
       }
 
-      const sourceMetadata = this.getOpenCaseSourceMetadata(input);
-      const sourceMessage = sourceMetadata
-        ? await this.fetchOpenCaseSourceMessage(
-            sourceMetadata.source_channel_id,
-            sourceMetadata.source_message_id
-          )
-        : undefined;
-      const result = await this.securityActionService.openAdminCase(
-        targetMember,
-        interaction.user,
-        {
-          action: 'open_case',
-          reason,
-          ...(sourceMetadata
-            ? {
-                metadata: sourceMetadata,
-                ...(sourceMessage ? { sourceMessage } : {}),
-              }
-            : {}),
-        }
-      );
+      const outcome = await this.executeConfirmedCaseAction(interaction, {
+        kind: 'open_admin_case',
+        targetUserId,
+        reason: reason ?? null,
+        detectionEventId: null,
+        selectedMessage:
+          'sourceChannelId' in input
+            ? { channelId: input.sourceChannelId, messageId: input.sourceMessageId }
+            : null,
+      });
+      if (outcome.kind !== 'open_admin_case') throw new Error('Case outcome mismatch.');
+      const result = outcome.result;
       if (!result.opened) {
         throw new Error('Case flow returned false');
       }
@@ -2962,32 +2990,6 @@ export class InteractionHandler implements IInteractionHandler {
         allowedMentions: { parse: [] },
       });
     }
-  }
-
-  private getOpenCaseSourceMetadata(
-    input: { targetUserId: string } | OpenCaseMessageContextModalData
-  ): { source: string; source_channel_id: string; source_message_id: string } | undefined {
-    if (!('sourceChannelId' in input)) {
-      return undefined;
-    }
-
-    return {
-      source: 'message_context_case',
-      source_channel_id: input.sourceChannelId,
-      source_message_id: input.sourceMessageId,
-    };
-  }
-
-  private async fetchOpenCaseSourceMessage(
-    sourceChannelId: string,
-    sourceMessageId: string
-  ): Promise<Message | undefined> {
-    const channel = await this.client.channels.fetch(sourceChannelId).catch(() => null);
-    if (!channel || !('messages' in channel)) {
-      return undefined;
-    }
-
-    return (await channel.messages.fetch(sourceMessageId).catch(() => null)) ?? undefined;
   }
 
   private async handleVerificationBanModalSubmit(
@@ -3048,11 +3050,14 @@ export class InteractionHandler implements IInteractionHandler {
       const guild = await this.client.guilds.fetch(interaction.guildId);
       const member = await guild.members.fetch(userId).catch(() => null);
 
-      if (member) {
-        await this.userModerationService.banUser(member, banReason, interaction.user);
-      } else {
-        await this.userModerationService.banUserById(guild, userId, banReason, interaction.user);
-      }
+      const caseId = this.consumeCaseModalBinding(interaction, userId);
+      await this.executeConfirmedCaseAction(interaction, {
+        kind: member ? 'ban_case_user' : 'ban_case_user_by_id',
+        caseId,
+        targetUserId: userId,
+        reason: banReason,
+        detectionEventId: null,
+      });
 
       await interaction.editReply({
         content: `User <@${userId}> has been banned from the server.`,
@@ -3292,7 +3297,13 @@ export class InteractionHandler implements IInteractionHandler {
         throw new Error('Could not find member in guild');
       }
 
-      await this.userModerationService.kickUser(member, reason, interaction.user);
+      await this.executeConfirmedCaseAction(interaction, {
+        kind: 'kick_case_user',
+        caseId: this.consumeCaseModalBinding(interaction, userId),
+        targetUserId: userId,
+        reason,
+        detectionEventId: null,
+      });
 
       await interaction.editReply({
         content: `Kicked <@${userId}> and resolved pending verification cases as kicked.`,
@@ -3599,12 +3610,15 @@ export class InteractionHandler implements IInteractionHandler {
     userId: string,
     detectionEventId: string
   ): Promise<void> {
-    const member = await this.getObservedTargetMember(guildId, userId);
-    const opened = await this.securityActionService.openObservedDetectionCase(
-      member,
+    const outcome = await this.executeConfirmedCaseAction(interaction, {
+      kind: 'open_case_from_observed_detection',
+      targetUserId: userId,
       detectionEventId,
-      interaction.user
-    );
+      reportId: null,
+    });
+    if (outcome.kind !== 'open_case_from_observed_detection')
+      throw new Error('Case outcome mismatch.');
+    const opened = outcome.succeeded;
     await interaction.followUp({
       content: opened
         ? `Opened a verification case for <@${userId}>.`

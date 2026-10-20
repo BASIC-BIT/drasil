@@ -1,18 +1,18 @@
+import type { CaseCommand } from '../cases/commands';
 export interface QueuedActionReceipt {
   readonly id: string;
   readonly status: 'queued' | 'processing' | 'completed' | 'failed';
 }
+// The codec alone owns the optional-column database representation.
 export interface EnqueueInput {
-  readonly actionType: 'open_case_from_observed_detection';
+  readonly actionType: CaseCommand['kind'];
   readonly actorId: string;
   readonly actorSurface: string;
   readonly serverId: string;
   readonly targetUserId: string;
-  readonly detectionEventId: string;
-  readonly reportIntakeId: string | null;
+  readonly detectionEventId?: string | null;
+  readonly reportIntakeId?: string | null;
+  readonly verificationEventId?: string | null;
   readonly idempotencyKey: string;
-  readonly metadata: {
-    readonly requested_surface: string;
-    readonly report_intake_id: string | null;
-  };
+  readonly metadata: Record<string, unknown>;
 }

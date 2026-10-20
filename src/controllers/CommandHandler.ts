@@ -1,3 +1,4 @@
+import type { BotApplication } from '../application/createBotApplication';
 import {
   Client,
   REST,
@@ -116,7 +117,8 @@ export class CommandHandler implements ICommandHandler {
     integrityAuditService?: IIntegrityAuditService,
     @inject(TYPES.CaseThreadClosureSweepService)
     @optional()
-    caseThreadClosureSweepService?: ICaseThreadClosureSweepService
+    caseThreadClosureSweepService?: ICaseThreadClosureSweepService,
+    @inject(TYPES.BotApplication) @optional() application?: BotApplication
   ) {
     this.client = client;
     this.configService = configService;
@@ -131,7 +133,8 @@ export class CommandHandler implements ICommandHandler {
     this.caseCommandHandler = new CaseCommandHandler(
       this.configService,
       securityActionService,
-      (interaction) => this.replyGuildInstallRequired(interaction)
+      (interaction) => this.replyGuildInstallRequired(interaction),
+      application
     );
     this.lockdownConfigCommandHandler = new LockdownConfigCommandHandler(
       this.configService,
@@ -151,7 +154,8 @@ export class CommandHandler implements ICommandHandler {
       securityActionService,
       (interaction) => this.replyGuildInstallRequired(interaction),
       integrityAuditService,
-      caseThreadClosureSweepService
+      caseThreadClosureSweepService,
+      application
     );
     this.reportCommandHandler = new ReportCommandHandler(
       reportSubmissionService,

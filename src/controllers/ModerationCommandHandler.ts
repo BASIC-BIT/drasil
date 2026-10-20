@@ -1,3 +1,6 @@
+import type { BotApplication } from '../application/createBotApplication';
+import { createDiscordActionContext } from '../application/context';
+import { requireCaseOutcome } from '../application/adapters/cases';
 import {
   ActionRowBuilder,
   ButtonStyle,
@@ -48,7 +51,8 @@ export class ModerationCommandHandler {
     private readonly securityActionService: ISecurityActionService,
     private readonly replyGuildInstallRequired: ReplyGuildInstallRequired,
     private readonly integrityAuditService?: IIntegrityAuditService,
-    private readonly caseThreadClosureSweepService?: ICaseThreadClosureSweepService
+    private readonly caseThreadClosureSweepService?: ICaseThreadClosureSweepService,
+    private readonly application?: BotApplication
   ) {}
 
   public async handleReviewReportBanCommand(
@@ -481,11 +485,19 @@ export class ModerationCommandHandler {
           components: [],
         });
         try {
-          await this.securityActionService.handleManualFlag(
-            targetMember,
-            interaction.user,
-            reason ?? undefined
-          );
+          if (!this.application) throw new Error('Case application is unavailable.');
+          const context = createDiscordActionContext({
+            guildId: guild.id,
+            userId: interaction.user.id,
+            requestId: buttonInteraction.id,
+          });
+          const command = {
+            kind: 'manual_flag_user',
+            targetUserId: targetUser.id,
+            reason: reason ?? null,
+          } as const;
+          this.application.caseConfirmations.recordVerified(context, command);
+          requireCaseOutcome(await this.application.cases.execute(context, command));
           await buttonInteraction.editReply({
             content: `Flag request for ${targetUser.tag} received. Initiating verification process...`,
           });

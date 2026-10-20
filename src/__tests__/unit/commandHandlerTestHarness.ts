@@ -1,3 +1,4 @@
+import { buildCaseApplication } from './caseApplicationTestHarness';
 import { CommandHandler } from '../../controllers/CommandHandler';
 
 export function restoreUserInstallReportingEnvAfterEach(): void {
@@ -186,6 +187,45 @@ export const buildHandler = (overrides: HandlerOverrides = {}) => {
       user: { id: 'client-1' },
     } as any);
 
+  const caseRepository = {
+    findActiveByUserAndServer: jest.fn(async (userId: string) => ({
+      id: 'ver-1',
+      user_id: userId,
+      server_id: 'guild-1',
+      status: 'pending',
+    })),
+    findByUserAndServer: jest.fn(async (userId: string) => [
+      { id: 'ver-1', user_id: userId, server_id: 'guild-1', status: 'pending' },
+    ]),
+    findById: jest.fn(async (id: string) => ({
+      id,
+      user_id: 'user-2',
+      server_id: 'guild-1',
+      status: 'pending',
+    })),
+  } as any;
+  const application = buildCaseApplication({
+    client: {
+      guilds: {
+        fetch: jest.fn(async () => ({
+          id: 'guild-1',
+          members: { fetch: jest.fn(async (id: string) => ({ id })) },
+        })),
+      },
+      users: {
+        fetch: jest.fn(async (id: string) =>
+          id.startsWith('user-') ? { id, tag: 'target#0001' } : { id }
+        ),
+      },
+    } as any,
+    configService,
+    verificationEventRepository: caseRepository,
+    detectionEventsRepository: { findById: jest.fn() } as any,
+    securityActionService,
+    userModerationService,
+    roleGateService: null,
+  });
+
   return {
     handler: new CommandHandler(
       client,
@@ -198,7 +238,9 @@ export const buildHandler = (overrides: HandlerOverrides = {}) => {
       setupDiagnosticsService,
       overrides.caseRoleLockdownService,
       overrides.moderationQueueService,
-      overrides.integrityAuditService
+      overrides.integrityAuditService,
+      undefined,
+      application
     ),
     client,
     userModerationService,

@@ -431,7 +431,7 @@ describe('CommandHandler case commands (unit)', () => {
     expect(securityActionService.refreshCaseNotification).toHaveBeenCalledWith(
       'guild-1',
       targetUser,
-      undefined
+      'ver-1'
     );
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('Refreshed verified case notification'),

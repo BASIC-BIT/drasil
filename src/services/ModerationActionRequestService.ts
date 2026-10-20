@@ -1,3 +1,6 @@
+import { decodeQueuedAction } from '@drasil/application';
+import type { BotApplication } from '../application/createBotApplication';
+import { dispatchQueuedAction } from '../application/requestDispatch';
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -92,9 +95,9 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     Record<ModerationActionRequestType, (request: ModerationActionRequest) => Promise<void>>
   > = {
     [ModerationActionRequestType.OPEN_CASE_FROM_OBSERVED_DETECTION]: (request) =>
-      this.openObservedDetectionCase(request),
-    [ModerationActionRequestType.OPEN_ADMIN_CASE]: (request) => this.openAdminCase(request),
-    [ModerationActionRequestType.MANUAL_FLAG_USER]: (request) => this.manualFlagUser(request),
+      this.executeCaseRequest(request),
+    [ModerationActionRequestType.OPEN_ADMIN_CASE]: (request) => this.executeCaseRequest(request),
+    [ModerationActionRequestType.MANUAL_FLAG_USER]: (request) => this.executeCaseRequest(request),
     [ModerationActionRequestType.SUBMIT_USER_REPORT]: (request) => this.submitUserReport(request),
     [ModerationActionRequestType.START_REPORT_INTAKE]: (request) => this.startReportIntake(request),
     [ModerationActionRequestType.CLOSE_REPORT_INTAKE]: (request) => this.closeReportIntake(request),
@@ -112,26 +115,27 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       this.ignoreDetectionAccounting(request),
     [ModerationActionRequestType.RESTORE_DETECTION_ACCOUNTING]: (request) =>
       this.restoreDetectionAccounting(request),
-    [ModerationActionRequestType.VERIFY_CASE_USER]: (request) => this.verifyCaseUser(request),
+    [ModerationActionRequestType.VERIFY_CASE_USER]: (request) => this.executeCaseRequest(request),
     [ModerationActionRequestType.PREVIEW_ACCOUNT_QUARANTINE]: (request) =>
       this.previewAccountQuarantine(request),
     [ModerationActionRequestType.QUARANTINE_COMPROMISED_ACCOUNT]: (request) =>
       this.quarantineCompromisedAccount(request),
     [ModerationActionRequestType.CLOSE_CASE_NO_ACTION]: (request) =>
-      this.closeCaseNoAction(request),
-    [ModerationActionRequestType.KICK_CASE_USER]: (request) => this.kickCaseUser(request),
-    [ModerationActionRequestType.BAN_CASE_USER]: (request) => this.banCaseUser(request),
+      this.executeCaseRequest(request),
+    [ModerationActionRequestType.KICK_CASE_USER]: (request) => this.executeCaseRequest(request),
+    [ModerationActionRequestType.BAN_CASE_USER]: (request) => this.executeCaseRequest(request),
     [ModerationActionRequestType.PREVIEW_CASE_MESSAGE_DELETION]: (request) =>
       this.previewCaseMessageDeletion(request),
     [ModerationActionRequestType.EXECUTE_CASE_MESSAGE_DELETION]: (request) =>
       this.executeCaseMessageDeletion(request),
     [ModerationActionRequestType.BAN_CASE_USER_WITH_MESSAGE_CLEANUP]: (request) =>
       this.banCaseUserWithMessageCleanup(request),
-    [ModerationActionRequestType.BAN_CASE_USER_BY_ID]: (request) => this.banCaseUserById(request),
-    [ModerationActionRequestType.REPAIR_ACTIVE_CASE]: (request) => this.repairActiveCase(request),
-    [ModerationActionRequestType.REOPEN_CASE]: (request) => this.reopenCase(request),
+    [ModerationActionRequestType.BAN_CASE_USER_BY_ID]: (request) =>
+      this.executeCaseRequest(request),
+    [ModerationActionRequestType.REPAIR_ACTIVE_CASE]: (request) => this.executeCaseRequest(request),
+    [ModerationActionRequestType.REOPEN_CASE]: (request) => this.executeCaseRequest(request),
     [ModerationActionRequestType.REFRESH_CASE_NOTIFICATION]: (request) =>
-      this.refreshCaseNotification(request),
+      this.executeCaseRequest(request),
     [ModerationActionRequestType.SYNC_MODERATION_QUEUE]: (request) =>
       this.syncModerationQueue(request),
     [ModerationActionRequestType.CLEAR_MODERATION_QUEUE]: (request) =>
@@ -143,7 +147,7 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     [ModerationActionRequestType.APPLY_CASE_ROLE_LOCKDOWN]: (request) =>
       this.applyCaseRoleLockdown(request),
     [ModerationActionRequestType.INTAKE_ROLE_MEMBERS]: (request) => this.intakeRoleMembers(request),
-    [ModerationActionRequestType.SYNC_EXISTING_BAN]: (request) => this.syncExistingBan(request),
+    [ModerationActionRequestType.SYNC_EXISTING_BAN]: (request) => this.executeCaseRequest(request),
     [ModerationActionRequestType.COMPLETE_SETUP_VERIFICATION]: (request) =>
       this.completeSetupVerification(request),
     [ModerationActionRequestType.UPSERT_REPORT_INSTRUCTIONS]: (request) =>
@@ -195,7 +199,10 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     private readonly accountQuarantineService?: IAccountQuarantineService,
     @inject(TYPES.CaptchaChallengeService)
     @optional()
-    private readonly captchaChallengeService?: ICaptchaChallengeService
+    private readonly captchaChallengeService?: ICaptchaChallengeService,
+    @inject(TYPES.BotApplication)
+    @optional()
+    private readonly application?: BotApplication
   ) {}
 
   public start(): void {
@@ -314,87 +321,14 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     }
   }
 
-  private async openObservedDetectionCase(request: ModerationActionRequest): Promise<void> {
-    if (!request.target_user_id || !request.detection_event_id) {
-      throw new Error('Open-case request is missing target user or detection event.');
-    }
-
-    const [member, moderator] = await Promise.all([
-      this.fetchGuildMember(request.server_id, request.target_user_id),
-      this.fetchModerator(request.actor_id),
-    ]);
-    const opened = await this.securityActionService.openObservedDetectionCase(
-      member,
-      request.detection_event_id,
-      moderator
-    );
-
-    await this.repository.complete(request.id, {
-      opened,
-      action_type: request.action_type,
-      detection_event_id: request.detection_event_id,
-      target_user_id: request.target_user_id,
-    });
-  }
-
-  private async openAdminCase(request: ModerationActionRequest): Promise<void> {
-    if (!request.target_user_id) {
-      throw new Error('Open-admin-case request is missing target user.');
-    }
-
-    const reason = await this.resolveOpenAdminCaseReason(request);
-    const [member, moderator] = await Promise.all([
-      this.fetchGuildMember(request.server_id, request.target_user_id),
-      this.fetchModerator(request.actor_id),
-    ]);
-    const sourceMetadata = this.readOpenAdminCaseSourceMetadata(request);
-    const sourceMessage = sourceMetadata
-      ? await this.fetchOpenCaseSourceMessage(
-          sourceMetadata.source_channel_id,
-          sourceMetadata.source_message_id
-        )
-      : undefined;
-    const result = await this.securityActionService.openAdminCase(member, moderator, {
-      action: 'open_case',
-      metadata: {
-        requested_surface: request.actor_surface,
-        ...sourceMetadata,
-        web_action: 'open_admin_case',
-      },
-      reason,
-      ...(sourceMessage ? { sourceMessage } : {}),
-    });
-
-    await this.repository.complete(request.id, {
-      action_type: request.action_type,
-      case_role_active: result.caseRoleActive,
-      case_role_attempted: result.caseRoleAttempted,
-      detection_event_id: request.detection_event_id,
-      opened: result.opened,
-      source_channel_id: sourceMetadata?.source_channel_id ?? null,
-      source_message_fetched: Boolean(sourceMessage),
-      source_message_id: sourceMetadata?.source_message_id ?? null,
-      target_user_id: request.target_user_id,
-    });
-  }
-
-  private async manualFlagUser(request: ModerationActionRequest): Promise<void> {
-    if (!request.target_user_id) {
-      throw new Error('Manual-flag request is missing target user.');
-    }
-
-    const reason = this.readMetadataString(request.metadata, 'reason')?.trim() || undefined;
-    const [member, moderator] = await Promise.all([
-      this.fetchGuildMember(request.server_id, request.target_user_id),
-      this.fetchModerator(request.actor_id),
-    ]);
-    const flagged = await this.securityActionService.handleManualFlag(member, moderator, reason);
-
-    await this.repository.complete(request.id, {
-      action_type: request.action_type,
-      flagged,
-      target_user_id: request.target_user_id,
-    });
+  private async executeCaseRequest(request: ModerationActionRequest): Promise<void> {
+    const action = decodeQueuedAction(request);
+    if (!this.application) throw new Error('Case application is unavailable.');
+    // The persisted form submission supplies confirmation evidence; the shared
+    // operation still checks fresh authority, mutable policy and case binding.
+    this.application.caseConfirmations.recordVerified(action.context, action.command);
+    const outcome = await dispatchQueuedAction(this.application, action);
+    await this.repository.complete(request.id, outcome);
   }
 
   private async submitUserReport(request: ModerationActionRequest): Promise<void> {
@@ -738,103 +672,6 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     );
   }
 
-  private async syncExistingBan(request: ModerationActionRequest): Promise<void> {
-    if (!request.target_user_id || !request.verification_event_id) {
-      throw new Error('Sync-existing-ban request is missing target user or case id.');
-    }
-
-    const [guild, moderator] = await Promise.all([
-      this.fetchGuild(request.server_id),
-      this.fetchModerator(request.actor_id),
-    ]);
-    const syncedCount = await this.userModerationService.syncAlreadyBannedUser(
-      guild,
-      request.target_user_id,
-      moderator
-    );
-
-    await this.repository.complete(request.id, {
-      action_type: request.action_type,
-      synced_count: syncedCount,
-      target_user_id: request.target_user_id,
-      verification_event_id: request.verification_event_id,
-    });
-  }
-
-  private async repairActiveCase(request: ModerationActionRequest): Promise<void> {
-    if (!request.target_user_id || !request.verification_event_id) {
-      throw new Error('Repair-case request is missing target user or case id.');
-    }
-
-    const member = await this.fetchGuildMember(request.server_id, request.target_user_id);
-    const result = await this.securityActionService.repairActiveCase(member);
-
-    await this.repository.complete(request.id, {
-      action_type: request.action_type,
-      message: result.message,
-      repaired: result.repaired,
-      target_user_id: request.target_user_id,
-      thread_created: result.threadCreated,
-      verification_event_id: request.verification_event_id,
-    });
-  }
-
-  private async reopenCase(request: ModerationActionRequest): Promise<void> {
-    if (!request.target_user_id || !request.verification_event_id) {
-      throw new Error('Reopen-case request is missing target user or case id.');
-    }
-
-    const [verificationEvent, moderator] = await Promise.all([
-      this.verificationEventRepository.findById(request.verification_event_id),
-      this.fetchModerator(request.actor_id),
-    ]);
-    if (!verificationEvent) {
-      throw new Error(`Verification event ${request.verification_event_id} not found.`);
-    }
-    if (
-      verificationEvent.server_id !== request.server_id ||
-      verificationEvent.user_id !== request.target_user_id
-    ) {
-      throw new Error('Reopen-case request target does not match the verification event.');
-    }
-
-    const reopened = await this.securityActionService.reopenVerification(
-      verificationEvent,
-      moderator
-    );
-
-    await this.repository.complete(request.id, {
-      action_type: request.action_type,
-      reopened,
-      target_user_id: request.target_user_id,
-      verification_event_id: request.verification_event_id,
-    });
-  }
-
-  private async refreshCaseNotification(request: ModerationActionRequest): Promise<void> {
-    if (!request.target_user_id || !request.verification_event_id) {
-      throw new Error('Refresh-notification request is missing target user or case id.');
-    }
-
-    const targetUser = await this.fetchUser(request.target_user_id);
-    const result = await this.securityActionService.refreshCaseNotification(
-      request.server_id,
-      targetUser,
-      request.verification_event_id
-    );
-
-    await this.repository.complete(request.id, {
-      action_type: request.action_type,
-      message: result.message,
-      notification_channel_id: result.notificationChannelId ?? null,
-      notification_message_id: result.notificationMessageId ?? null,
-      refreshed: result.refreshed,
-      status: result.status ?? null,
-      target_user_id: request.target_user_id,
-      verification_event_id: request.verification_event_id,
-    });
-  }
-
   private async syncModerationQueue(request: ModerationActionRequest): Promise<void> {
     await this.moderationQueueService.syncServerQueue(request.server_id);
 
@@ -970,25 +807,6 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       skipped_bots: result.skippedBots,
       skipped_over_limit: result.skippedOverLimit,
       total_members: result.totalMembers,
-    });
-  }
-
-  private async verifyCaseUser(request: ModerationActionRequest): Promise<void> {
-    if (!request.target_user_id || !request.verification_event_id) {
-      throw new Error('Verify-case request is missing target user or case id.');
-    }
-
-    const [member, moderator] = await Promise.all([
-      this.fetchGuildMember(request.server_id, request.target_user_id),
-      this.fetchModerator(request.actor_id),
-    ]);
-    const verified = await this.userModerationService.verifyUser(member, moderator);
-
-    await this.repository.complete(request.id, {
-      action_type: request.action_type,
-      target_user_id: request.target_user_id,
-      verification_event_id: request.verification_event_id,
-      verified,
     });
   }
 
@@ -1941,58 +1759,6 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     return Boolean(await this.fetchOpenCaseSourceMessage(channelId, messageId));
   }
 
-  private async kickCaseUser(request: ModerationActionRequest): Promise<void> {
-    if (!request.target_user_id || !request.verification_event_id) {
-      throw new Error('Kick-case request is missing target user or case id.');
-    }
-
-    const reason = await this.resolveDestructiveActionReason(request, 'kick');
-    const [member, moderator] = await Promise.all([
-      this.fetchGuildMember(request.server_id, request.target_user_id),
-      this.fetchModerator(request.actor_id),
-    ]);
-    await this.assertBotPermission(member.guild, PermissionFlagsBits.KickMembers, 'Kick Members');
-    const kicked = await this.userModerationService.kickUser(
-      member,
-      reason,
-      moderator,
-      request.detection_event_id ?? undefined
-    );
-
-    await this.repository.complete(request.id, {
-      action_type: request.action_type,
-      kicked,
-      target_user_id: request.target_user_id,
-      verification_event_id: request.verification_event_id,
-    });
-  }
-
-  private async banCaseUser(request: ModerationActionRequest): Promise<void> {
-    if (!request.target_user_id || !request.verification_event_id) {
-      throw new Error('Ban-case request is missing target user or case id.');
-    }
-
-    const reason = await this.resolveDestructiveActionReason(request, 'ban');
-    const [member, moderator] = await Promise.all([
-      this.fetchGuildMember(request.server_id, request.target_user_id),
-      this.fetchModerator(request.actor_id),
-    ]);
-    await this.assertBotPermission(member.guild, PermissionFlagsBits.BanMembers, 'Ban Members');
-    const banned = await this.userModerationService.banUser(
-      member,
-      reason,
-      moderator,
-      request.detection_event_id ?? undefined
-    );
-
-    await this.repository.complete(request.id, {
-      action_type: request.action_type,
-      banned,
-      target_user_id: request.target_user_id,
-      verification_event_id: request.verification_event_id,
-    });
-  }
-
   private async previewCaseMessageDeletion(request: ModerationActionRequest): Promise<void> {
     const job = await this.requireMessageDeletionJob(request);
     try {
@@ -2131,57 +1897,6 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     } catch (error) {
       console.warn(`Failed to clear completed cleanup marker for job ${job.id}:`, error);
     }
-  }
-
-  private async banCaseUserById(request: ModerationActionRequest): Promise<void> {
-    if (!request.target_user_id || !request.verification_event_id) {
-      throw new Error('Ban-by-ID request is missing target user or case id.');
-    }
-
-    const reason = await this.resolveDestructiveActionReason(request, 'ban');
-    const [guild, moderator] = await Promise.all([
-      this.fetchGuild(request.server_id),
-      this.fetchModerator(request.actor_id),
-    ]);
-    await this.assertBotPermission(guild, PermissionFlagsBits.BanMembers, 'Ban Members');
-    const banned = await this.userModerationService.banUserById(
-      guild,
-      request.target_user_id,
-      reason,
-      moderator,
-      request.detection_event_id ?? undefined
-    );
-
-    await this.repository.complete(request.id, {
-      action_type: request.action_type,
-      banned,
-      target_user_id: request.target_user_id,
-      verification_event_id: request.verification_event_id,
-    });
-  }
-
-  private async closeCaseNoAction(request: ModerationActionRequest): Promise<void> {
-    if (!request.target_user_id || !request.verification_event_id) {
-      throw new Error('Close-no-action request is missing target user or case id.');
-    }
-
-    const [guild, moderator] = await Promise.all([
-      this.fetchGuild(request.server_id),
-      this.fetchModerator(request.actor_id),
-    ]);
-    const closedCount = await this.userModerationService.closeCaseNoAction(
-      guild,
-      request.target_user_id,
-      moderator,
-      'Closed with no action from the web moderation workbench.'
-    );
-
-    await this.repository.complete(request.id, {
-      action_type: request.action_type,
-      closed_count: closedCount,
-      target_user_id: request.target_user_id,
-      verification_event_id: request.verification_event_id,
-    });
   }
 
   private async completeSetupVerification(request: ModerationActionRequest): Promise<void> {
@@ -2669,22 +2384,6 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     return this.client.users.fetch(userId);
   }
 
-  private readOpenAdminCaseSourceMetadata(
-    request: ModerationActionRequest
-  ): { source: string; source_channel_id: string; source_message_id: string } | undefined {
-    const sourceChannelId = this.readMetadataString(request.metadata, 'source_channel_id');
-    const sourceMessageId = this.readMetadataString(request.metadata, 'source_message_id');
-    if (!sourceChannelId || !sourceMessageId) {
-      return undefined;
-    }
-
-    return {
-      source: this.readMetadataString(request.metadata, 'source') ?? 'message_context_case',
-      source_channel_id: sourceChannelId,
-      source_message_id: sourceMessageId,
-    };
-  }
-
   private async fetchOpenCaseSourceMessage(
     sourceChannelId: string,
     sourceMessageId: string
@@ -2699,32 +2398,6 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     }
 
     return (await messageChannel.messages.fetch(sourceMessageId).catch(() => null)) ?? undefined;
-  }
-
-  private async resolveDestructiveActionReason(
-    request: ModerationActionRequest,
-    action: 'ban' | 'kick'
-  ): Promise<string> {
-    const config = await this.configService.getServerConfig(request.server_id);
-    const settings = getDetectionResponseSettings(config.settings);
-    const isBan = action === 'ban';
-    const actionLabel = isBan ? 'ban' : 'kick';
-    const enabled = isBan
-      ? settings.moderatorBanActionEnabled
-      : settings.moderatorKickActionEnabled;
-    const requiresReason = isBan
-      ? settings.moderatorBanActionRequiresReason
-      : settings.moderatorKickActionRequiresReason;
-    if (!enabled) {
-      throw new Error(`Moderator ${actionLabel} action is disabled for this server.`);
-    }
-
-    const reason = this.readMetadataString(request.metadata, 'reason')?.trim();
-    if (requiresReason && !reason) {
-      throw new Error(`Moderator ${actionLabel} action requires a reason.`);
-    }
-
-    return reason || `No reason provided for web ${actionLabel} action.`;
   }
 
   private async assertModeratorBanActionEnabled(serverId: string): Promise<void> {
@@ -2761,19 +2434,6 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     }
 
     return reason || (isBan ? OBSERVED_BAN_DEFAULT_REASON : OBSERVED_KICK_DEFAULT_REASON);
-  }
-
-  private async resolveOpenAdminCaseReason(
-    request: ModerationActionRequest
-  ): Promise<string | undefined> {
-    const config = await this.configService.getServerConfig(request.server_id);
-    const settings = getDetectionResponseSettings(config.settings);
-    const reason = this.readMetadataString(request.metadata, 'reason')?.trim();
-    if (settings.adminCaseOpenRequiresReason && !reason) {
-      throw new Error('Open case action requires a reason.');
-    }
-
-    return reason || undefined;
   }
 
   private readMetadataString(metadata: unknown, key: string): string | null {
