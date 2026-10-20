@@ -1,3 +1,7 @@
+import { operationConfirmationCommand } from '@drasil/application';
+import { createDiscordActionContext } from '../application/context';
+import { requireOperationsOutcome } from '../application/adapters/operations';
+import type { BotApplication } from '../application/createBotApplication';
 import { ChannelType, ChatInputCommandInteraction, Guild, MessageFlags } from 'discord.js';
 import { IConfigService } from '../config/ConfigService';
 import { ServerSettings } from '../repositories/types';
@@ -16,7 +20,8 @@ import { truncatePreview } from '../utils/textPreview';
 export class LockdownConfigCommandHandler {
   public constructor(
     private readonly configService: IConfigService,
-    private readonly caseRoleLockdownService?: ICaseRoleLockdownService
+    private readonly caseRoleLockdownService?: ICaseRoleLockdownService,
+    private readonly application?: BotApplication
   ) {}
 
   public async handleLockdownConfigCommand(
@@ -67,12 +72,34 @@ export class LockdownConfigCommandHandler {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     try {
-      const report =
+      if (!this.application) throw new Error('Operations application is unavailable.');
+      const context = createDiscordActionContext({
+        guildId: guild.id,
+        userId: interaction.user.id,
+        requestId: interaction.id,
+      });
+      const command =
         subcommand === 'apply'
-          ? await this.caseRoleLockdownService.applyGuild(guild, interaction.user.id, {
+          ? {
+              kind: 'apply_case_role_lockdown' as const,
               unsyncAllowedChannels: interaction.options.getBoolean('unsync-allowed') ?? false,
-            })
-          : await this.caseRoleLockdownService.auditGuild(guild);
+            }
+          : { kind: 'audit_case_role_lockdown' as const };
+      // The authenticated slash apply subcommand is the shipped explicit execution step.
+      if (subcommand === 'apply')
+        this.application.caseConfirmations.recordVerified(
+          context,
+          operationConfirmationCommand(context, command)
+        );
+      const outcome = requireOperationsOutcome(
+        await this.application.operations.execute(context, command)
+      );
+      if (
+        outcome.kind !== 'audit_case_role_lockdown' &&
+        outcome.kind !== 'apply_case_role_lockdown'
+      )
+        throw new Error('Operation outcome mismatch.');
+      const report = outcome.report;
 
       await interaction.editReply({
         content: this.formatCaseRoleLockdownReport(report, subcommand === 'apply'),

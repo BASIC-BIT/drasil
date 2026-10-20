@@ -1,3 +1,7 @@
+import { mock } from 'jest-mock-extended';
+import type { IIntegrityAuditService } from '../../services/IntegrityAuditService';
+import type { ICaseRoleLockdownService } from '../../services/CaseRoleLockdownService';
+import type { ICaseThreadClosureSweepService } from '../../services/CaseThreadClosureSweepService';
 import { createBotApplication } from '../../application/createBotApplication';
 import { getReportBanAttemptToken } from '../../repositories/ModerationActionRequestRepository';
 import { NotificationManager } from '../../services/NotificationManager';
@@ -174,6 +178,9 @@ async function fixture() {
       .mockResolvedValue({ settings: { moderator_ban_action_enabled: true } }),
   };
   const application = createBotApplication({
+    integrityAuditService: mock<IIntegrityAuditService>(),
+    caseRoleLockdownService: mock<ICaseRoleLockdownService>(),
+    caseThreadClosureSweepService: mock<ICaseThreadClosureSweepService>(),
     messageDeletionJobs: {} as never,
     messageCleanupService: {} as never,
     captchaChallengeService: null,

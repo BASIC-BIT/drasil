@@ -1,3 +1,14 @@
+import {
+  operationConfirmationCommand,
+  type ConfirmationBinding,
+  type CaseThreadClosureSweepReport,
+} from '@drasil/application';
+import { requireOperationsOutcome } from '../application/adapters/operations';
+import {
+  normalizeIntegrityAuditScope,
+  clampIntegrityAuditDays,
+  clampIntegrityAuditLimit,
+} from '../utils/integrityAuditSettings';
 import { requireDetectionOutcome } from '../application/adapters/detections';
 import type { BotApplication } from '../application/createBotApplication';
 import { createDiscordActionContext } from '../application/context';
@@ -16,10 +27,7 @@ import {
   UserContextMenuCommandInteraction,
 } from 'discord.js';
 import { IConfigService } from '../config/ConfigService';
-import {
-  CaseThreadClosureSweepReport,
-  ICaseThreadClosureSweepService,
-} from '../services/CaseThreadClosureSweepService';
+import { ICaseThreadClosureSweepService } from '../services/CaseThreadClosureSweepService';
 import {
   IIntegrityAuditService,
   IntegrityAuditFinding,
@@ -592,12 +600,25 @@ export class ModerationCommandHandler {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     try {
-      const report = await this.integrityAuditService.auditGuild(guild, {
-        scope: interaction.options.getString('scope'),
-        days: interaction.options.getInteger('days'),
-        limit: interaction.options.getInteger('limit'),
-        userId: interaction.options.getUser('user')?.id,
-      });
+      if (!this.application) throw new Error('Operations application is unavailable.');
+      const outcome = requireOperationsOutcome(
+        await this.application.operations.execute(
+          createDiscordActionContext({
+            guildId: guild.id,
+            userId: interaction.user.id,
+            requestId: interaction.id,
+          }),
+          {
+            kind: 'audit_integrity',
+            scope: normalizeIntegrityAuditScope(interaction.options.getString('scope')),
+            days: clampIntegrityAuditDays(interaction.options.getInteger('days')),
+            limit: clampIntegrityAuditLimit(interaction.options.getInteger('limit')),
+            userId: interaction.options.getUser('user')?.id ?? null,
+          }
+        )
+      );
+      if (outcome.kind !== 'audit_integrity') throw new Error('Operation outcome mismatch.');
+      const report = outcome.report;
 
       await interaction.editReply({ content: this.formatIntegrityAuditReport(report) });
     } catch (error) {
@@ -625,32 +646,60 @@ export class ModerationCommandHandler {
     const days = interaction.options.getInteger('days') ?? 30;
     const limit = interaction.options.getInteger('limit') ?? 100;
     const userId = interaction.options.getUser('user')?.id ?? null;
-    const runSweep = async (): Promise<CaseThreadClosureSweepReport> =>
-      caseThreadClosureSweepService.sweepResolvedCaseThreads({
-        serverId: guild.id,
-        execute,
-        days,
-        limit,
-        userId,
-      });
+    const command = {
+      kind: 'close_resolved_case_threads',
+      intent: 'guild_audit',
+      execute,
+      days,
+      limit,
+      userId,
+    } as const;
+    const context = createDiscordActionContext({
+      guildId: guild.id,
+      userId: interaction.user.id,
+      requestId: interaction.id,
+    });
+    const confirmation = operationConfirmationCommand(context, command);
+    const runSweep = async (
+      requestId: string,
+      evidence?: ConfirmationBinding | null
+    ): Promise<CaseThreadClosureSweepReport> => {
+      if (!this.application) throw new Error('Operations application is unavailable.');
+      const executionContext = { ...context, requestId };
+      if (execute) {
+        if (!evidence) throw new Error('Thread closure confirmation is unavailable.');
+        this.application.caseConfirmations.recordVerified(
+          executionContext,
+          operationConfirmationCommand(executionContext, command),
+          evidence
+        );
+      }
+      const outcome = requireOperationsOutcome(
+        await this.application.operations.execute(executionContext, command)
+      );
+      if (outcome.kind !== 'close_resolved_case_threads')
+        throw new Error('Operation outcome mismatch.');
+      return outcome.report;
+    };
 
     if (!execute) {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-      const report = await runSweep();
+      const report = await runSweep(interaction.id);
       await interaction.editReply({ content: this.formatThreadClosureSweepReport(report) });
       return;
     }
 
     await requestSlashCommandConfirmation(interaction, {
+      confirmation: { action: command.kind, targetId: confirmation.operationId },
       message: `Close resolved case threads that are still open? This will inspect up to ${limit} resolved case(s) from the last ${days} day(s).`,
       confirmLabel: 'Close Threads',
       confirmStyle: ButtonStyle.Danger,
-      execute: async (buttonInteraction) => {
+      execute: async (buttonInteraction, evidence) => {
         await buttonInteraction.update({
           content: 'Closing resolved case threads...',
           components: [],
         });
-        const report = await runSweep();
+        const report = await runSweep(buttonInteraction.id, evidence);
         await buttonInteraction.editReply({ content: this.formatThreadClosureSweepReport(report) });
       },
     });

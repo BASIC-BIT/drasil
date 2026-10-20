@@ -1160,6 +1160,9 @@ describe('ModerationActionRequestService', () => {
       })),
     };
     const application = createBotApplication({
+      caseThreadClosureSweepService: caseThreadClosureSweepService as never,
+      caseRoleLockdownService: caseRoleLockdownService as never,
+      integrityAuditService: { auditGuild: jest.fn() },
       messageDeletionJobs: messageDeletionJobs as any,
       messageCleanupService: messageCleanupService as any,
       captchaChallengeService: captchaChallengeService as any,
@@ -3756,6 +3759,32 @@ describe('ModerationActionRequestService', () => {
           error: 'Report panel repost requires current Administrator permission.',
         },
       ]);
+    }
+  );
+
+  it.each([
+    syncModerationQueueRequest,
+    clearModerationQueueRequest,
+    closeResolvedThreadsRequest,
+    auditCaseRoleLockdownRequest,
+    applyCaseRoleLockdownRequest,
+    roleIntakeRequest,
+  ])(
+    'rechecks current Administrator permission for queued operation $action_type',
+    async (request) => {
+      const h = buildService([request]);
+      h.reporterMember.permissions.bitfield = 1n << 5n;
+      await expect(h.service.processPendingRequests()).resolves.toBe(1);
+      expect(h.repository.completed).toEqual([]);
+      expect(h.repository.failed).toEqual([
+        { id: request.id, error: 'Operation denied: permission_denied' },
+      ]);
+      expect(h.moderationQueueService.syncServerQueue).not.toHaveBeenCalled();
+      expect(h.moderationQueueService.clearServerQueue).not.toHaveBeenCalled();
+      expect(h.caseThreadClosureSweepService.sweepResolvedCaseThreads).not.toHaveBeenCalled();
+      expect(h.caseRoleLockdownService.auditGuild).not.toHaveBeenCalled();
+      expect(h.caseRoleLockdownService.applyGuild).not.toHaveBeenCalled();
+      expect(h.securityActionService.intakeRoleMembers).not.toHaveBeenCalled();
     }
   );
 

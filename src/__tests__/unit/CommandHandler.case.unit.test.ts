@@ -595,6 +595,95 @@ describe('CommandHandler case commands (unit)', () => {
     consoleError.mockRestore();
   });
 
+  it.each([true, false])(
+    'executes role intake only after authenticated confirmation and fresh Administrator authority %s',
+    async (retainAdministrator) => {
+      let permissions = PermissionFlagsBits.Administrator;
+      const invoker = { id: 'admin-1' };
+      const staff = {
+        id: invoker.id,
+        permissions: {
+          has: () => true,
+          get bitfield() {
+            return permissions;
+          },
+        },
+        roles: { cache: new Map() },
+      };
+      const guild = {
+        id: 'guild-1',
+        ownerId: 'owner',
+        roles: { fetch: jest.fn() },
+        members: { fetch: jest.fn(async () => staff) },
+      };
+      const role = { id: 'role-1', name: 'restricted', guild };
+      guild.roles.fetch.mockResolvedValue(role);
+      const client = {
+        guilds: { fetch: jest.fn(async () => guild) },
+        users: { fetch: jest.fn(async () => invoker) },
+      };
+      const intakeRoleMembers = jest.fn(async () => ({
+        batchId: 'batch',
+        roleId: role.id,
+        roleName: role.name,
+        action: 'open_case',
+        execute: true,
+        totalMembers: 1,
+        eligibleMembers: 1,
+        processed: 1,
+        opened: 1,
+        skippedBots: 0,
+        skippedActiveCases: 0,
+        skippedOverLimit: 0,
+        failed: 0,
+        failures: [],
+      }));
+      const { handler } = buildHandler({
+        client,
+        caseAuthority: createBotAuthority(client as unknown as Client),
+        intakeRoleMembers,
+      });
+      const interaction = {
+        id: 'intake-slash',
+        commandName: 'case',
+        guildId: guild.id,
+        guild,
+        user: invoker,
+        options: {
+          getSubcommand: () => 'intake-role',
+          getRole: () => role,
+          getBoolean: () => true,
+          getInteger: () => 12,
+          getString: () => 'reason',
+        },
+        reply: jest.fn(),
+        editReply: jest.fn(),
+        deferReply: jest.fn(),
+      };
+      await handler.handleSlashCommand(interaction as never);
+      expect(intakeRoleMembers).not.toHaveBeenCalled();
+      if (!retainAdministrator) permissions = PermissionFlagsBits.ManageGuild;
+      await confirmLastSlashCommand(interaction);
+      if (retainAdministrator) {
+        expect(intakeRoleMembers).toHaveBeenCalledWith(
+          expect.objectContaining({
+            role,
+            moderator: invoker,
+            execute: true,
+            limit: 12,
+            reason: 'reason',
+            onProgress: expect.any(Function),
+          })
+        );
+        expect(interaction.editReply).toHaveBeenCalledWith(
+          expect.objectContaining({ content: expect.stringContaining('Role intake executed') })
+        );
+      } else {
+        expect(intakeRoleMembers).not.toHaveBeenCalled();
+      }
+    }
+  );
+
   it('dry-runs case role intake via /case intake-role', async () => {
     const intakeRoleMembers = jest.fn().mockResolvedValue({
       batchId: 'role-intake-1',
@@ -612,11 +701,18 @@ describe('CommandHandler case commands (unit)', () => {
       failed: 0,
       failures: [],
     });
-    const { handler, securityActionService } = buildHandler({ intakeRoleMembers });
+    const { handler, securityActionService } = buildHandler({
+      intakeRoleMembers,
+      client: {
+        guilds: { fetch: jest.fn(async () => guild) },
+        users: { fetch: jest.fn(async () => invoker) },
+      },
+    });
     const invoker = { id: 'admin-1' } as any;
-    const role = { id: 'role-1', name: 'restricted' } as any;
+    const role = { id: 'role-1', name: 'restricted', guild: { id: 'guild-1' } } as any;
     const guild = {
       id: 'guild-1',
+      roles: { fetch: jest.fn(async () => role) },
       members: {
         fetch: jest.fn().mockResolvedValue({
           permissions: { has: jest.fn().mockReturnValue(true) },
@@ -675,11 +771,18 @@ describe('CommandHandler case commands (unit)', () => {
       failed: 0,
       failures: [],
     });
-    const { handler, securityActionService } = buildHandler({ intakeRoleMembers });
+    const { handler, securityActionService } = buildHandler({
+      intakeRoleMembers,
+      client: {
+        guilds: { fetch: jest.fn(async () => guild) },
+        users: { fetch: jest.fn(async () => invoker) },
+      },
+    });
     const invoker = { id: 'admin-1' } as any;
-    const role = { id: 'role-1', name: 'restricted' } as any;
+    const role = { id: 'role-1', name: 'restricted', guild: { id: 'guild-1' } } as any;
     const guild = {
       id: 'guild-1',
+      roles: { fetch: jest.fn(async () => role) },
       members: {
         fetch: jest.fn().mockResolvedValue({
           permissions: { has: jest.fn().mockReturnValue(true) },
@@ -710,7 +813,7 @@ describe('CommandHandler case commands (unit)', () => {
       reason: undefined,
       action: 'open_case',
       execute: false,
-      limit: undefined,
+      limit: 250,
     });
   });
 

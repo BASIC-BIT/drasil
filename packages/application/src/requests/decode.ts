@@ -1,3 +1,5 @@
+import { isQueuedOperationKind } from '../operations/commands';
+import { decodeOperationCommand } from './operations';
 import { decodeMessageCleanupCommand } from './messageCleanup';
 import { decodeCaptchaCommand } from './captcha';
 import { decodeDetectionCommand } from './detections';
@@ -5,19 +7,28 @@ import { z } from 'zod';
 import type { ActionContext } from '../context';
 import { queuedCommandSchema, type QueuedCommand } from './commands';
 const id = z.string().min(1);
-const queuedRowSchema = z.object({
-  id,
-  server_id: id,
-  action_type: id,
-  actor_id: id,
-  actor_surface: id,
-  target_user_id: id,
-  detection_event_id: id.nullable().optional(),
-  report_intake_id: id.nullable().optional(),
-  verification_event_id: id.nullable().optional(),
-  message_deletion_job_id: id.nullable().optional(),
-  metadata: z.record(z.unknown()).nullable().optional(),
-});
+const queuedRowSchema = z
+  .object({
+    id,
+    server_id: id,
+    action_type: id,
+    actor_id: id,
+    actor_surface: id,
+    target_user_id: id.nullable(),
+    detection_event_id: id.nullable().optional(),
+    report_intake_id: id.nullable().optional(),
+    verification_event_id: id.nullable().optional(),
+    message_deletion_job_id: id.nullable().optional(),
+    metadata: z.record(z.unknown()).nullable().optional(),
+  })
+  .superRefine((row, ctx) => {
+    if (row.target_user_id === null && !isQueuedOperationKind(row.action_type))
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['target_user_id'],
+        message: 'A target user is required for this action.',
+      });
+  });
 export type QueuedRow = z.infer<typeof queuedRowSchema>;
 export interface DecodedQueuedAction {
   readonly context: ActionContext;
@@ -106,6 +117,7 @@ export function decodeQueuedAction(row: unknown): DecodedQueuedAction {
 
 function decodeFamilyCommand(row: QueuedRow, reason: string | null): QueuedCommand | null {
   return (
+    decodeOperationCommand(row) ??
     decodeMessageCleanupCommand(row) ??
     decodeCaptchaCommand(row) ??
     decodeDetectionCommand(row, reason)

@@ -1,3 +1,7 @@
+import { operationConfirmationCommand } from '@drasil/application';
+import type { BotApplication } from '../application/createBotApplication';
+import { createDiscordActionContext } from '../application/context';
+import { requireOperationsOutcome } from '../application/adapters/operations';
 import { ChatInputCommandInteraction, MessageFlags } from 'discord.js';
 import { HeuristicSettings, IConfigService } from '../config/ConfigService';
 import { globalConfig } from '../config/GlobalConfig';
@@ -125,7 +129,8 @@ export class ConfigSubcommandHandler {
     private readonly configService: IConfigService,
     private readonly heuristicService: IHeuristicService,
     private readonly productAnalyticsService: IProductAnalyticsService,
-    private readonly moderationQueueService?: IModerationQueueService
+    private readonly moderationQueueService?: IModerationQueueService,
+    private readonly application?: BotApplication
   ) {}
 
   private formatKeywordSummary(keywords: readonly string[]): string {
@@ -489,6 +494,30 @@ export class ConfigSubcommandHandler {
     }
   }
 
+  private async executeQueueOperation(
+    interaction: ChatInputCommandInteraction,
+    guildId: string,
+    kind: 'sync_moderation_queue' | 'clear_moderation_queue'
+  ): Promise<number> {
+    if (!this.application) throw new Error('Operations application is unavailable.');
+    const context = createDiscordActionContext({
+      guildId,
+      userId: interaction.user.id,
+      requestId: interaction.id,
+    });
+    const command = { kind };
+    // Config subcommands are authenticated explicit execution intents, with a
+    // fresh Administrator check inside the operation before touching the queue.
+    this.application.caseConfirmations.recordVerified(
+      context,
+      operationConfirmationCommand(context, command)
+    );
+    const outcome = requireOperationsOutcome(
+      await this.application.operations.execute(context, command)
+    );
+    return outcome.kind === 'clear_moderation_queue' ? outcome.removedCount : 0;
+  }
+
   public async handleCaseQueueConfigCommand(
     interaction: ChatInputCommandInteraction,
     guildId: string
@@ -516,7 +545,7 @@ export class ConfigSubcommandHandler {
           const updated = await this.configService.updateServerSettings(guildId, {
             [MODERATION_QUEUE_CHANNEL_ID_SETTING_KEY]: channel.id,
           });
-          await this.moderationQueueService?.syncServerQueue(guildId);
+          await this.executeQueueOperation(interaction, guildId, 'sync_moderation_queue');
           const settings = getModerationQueueSettings(updated.settings);
           await interaction.editReply({
             content:
@@ -529,7 +558,11 @@ export class ConfigSubcommandHandler {
 
         case 'clear-channel': {
           await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-          const deletedCount = (await this.moderationQueueService?.clearServerQueue(guildId)) ?? 0;
+          const deletedCount = await this.executeQueueOperation(
+            interaction,
+            guildId,
+            'clear_moderation_queue'
+          );
           const updated = await this.configService.updateServerSettings(guildId, {
             [MODERATION_QUEUE_CHANNEL_ID_SETTING_KEY]: null,
           });

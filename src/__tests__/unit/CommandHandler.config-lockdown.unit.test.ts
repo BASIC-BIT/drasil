@@ -199,9 +199,13 @@ describe('CommandHandler lockdown config commands (unit)', () => {
 
     await handler.handleSlashCommand(interaction);
 
-    expect(lockdownService.applyGuild).toHaveBeenCalledWith(guild, 'admin-1', {
-      unsyncAllowedChannels: true,
-    });
+    expect(lockdownService.applyGuild).toHaveBeenCalledWith(
+      expect.objectContaining({ id: guild.id }),
+      'admin-1',
+      {
+        unsyncAllowedChannels: true,
+      }
+    );
     const content = interaction.editReply.mock.calls[0][0].content as string;
     expect(content).toContain('Unsynced allowed channels: `1`');
     expect(content.indexOf('[ERROR]')).toBeLessThan(content.indexOf('[WARNING]'));

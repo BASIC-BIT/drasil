@@ -1,3 +1,5 @@
+import { encodeOperationAction } from './operations';
+import { isQueuedOperationCommand } from '../operations/commands';
 import { encodeMessageCleanupAction } from './messageCleanup';
 import { encodeCaptchaAction } from './captcha';
 import { encodeDetectionAction } from './detections';
@@ -17,6 +19,7 @@ const caseAction = {
 } as const;
 export function encodeQueuedAction(context: ActionContext, input: QueuedCommand): EnqueueInput {
   const command = queuedCommandSchema.parse(input);
+  if (isQueuedOperationCommand(command)) return encodeOperationAction(context, command);
   if (
     command.kind === 'request_captcha_challenge' ||
     command.kind === 'retry_captcha_challenge' ||

@@ -1,4 +1,9 @@
 import {
+  createBotOperationsRuntime,
+  type BotOperationsRuntime,
+  type BotOperationsDependencies,
+} from './adapters/operations';
+import {
   createBotMessageCleanupRuntime,
   type BotMessageCleanupDependencies,
   type BotMessageCleanupRuntime,
@@ -32,6 +37,8 @@ import type { IModerationQueueService } from '../services/ModerationQueueService
 import { createBotAuthority, createBotAttentionMessageDeleter } from './adapters/attention';
 
 export interface BotApplication {
+  readonly operations: BotOperationsRuntime['actions'];
+  readonly operationsRuntime: BotOperationsRuntime;
   readonly messageCleanup: MessageCleanupActions;
   readonly messageCleanupRuntime: BotMessageCleanupRuntime;
   readonly captcha: BotCaptchaRuntime['actions'];
@@ -46,7 +53,8 @@ export interface BotApplication {
   readonly caseRepository: BotCaseDependencies['verificationEventRepository'];
 }
 export function createBotApplication(
-  deps: Omit<BotCaseDependencies, 'confirmations'> &
+  deps: BotOperationsDependencies &
+    Omit<BotCaseDependencies, 'confirmations'> &
     BotMessageCleanupDependencies &
     Pick<
       BotCaptchaDependencies,
@@ -60,6 +68,10 @@ export function createBotApplication(
     }
 ): BotApplication {
   const caseConfirmations = createCaseConfirmationStore();
+  const operationsRuntime = createBotOperationsRuntime({
+    ...deps,
+    confirmations: caseConfirmations.confirmations,
+  });
   const detectionRuntime = createBotDetectionRuntime({
     ...deps,
     confirmations: caseConfirmations.confirmations,
@@ -71,6 +83,8 @@ export function createBotApplication(
   const messageCleanupRuntime = createBotMessageCleanupRuntime(deps);
   const quarantineRuntime = createBotQuarantineRuntime(deps);
   return {
+    operations: operationsRuntime.actions,
+    operationsRuntime,
     messageCleanupRuntime,
     messageCleanup: {
       async execute(): ReturnType<MessageCleanupActions['execute']> {

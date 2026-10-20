@@ -229,6 +229,9 @@ export const buildHandler = (overrides: HandlerOverrides = {}) => {
           },
         } as any),
       configService,
+      queueService: overrides.moderationQueueService,
+      caseRoleLockdownService: overrides.caseRoleLockdownService,
+      integrityAuditService: overrides.integrityAuditService,
       verificationEventRepository: caseRepository,
       detectionEventsRepository:
         overrides.detectionEventsRepository ??

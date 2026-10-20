@@ -1,11 +1,14 @@
+import { dispatchOperationsAction, type QueuedOperationsOutcome } from './operationsDispatch';
 import {
   dispatchMessageCleanupAction,
   type QueuedMessageCleanupOutcome,
 } from './messageCleanupDispatch';
 import { requireCaptchaOutcome } from './adapters/captcha';
 import {
+  isQueuedOperationCommand,
   isQueuedCaptchaCommand,
   isQueuedMessageCleanupCommand,
+  type ActionContext,
   type CaptchaOutcome,
   type CaseCommand,
   type CaseOutcome,
@@ -18,6 +21,7 @@ import { requireCaseOutcome } from './adapters/cases';
 
 type CaseReceipt = { readonly target_user_id: string; readonly verification_event_id: string };
 export type QueuedActionOutcome =
+  | QueuedOperationsOutcome
   | QueuedMessageCleanupOutcome
   | CaptchaOutcome
   | QueuedQuarantineOutcome
@@ -75,6 +79,8 @@ export async function dispatchQueuedAction(
   action: DecodedQueuedAction
 ): Promise<QueuedActionOutcome> {
   const { command, context } = action;
+  if (isQueuedOperationCommand(command))
+    return dispatchOperationsAction(application.operations, context, command);
   if (isQueuedCaptchaCommand(command))
     return requireCaptchaOutcome(await application.captcha.execute(context, command));
   if (isQueuedMessageCleanupCommand(command))
@@ -92,6 +98,13 @@ export async function dispatchQueuedAction(
     case 'restore_detection_accounting':
       return dispatchDetectionAction(application.detections, context, command);
   }
+  return dispatchCaseAction(application, context, command);
+}
+async function dispatchCaseAction(
+  application: BotApplication,
+  context: ActionContext,
+  command: CaseCommand
+): Promise<QueuedActionOutcome> {
   const outcome = requireCaseOutcome(await application.cases.execute(context, command));
   const target = { target_user_id: command.targetUserId };
   switch (outcome.kind) {

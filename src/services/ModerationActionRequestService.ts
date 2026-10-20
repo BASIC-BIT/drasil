@@ -1,4 +1,8 @@
-import { decodeQueuedAction } from '@drasil/application';
+import {
+  operationConfirmationCommand,
+  isQueuedOperationCommand,
+  decodeQueuedAction,
+} from '@drasil/application';
 import type { BotApplication } from '../application/createBotApplication';
 import { dispatchQueuedAction } from '../application/requestDispatch';
 import {
@@ -34,7 +38,6 @@ import {
   ModerationActionRequestType,
   type VerificationChannelPermissionSyncState,
 } from '../repositories/types';
-import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
 import { buildReportIntakeAdminActionsCustomId } from '../utils/reportIntakeAdminActions';
 import { IModerationQueueService } from './ModerationQueueService';
 import { INotificationManager } from './NotificationManager';
@@ -49,7 +52,7 @@ import { SetupProvisioningService } from './SetupProvisioningService';
 import { IThreadManager } from './ThreadManager';
 import { ICombinedBanLifecycleService, IUserModerationService } from './UserModerationService';
 import { ICaseThreadClosureSweepService } from './CaseThreadClosureSweepService';
-import { CaseRoleLockdownReport, ICaseRoleLockdownService } from './CaseRoleLockdownService';
+import { ICaseRoleLockdownService } from './CaseRoleLockdownService';
 
 const DEFAULT_POLL_INTERVAL_MS = 5000;
 const DEFAULT_MAX_REQUESTS_PER_TICK = 5;
@@ -112,16 +115,17 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     [ModerationActionRequestType.REFRESH_CASE_NOTIFICATION]: (request) =>
       this.executeCaseRequest(request),
     [ModerationActionRequestType.SYNC_MODERATION_QUEUE]: (request) =>
-      this.syncModerationQueue(request),
+      this.executeOperationsRequest(request),
     [ModerationActionRequestType.CLEAR_MODERATION_QUEUE]: (request) =>
-      this.clearModerationQueue(request),
+      this.executeOperationsRequest(request),
     [ModerationActionRequestType.CLOSE_RESOLVED_CASE_THREADS]: (request) =>
-      this.closeResolvedCaseThreads(request),
+      this.executeOperationsRequest(request),
     [ModerationActionRequestType.AUDIT_CASE_ROLE_LOCKDOWN]: (request) =>
-      this.auditCaseRoleLockdown(request),
+      this.executeOperationsRequest(request),
     [ModerationActionRequestType.APPLY_CASE_ROLE_LOCKDOWN]: (request) =>
-      this.applyCaseRoleLockdown(request),
-    [ModerationActionRequestType.INTAKE_ROLE_MEMBERS]: (request) => this.intakeRoleMembers(request),
+      this.executeOperationsRequest(request),
+    [ModerationActionRequestType.INTAKE_ROLE_MEMBERS]: (request) =>
+      this.executeOperationsRequest(request),
     [ModerationActionRequestType.SYNC_EXISTING_BAN]: (request) => this.executeCaseRequest(request),
     [ModerationActionRequestType.COMPLETE_SETUP_VERIFICATION]: (request) =>
       this.completeSetupVerification(request),
@@ -290,6 +294,7 @@ export class ModerationActionRequestService implements IModerationActionRequestS
           },
         }
       : decoded;
+    if (isQueuedOperationCommand(action.command)) throw new Error('Detection request mismatch.');
     if (!recovery)
       this.application.caseConfirmations.recordVerified(action.context, action.command);
     const outcome = await dispatchQueuedAction(
@@ -307,6 +312,7 @@ export class ModerationActionRequestService implements IModerationActionRequestS
 
   private async executeCaseRequest(request: ModerationActionRequest): Promise<void> {
     const action = decodeQueuedAction(request);
+    if (isQueuedOperationCommand(action.command)) throw new Error('Case request mismatch.');
     if (!this.application) throw new Error('Case application is unavailable.');
     // The persisted form submission supplies confirmation evidence; the shared
     // operation still checks fresh authority, mutable policy and case binding.
@@ -491,147 +497,24 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     });
   }
 
-  private async syncModerationQueue(request: ModerationActionRequest): Promise<void> {
-    await this.moderationQueueService.syncServerQueue(request.server_id);
-
-    await this.repository.complete(request.id, {
-      action_type: request.action_type,
-      server_id: request.server_id,
-      synced: true,
-    });
-  }
-
-  private async clearModerationQueue(request: ModerationActionRequest): Promise<void> {
-    const removedCount = await this.moderationQueueService.clearServerQueue(request.server_id);
-
-    await this.repository.complete(request.id, {
-      action_type: request.action_type,
-      removed_count: removedCount,
-      server_id: request.server_id,
-    });
-  }
-
-  private async closeResolvedCaseThreads(request: ModerationActionRequest): Promise<void> {
-    const report = await this.caseThreadClosureSweepService.sweepResolvedCaseThreads({
-      days: this.readMetadataInteger(request.metadata, 'days'),
-      execute: this.readMetadataBoolean(request.metadata, 'execute') === true,
-      limit: this.readMetadataInteger(request.metadata, 'limit'),
-      serverId: request.server_id,
-    });
-
-    await this.repository.complete(request.id, {
-      action_type: request.action_type,
-      already_closed_threads: report.alreadyClosedThreads,
-      checked_cases: report.checkedCases,
-      checked_threads: report.checkedThreads,
-      closed_threads: report.closedThreads,
-      days: report.days,
-      execute: report.execute,
-      failed_threads: report.failedThreads,
-      limit: report.limit,
-      missing_threads: report.missingThreads,
-      server_id: request.server_id,
-      would_close_threads: report.wouldCloseThreads,
-    });
-  }
-
-  private async auditCaseRoleLockdown(request: ModerationActionRequest): Promise<void> {
-    const guild = await this.fetchGuild(request.server_id);
-    const report = await this.caseRoleLockdownService.auditGuild(guild);
-    await this.repository.complete(request.id, this.toCaseRoleLockdownResult(request, report));
-  }
-
-  private async applyCaseRoleLockdown(request: ModerationActionRequest): Promise<void> {
-    const guild = await this.fetchGuild(request.server_id);
-    const report = await this.caseRoleLockdownService.applyGuild(guild, request.actor_id, {
-      unsyncAllowedChannels:
-        this.readMetadataBoolean(request.metadata, 'unsync_allowed_channels') === true,
-    });
-    await this.repository.complete(request.id, this.toCaseRoleLockdownResult(request, report));
-  }
-
-  private toCaseRoleLockdownResult(
-    request: ModerationActionRequest,
-    report: CaseRoleLockdownReport
-  ): Prisma.JsonObject {
-    return {
-      action_type: request.action_type,
-      applied_writes: report.appliedActions.length,
-      enabled: report.enabled,
-      error_count: report.errorCount,
-      failed_writes: report.failedActions.length,
-      issues: report.issues.slice(0, 8).map((issue) => ({
-        code: issue.code,
-        message: issue.message,
-        severity: issue.severity,
-      })),
-      planned_writes: report.plannedActions.length,
-      server_id: request.server_id,
-      synced_allowed_channel_blockers: report.syncedAllowedChannels.length,
-      unsynced_allowed_channels: report.unsyncedAllowedChannels.length,
-      warning_count: report.warningCount,
-    };
-  }
-
-  private async intakeRoleMembers(request: ModerationActionRequest): Promise<void> {
-    const roleId = this.readMetadataString(request.metadata, 'role_id');
-    if (!roleId) {
-      throw new Error('Role-intake request is missing role id.');
-    }
-
-    const execute = this.readMetadataBoolean(request.metadata, 'execute') === true;
-    const reason = this.readMetadataString(request.metadata, 'reason')?.trim() || undefined;
-    if (execute) {
-      const config = await this.configService.getServerConfig(request.server_id);
-      const settings = getDetectionResponseSettings(config.settings);
-      if (settings.adminCaseOpenRequiresReason && !reason) {
-        throw new Error('Role intake execution requires a case reason.');
-      }
-    }
-
-    const [guild, moderator] = await Promise.all([
-      this.fetchGuild(request.server_id),
-      this.fetchModerator(request.actor_id),
-    ]);
-    const role = await guild.roles.fetch(roleId).catch(() => null);
-    if (!role) {
-      throw new Error(`Role ${roleId} was not found.`);
-    }
-
-    const result = await this.securityActionService.intakeRoleMembers({
-      action: 'open_case',
-      execute,
-      limit: this.readMetadataInteger(request.metadata, 'limit') ?? undefined,
-      moderator,
-      reason,
-      role,
-    });
-
-    await this.repository.complete(request.id, {
-      action_type: request.action_type,
-      batch_id: result.batchId,
-      eligible_members: result.eligibleMembers,
-      execute: result.execute,
-      failed: result.failed,
-      failures: result.failures.slice(0, 8).map((failure) => ({
-        message: failure.message,
-        user_id: failure.userId,
-      })),
-      opened: result.opened,
-      processed: result.processed,
-      role_id: result.roleId,
-      role_name: result.roleName,
-      server_id: request.server_id,
-      skipped_active_cases: result.skippedActiveCases,
-      skipped_bots: result.skippedBots,
-      skipped_over_limit: result.skippedOverLimit,
-      total_members: result.totalMembers,
-    });
+  private async executeOperationsRequest(request: ModerationActionRequest): Promise<void> {
+    if (!this.application) throw new Error('Operations application is unavailable.');
+    const action = decodeQueuedAction(request);
+    if (!isQueuedOperationCommand(action.command)) throw new Error('Operation request mismatch.');
+    // The worker owns the accepted persisted request. Execute/unsync remain intent;
+    // confirmation is issued separately from that authenticated admission envelope.
+    this.application.caseConfirmations.recordVerified(
+      action.context,
+      operationConfirmationCommand(action.context, action.command)
+    );
+    const outcome = await dispatchQueuedAction(this.application, action);
+    await this.repository.complete(request.id, outcome);
   }
 
   private async executeCaptchaRequest(request: ModerationActionRequest): Promise<void> {
     if (!this.application) throw new Error('CAPTCHA application is unavailable.');
     const action = await this.application.captchaRuntime.decodeRequest(request);
+    if (isQueuedOperationCommand(action.command)) throw new Error('CAPTCHA request mismatch.');
     if (action.context.actor.kind === 'user')
       this.application.caseConfirmations.recordVerified(action.context, action.command);
     const outcome = await dispatchQueuedAction(

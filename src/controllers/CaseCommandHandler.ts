@@ -1,3 +1,5 @@
+import { operationConfirmationCommand, type ConfirmationBinding } from '@drasil/application';
+import { requireOperationsOutcome } from '../application/adapters/operations';
 import type { BotApplication } from '../application/createBotApplication';
 import { createDiscordActionContext } from '../application/context';
 import { requireCaseOutcome } from '../application/adapters/cases';
@@ -529,7 +531,6 @@ export class CaseCommandHandler {
       return;
     }
 
-    const action = 'open_case' as const;
     const execute = interaction.options.getBoolean('execute') ?? false;
     const limit = interaction.options.getInteger('limit') ?? undefined;
     const reason = interaction.options.getString('reason')?.trim() || undefined;
@@ -543,11 +544,27 @@ export class CaseCommandHandler {
     }
 
     if (execute) {
+      const command = {
+        kind: 'intake_role_members',
+        roleId: role.id,
+        execute,
+        limit: limit ?? 250,
+        reason: reason ?? null,
+      } as const;
+      const context = createDiscordActionContext({
+        guildId: guild.id,
+        userId: interaction.user.id,
+        requestId: interaction.id,
+      });
       await requestSlashCommandConfirmation(interaction, {
+        confirmation: {
+          action: command.kind,
+          targetId: operationConfirmationCommand(context, command).operationId,
+        },
         message: `Execute role intake for ${role.name}? This will open cases and apply the case role to eligible members${limit ? `, up to ${limit} members` : ''}.`,
         confirmLabel: 'Execute Intake',
         confirmStyle: ButtonStyle.Danger,
-        execute: async (buttonInteraction) => {
+        execute: async (buttonInteraction, evidence) => {
           await buttonInteraction.update({
             content: `Executing role intake for ${role.name}...`,
             components: [],
@@ -557,9 +574,9 @@ export class CaseCommandHandler {
             role,
             interaction.user,
             reason,
-            action,
             execute,
-            limit
+            limit,
+            evidence
           );
         },
       });
@@ -567,56 +584,63 @@ export class CaseCommandHandler {
     }
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-    await this.executeRoleIntake(
-      interaction,
-      role,
-      interaction.user,
-      reason,
-      action,
-      execute,
-      limit
-    );
+    await this.executeRoleIntake(interaction, role, interaction.user, reason, execute, limit);
   }
 
   private async executeRoleIntake(
-    interaction: Pick<ChatInputCommandInteraction, 'editReply'>,
+    interaction: Pick<ChatInputCommandInteraction, 'editReply' | 'id'>,
     role: Role,
     moderator: ChatInputCommandInteraction['user'],
     reason: string | undefined,
-    action: 'open_case',
     execute: boolean,
-    limit: number | undefined
+    limit: number | undefined,
+    evidence?: ConfirmationBinding | null
   ): Promise<void> {
     let lastProgressUpdateAt = 0;
     try {
-      const result = await this.securityActionService.intakeRoleMembers({
-        role,
-        moderator,
-        reason,
-        action,
-        execute,
-        limit,
-        onProgress: execute
-          ? async (progress): Promise<void> => {
-              const now = Date.now();
-              const shouldUpdate =
-                progress.completedMembers === 1 ||
-                progress.completedMembers === progress.result.processed ||
-                progress.completedMembers % 5 === 0 ||
-                now - lastProgressUpdateAt > 15_000;
-              if (!shouldUpdate) {
-                return;
-              }
-
-              lastProgressUpdateAt = now;
-              await interaction.editReply({
-                content: this.formatRoleIntakeProgress(progress),
-                allowedMentions: { parse: [] },
-              });
-            }
-          : undefined,
+      if (!this.application) throw new Error('Operations application is unavailable.');
+      const context = createDiscordActionContext({
+        guildId: role.guild.id,
+        userId: moderator.id,
+        requestId: interaction.id,
       });
+      const command = {
+        kind: 'intake_role_members',
+        roleId: role.id,
+        reason: reason ?? null,
+        execute,
+        limit: limit ?? 250,
+      } as const;
+      if (execute) {
+        if (!evidence) throw new Error('Intake confirmation is unavailable.');
+        this.application.caseConfirmations.recordVerified(
+          context,
+          operationConfirmationCommand(context, command),
+          evidence
+        );
+      }
+      const actions = execute
+        ? this.application.operationsRuntime.withProgress(async (progress): Promise<void> => {
+            const now = Date.now();
+            const shouldUpdate =
+              progress.completedMembers === 1 ||
+              progress.completedMembers === progress.result.processed ||
+              progress.completedMembers % 5 === 0 ||
+              now - lastProgressUpdateAt > 15_000;
+            if (!shouldUpdate) {
+              return;
+            }
 
+            lastProgressUpdateAt = now;
+            await interaction.editReply({
+              content: this.formatRoleIntakeProgress(progress),
+              allowedMentions: { parse: [] },
+            });
+          })
+        : this.application.operations;
+      const outcome = requireOperationsOutcome(await actions.execute(context, command));
+      if (outcome.kind !== 'intake_role_members') throw new Error('Operation outcome mismatch.');
+      const result = outcome.result;
       await interaction.editReply({
         content: this.formatRoleIntakeResult(result),
         allowedMentions: { parse: [] },

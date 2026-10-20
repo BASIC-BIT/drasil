@@ -128,7 +128,8 @@ export class CommandHandler implements ICommandHandler {
       this.configService,
       heuristicService,
       resolvedProductAnalyticsService,
-      moderationQueueService
+      moderationQueueService,
+      application
     );
     this.caseCommandHandler = new CaseCommandHandler(
       this.configService,
@@ -138,7 +139,8 @@ export class CommandHandler implements ICommandHandler {
     );
     this.lockdownConfigCommandHandler = new LockdownConfigCommandHandler(
       this.configService,
-      caseRoleLockdownService
+      caseRoleLockdownService,
+      application
     );
     const reportInstructionsManager = new ReportInstructionsManager(
       this.client,

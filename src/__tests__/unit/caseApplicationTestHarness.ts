@@ -1,3 +1,8 @@
+import { mock } from 'jest-mock-extended';
+import {
+  createBotOperationsRuntime,
+  type BotOperationsDependencies,
+} from '../../application/adapters/operations';
 import {
   createBotCaptchaRuntime,
   type BotCaptchaDependencies,
@@ -20,6 +25,10 @@ import {
 // actual Discord authority adapter in CaseActions.unit.test.ts.
 export function buildCaseApplication(
   deps: Omit<BotCaseDependencies, 'confirmations'> & {
+    readonly queueService?: BotOperationsDependencies['queueService'];
+    readonly integrityAuditService?: BotOperationsDependencies['integrityAuditService'];
+    readonly caseRoleLockdownService?: BotOperationsDependencies['caseRoleLockdownService'];
+    readonly caseThreadClosureSweepService?: BotOperationsDependencies['caseThreadClosureSweepService'];
     readonly captchaChallengeService?: BotCaptchaDependencies['captchaChallengeService'];
     readonly threadManager?: BotCaptchaDependencies['threadManager'];
     readonly notificationManager?: BotCaptchaDependencies['notificationManager'];
@@ -28,6 +37,26 @@ export function buildCaseApplication(
   authority?: AuthorityPort
 ): BotApplication {
   const caseConfirmations = createCaseConfirmationStore();
+  const operationsRuntime = createBotOperationsRuntime(
+    {
+      ...deps,
+      queueService: deps.queueService ?? mock<BotOperationsDependencies['queueService']>(),
+      integrityAuditService:
+        deps.integrityAuditService ?? mock<BotOperationsDependencies['integrityAuditService']>(),
+      caseRoleLockdownService:
+        deps.caseRoleLockdownService ??
+        mock<BotOperationsDependencies['caseRoleLockdownService']>(),
+      caseThreadClosureSweepService:
+        deps.caseThreadClosureSweepService ??
+        mock<BotOperationsDependencies['caseThreadClosureSweepService']>(),
+      confirmations: caseConfirmations.confirmations,
+    },
+    authority ?? {
+      async loadFresh(guildId, userId) {
+        return { guildId, userId, present: true, owner: false, permissions: '8', roleIds: [] };
+      },
+    }
+  );
   const ports = createBotCaseDependencies({
     ...deps,
     confirmations: caseConfirmations.confirmations,
@@ -90,6 +119,22 @@ export function buildCaseApplication(
     }
   );
   return {
+    operations: operationsRuntime.actions,
+    operationsRuntime,
+    messageCleanup: {
+      async execute() {
+        throw new Error('Not arranged for these units');
+      },
+    },
+    messageCleanupRuntime: {
+      forRequest() {
+        throw new Error('Not arranged for these units');
+      },
+      async decodeRequest() {
+        throw new Error('Not arranged for these units');
+      },
+      async afterComplete() {},
+    },
     captcha: captchaRuntime.actions,
     captchaRuntime,
     quarantine: quarantineRuntime.actions,

@@ -1,3 +1,4 @@
+import { queuedOperationCommandSchema, type QueuedOperationCommand } from '../operations/commands';
 import {
   messageCleanupCommandSchema,
   type MessageCleanupCommand,
@@ -33,12 +34,14 @@ const queuedCaseCommandSchema = caseCommandSchema.refine(
 );
 
 export type QueuedCommand =
+  | QueuedOperationCommand
   | CaptchaCommand
   | MessageCleanupCommand
   | QueuedCaseCommand
   | QueuedDetectionCommand
   | QueuedQuarantineCommand;
 export const queuedCommandSchema = z.union([
+  queuedOperationCommandSchema,
   messageCleanupCommandSchema,
   captchaCommandSchema,
   queuedCaseCommandSchema,

@@ -124,10 +124,10 @@ describe('CommandHandler moderation commands (unit)', () => {
     await handler.handleSlashCommand(interaction);
 
     expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
-    expect(auditGuild).toHaveBeenCalledWith(guild, {
+    expect(auditGuild).toHaveBeenCalledWith(expect.objectContaining({ id: guild.id }), {
       scope: 'all',
       days: 30,
-      limit: null,
+      limit: 50,
       userId: undefined,
     });
     expect(interaction.editReply).toHaveBeenCalledWith({
