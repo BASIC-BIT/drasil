@@ -1,7 +1,6 @@
 import { buildEnqueueStatement } from '@drasil/application/postgres';
 import type { EnqueueInput, QueuedActionReceipt } from '@drasil/application';
 import type { Pool, PoolClient } from 'pg';
-import { getPostgresPool } from './setupDataAdapter';
 
 export type ModerationActionRequestActionType = EnqueueInput['actionType'];
 
@@ -13,18 +12,6 @@ export interface ModerationActionRequestReceipt extends QueuedActionReceipt {
 
 interface ActiveModerationActionRequestReceipt extends ModerationActionRequestReceipt {
   readonly idempotencyKey: string;
-}
-
-export async function queueModerationActionRequest(
-  input: EnqueueInput
-): Promise<ModerationActionRequestQueueStatus> {
-  return (await queueModerationActionRequestWithReceipt(input)).status;
-}
-
-export async function queueModerationActionRequestWithReceipt(
-  input: EnqueueInput
-): Promise<ModerationActionRequestReceipt> {
-  return insertModerationActionRequestWithReceipt(getPostgresPool(), input);
 }
 
 export async function insertModerationActionRequestWithReceipt(
