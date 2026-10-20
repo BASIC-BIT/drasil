@@ -6,45 +6,38 @@ import {
   type ReportQueueItem,
   type ReportQueueStatus,
 } from '@drasil/contracts';
-import type { QueueAttentionItemRecord } from '@drasil/application';
-import {
-  ReportReviewService,
-  type ReportCaseOpener,
-  type ReportCaseOpenResult,
-  type ReportClosureAction,
-  type OpenSubmittedReportCaseResult,
-  type ReportOpenCaseCandidate,
-  type ReportOpenCaseRepository,
-  type ReportReviewClosureStatus,
-  type ReportReviewQueueRepository,
-  type ReportReviewRecord,
-  type ReportReviewRepository,
-} from '../../../src/services/ReportReviewService';
-import { deleteBotMessage } from './discordApi';
+import type {
+  ActionContext,
+  ReportReviewActions,
+  ReportClosureAction,
+  OpenSubmittedReportCaseResult,
+} from '@drasil/application';
+import { createWebApplication } from './application/createWebApplication';
 import { fixtureSubmittedReports } from './reportFixtures';
 import { discordMessageUrl } from './discordUrls';
 import { isWebE2eFixtureMode } from './e2eFixtures';
-import { queueModerationActionRequestWithReceipt } from './moderationActionRequestQueue';
 import { getPostgresPool } from './setupDataAdapter';
 import { resolveReportSummarySource } from './reportSummaryProvenance';
 
-export type { ReportClosureAction } from '../../../src/services/ReportReviewService';
+export type { ReportClosureAction } from '@drasil/application';
 
 export interface ReportQueueDataAdapter {
   listSubmittedReports(guildId: string): Promise<ReportQueueItem[]>;
   countClosedReports(guildId: string): Promise<number>;
   canOpenSubmittedReportCase(): boolean;
-  closeSubmittedReport(input: {
-    guildId: string;
-    reportId: string;
-    action: ReportClosureAction;
-    adminId: string;
-  }): Promise<boolean>;
-  openCaseFromSubmittedReport(input: {
-    guildId: string;
-    reportId: string;
-    adminId: string;
-  }): Promise<OpenSubmittedReportCaseResult>;
+  closeSubmittedReport(
+    context: ActionContext,
+    input: {
+      reportId: string;
+      action: ReportClosureAction;
+    }
+  ): Promise<boolean>;
+  openCaseFromSubmittedReport(
+    context: ActionContext,
+    input: {
+      reportId: string;
+    }
+  ): Promise<OpenSubmittedReportCaseResult>;
 }
 
 interface ReportQueueRow {
@@ -141,135 +134,9 @@ export function parseReportQueueRow(row: ReportQueueRow, now = new Date()): Repo
   });
 }
 
-class PostgresReportReviewRepository implements ReportReviewRepository {
-  public async closeSubmittedReport(input: {
-    reportId: string;
-    serverId: string;
-    status: ReportReviewClosureStatus;
-    closedAt: Date;
-    metadata: Record<string, unknown>;
-  }): Promise<ReportReviewRecord | null> {
-    const result = await getPostgresPool().query<ReportReviewRecord>(
-      `update report_intakes
-       set status = $3,
-           closed_at = $4,
-           updated_at = $4,
-           metadata = coalesce(metadata, '{}'::jsonb) || $5::jsonb
-       where id = $1 and server_id = $2 and status = 'submitted'
-         and coalesce(metadata->>'report_ban_operation_id', '') = ''
-       returning id, server_id, thread_id, status`,
-      [input.reportId, input.serverId, input.status, input.closedAt, JSON.stringify(input.metadata)]
-    );
-    if (result.rows[0]) return result.rows[0];
-    const busy = await getPostgresPool().query<ReportReviewRecord>(
-      `select id, server_id, thread_id, status, true as busy from report_intakes where id = $1 and server_id = $2 and coalesce(metadata->>'report_ban_operation_id', '') <> ''`,
-      [input.reportId, input.serverId]
-    );
-    return busy.rows[0] ?? null;
-  }
-}
-
-class PostgresReportReviewQueueRepository implements ReportReviewQueueRepository {
-  public async deleteReportThreadAttention(
-    reportIntakeId: string
-  ): Promise<QueueAttentionItemRecord[]> {
-    const result = await getPostgresPool().query<QueueAttentionItemRecord>(
-      `delete from moderation_queue_items
-       where report_intake_id = $1 and item_type = 'report_thread_attention'
-       returning id, server_id, item_type, queue_channel_id, queue_message_id`,
-      [reportIntakeId]
-    );
-    return result.rows;
-  }
-}
-
-class PostgresReportOpenCaseRepository implements ReportOpenCaseRepository {
-  public async findSubmittedReportCaseCandidate(input: {
-    reportId: string;
-    serverId: string;
-  }): Promise<ReportOpenCaseCandidate | null> {
-    const result = await getPostgresPool().query<ReportOpenCaseCandidate>(
-      `select
-         ri.id,
-         ri.server_id,
-         ri.status,
-         ri.confirmed_target_user_id,
-         coalesce(ri.metadata->>'report_ban_operation_id', '') <> '' as busy,
-         de.id as latest_detection_id,
-         de.latest_verification_event_id as latest_case_id
-       from report_intakes ri
-       left join lateral (
-         select id, latest_verification_event_id
-         from detection_events
-         where server_id = ri.server_id
-           and metadata ->> 'reportIntakeId' = ri.id::text
-         order by detected_at desc nulls last
-         limit 1
-       ) de on true
-       where ri.id = $1 and ri.server_id = $2 and ri.status = 'submitted'
-       limit 1`,
-      [input.reportId, input.serverId]
-    );
-    return result.rows[0] ?? null;
-  }
-}
-
-class PostgresQueuedReportCaseOpener implements ReportCaseOpener {
-  public async openObservedDetectionCase(input: {
-    actor: { id: string; surface: string };
-    detectionEventId: string;
-    reportId?: string;
-    serverId: string;
-    userId: string;
-  }): Promise<ReportCaseOpenResult> {
-    const receipt = await queueModerationActionRequestWithReceipt({
-      actionType: 'open_case_from_observed_detection',
-      actorId: input.actor.id,
-      actorSurface: input.actor.surface,
-      detectionEventId: input.detectionEventId,
-      idempotencyKey: `web:report-open-case:${input.serverId}:${input.reportId ?? 'no-report'}:${input.detectionEventId}`,
-      metadata: {
-        requested_surface: input.actor.surface,
-        report_intake_id: input.reportId ?? null,
-      },
-      reportIntakeId: input.reportId ?? null,
-      serverId: input.serverId,
-      targetUserId: input.userId,
-    });
-    if (receipt.status === 'failed') {
-      throw new Error('Report case action could not be queued. Refresh the inbox and try again.');
-    }
-    return {
-      requestId: receipt.id,
-      status: receipt.status === 'completed' ? 'already_handled' : 'queued',
-    };
-  }
-}
-
-function createPostgresReportReviewService(): ReportReviewService {
-  return new ReportReviewService(
-    new PostgresReportReviewRepository(),
-    new PostgresReportReviewQueueRepository(),
-    {
-      deleteQueueMessage: async (item) => {
-        if (!item.queue_channel_id || !item.queue_message_id) {
-          return;
-        }
-
-        await deleteBotMessage(item.queue_channel_id, item.queue_message_id);
-      },
-    },
-    new PostgresReportOpenCaseRepository(),
-    new PostgresQueuedReportCaseOpener()
-  );
-}
-
 export class PostgresReportQueueDataAdapter implements ReportQueueDataAdapter {
   public constructor(
-    private readonly reportReviewService: Pick<
-      ReportReviewService,
-      'canOpenSubmittedReportCase' | 'closeSubmittedReport' | 'openCaseFromSubmittedReport'
-    > = createPostgresReportReviewService()
+    private readonly reportReview: ReportReviewActions = createWebApplication().reportReview
   ) {}
 
   public async listSubmittedReports(guildId: string): Promise<ReportQueueItem[]> {
@@ -322,34 +189,35 @@ export class PostgresReportQueueDataAdapter implements ReportQueueDataAdapter {
   }
 
   public canOpenSubmittedReportCase(): boolean {
-    return this.reportReviewService.canOpenSubmittedReportCase();
+    return true;
   }
 
-  public async closeSubmittedReport(input: {
-    guildId: string;
-    reportId: string;
-    action: ReportClosureAction;
-    adminId: string;
-  }): Promise<boolean> {
-    const result = await this.reportReviewService.closeSubmittedReport({
-      actor: { id: input.adminId, surface: 'web' },
+  public async closeSubmittedReport(
+    context: ActionContext,
+    input: {
+      reportId: string;
+      action: ReportClosureAction;
+    }
+  ): Promise<boolean> {
+    const result = await this.reportReview.close(context, {
       action: input.action,
       reportId: input.reportId,
-      serverId: input.guildId,
     });
-    return result.status === 'closed';
+    if (result.kind === 'denied')
+      throw new Error('You need moderation permissions to review reports.');
+    return result.outcome.status === 'closed';
   }
 
-  public async openCaseFromSubmittedReport(input: {
-    guildId: string;
-    reportId: string;
-    adminId: string;
-  }): Promise<OpenSubmittedReportCaseResult> {
-    return this.reportReviewService.openCaseFromSubmittedReport({
-      actor: { id: input.adminId, surface: 'web' },
-      reportId: input.reportId,
-      serverId: input.guildId,
-    });
+  public async openCaseFromSubmittedReport(
+    context: ActionContext,
+    input: {
+      reportId: string;
+    }
+  ): Promise<OpenSubmittedReportCaseResult> {
+    const result = await this.reportReview.openCase(context, { reportId: input.reportId });
+    if (result.kind === 'denied')
+      throw new Error('You need moderation permissions to review reports.');
+    return result.outcome;
   }
 }
 
@@ -376,14 +244,18 @@ export class FixtureReportQueueDataAdapter implements ReportQueueDataAdapter {
     return true;
   }
 
-  public async openCaseFromSubmittedReport(input: {
-    guildId: string;
-    reportId: string;
-    adminId: string;
-  }): Promise<OpenSubmittedReportCaseResult> {
+  public async openCaseFromSubmittedReport(
+    context: ActionContext,
+    input: {
+      reportId: string;
+    }
+  ): Promise<OpenSubmittedReportCaseResult> {
     const report = fixtureSubmittedReports().find((item) => item.id === input.reportId);
     return {
-      actor: { id: input.adminId, surface: 'web' },
+      actor: {
+        id: context.actor.kind === 'user' ? context.actor.userId : '',
+        surface: context.source,
+      },
       action: 'open_case',
       caseId: report?.latestCaseId ?? `fixture-case-${input.reportId}`,
       detectionEventId: report?.latestDetectionId ?? null,

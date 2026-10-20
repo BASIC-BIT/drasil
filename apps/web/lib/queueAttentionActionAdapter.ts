@@ -24,7 +24,9 @@ function unwrap(result: ActionResult<AttentionOutcome>): AttentionOutcome {
   return result.outcome;
 }
 export class PostgresQueueAttentionActionAdapter implements QueueAttentionActionAdapter {
-  public constructor(private readonly application: WebApplication = createWebApplication()) {}
+  public constructor(
+    private readonly application: Pick<WebApplication, 'attention'> = createWebApplication()
+  ) {}
   public async acknowledgeAttentionItem(input: AttentionInput): Promise<AttentionOutcome> {
     return unwrap(
       await this.application.attention.acknowledge(

@@ -1,14 +1,39 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ModerationInboxView } from '@/components/inbox/ModerationInboxView';
 import { reportQueueItemToInboxItem } from './moderationInboxDataAdapter';
 import { parseReportDetailRows } from './reportDetailDataAdapter';
 import { initialInboxActionState } from './inboxActionState';
+import type { ActionContext } from '@drasil/application';
 import { PostgresReportQueueDataAdapter, parseReportQueueRow } from './reportQueueDataAdapter';
 
 const db = vi.hoisted(() => ({ query: vi.fn() }));
-vi.mock('./setupDataAdapter', () => ({ getPostgresPool: () => ({ query: db.query }) }));
+vi.mock('./setupDataAdapter', () => ({
+  getPostgresPool: () => ({ query: db.query }),
+  createSetupDataAdapter: () => ({
+    getServer: async () => ({ settings: { case_responder_role_ids: [] } }),
+  }),
+}));
+const discord = vi.hoisted(() => ({
+  permissions: '32',
+  deleteBotMessage: vi.fn(async () => undefined),
+}));
+vi.mock('./discordApi', () => ({
+  fetchDiscordGuild: async () => ({ id: 'guild-1', owner_id: 'owner-1' }),
+  fetchDiscordGuildMember: async () => ({ roles: [] }),
+  fetchDiscordGuildRoles: async () => [{ id: 'guild-1', permissions: discord.permissions }],
+  deleteBotMessage: discord.deleteBotMessage,
+}));
+const context: ActionContext = {
+  guildId: 'guild-1',
+  requestId: 'request-1',
+  source: 'web',
+  actor: { kind: 'user', userId: 'admin-1' },
+};
+beforeEach(() => {
+  discord.permissions = '32';
+});
 
 const baseRow = {
   id: 'report-1',
@@ -95,72 +120,48 @@ describe('reportQueueDataAdapter', () => {
     ]);
   });
 
-  it('routes submitted report closures through the shared review service', async () => {
-    const closeSubmittedReport = vi.fn(async () => ({
-      actor: { id: 'admin-1', surface: 'web' as const },
-      action: 'mark_false_positive' as const,
-      reportId: 'report-1',
-      reportStatus: 'false_positive' as const,
-      status: 'closed' as const,
-      queueCleanupStatus: 'skipped' as const,
-    }));
-    const adapter = new PostgresReportQueueDataAdapter({
-      canOpenSubmittedReportCase: () => false,
-      closeSubmittedReport,
-      openCaseFromSubmittedReport: vi.fn(),
-    });
-
-    await expect(
-      adapter.closeSubmittedReport({
-        guildId: 'guild-1',
+  it('routes authenticated report closures to the shared owner with context', async () => {
+    const close = vi.fn(async () => ({
+      kind: 'outcome' as const,
+      outcome: {
+        actor: { id: 'admin-1', surface: 'web' },
+        action: 'mark_false_positive' as const,
         reportId: 'report-1',
-        action: 'mark_false_positive',
-        adminId: 'admin-1',
-      })
+        reportStatus: 'false_positive' as const,
+        status: 'closed' as const,
+        queueCleanupStatus: 'skipped' as const,
+      },
+    }));
+    const adapter = new PostgresReportQueueDataAdapter({ close, openCase: vi.fn() });
+    await expect(
+      adapter.closeSubmittedReport(context, { reportId: 'report-1', action: 'mark_false_positive' })
     ).resolves.toBe(true);
-
-    expect(closeSubmittedReport).toHaveBeenCalledWith({
-      actor: { id: 'admin-1', surface: 'web' },
-      action: 'mark_false_positive',
+    expect(close).toHaveBeenCalledWith(context, {
       reportId: 'report-1',
-      serverId: 'guild-1',
+      action: 'mark_false_positive',
     });
   });
-
-  it('routes submitted report case open through the shared review service', async () => {
-    const openCaseFromSubmittedReport = vi.fn(async () => ({
-      actor: { id: 'admin-1', surface: 'web' as const },
-      action: 'open_case' as const,
-      caseId: 'case-1',
-      detectionEventId: 'det-1',
-      reportId: 'report-1',
-      status: 'opened' as const,
-      targetUserId: 'user-1',
-      queueCleanupStatus: 'skipped' as const,
-    }));
-    const adapter = new PostgresReportQueueDataAdapter({
-      canOpenSubmittedReportCase: () => true,
-      closeSubmittedReport: vi.fn(),
-      openCaseFromSubmittedReport,
-    });
-
-    await expect(
-      adapter.openCaseFromSubmittedReport({
-        guildId: 'guild-1',
+  it('retains a queued case receipt from the shared owner', async () => {
+    const openCase = vi.fn(async () => ({
+      kind: 'outcome' as const,
+      outcome: {
+        actor: { id: 'admin-1', surface: 'web' },
+        action: 'open_case' as const,
         reportId: 'report-1',
-        adminId: 'admin-1',
-      })
-    ).resolves.toMatchObject({
-      caseId: 'case-1',
-      status: 'opened',
-    });
-
+        status: 'queued' as const,
+        requestId: 'request-1',
+        caseId: null,
+        detectionEventId: 'det-1',
+        targetUserId: 'user-1',
+        queueCleanupStatus: 'skipped' as const,
+      },
+    }));
+    const adapter = new PostgresReportQueueDataAdapter({ close: vi.fn(), openCase });
+    await expect(
+      adapter.openCaseFromSubmittedReport(context, { reportId: 'report-1' })
+    ).resolves.toMatchObject({ status: 'queued', requestId: 'request-1' });
+    expect(openCase).toHaveBeenCalledWith(context, { reportId: 'report-1' });
     expect(adapter.canOpenSubmittedReportCase()).toBe(true);
-    expect(openCaseFromSubmittedReport).toHaveBeenCalledWith({
-      actor: { id: 'admin-1', surface: 'web' },
-      reportId: 'report-1',
-      serverId: 'guild-1',
-    });
   });
 });
 
@@ -172,21 +173,17 @@ it('keeps a claimed report busy in the SQL close and case-open paths', async () 
     .mockResolvedValueOnce({ rows: [{ ...baseRow, busy: true }] });
   const adapter = new PostgresReportQueueDataAdapter();
   expect(
-    await adapter.closeSubmittedReport({
-      guildId: 'guild-1',
+    await adapter.closeSubmittedReport(context, {
       reportId: 'report-1',
       action: 'dismiss_no_action',
-      adminId: 'admin-1',
     })
   ).toBe(false);
   expect(db.query.mock.calls[0][0]).toContain(
     "coalesce(metadata->>'report_ban_operation_id', '') = ''"
   );
   expect(
-    await adapter.openCaseFromSubmittedReport({
-      guildId: 'guild-1',
+    await adapter.openCaseFromSubmittedReport(context, {
       reportId: 'report-1',
-      adminId: 'admin-1',
     })
   ).toMatchObject({ status: 'busy' });
   expect(db.query).toHaveBeenCalledTimes(3);
@@ -264,4 +261,78 @@ it.each([
     'ban_user'
   );
   expect(renderInboxReport(report)).not.toContain('Review Ban');
+});
+
+it('requires fresh review authority before a direct SQL closure', async () => {
+  db.query.mockReset();
+  discord.permissions = '0';
+  const adapter = new PostgresReportQueueDataAdapter();
+  await expect(
+    adapter.closeSubmittedReport(context, { reportId: 'report-1', action: 'mark_actioned' })
+  ).rejects.toThrow('moderation permissions');
+  expect(db.query).not.toHaveBeenCalled();
+});
+
+it.each(['queued', 'processing', 'completed'] as const)(
+  'uses shared encoding and retains the persisted %s receipt',
+  async (status) => {
+    db.query.mockReset();
+    db.query
+      .mockResolvedValueOnce({ rows: [baseRow] })
+      .mockResolvedValueOnce({ rows: [{ id: 'persisted-request-1', status }] });
+    const result = await new PostgresReportQueueDataAdapter().openCaseFromSubmittedReport(context, {
+      reportId: 'report-1',
+    });
+    expect(result).toMatchObject({
+      status: status === 'completed' ? 'already_handled' : 'queued',
+      requestId: 'persisted-request-1',
+      queueCleanupStatus: 'skipped',
+    });
+    expect(db.query.mock.calls[1][1]).toEqual([
+      'guild-1',
+      'open_case_from_observed_detection',
+      'admin-1',
+      'web',
+      'user-1',
+      'det-1',
+      'report-1',
+      null,
+      null,
+      'web:report-open-case:guild-1:report-1:det-1',
+      JSON.stringify({ requested_surface: 'web', report_intake_id: 'report-1' }),
+    ]);
+    expect(db.query).toHaveBeenCalledTimes(2);
+  }
+);
+it('preserves enqueue failure instead of claiming report-case success', async () => {
+  db.query.mockReset();
+  db.query
+    .mockResolvedValueOnce({ rows: [baseRow] })
+    .mockResolvedValueOnce({ rows: [{ id: 'persisted-request-1', status: 'failed' }] });
+  await expect(
+    new PostgresReportQueueDataAdapter().openCaseFromSubmittedReport(context, {
+      reportId: 'report-1',
+    })
+  ).rejects.toThrow('could not be queued');
+});
+it('closes directly with context provenance and clears attention without a request insert', async () => {
+  db.query.mockReset();
+  db.query
+    .mockResolvedValueOnce({ rows: [{ ...baseRow, status: 'false_positive' }] })
+    .mockResolvedValueOnce({
+      rows: [{ id: 'queue-1', queue_channel_id: 'channel-1', queue_message_id: 'message-1' }],
+    });
+  await expect(
+    new PostgresReportQueueDataAdapter().closeSubmittedReport(context, {
+      reportId: 'report-1',
+      action: 'mark_false_positive',
+    })
+  ).resolves.toBe(true);
+  expect(JSON.parse(db.query.mock.calls[0][1][4])).toMatchObject({
+    closed_by: 'admin-1',
+    closed_action: 'mark_false_positive',
+    closed_surface: 'web',
+  });
+  expect(discord.deleteBotMessage).toHaveBeenCalledWith('channel-1', 'message-1');
+  expect(db.query).toHaveBeenCalledTimes(2);
 });

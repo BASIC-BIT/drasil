@@ -1,5 +1,7 @@
 'use server';
 
+import { isReportClosureAction } from '@drasil/application';
+import { createWebActionContext } from '@/lib/application/context';
 import { createReportDetailDataAdapter } from '@/lib/reportDetailDataAdapter';
 import { createSetupDataAdapter } from '@/lib/setupDataAdapter';
 import { fetchGuildResources } from '@/lib/discordApi';
@@ -14,7 +16,7 @@ import { queueFixtureReportBan } from '@/lib/reportBanFixtures';
 import { isWebE2eFixtureMode } from '@/lib/e2eFixtures';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { reportQueueActionSchema, type ReportQueueAction } from '@drasil/contracts';
+import { reportQueueActionSchema } from '@drasil/contracts';
 import {
   createReportQueueDataAdapter,
   type ReportClosureAction,
@@ -28,12 +30,6 @@ import {
   type InboxActionState,
 } from '@/lib/inboxActionState';
 
-const closureActions = new Set<ReportQueueAction>([
-  'mark_actioned',
-  'dismiss_no_action',
-  'mark_false_positive',
-]);
-
 async function performCloseSubmittedReport(
   guildId: string,
   reportId: string,
@@ -46,18 +42,19 @@ async function performCloseSubmittedReport(
   }
 
   const parsedAction = reportQueueActionSchema.parse(action);
-  if (!closureActions.has(parsedAction)) {
+  if (!isReportClosureAction(parsedAction)) {
     throw new Error(`Unsupported report closure action: ${parsedAction}`);
   }
 
   const setupService = createSetupDashboardService();
   await setupService.assertCanManageGuild(guildId, token.accessToken);
-  const closed = await createReportQueueDataAdapter().closeSubmittedReport({
-    guildId,
-    reportId,
-    action: parsedAction as ReportClosureAction,
-    adminId: session.userId,
-  });
+  const closed = await createReportQueueDataAdapter().closeSubmittedReport(
+    createWebActionContext({ guildId, userId: session.userId }),
+    {
+      reportId,
+      action: parsedAction,
+    }
+  );
 
   if (!closed) {
     throw new Error('Report is no longer available to close. Refresh the queue and try again.');
@@ -109,11 +106,12 @@ export async function openSubmittedReportCase(guildId: string, reportId: string)
   const parsedAction = reportQueueActionSchema.parse('open_case');
   const setupService = createSetupDashboardService();
   await setupService.assertCanManageGuild(guildId, token.accessToken);
-  const result = await createReportQueueDataAdapter().openCaseFromSubmittedReport({
-    guildId,
-    reportId,
-    adminId: session.userId,
-  });
+  const result = await createReportQueueDataAdapter().openCaseFromSubmittedReport(
+    createWebActionContext({ guildId, userId: session.userId }),
+    {
+      reportId,
+    }
+  );
 
   revalidatePath(`/admin/guild/${guildId}/inbox`);
   revalidatePath(`/admin/guild/${guildId}/cases`);
@@ -154,11 +152,12 @@ export async function openInboxSubmittedReportCase(
     }
 
     await createSetupDashboardService().assertCanManageGuild(guildId, token.accessToken);
-    const result = await createReportQueueDataAdapter().openCaseFromSubmittedReport({
-      guildId,
-      reportId,
-      adminId: session.userId,
-    });
+    const result = await createReportQueueDataAdapter().openCaseFromSubmittedReport(
+      createWebActionContext({ guildId, userId: session.userId }),
+      {
+        reportId,
+      }
+    );
 
     revalidatePath(`/admin/guild/${guildId}/inbox`);
     revalidatePath(`/admin/guild/${guildId}/cases`);
