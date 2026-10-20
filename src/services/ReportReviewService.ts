@@ -1,4 +1,4 @@
-import type { QueueAttentionItemRecord, QueueMessageDeleter } from './QueueAttentionService';
+import type { QueueAttentionItemRecord, QueueMessageDeleter } from '@drasil/application';
 
 export const reportClosureActions = [
   'mark_actioned',

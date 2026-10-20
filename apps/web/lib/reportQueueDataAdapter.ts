@@ -6,7 +6,7 @@ import {
   type ReportQueueItem,
   type ReportQueueStatus,
 } from '@drasil/contracts';
-import type { QueueAttentionItemRecord } from '../../../src/services/QueueAttentionService';
+import type { QueueAttentionItemRecord } from '@drasil/application';
 import {
   ReportReviewService,
   type ReportCaseOpener,

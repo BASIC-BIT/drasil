@@ -1,3 +1,5 @@
+import { createAttentionActions } from '@drasil/application';
+import { createBotAttentionMessageDeleter } from '../../application/adapters/attention';
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -404,18 +406,29 @@ const buildService = (
     },
   } as unknown as Client;
 
-  return {
-    channel,
-    queueRepository,
-    service: new ModerationQueueService(
-      client,
-      configService,
-      serverRepository,
-      verificationRepository,
-      detectionRepository,
-      queueRepository
-    ),
-  };
+  const service = new ModerationQueueService(
+    client,
+    configService,
+    serverRepository,
+    verificationRepository,
+    detectionRepository,
+    queueRepository
+  );
+  const attention = createAttentionActions({
+    repository: queueRepository,
+    messageDeleter: createBotAttentionMessageDeleter(service),
+    authority: {
+      loadFresh: async (guildId, userId) => ({
+        guildId,
+        userId,
+        owner: false,
+        present: true,
+        permissions: String(1n << 40n),
+        roleIds: [],
+      }),
+    },
+  });
+  return { channel, queueRepository, service, attention };
 };
 
 describe('ModerationQueueService', () => {
@@ -597,7 +610,7 @@ describe('ModerationQueueService', () => {
   });
 
   it('debounces support-thread attention until acknowledgement deletes the reminder only', async () => {
-    const { channel, queueRepository, service } = buildService();
+    const { channel, queueRepository, service, attention } = buildService();
     const verificationEvent = buildVerificationEvent();
     const firstMessage = {
       id: 'reply-1',
@@ -629,13 +642,17 @@ describe('ModerationQueueService', () => {
     expect(queueRepository.items).toHaveLength(1);
     expect(queueRepository.items[0].last_source_message_id).toBe('reply-2');
 
-    const acknowledged = await service.acknowledgeAttentionItem(
-      queueRepository.items[0].id,
-      'guild-1',
-      'moderator-1'
+    const acknowledged = await attention.acknowledge(
+      {
+        guildId: 'guild-1',
+        requestId: 'interaction-1',
+        source: 'discord_interaction',
+        actor: { kind: 'user', userId: 'moderator-1' },
+      },
+      { itemId: queueRepository.items[0].id }
     );
 
-    expect(acknowledged).toBe(true);
+    expect(acknowledged).toMatchObject({ kind: 'outcome', outcome: { status: 'acknowledged' } });
     expect(channel.sentMessages[0].delete).toHaveBeenCalledTimes(1);
     expect(queueRepository.items).toHaveLength(0);
 
@@ -752,8 +769,35 @@ describe('ModerationQueueService', () => {
     expect(queueRepository.items[0].last_source_message_id).toBe('outside-reply-2');
   });
 
+  it('retains attention when Discord reminder deletion fails', async () => {
+    const warning = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { channel, queueRepository, service, attention } = buildService();
+    await service.recordSupportThreadAttention(buildVerificationEvent(), {
+      id: 'reply-1',
+      channelId: 'support-thread',
+      content: 'Please review this.',
+      url: 'https://discord.com/channels/guild-1/support-thread/reply-1',
+      createdTimestamp: Date.parse('2026-06-13T12:00:00Z'),
+      author: { id: 'user-1' },
+    } as unknown as Message);
+    channel.sentMessages[0].delete.mockRejectedValueOnce(new Error('Missing permissions'));
+    await expect(
+      attention.acknowledge(
+        {
+          guildId: 'guild-1',
+          requestId: 'interaction-1',
+          source: 'discord_interaction',
+          actor: { kind: 'user', userId: 'moderator-1' },
+        },
+        { itemId: queueRepository.items[0].id }
+      )
+    ).rejects.toThrow('Failed to delete live moderation queue message');
+    expect(queueRepository.items).toHaveLength(1);
+    warning.mockRestore();
+  });
+
   it('does not acknowledge attention items from another server', async () => {
-    const { channel, queueRepository, service } = buildService();
+    const { channel, queueRepository, service, attention } = buildService();
     await service.recordSupportThreadAttention(buildVerificationEvent(), {
       id: 'reply-1',
       channelId: 'support-thread',
@@ -763,13 +807,17 @@ describe('ModerationQueueService', () => {
       author: { id: 'user-1' },
     } as unknown as Message);
 
-    const acknowledged = await service.acknowledgeAttentionItem(
-      queueRepository.items[0].id,
-      'other-guild',
-      'moderator-1'
+    const acknowledged = await attention.acknowledge(
+      {
+        guildId: 'other-guild',
+        requestId: 'interaction-1',
+        source: 'discord_interaction',
+        actor: { kind: 'user', userId: 'moderator-1' },
+      },
+      { itemId: queueRepository.items[0].id }
     );
 
-    expect(acknowledged).toBe(false);
+    expect(acknowledged).toMatchObject({ kind: 'outcome', outcome: { status: 'already_handled' } });
     expect(channel.sentMessages[0].delete).not.toHaveBeenCalled();
     expect(queueRepository.items).toHaveLength(1);
   });

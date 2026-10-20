@@ -1,3 +1,5 @@
+import type { BotApplication } from '../application/createBotApplication';
+import { createDiscordActionContext } from '../application/context';
 import { isReportIntakeActionChannel } from '../utils/reportIntakeAdminActions';
 import { IReportIntakeRepository } from '../repositories/ReportIntakeRepository';
 import { IModerationActionRequestRepository } from '../repositories/ModerationActionRequestRepository';
@@ -85,10 +87,7 @@ import {
   handleSlashCommandConfirmationButton,
   isSlashCommandConfirmationCustomId,
 } from '../utils/slashCommandConfirmations';
-import {
-  IModerationQueueService,
-  ModerationQueueService,
-} from '../services/ModerationQueueService';
+import { ModerationQueueService } from '../services/ModerationQueueService';
 import { IRoleGateService, RoleGateResolutionResult } from '../services/RoleGateService';
 import {
   type AccountQuarantinePreview,
@@ -168,7 +167,6 @@ export class InteractionHandler implements IInteractionHandler {
   private adminActionRepository: IAdminActionRepository;
   private reportInteractionHandler: ReportInteractionHandler;
   private setupVerificationModalHandler: SetupVerificationModalHandler;
-  private moderationQueueService?: IModerationQueueService;
   private roleGateService?: IRoleGateService;
   private detectionEventsRepository?: IDetectionEventsRepository;
   private accountQuarantineService?: IAccountQuarantineService;
@@ -201,9 +199,9 @@ export class InteractionHandler implements IInteractionHandler {
     @inject(TYPES.ServerMemberRepository)
     @optional()
     serverMemberRepository?: IServerMemberRepository,
-    @inject(TYPES.ModerationQueueService)
+    @inject(TYPES.BotApplication)
     @optional()
-    moderationQueueService?: IModerationQueueService,
+    private readonly application?: BotApplication,
     @inject(TYPES.RoleGateService)
     @optional()
     roleGateService?: IRoleGateService,
@@ -232,7 +230,6 @@ export class InteractionHandler implements IInteractionHandler {
     this.serverMemberRepository = serverMemberRepository;
     this.threadManager = threadManager;
     this.adminActionRepository = adminActionRepository;
-    this.moderationQueueService = moderationQueueService;
     this.roleGateService = roleGateService;
     this.detectionEventsRepository = detectionEventsRepository;
     this.accountQuarantineService = accountQuarantineService;
@@ -472,15 +469,7 @@ export class InteractionHandler implements IInteractionHandler {
     guildId: string,
     itemId: string
   ): Promise<void> {
-    if (!(await this.hasAnyPermission(interaction, guildId, this.getModerationPermissions()))) {
-      await this.replyPermissionDenied(
-        interaction,
-        'You need moderation permissions to acknowledge queue reminders.'
-      );
-      return;
-    }
-
-    if (!this.moderationQueueService) {
+    if (!this.application) {
       await interaction.reply({
         content: 'Live moderation queue support is unavailable in this process.',
         flags: MessageFlags.Ephemeral,
@@ -489,13 +478,25 @@ export class InteractionHandler implements IInteractionHandler {
     }
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-    const acknowledged = await this.moderationQueueService.acknowledgeAttentionItem(
-      itemId,
-      guildId,
-      interaction.user.id
+    const result = await this.application.attention.acknowledge(
+      createDiscordActionContext({
+        guildId,
+        userId: interaction.user.id,
+        requestId: interaction.id,
+      }),
+      { itemId }
     );
+    if (result.kind === 'denied') {
+      await this.replyPermissionDenied(
+        interaction,
+        'You need moderation permissions to acknowledge queue reminders.'
+      );
+      return;
+    }
     await interaction.editReply(
-      acknowledged ? 'Queue reminder acknowledged.' : 'That queue reminder was already handled.'
+      result.outcome.status === 'acknowledged'
+        ? 'Queue reminder acknowledged.'
+        : 'That queue reminder was already handled.'
     );
   }
 

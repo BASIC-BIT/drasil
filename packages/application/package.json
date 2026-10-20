@@ -1,0 +1,30 @@
+{
+  "name": "@drasil/application",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "import": "./dist/index.js"
+    },
+    "./postgres": {
+      "types": "./dist/postgres/index.d.ts",
+      "require": "./dist/postgres/index.js",
+      "import": "./dist/postgres/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src --max-warnings=0",
+    "test": "jest --config jest.config.cjs",
+    "test:coverage": "jest --config jest.config.cjs --coverage"
+  },
+  "dependencies": {
+    "zod": "^3.25.76"
+  }
+}

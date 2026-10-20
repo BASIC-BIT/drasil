@@ -8,10 +8,7 @@ import {
   type ReportReviewRecord,
   type ReportReviewRepository,
 } from '../../services/ReportReviewService';
-import type {
-  QueueAttentionItemRecord,
-  QueueMessageDeleter,
-} from '../../services/QueueAttentionService';
+import type { QueueAttentionItemRecord, QueueMessageDeleter } from '@drasil/application';
 
 class FakeReportReviewRepository implements ReportReviewRepository {
   public closedInput: {

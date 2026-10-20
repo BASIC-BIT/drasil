@@ -1,3 +1,4 @@
+import { createBotApplication, type BotApplication } from '../application/createBotApplication';
 import { ModerationEvidenceService } from '../services/ModerationEvidenceService';
 import 'reflect-metadata';
 import { Container } from 'inversify';
@@ -276,6 +277,17 @@ function configureRepositories(container: Container): void {
  * Configure service bindings
  */
 function configureServices(container: Container): void {
+  container
+    .bind<BotApplication>(TYPES.BotApplication)
+    .toDynamicValue((context) =>
+      createBotApplication({
+        client: context.get<Client>(TYPES.DiscordClient),
+        queueRepository: context.get<IModerationQueueRepository>(TYPES.ModerationQueueRepository),
+        queueService: context.get<IModerationQueueService>(TYPES.ModerationQueueService),
+      })
+    )
+    .inSingletonScope();
+
   // Bind services to their implementations
   container.bind<IHeuristicService>(TYPES.HeuristicService).to(HeuristicService).inSingletonScope();
 
