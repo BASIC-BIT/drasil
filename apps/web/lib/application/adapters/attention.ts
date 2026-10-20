@@ -1,18 +1,9 @@
 import type {
-  AuthorityFacts,
-  AuthorityPort,
   QueueAttentionItemRecord,
   QueueAttentionRepository,
   QueueMessageDeleter,
 } from '@drasil/application';
-import {
-  DiscordApiError,
-  deleteBotMessage,
-  fetchDiscordGuild,
-  fetchDiscordGuildMember,
-  fetchDiscordGuildRoles,
-} from '../../discordApi';
-import { computeGuildPermissions } from '../../discordPermissions';
+import { deleteBotMessage } from '../../discordApi';
 import { getPostgresPool } from '../../setupDataAdapter';
 
 export class PostgresQueueAttentionRepository implements QueueAttentionRepository {
@@ -32,34 +23,6 @@ export class PostgresQueueAttentionRepository implements QueueAttentionRepositor
     );
     return result.rows[0] ?? null;
   }
-}
-export function createWebAuthority(): AuthorityPort {
-  return {
-    async loadFresh(guildId, userId): Promise<AuthorityFacts | null> {
-      try {
-        const [guild, member, roles] = await Promise.all([
-          fetchDiscordGuild(guildId),
-          fetchDiscordGuildMember(guildId, userId),
-          fetchDiscordGuildRoles(guildId),
-        ]);
-        return {
-          guildId: guild.id,
-          userId,
-          present: true,
-          owner: guild.owner_id === userId,
-          permissions: computeGuildPermissions({
-            guildId,
-            roles,
-            memberRoleIds: member.roles,
-          }).toString(),
-          roleIds: member.roles,
-        };
-      } catch (error) {
-        if (error instanceof DiscordApiError && error.status === 404) return null;
-        throw error;
-      }
-    },
-  };
 }
 export function createWebAttentionMessageDeleter(): QueueMessageDeleter {
   return {

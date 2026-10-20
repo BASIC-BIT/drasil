@@ -10,7 +10,7 @@ import {
   type DetectionOperation,
 } from '@drasil/application';
 import type { BotCaseDependencies } from './cases';
-import { createBotAuthority } from './attention';
+import { createBotAuthority } from './authority';
 import {
   getReportBanAttemptToken,
   type IModerationActionRequestRepository,

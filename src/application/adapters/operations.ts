@@ -15,7 +15,7 @@ import type { ICaseRoleLockdownService } from '../../services/CaseRoleLockdownSe
 import type { IIntegrityAuditService } from '../../services/IntegrityAuditService';
 import type { ISecurityActionService } from '../../services/SecurityActionService';
 import { getDetectionResponseSettings } from '../../utils/detectionResponseSettings';
-import { createBotAuthority } from './attention';
+import { createBotAuthority } from './authority';
 export interface BotOperationsDependencies {
   readonly client: Client;
   readonly configService: IConfigService;

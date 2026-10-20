@@ -1,5 +1,6 @@
 import {
   matchesConfirmation,
+  confirmationBindingFor,
   type ActionContext,
   type QuarantinePreviewBinding,
   type QuarantineExecuteInput,
@@ -42,7 +43,8 @@ export function createCaseConfirmationStore(): {
   };
   return {
     recordVerified(context, command, evidence): void {
-      if (context.actor.kind !== 'user') throw new Error('A case confirmation needs a user actor.');
+      const binding = confirmationBindingFor(context, command);
+      if (binding === null) throw new Error('A case confirmation needs a user actor.');
       prune();
       bindings.delete(context.requestId);
       if (bindings.size >= maxBindings) {
@@ -51,19 +53,7 @@ export function createCaseConfirmationStore(): {
       }
       bindings.set(context.requestId, {
         expiresAt: Date.now() + ttlMs,
-        binding: evidence ?? {
-          guildId: context.guildId,
-          actorId: context.actor.userId,
-          action: command.kind,
-          targetId:
-            'intakeId' in command
-              ? command.intakeId
-              : 'caseId' in command
-                ? command.caseId
-                : 'operationId' in command
-                  ? command.operationId
-                  : command.targetUserId,
-        },
+        binding: evidence ?? binding,
       });
     },
     confirmations: {

@@ -40,7 +40,8 @@ import {
 import type { Client } from 'discord.js';
 import type { IModerationQueueRepository } from '../repositories/ModerationQueueRepository';
 import type { IModerationQueueService } from '../services/ModerationQueueService';
-import { createBotAuthority, createBotAttentionMessageDeleter } from './adapters/attention';
+import { createBotAuthority } from './adapters/authority';
+import { createBotAttentionMessageDeleter } from './adapters/attention';
 
 export interface BotApplication {
   readonly setup: BotSetupRuntime['actions'];

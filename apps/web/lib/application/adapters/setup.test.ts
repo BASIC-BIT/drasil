@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SetupDataAdapter } from '../../setupDataAdapter';
 import type { SetupServerRecord } from '@drasil/contracts';
 const state = vi.hoisted(() => ({ permissions: '8', owner: false, provider: true, present: true }));
-vi.mock('./attention', () => ({
+vi.mock('./authority', () => ({
   createWebAuthority: () => ({
     loadFresh: async (guildId: string, userId: string) =>
       state.present

@@ -19,7 +19,7 @@ import {
 import type { BotCaseDependencies } from './cases';
 import type { IModerationActionRequestRepository } from '../../repositories/ModerationActionRequestRepository';
 import type { IAccountQuarantineService } from '../../services/AccountQuarantineService';
-import { createBotAuthority } from './attention';
+import { createBotAuthority } from './authority';
 import { createQuarantinePreviewStore } from '../context';
 import { getAccountQuarantineSettings } from '../../utils/accountQuarantineSettings';
 

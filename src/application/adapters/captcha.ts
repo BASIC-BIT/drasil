@@ -22,7 +22,7 @@ import {
   type ModerationActionRequest,
 } from '../../repositories/types';
 import { getCaptchaSettings } from '../../utils/captchaSettings';
-import { createBotAuthority } from './attention';
+import { createBotAuthority } from './authority';
 import { CaptchaEffects } from './captchaEffects';
 
 export interface BotCaptchaDependencies {
