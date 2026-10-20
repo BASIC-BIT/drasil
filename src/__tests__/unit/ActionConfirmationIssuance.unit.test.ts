@@ -52,7 +52,11 @@ it.each([
     verification_event_id: encoded.verificationEventId ?? null,
     metadata: encoded.metadata,
   });
-  await prepareQueuedRequest(app, request, mock<IProductAnalyticsService>(), false);
+  await prepareQueuedRequest({
+    runtime: app,
+    request,
+    analytics: mock<IProductAnalyticsService>(),
+  });
   expect(app.caseConfirmations.recordVerified).not.toHaveBeenCalled();
 });
 
@@ -71,7 +75,11 @@ it('retains evidence for a destructive operation', async () => {
     verification_event_id: null,
     metadata: {},
   });
-  await prepareQueuedRequest(app, request, mock<IProductAnalyticsService>(), false);
+  await prepareQueuedRequest({
+    runtime: app,
+    request,
+    analytics: mock<IProductAnalyticsService>(),
+  });
   expect(app.caseConfirmations.recordVerified).toHaveBeenCalledTimes(1);
 });
 

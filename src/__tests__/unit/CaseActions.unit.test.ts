@@ -4,17 +4,12 @@ import type { ISetupDiagnosticsService } from '../../services/SetupDiagnosticsSe
 import type { IIntegrityAuditService } from '../../services/IntegrityAuditService';
 import type { ICaseRoleLockdownService } from '../../services/CaseRoleLockdownService';
 import type { ICaseThreadClosureSweepService } from '../../services/CaseThreadClosureSweepService';
-import {
-  decodeQueuedAction,
-  queuedCommandSchema,
-  encodeQueuedAction,
-  type CaseCommand,
-} from '@drasil/application';
+import { queuedCommandSchema, encodeQueuedAction, type CaseCommand } from '@drasil/application';
 import type { Client, GuildMember, User } from 'discord.js';
 import type { IConfigService } from '../../config/ConfigService';
 import { createBotApplication } from '../../application/createBotApplication';
 import { createDiscordActionContext } from '../../application/context';
-import { dispatchQueuedAction } from '../../application/requestDispatch';
+import { prepareQueuedRequest } from '../../application/requestRuntime';
 import { UserModerationService } from '../../services/UserModerationService';
 import { AdminActionService } from '../../services/AdminActionService';
 import { ModerationOutcomeService } from '../../services/ModerationOutcomeService';
@@ -22,7 +17,11 @@ import type { ISecurityActionService } from '../../services/SecurityActionServic
 import type { IRoleManager } from '../../services/RoleManager';
 import type { INotificationManager } from '../../services/NotificationManager';
 import type { IThreadManager } from '../../services/ThreadManager';
-import { DetectionType, VerificationStatus } from '../../repositories/types';
+import {
+  DetectionType,
+  VerificationStatus,
+  type ModerationActionRequest,
+} from '../../repositories/types';
 import {
   InMemoryAdminActionRepository,
   InMemoryDetectionEventsRepository,
@@ -168,28 +167,31 @@ async function arrange() {
       { ...context, source: 'web' },
       queuedCommandSchema.parse(input)
     );
-    const decoded = decodeQueuedAction({
+    const request = mock<ModerationActionRequest>({
       id: context.requestId,
       server_id: encoded.serverId,
       actor_id: encoded.actorId,
       actor_surface: encoded.actorSurface,
       target_user_id: encoded.targetUserId,
-      action_type: encoded.actionType,
+      action_type: encoded.actionType as ModerationActionRequest['action_type'],
       verification_event_id: encoded.verificationEventId,
       detection_event_id: encoded.detectionEventId,
       report_intake_id: encoded.reportIntakeId,
+      message_deletion_job_id: encoded.messageDeletionJobId,
       metadata: encoded.metadata,
     });
-    if (!('targetUserId' in decoded.command)) throw new Error('Expected case command.');
-    proof.recordVerified(decoded.context, decoded.command);
-    return decoded;
+    return prepareQueuedRequest({
+      runtime: application,
+      request,
+      analytics: mock<IProductAnalyticsService>(),
+    });
   };
   const execute = async (delivery: 'direct' | 'worker', input: CaseCommand = command) => {
     if (delivery === 'direct') {
       proof.recordVerified(context, input);
       return actions.execute(context, input);
     }
-    return dispatchQueuedAction(application, prepareQueued(input));
+    return (await prepareQueued(input)).execute();
   };
   return {
     application,
@@ -214,7 +216,7 @@ async function arrange() {
 test('queued_dashboard_open_rechecks_Manage_Guild_instead_of_accepting_Moderate_Members', async () => {
   const fixture = await arrange();
   fixture.setPermissions(1n << 5n);
-  const queued = fixture.prepareQueued({
+  const queued = await fixture.prepareQueued({
     kind: 'open_admin_case',
     intent: 'dashboard_case_open',
     targetUserId: 'target-1',
@@ -223,9 +225,7 @@ test('queued_dashboard_open_rechecks_Manage_Guild_instead_of_accepting_Moderate_
     selectedMessage: null,
   });
   fixture.setPermissions(1n << 40n);
-  await expect(dispatchQueuedAction(fixture.application, queued)).rejects.toThrow(
-    'permission_denied'
-  );
+  await expect(queued.execute()).rejects.toThrow('permission_denied');
 });
 
 describe.each(['direct', 'worker'] as const)(

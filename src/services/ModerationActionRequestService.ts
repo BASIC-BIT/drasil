@@ -1,5 +1,4 @@
-import type { BotApplication } from '../application/createBotApplication';
-import { dispatchQueuedAction } from '../application/requestDispatch';
+import type { QueuedRequestRuntime } from '../application/requestDispatch';
 import { prepareQueuedRequest } from '../application/requestRuntime';
 import { inject, injectable } from 'inversify';
 import { TYPES } from '../di/symbols';
@@ -28,7 +27,7 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     @inject(TYPES.ModerationActionRequestRepository)
     private readonly repository: IModerationActionRequestRepository,
     @inject(TYPES.BotApplication)
-    private readonly application: BotApplication,
+    private readonly application: QueuedRequestRuntime,
     @inject(TYPES.ProductAnalyticsService)
     private readonly productAnalyticsService: IProductAnalyticsService
   ) {}
@@ -128,13 +127,13 @@ export class ModerationActionRequestService implements IModerationActionRequestS
   }
 
   private async executeRequest(request: ModerationActionRequest, recovery = false): Promise<void> {
-    const execution = await prepareQueuedRequest(
-      this.application,
+    const execution = await prepareQueuedRequest({
+      runtime: this.application,
       request,
-      this.productAnalyticsService,
-      recovery
-    );
-    const outcome = await dispatchQueuedAction(execution.application, execution.action);
+      analytics: this.productAnalyticsService,
+      recovery,
+    });
+    const outcome = await execution.execute();
     if (
       recovery &&
       outcome.action_type === 'ban_observed_detection' &&
