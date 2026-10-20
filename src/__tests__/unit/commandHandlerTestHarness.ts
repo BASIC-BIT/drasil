@@ -1,3 +1,6 @@
+import { buildReportActions } from './reportApplicationTestHarness';
+import type { AuthorityPort } from '@drasil/application';
+import { buildCaseApplication } from './caseApplicationTestHarness';
 import { CommandHandler } from '../../controllers/CommandHandler';
 
 export function restoreUserInstallReportingEnvAfterEach(): void {
@@ -41,6 +44,8 @@ export type HandlerOverrides = Partial<{
   moderationQueueService: any;
   integrityAuditService: any;
   client: any;
+  caseAuthority: AuthorityPort;
+  detectionEventsRepository: any;
 }>;
 
 export const buildHandler = (overrides: HandlerOverrides = {}) => {
@@ -55,8 +60,10 @@ export const buildHandler = (overrides: HandlerOverrides = {}) => {
     jest.fn().mockResolvedValue({});
   const configService = {
     updateSetupConfiguration,
-    updateServerConfig: overrides.updateServerConfig ?? jest.fn().mockResolvedValue({}),
-    updateServerSettings: overrides.updateServerSettings ?? jest.fn().mockResolvedValue({}),
+    updateServerConfig:
+      overrides.updateServerConfig ?? jest.fn().mockResolvedValue({ settings: {} }),
+    updateServerSettings:
+      overrides.updateServerSettings ?? jest.fn().mockResolvedValue({ settings: {} }),
     getCachedServerConfig: overrides.getCachedServerConfig ?? jest.fn().mockReturnValue(null),
     getServerConfig:
       overrides.getServerConfig ??
@@ -184,7 +191,63 @@ export const buildHandler = (overrides: HandlerOverrides = {}) => {
     overrides.client ??
     ({
       user: { id: 'client-1' },
+      guilds: {
+        fetch: jest.fn(async () => ({
+          id: 'guild-1',
+          members: {
+            me: { permissions: { has: () => true } },
+            fetchMe: jest.fn().mockResolvedValue({ permissions: { has: () => true } }),
+            fetch: jest.fn(async (id: string) => ({ id })),
+          },
+        })),
+      },
+      users: {
+        fetch: jest.fn(async (id: string) =>
+          id.startsWith('user-') ? { id, tag: 'target#0001' } : { id }
+        ),
+      },
     } as any);
+
+  const caseRepository = {
+    findActiveByUserAndServer: jest.fn(async (userId: string) => ({
+      id: 'ver-1',
+      user_id: userId,
+      server_id: 'guild-1',
+      status: 'pending',
+    })),
+    findByUserAndServer: jest.fn(async (userId: string) => [
+      { id: 'ver-1', user_id: userId, server_id: 'guild-1', status: 'pending' },
+    ]),
+    findById: jest.fn(async (id: string) => ({
+      id,
+      user_id: 'user-2',
+      server_id: 'guild-1',
+      status: 'pending',
+    })),
+  } as any;
+  const application = buildCaseApplication(
+    {
+      client,
+      configService,
+      notificationManager,
+      setupDiagnosticsService,
+      queueService: overrides.moderationQueueService,
+      caseRoleLockdownService: overrides.caseRoleLockdownService,
+      integrityAuditService: overrides.integrityAuditService,
+      verificationEventRepository: caseRepository,
+      detectionEventsRepository:
+        overrides.detectionEventsRepository ??
+        ({
+          findById: jest
+            .fn()
+            .mockResolvedValue({ server_id: 'guild-1', user_id: 'target', metadata: {} }),
+        } as any),
+      securityActionService,
+      userModerationService,
+      roleGateService: null,
+    },
+    overrides.caseAuthority
+  );
 
   return {
     handler: new CommandHandler(
@@ -198,7 +261,18 @@ export const buildHandler = (overrides: HandlerOverrides = {}) => {
       setupDiagnosticsService,
       overrides.caseRoleLockdownService,
       overrides.moderationQueueService,
-      overrides.integrityAuditService
+      overrides.integrityAuditService,
+      undefined,
+      {
+        ...application,
+        reports: buildReportActions({
+          client,
+          configService,
+          securityActionService,
+          threadManager: {} as never,
+          reportIntakeService: {} as never,
+        }),
+      }
     ),
     client,
     userModerationService,
@@ -209,3 +283,17 @@ export const buildHandler = (overrides: HandlerOverrides = {}) => {
     integrityAuditService: overrides.integrityAuditService,
   };
 };
+
+export function configurationResponseMocks(): {
+  deferred: boolean;
+  deferReply: jest.Mock;
+  editReply: jest.Mock;
+} {
+  return {
+    deferred: false,
+    deferReply: jest.fn(async function (this: { deferred: boolean }) {
+      this.deferred = true;
+    }),
+    editReply: jest.fn().mockResolvedValue(undefined),
+  };
+}

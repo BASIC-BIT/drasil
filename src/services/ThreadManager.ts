@@ -1,3 +1,5 @@
+import type { ResolvedThreadClosureResult } from '@drasil/application';
+export type { ResolvedThreadClosureResult } from '@drasil/application';
 import { injectable, inject } from 'inversify';
 import {
   ActionRowBuilder,
@@ -66,16 +68,6 @@ interface VerificationSetupResult {
   metadata: VerificationEvent['metadata'];
   thread: ThreadChannel | null;
   repair: VerificationThreadRepairResult;
-}
-
-export interface ResolvedThreadClosureResult {
-  threadId: string;
-  threadKind: 'case' | 'private_evidence';
-  wouldClose: boolean;
-  closed: boolean;
-  alreadyClosed: boolean;
-  missing: boolean;
-  error: string | null;
 }
 
 export interface ResolvedCaseThreadClosureResult {

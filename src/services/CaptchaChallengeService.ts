@@ -1,3 +1,4 @@
+import { encodeCaptchaEffect } from '../application/captchaContext';
 import { createHash, randomBytes } from 'node:crypto';
 import { inject, injectable, optional } from 'inversify';
 import { IConfigService } from '../config/ConfigService';
@@ -14,7 +15,6 @@ import {
   CaptchaChallengeRequestSource,
   CaptchaChallengeStatus,
   CaseKind,
-  ModerationActionRequestType,
   VerificationEvent,
   VerificationStatus,
 } from '../repositories/types';
@@ -402,20 +402,7 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     ) {
       return;
     }
-    await this.moderationActionRequests.enqueue({
-      serverId: challenge.server_id,
-      actionType: ModerationActionRequestType.NOTIFY_CAPTCHA_ATTENTION,
-      actorId: 'drasil:captcha',
-      actorSurface: 'captcha',
-      targetUserId: challenge.user_id,
-      verificationEventId: challenge.verification_event_id,
-      idempotencyKey: `captcha:attention:${challenge.id}:${challenge.generation}:${this.attentionReasonKey(reason)}`,
-      metadata: {
-        challenge_id: challenge.id,
-        generation: challenge.generation,
-        reason,
-      },
-    });
+    await this.moderationActionRequests.enqueue(encodeCaptchaEffect(challenge, reason));
   }
 
   private async queueCancelledPresentation(challenge: CaptchaChallenge): Promise<void> {
@@ -433,40 +420,14 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     if (!this.moderationActionRequests) {
       throw new Error('Moderation action requests are unavailable for CAPTCHA presentation.');
     }
-    await this.moderationActionRequests.enqueue({
-      serverId: challenge.server_id,
-      actionType: ModerationActionRequestType.NOTIFY_CAPTCHA_ATTENTION,
-      actorId: 'drasil:captcha',
-      actorSurface: 'captcha',
-      targetUserId: challenge.user_id,
-      verificationEventId: challenge.verification_event_id,
-      idempotencyKey: `captcha:presentation:${challenge.id}:${challenge.generation}:${reason}`,
-      metadata: {
-        challenge_id: challenge.id,
-        generation: challenge.generation,
-        reason,
-      },
-    });
+    await this.moderationActionRequests.enqueue(encodeCaptchaEffect(challenge, reason));
   }
 
   private async queuePassedApplication(challenge: CaptchaChallenge): Promise<void> {
     if (!this.moderationActionRequests) {
       throw new Error('Moderation action requests are unavailable for CAPTCHA completion.');
     }
-    await this.moderationActionRequests.enqueue({
-      serverId: challenge.server_id,
-      actionType: ModerationActionRequestType.APPLY_CAPTCHA_PASS,
-      actorId: 'drasil:captcha',
-      actorSurface: 'captcha',
-      targetUserId: challenge.user_id,
-      verificationEventId: challenge.verification_event_id,
-      idempotencyKey: `captcha:apply:${challenge.id}:${challenge.generation}`,
-      metadata: {
-        challenge_id: challenge.id,
-        generation: challenge.generation,
-        expected_case_revision: challenge.case_revision_at_issue,
-      },
-    });
+    await this.moderationActionRequests.enqueue(encodeCaptchaEffect(challenge, 'pass'));
   }
 
   private async queueDeliveryFailureAttention(
@@ -512,13 +473,6 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
       );
     }
     return current.status === challenge.status;
-  }
-
-  private attentionReasonKey(reason: 'delivery_failed' | 'submission_limit' | 'expired'): string {
-    if (reason === 'delivery_failed') {
-      return 'delivery-failed';
-    }
-    return reason === 'submission_limit' ? 'submission-limit' : 'expired';
   }
 
   private async refreshCaptchaPresentation(

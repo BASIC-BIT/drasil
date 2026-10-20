@@ -1,5 +1,7 @@
 'use server';
 
+import { evaluateCasePolicy, readCasePolicy, type ActionContext } from '@drasil/application';
+import { createWebActionContext, createWebConfirmationPort } from '@/lib/application/context';
 import { randomUUID } from 'node:crypto';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
@@ -127,35 +129,24 @@ function readFormString(formData: FormData | undefined, key: string): string | n
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
-function assertDestructiveActionEnabled(
-  settings: Record<string, unknown>,
-  context: DestructiveActionContext
-): void {
-  const enabled = context.isBanAction
-    ? settings.moderator_ban_action_enabled !== false
-    : settings.moderator_kick_action_enabled !== false;
-  if (!enabled) {
-    throw new Error(
-      context.isBanAction
-        ? 'Moderator ban actions are disabled for this server.'
-        : 'Moderator kick actions are disabled for this server.'
-    );
-  }
-}
-
 function readDestructiveReason(
   formData: FormData | undefined,
   settings: Record<string, unknown>,
   context: DestructiveActionContext
 ): string | null {
   const reason = readFormString(formData, 'reason');
-  const requiresReason = context.isBanAction
-    ? settings.moderator_ban_action_requires_reason === true
-    : settings.moderator_kick_action_requires_reason === true;
-  if (requiresReason && !reason) {
+  const denial = evaluateCasePolicy(
+    { kind: context.isBanAction ? 'ban_case_user' : 'kick_case_user', reason },
+    readCasePolicy(settings)
+  );
+  if (denial === 'policy_disabled')
+    throw new Error(
+      context.isBanAction
+        ? 'Moderator ban actions are disabled for this server.'
+        : 'Moderator kick actions are disabled for this server.'
+    );
+  if (denial === 'reason_required')
     throw new Error(context.isBanAction ? 'Ban reason is required.' : 'Kick reason is required.');
-  }
-
   return reason;
 }
 
@@ -182,7 +173,8 @@ async function assertCanQueueCaseAction(
   action: WebCaseAction,
   guild: { readonly id: string; readonly owner: boolean; readonly permissions: string },
   caseId: string,
-  formData: FormData | undefined
+  formData: FormData | undefined,
+  actionContext: ActionContext
 ): Promise<CaseActionOptions> {
   assertActorPermission(action, guild);
 
@@ -211,7 +203,13 @@ async function assertCanQueueCaseAction(
         reason: null,
       };
     }
-    if (formData?.get('confirmAction') !== 'on') {
+    const confirmationCommand = { kind: 'quarantine_compromised_account', caseId };
+    if (
+      !(await createWebConfirmationPort(actionContext, confirmationCommand, formData).verify(
+        actionContext,
+        confirmationCommand
+      ))
+    ) {
       throw new Error('Confirm the account quarantine before queueing it.');
     }
     const reason = readFormString(formData, 'reason');
@@ -276,14 +274,24 @@ async function assertCanQueueCaseAction(
     };
   }
 
-  if (formData?.get('confirmAction') !== 'on') {
+  const confirmationKinds = {
+    ban_user: 'ban_case_user',
+    ban_by_id: 'ban_case_user_by_id',
+    kick_user: 'kick_case_user',
+  };
+  const confirmationCommand = { kind: confirmationKinds[destructiveContext.action], caseId };
+  if (
+    !(await createWebConfirmationPort(actionContext, confirmationCommand, formData).verify(
+      actionContext,
+      confirmationCommand
+    ))
+  ) {
     throw new Error('Confirm the moderation action before queueing it.');
   }
 
   const setupAdapter = createSetupDataAdapter();
   const server = await setupAdapter.getServer(guild.id);
   const settings = server?.settings ?? {};
-  assertDestructiveActionEnabled(settings, destructiveContext);
 
   const reason = readDestructiveReason(formData, settings, destructiveContext);
   await assertBotCanRunDestructiveAction(guild.id, destructiveContext);
@@ -328,7 +336,8 @@ async function performQueueCaseAction(
     parsedAction as WebCaseAction,
     guild,
     caseId,
-    formData
+    formData,
+    createWebActionContext({ guildId, userId: session.userId })
   );
   const result = await createActiveCaseDataAdapter().queueCaseAction({
     action: parsedAction as WebCaseAction,

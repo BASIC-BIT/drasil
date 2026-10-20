@@ -1,3 +1,4 @@
+import { encodeQueuedAction } from '@drasil/application';
 import { isWebE2eFixtureMode } from './e2eFixtures';
 import {
   queueModerationActionRequest,
@@ -16,17 +17,15 @@ export async function queueMemberManualFlagActionRequest(input: {
     return 'queued';
   }
 
-  return queueModerationActionRequest({
-    actionType: 'manual_flag_user',
-    actorId: input.actorId,
-    actorSurface: input.actorSurface,
-    idempotencyKey: `web:member-manual-flag:${input.guildId}:${input.targetUserId}:${input.requestId}`,
-    metadata: {
-      reason: input.reason ?? null,
-      requested_surface: input.actorSurface,
-      web_action: 'manual_flag_user',
-    },
-    serverId: input.guildId,
-    targetUserId: input.targetUserId,
-  });
+  return queueModerationActionRequest(
+    encodeQueuedAction(
+      {
+        guildId: input.guildId,
+        requestId: input.requestId,
+        source: input.actorSurface,
+        actor: { kind: 'user', userId: input.actorId },
+      },
+      { kind: 'manual_flag_user', targetUserId: input.targetUserId, reason: input.reason ?? null }
+    )
+  );
 }

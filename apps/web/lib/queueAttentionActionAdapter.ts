@@ -1,93 +1,70 @@
-import {
-  QueueAttentionService,
-  type QueueActionActor,
-  type QueueAttentionItemRecord,
-  type QueueAttentionRepository,
-  type AcknowledgeQueueAttentionResult,
-} from '../../../src/services/QueueAttentionService';
-import { deleteBotMessage } from './discordApi';
+import type { ActionResult, AttentionOutcome, QueueActionActor } from '@drasil/application';
+import { createWebApplication, type WebApplication } from './application/createWebApplication';
+import { createWebActionContext } from './application/context';
 import { isWebE2eFixtureMode } from './e2eFixtures';
-import { getPostgresPool } from './setupDataAdapter';
 
-export type { QueueAttentionAcknowledgeStatus } from '../../../src/services/QueueAttentionService';
-
+export type { QueueAttentionAcknowledgeStatus } from '@drasil/application';
+interface AttentionInput {
+  readonly guildId: string;
+  readonly queueItemId: string;
+  readonly actor: QueueActionActor;
+}
+interface AttentionBatchInput {
+  readonly guildId: string;
+  readonly queueItemIds: readonly string[];
+  readonly actor: QueueActionActor;
+}
 export interface QueueAttentionActionAdapter {
-  acknowledgeAttentionItem(input: {
-    guildId: string;
-    queueItemId: string;
-    actor: QueueActionActor;
-  }): Promise<AcknowledgeQueueAttentionResult>;
+  acknowledgeAttentionItem(input: AttentionInput): Promise<AttentionOutcome>;
+  acknowledgeAttentionItems(input: AttentionBatchInput): Promise<readonly AttentionOutcome[]>;
 }
-
-class PostgresQueueAttentionRepository implements QueueAttentionRepository {
-  public async findById(id: string): Promise<QueueAttentionItemRecord | null> {
-    const result = await getPostgresPool().query<QueueAttentionItemRecord>(
-      `select id, server_id, item_type, queue_channel_id, queue_message_id
-       from moderation_queue_items
-       where id = $1
-       limit 1`,
-      [id]
-    );
-    return result.rows[0] ?? null;
-  }
-
-  public async deleteById(id: string): Promise<QueueAttentionItemRecord | null> {
-    const result = await getPostgresPool().query<QueueAttentionItemRecord>(
-      `delete from moderation_queue_items
-       where id = $1
-       returning id, server_id, item_type, queue_channel_id, queue_message_id`,
-      [id]
-    );
-    return result.rows[0] ?? null;
-  }
+function unwrap(result: ActionResult<AttentionOutcome>): AttentionOutcome {
+  if (result.kind === 'denied')
+    throw new Error('You need moderation permissions to acknowledge queue reminders.');
+  return result.outcome;
 }
-
 export class PostgresQueueAttentionActionAdapter implements QueueAttentionActionAdapter {
   public constructor(
-    private readonly service = new QueueAttentionService(new PostgresQueueAttentionRepository(), {
-      deleteQueueMessage: async (item) => {
-        if (!item.queue_channel_id || !item.queue_message_id) {
-          return;
-        }
-
-        await deleteBotMessage(item.queue_channel_id, item.queue_message_id).catch((error) => {
-          console.warn(`Failed to delete acknowledged queue message ${item.id}:`, error);
-        });
-      },
-    })
+    private readonly application: Pick<WebApplication, 'attention'> = createWebApplication()
   ) {}
-
-  public acknowledgeAttentionItem(input: {
-    guildId: string;
-    queueItemId: string;
-    actor: QueueActionActor;
-  }): Promise<AcknowledgeQueueAttentionResult> {
-    return this.service.acknowledgeAttentionItem({
-      actor: input.actor,
-      itemId: input.queueItemId,
-      serverId: input.guildId,
-    });
+  public async acknowledgeAttentionItem(input: AttentionInput): Promise<AttentionOutcome> {
+    return unwrap(
+      await this.application.attention.acknowledge(
+        createWebActionContext({ guildId: input.guildId, userId: input.actor.id }),
+        { itemId: input.queueItemId }
+      )
+    );
+  }
+  public async acknowledgeAttentionItems(
+    input: AttentionBatchInput
+  ): Promise<readonly AttentionOutcome[]> {
+    const results = await this.application.attention.acknowledgeBatch(
+      createWebActionContext({ guildId: input.guildId, userId: input.actor.id }),
+      { itemIds: input.queueItemIds }
+    );
+    return results.map(unwrap);
   }
 }
-
 export class FixtureQueueAttentionActionAdapter implements QueueAttentionActionAdapter {
-  public async acknowledgeAttentionItem(input: {
-    guildId: string;
-    queueItemId: string;
-    actor: QueueActionActor;
-  }): Promise<AcknowledgeQueueAttentionResult> {
+  public async acknowledgeAttentionItem(input: AttentionInput): Promise<AttentionOutcome> {
     return {
       actor: input.actor,
       itemId: input.queueItemId,
       status: input.queueItemId === 'queue-support-1' ? 'already_handled' : 'acknowledged',
     };
   }
-}
-
-export function createQueueAttentionActionAdapter(): QueueAttentionActionAdapter {
-  if (isWebE2eFixtureMode()) {
-    return new FixtureQueueAttentionActionAdapter();
+  public async acknowledgeAttentionItems(
+    input: AttentionBatchInput
+  ): Promise<readonly AttentionOutcome[]> {
+    return Promise.all(
+      input.queueItemIds.map((queueItemId) =>
+        this.acknowledgeAttentionItem({ ...input, queueItemId })
+      )
+    );
   }
-
-  return new PostgresQueueAttentionActionAdapter();
+}
+export function createQueueAttentionActionAdapter(): QueueAttentionActionAdapter {
+  return isWebE2eFixtureMode()
+    ? new FixtureQueueAttentionActionAdapter()
+    : new PostgresQueueAttentionActionAdapter();
 }

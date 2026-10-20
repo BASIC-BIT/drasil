@@ -28,6 +28,10 @@ export interface IMessageDeletionJobRepository {
     evidenceMessageId: string,
     preservedAt?: Date
   ): Promise<MessageDeletionItem | null>;
+  recordCombinedOperation(
+    id: string,
+    operation: { requestId: string; actorId: string; source: string }
+  ): Promise<void>;
   updateBanStatus(id: string, status: MessageDeletionBanStatus): Promise<MessageDeletionJob | null>;
   updateCaseFinalizationStatus(
     id: string,
@@ -242,6 +246,17 @@ export class MessageDeletionJobRepository implements IMessageDeletionJobReposito
     } catch (error) {
       this.handleError(error, 'beginMessageDeletionExecution');
     }
+  }
+
+  public async recordCombinedOperation(
+    id: string,
+    operation: { requestId: string; actorId: string; source: string }
+  ): Promise<void> {
+    await this.prisma.$executeRaw`
+      update message_deletion_jobs
+      set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('combined_operation', ${JSON.stringify(operation)}::jsonb)
+      where id = ${id}::uuid and ban_status in ('not_requested', 'failed')
+    `;
   }
 
   public async updateBanStatus(

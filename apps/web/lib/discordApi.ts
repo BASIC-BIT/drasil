@@ -268,3 +268,18 @@ export async function fetchBotChannelMessages(
 
   return messages.reverse();
 }
+
+export async function fetchDiscordGuild(
+  guildId: string
+): Promise<{ readonly id: string; readonly owner_id: string }> {
+  return fetchBotJson(`/guilds/${guildId}`);
+}
+export async function fetchDiscordGuildMember(
+  guildId: string,
+  userId: string
+): Promise<DiscordGuildMember> {
+  return fetchBotJson(`/guilds/${guildId}/members/${userId}`);
+}
+export async function fetchDiscordGuildRoles(guildId: string): Promise<DiscordRole[]> {
+  return fetchBotJson(`/guilds/${guildId}/roles`);
+}

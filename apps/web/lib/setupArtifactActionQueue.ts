@@ -1,3 +1,4 @@
+import { encodeQueuedAction, queuedSetupCommandSchema } from '@drasil/application';
 import { randomUUID } from 'node:crypto';
 import { isWebE2eFixtureMode } from './e2eFixtures';
 import {
@@ -20,27 +21,30 @@ export async function queueReportInstructionsRepairRequest(input: {
     return 'queued';
   }
 
-  return queueModerationActionRequest({
-    actionType: 'upsert_report_instructions',
-    actorId: input.actorId,
-    actorSurface: 'web',
-    idempotencyKey: input.repost
-      ? `web:setup:repost_report_instructions:${input.guildId}:${input.channelId}:${input.expectedMessageId ?? 'none'}:${input.submissionId ?? randomUUID()}`
-      : `web:setup:upsert_report_instructions:${input.guildId}:${randomUUID()}`,
-    metadata: {
-      channel_id: input.channelId,
-      requested_surface: 'web',
-      setup_action: 'upsert_report_instructions',
-      ...(input.repost
-        ? {
-            repost: true,
-            expected_message_id: input.expectedMessageId ?? null,
-            expected_channel_id: input.expectedChannelId ?? null,
-          }
-        : {}),
-    },
-    serverId: input.guildId,
-  });
+  const requestId = input.submissionId ?? randomUUID();
+  const context = {
+    guildId: input.guildId,
+    requestId,
+    source: 'web',
+    actor: { kind: 'user' as const, userId: input.actorId },
+  };
+  return queueModerationActionRequest(
+    encodeQueuedAction(
+      context,
+      queuedSetupCommandSchema.parse({
+        kind: 'upsert_report_instructions',
+        channelId: input.channelId,
+        repost: input.repost === true,
+        ...(input.repost
+          ? {
+              expectedMessageId: input.expectedMessageId ?? null,
+              expectedChannelId: input.expectedChannelId ?? null,
+              submissionId: requestId,
+            }
+          : {}),
+      })
+    )
+  );
 }
 
 export async function queueCompleteSetupVerificationRequest(input: {
@@ -74,27 +78,28 @@ export async function queueCompleteSetupVerificationRequestWithReceipt(input: {
     return { id: input.submissionId ?? 'fixture-setup-request', status: 'queued' };
   }
 
-  return queueSerializedModerationActionRequestWithReceipt({
-    actionType: 'complete_setup_verification',
-    actorId: input.actorId,
-    actorSurface: 'web',
-    idempotencyKey: `web:setup:complete_setup_verification:${input.guildId}:${input.submissionId ?? randomUUID()}`,
-    metadata: {
-      admin_channel_id: input.adminChannelId,
-      case_role_id: input.caseRoleId,
-      case_role_name: input.caseRoleName ?? undefined,
-      ...(input.onboardingWizard === true
-        ? { detection_response_mode: input.detectionResponseMode ?? null }
-        : input.detectionResponseMode
-          ? { detection_response_mode: input.detectionResponseMode }
-          : {}),
-      report_instructions_channel_id: input.reportInstructionsChannelId ?? null,
-      requested_surface: 'web',
-      onboarding_wizard: input.onboardingWizard === true,
-      setup_action: 'complete_setup_verification',
-      submission_id: input.submissionId ?? undefined,
-      verification_channel_id: input.verificationChannelId ?? null,
-    },
-    serverId: input.guildId,
-  });
+  const requestId = input.submissionId ?? randomUUID();
+  const context = {
+    guildId: input.guildId,
+    requestId,
+    source: 'web',
+    actor: { kind: 'user' as const, userId: input.actorId },
+  };
+  return queueSerializedModerationActionRequestWithReceipt(
+    encodeQueuedAction(
+      context,
+      queuedSetupCommandSchema.parse({
+        kind: 'complete_setup_verification',
+        mode: 'provision',
+        adminChannelId: input.adminChannelId,
+        caseRoleId: input.caseRoleId,
+        caseRoleName: input.caseRoleName,
+        detectionResponseMode: input.detectionResponseMode,
+        reportInstructionsChannelId: input.reportInstructionsChannelId,
+        verificationChannelId: input.verificationChannelId,
+        submissionId: input.submissionId,
+        onboardingWizard: input.onboardingWizard === true,
+      })
+    )
+  );
 }

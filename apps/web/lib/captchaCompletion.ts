@@ -1,3 +1,15 @@
+import { createWebCaptchaApplication } from './application/createWebApplication';
+import type {
+  ActionContext,
+  CaptchaBrowserActions,
+  CaptchaPassReference,
+  CaptchaCompletionInput,
+} from '@drasil/application';
+import {
+  requireCaptchaBrowserOutcome,
+  createCaptchaPassContext,
+  encodeWebCaptchaEffect,
+} from './application/adapters/captcha';
 import { createHash, createHmac } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import { CAPTCHA_DEFAULT_MAX_SUBMISSIONS } from '@drasil/contracts';
@@ -5,7 +17,6 @@ import { requireEnv } from './env';
 import { insertModerationActionRequestWithReceipt } from './moderationActionRequestQueue';
 import { getPostgresPool } from './setupDataAdapter';
 import type { CaptchaIdentity } from './captchaSession';
-import type { SanitizedTurnstileResult } from './turnstile';
 
 const CAPTCHA_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const CAPTCHA_ATTEMPT_ID_PATTERN =
@@ -15,7 +26,6 @@ const CAPTCHA_ATTEMPT_RATE_LIMIT = 10;
 const CAPTCHA_SERVICE_ATTEMPT_RATE_LIMIT = 100;
 const CAPTCHA_CHALLENGE_ATTEMPT_LIMIT = 100;
 const CAPTCHA_ATTEMPT_ABANDONED_AFTER_MS = 60_000;
-const CAPTCHA_SYSTEM_ACTOR_ID = 'drasil:captcha';
 
 export type CaptchaPublicStatus =
   | 'pending'
@@ -202,24 +212,53 @@ export function getCaptchaFormConfiguration(
   }
 }
 
-export async function requeueCaptchaPassEffect(challenge: CaptchaPublicChallenge): Promise<void> {
-  if (challenge.status !== 'passed') {
-    return;
+async function requeuePassEffectTransaction(
+  context: ActionContext,
+  input: CaptchaPassReference
+): Promise<void> {
+  const client = await getPostgresPool().connect();
+  try {
+    await client.query('begin');
+    const result = await client.query<{
+      id: string;
+      verification_event_id: string;
+      server_id: string;
+      user_id: string;
+      status: string;
+      generation: number;
+      case_revision_at_issue: number;
+    }>(
+      'select id::text, verification_event_id::text, server_id, user_id, status::text, generation, case_revision_at_issue from captcha_challenges where id = $1::uuid for update',
+      [input.challengeId]
+    );
+    const current = result.rows[0];
+    if (
+      current?.status === 'passed' &&
+      current.id === input.challengeId &&
+      current.server_id === context.guildId &&
+      current.user_id === input.targetUserId &&
+      current.verification_event_id === input.caseId &&
+      current.generation === input.generation &&
+      current.case_revision_at_issue === input.expectedCaseRevision
+    )
+      await insertModerationActionRequestWithReceipt(
+        client,
+        encodeWebCaptchaEffect(context.guildId, {
+          kind: 'apply_captcha_pass',
+          caseId: input.caseId,
+          targetUserId: input.targetUserId,
+          challengeId: input.challengeId,
+          generation: input.generation,
+          expectedCaseRevision: input.expectedCaseRevision,
+        })
+      );
+    await client.query('commit');
+  } catch (error) {
+    await client.query('rollback').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
   }
-  await insertModerationActionRequestWithReceipt(getPostgresPool(), {
-    actionType: 'apply_captcha_pass',
-    actorId: CAPTCHA_SYSTEM_ACTOR_ID,
-    actorSurface: 'captcha',
-    idempotencyKey: `captcha:apply:${challenge.id}:${challenge.generation}`,
-    metadata: {
-      challenge_id: challenge.id,
-      generation: challenge.generation,
-      expected_case_revision: challenge.caseRevision,
-    },
-    serverId: challenge.serverId,
-    targetUserId: challenge.userId,
-    verificationEventId: challenge.verificationEventId,
-  });
 }
 
 export async function getCaptchaPublicChallenge(
@@ -374,27 +413,29 @@ async function failExhaustedGeneration(
   if (!failed.rows[0]) {
     return;
   }
-  await insertModerationActionRequestWithReceipt(client, {
-    actionType: 'notify_captcha_attention',
-    actorId: CAPTCHA_SYSTEM_ACTOR_ID,
-    actorSurface: 'captcha',
-    idempotencyKey: `captcha:attention:${challenge.id}:${challenge.generation}:submission-limit`,
-    metadata: {
-      challenge_id: challenge.id,
+  await insertModerationActionRequestWithReceipt(
+    client,
+    encodeWebCaptchaEffect(challenge.server_id, {
+      kind: 'notify_captcha_attention',
+      caseId: challenge.verification_event_id,
+      targetUserId: challenge.user_id,
+      challengeId: challenge.id,
       generation: challenge.generation,
       reason: 'submission_limit',
-    },
-    serverId: challenge.server_id,
-    targetUserId: challenge.user_id,
-    verificationEventId: challenge.verification_event_id,
-  });
+    })
+  );
 }
 
-export async function recordCaptchaIdentityMismatch(input: {
-  readonly token: string;
-  readonly discordUserId: string;
-  readonly idempotencyKey: string;
-}): Promise<void> {
+async function recordIdentityMismatchTransaction(
+  context: ActionContext,
+  input: {
+    readonly token: string;
+    readonly discordUserId: string;
+    readonly idempotencyKey: string;
+    readonly challengeId: string;
+    readonly generation: number;
+  }
+): Promise<void> {
   const tokenHash = hashToken(input.token);
   if (!tokenHash) {
     return;
@@ -403,7 +444,16 @@ export async function recordCaptchaIdentityMismatch(input: {
   try {
     await client.query('begin');
     const challenge = await selectChallenge(client, tokenHash, true);
-    if (challenge && toPublicChallenge(challenge).status === 'pending') {
+    if (
+      challenge &&
+      challenge.id === input.challengeId &&
+      challenge.generation === input.generation &&
+      challenge.server_id === context.guildId &&
+      context.actor.kind === 'user' &&
+      context.actor.userId === input.discordUserId &&
+      input.discordUserId !== challenge.user_id &&
+      toPublicChallenge(challenge).status === 'pending'
+    ) {
       await lockCaptchaAttemptUser(client, input.discordUserId);
       const limits = await readAttemptLimits(client, challenge, input.discordUserId);
       if (
@@ -432,11 +482,14 @@ export async function recordCaptchaIdentityMismatch(input: {
   }
 }
 
-export async function beginCaptchaAttempt(input: {
-  readonly token: string;
-  readonly identity: CaptchaIdentity;
-  readonly idempotencyKey: string;
-}): Promise<CaptchaAttemptStartResult> {
+async function beginAttemptTransaction(
+  context: ActionContext,
+  input: {
+    readonly token: string;
+    readonly identity: Pick<CaptchaIdentity, 'challengeId' | 'generation' | 'userId'>;
+    readonly idempotencyKey: string;
+  }
+): Promise<CaptchaAttemptStartResult> {
   const tokenHash = hashToken(input.token);
   if (!tokenHash || !CAPTCHA_ATTEMPT_ID_PATTERN.test(input.idempotencyKey)) {
     return { state: 'unavailable' };
@@ -455,6 +508,9 @@ export async function beginCaptchaAttempt(input: {
       return { state: 'stale', challenge: publicChallenge };
     }
     if (
+      context.actor.kind !== 'user' ||
+      context.actor.userId !== input.identity.userId ||
+      context.guildId !== challenge.server_id ||
       input.identity.challengeId !== challenge.id ||
       input.identity.generation !== challenge.generation ||
       input.identity.userId !== challenge.user_id
@@ -525,10 +581,10 @@ export async function beginCaptchaAttempt(input: {
   }
 }
 
-export async function completeCaptchaAttempt(input: {
-  readonly attemptId: string;
-  readonly validation: SanitizedTurnstileResult;
-}): Promise<CaptchaAttemptCompletionState> {
+async function completeAttemptTransaction(
+  context: ActionContext,
+  input: CaptchaCompletionInput
+): Promise<CaptchaAttemptCompletionState> {
   const client = await getPostgresPool().connect();
   try {
     await client.query('begin');
@@ -559,6 +615,16 @@ export async function completeCaptchaAttempt(input: {
     );
     const row = result.rows[0];
     if (!row) {
+      await client.query('commit');
+      return 'stale';
+    }
+    if (
+      context.actor.kind !== 'user' ||
+      context.actor.userId !== row.user_id ||
+      context.guildId !== row.server_id ||
+      input.challengeId !== row.id ||
+      input.generation !== row.attempt_generation
+    ) {
       await client.query('commit');
       return 'stale';
     }
@@ -621,20 +687,17 @@ export async function completeCaptchaAttempt(input: {
         [row.id, nextSubmissionCount, failed, row.generation]
       );
       if (failed) {
-        await insertModerationActionRequestWithReceipt(client, {
-          actionType: 'notify_captcha_attention',
-          actorId: CAPTCHA_SYSTEM_ACTOR_ID,
-          actorSurface: 'captcha',
-          idempotencyKey: `captcha:attention:${row.id}:${row.generation}:submission-limit`,
-          metadata: {
-            challenge_id: row.id,
+        await insertModerationActionRequestWithReceipt(
+          client,
+          encodeWebCaptchaEffect(row.server_id, {
+            kind: 'notify_captcha_attention',
+            caseId: row.verification_event_id,
+            targetUserId: row.user_id,
+            challengeId: row.id,
             generation: row.generation,
             reason: 'submission_limit',
-          },
-          serverId: row.server_id,
-          targetUserId: row.user_id,
-          verificationEventId: row.verification_event_id,
-        });
+          })
+        );
       }
       await client.query('commit');
       return failed ? 'failed' : 'invalid';
@@ -657,20 +720,17 @@ export async function completeCaptchaAttempt(input: {
       await client.query('commit');
       return 'stale';
     }
-    await insertModerationActionRequestWithReceipt(client, {
-      actionType: 'apply_captcha_pass',
-      actorId: CAPTCHA_SYSTEM_ACTOR_ID,
-      actorSurface: 'captcha',
-      idempotencyKey: `captcha:apply:${row.id}:${row.generation}`,
-      metadata: {
-        challenge_id: row.id,
+    await insertModerationActionRequestWithReceipt(
+      client,
+      encodeWebCaptchaEffect(row.server_id, {
+        kind: 'apply_captcha_pass',
+        caseId: row.verification_event_id,
+        targetUserId: row.user_id,
+        challengeId: row.id,
         generation: row.generation,
-        expected_case_revision: row.case_revision_at_issue,
-      },
-      serverId: row.server_id,
-      targetUserId: row.user_id,
-      verificationEventId: row.verification_event_id,
-    });
+        expectedCaseRevision: row.case_revision_at_issue,
+      })
+    );
     await client.query('commit');
     return 'passed';
   } catch (error) {
@@ -679,4 +739,80 @@ export async function completeCaptchaAttempt(input: {
   } finally {
     client.release();
   }
+}
+
+// Tokens and OAuth cookies stay in the runtime closure, outside shared commands.
+function browserActions(token: string): CaptchaBrowserActions {
+  return createWebCaptchaApplication({
+    beginAttempt: (context, input) =>
+      beginAttemptTransaction(context, {
+        token,
+        identity: {
+          challengeId: input.challengeId,
+          generation: input.generation,
+          userId: authenticatedCaptchaUser(context),
+        },
+        idempotencyKey: input.idempotencyKey,
+      }),
+    recordIdentityMismatch: (context, input) =>
+      recordIdentityMismatchTransaction(context, {
+        token,
+        ...input,
+        discordUserId: authenticatedCaptchaUser(context),
+      }),
+    completeAttempt: completeAttemptTransaction,
+    requeuePassEffect: requeuePassEffectTransaction,
+  }).captcha;
+}
+function authenticatedCaptchaUser(context: ActionContext): string {
+  if (context.actor.kind !== 'user') throw new Error('Security-check identity is unavailable.');
+  return context.actor.userId;
+}
+export async function beginCaptchaAttempt(
+  context: ActionContext,
+  input: Omit<Parameters<typeof beginAttemptTransaction>[1], 'identity'> & {
+    readonly identity: CaptchaIdentity;
+  }
+): Promise<CaptchaAttemptStartResult> {
+  if (authenticatedCaptchaUser(context) !== input.identity.userId)
+    return { state: 'identity_mismatch' };
+  return requireCaptchaBrowserOutcome(
+    await browserActions(input.token).beginAttempt(context, {
+      challengeId: input.identity.challengeId,
+      generation: input.identity.generation,
+      idempotencyKey: input.idempotencyKey,
+    })
+  );
+}
+export async function recordCaptchaIdentityMismatch(
+  context: ActionContext,
+  input: Parameters<typeof recordIdentityMismatchTransaction>[1]
+): Promise<void> {
+  if (authenticatedCaptchaUser(context) !== input.discordUserId)
+    throw new Error('Security-check identity is unavailable.');
+  return requireCaptchaBrowserOutcome(
+    await browserActions(input.token).recordIdentityMismatch(context, {
+      challengeId: input.challengeId,
+      generation: input.generation,
+      idempotencyKey: input.idempotencyKey,
+    })
+  );
+}
+export async function completeCaptchaAttempt(
+  context: ActionContext,
+  input: CaptchaCompletionInput
+): Promise<CaptchaAttemptCompletionState> {
+  return requireCaptchaBrowserOutcome(await browserActions('').completeAttempt(context, input));
+}
+export async function requeueCaptchaPassEffect(challenge: CaptchaPublicChallenge): Promise<void> {
+  if (challenge.status !== 'passed') return;
+  return requireCaptchaBrowserOutcome(
+    await browserActions('').requeuePassEffect(createCaptchaPassContext(challenge), {
+      challengeId: challenge.id,
+      generation: challenge.generation,
+      caseId: challenge.verificationEventId,
+      targetUserId: challenge.userId,
+      expectedCaseRevision: challenge.caseRevision,
+    })
+  );
 }

@@ -30,7 +30,7 @@ import {
 import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
 import { getModerationQueueSettings } from '../utils/moderationQueueSettings';
 import { NotificationPresentationBuilder } from './NotificationPresentationBuilder';
-import { QueueAttentionService } from './QueueAttentionService';
+import type { QueueAttentionItemRecord } from '@drasil/application';
 
 const QUEUE_ACK_CUSTOM_ID_PREFIX = 'queue:ack';
 const DISCORD_EMBED_FIELD_MAX_LENGTH = 1024;
@@ -86,7 +86,7 @@ export interface IModerationQueueService {
   ): Promise<ModerationQueueAttentionResult>;
   recordReportThreadAttention(reportIntake: ReportIntake, message: Message): Promise<void>;
   deleteReportThreadAttention(reportIntakeId: string): Promise<void>;
-  acknowledgeAttentionItem(itemId: string, serverId: string, actorId: string): Promise<boolean>;
+  deleteQueueMessage(item: QueueAttentionItemRecord): Promise<boolean>;
 }
 
 export interface ModerationQueueAttentionResult {
@@ -469,26 +469,6 @@ export class ModerationQueueService implements IModerationQueueService {
   public async deleteReportThreadAttention(reportIntakeId: string): Promise<void> {
     const items = await this.moderationQueueRepository.listByReportIntake(reportIntakeId);
     await this.deleteQueueItems(items);
-  }
-
-  public async acknowledgeAttentionItem(
-    itemId: string,
-    serverId: string,
-    actorId: string
-  ): Promise<boolean> {
-    const service = new QueueAttentionService(this.moderationQueueRepository, {
-      deleteQueueMessage: async (item): Promise<void> => {
-        if (!(await this.deleteQueueMessage(item))) {
-          throw new Error(`Failed to delete live moderation queue message for item ${item.id}.`);
-        }
-      },
-    });
-    const result = await service.acknowledgeAttentionItem({
-      actor: { id: actorId, surface: 'discord_interaction' },
-      itemId,
-      serverId,
-    });
-    return result.status === 'acknowledged';
   }
 
   private async deleteStaleMirrorItems(
@@ -936,7 +916,7 @@ export class ModerationQueueService implements IModerationQueueService {
     }
   }
 
-  private async deleteQueueMessage(
+  public async deleteQueueMessage(
     item: Pick<ModerationQueueItem, 'id' | 'queue_channel_id' | 'queue_message_id'>
   ): Promise<boolean> {
     if (!item.queue_channel_id || !item.queue_message_id) {

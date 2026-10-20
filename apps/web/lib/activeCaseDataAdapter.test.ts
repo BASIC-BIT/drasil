@@ -42,28 +42,6 @@ const baseRow = {
 };
 
 describe('activeCaseDataAdapter', () => {
-  it('binds account-quarantine execution idempotency to its completed preview', () => {
-    const base = {
-      action: 'quarantine_compromised_account' as const,
-      adminId: 'moderator-1',
-      attemptId: 'attempt-1',
-      caseId: 'ver-1',
-      guildId: 'guild-1',
-      quarantinePhase: 'preview' as const,
-    };
-
-    expect(buildCaseActionIdempotencyKey(base)).toBe(
-      'web:case-action:quarantine_compromised_account:guild-1:ver-1:preview:attempt-1'
-    );
-    expect(
-      buildCaseActionIdempotencyKey({
-        ...base,
-        quarantinePhase: 'execute',
-        previewRequestId: 'preview-1',
-      })
-    ).toBe('web:case-action:quarantine_compromised_account:guild-1:ver-1:execute:preview-1');
-  });
-
   it('uses a fresh idempotency key for each repeatable CAPTCHA action', () => {
     const base = {
       adminId: 'moderator-1',
@@ -669,5 +647,42 @@ describe('activeCaseDataAdapter CAPTCHA recovery actions', () => {
     expect(unused.allowedActions).not.toContain('challenge_user');
     expect(failed.allowedActions).not.toContain('retry_captcha');
     expect(failed.allowedActions).toContain('bypass_captcha');
+  });
+});
+
+describe('shared case moderation policy availability', () => {
+  it.each(['review_required', 'parked'] as const)(
+    'hides disabled moderation for %s cases',
+    (attention_state) => {
+      const summary = parseCaseSummaryRow({
+        ...baseRow,
+        attention_state,
+        server_settings: {
+          moderator_ban_action_enabled: false,
+          moderator_kick_action_enabled: false,
+        },
+      });
+      expect(summary.allowedActions).not.toContain('ban_user');
+      expect(summary.allowedActions).not.toContain('kick_user');
+      const departed = parseCaseSummaryRow({
+        ...baseRow,
+        attention_state,
+        member_user_id: null,
+        latest_outcome_type: 'member_left',
+        server_settings: { moderator_ban_action_enabled: false },
+      });
+      expect(departed.allowedActions).not.toContain('ban_by_id');
+    }
+  );
+  it('keeps reason-required actions available so the user can supply a reason', () => {
+    const summary = parseCaseSummaryRow({
+      ...baseRow,
+      server_settings: {
+        moderator_ban_action_requires_reason: true,
+        moderator_kick_action_requires_reason: true,
+      },
+    });
+    expect(summary.allowedActions).toContain('ban_user');
+    expect(summary.allowedActions).toContain('kick_user');
   });
 });

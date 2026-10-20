@@ -1,3 +1,4 @@
+import { createBotApplication, type BotApplication } from '../application/createBotApplication';
 import { ModerationEvidenceService } from '../services/ModerationEvidenceService';
 import 'reflect-metadata';
 import { Container } from 'inversify';
@@ -30,7 +31,11 @@ import {
 import { DetectionOrchestrator, IDetectionOrchestrator } from '../services/DetectionOrchestrator';
 import { ConfigService, IConfigService } from '../config/ConfigService';
 import { SecurityActionService, ISecurityActionService } from '../services/SecurityActionService';
-import { UserModerationService, IUserModerationService } from '../services/UserModerationService';
+import {
+  UserModerationService,
+  IUserModerationService,
+  type ICombinedBanLifecycleService,
+} from '../services/UserModerationService';
 import { Bot, IBot } from '../Bot';
 import {
   IVerificationEventRepository,
@@ -276,6 +281,58 @@ function configureRepositories(container: Container): void {
  * Configure service bindings
  */
 function configureServices(container: Container): void {
+  container
+    .bind<BotApplication>(TYPES.BotApplication)
+    .toDynamicValue((context) =>
+      createBotApplication({
+        productAnalyticsService: context.get<IProductAnalyticsService>(
+          TYPES.ProductAnalyticsService
+        ),
+        setupDiagnosticsService: context.get<ISetupDiagnosticsService>(
+          TYPES.SetupDiagnosticsService
+        ),
+        reportIntakeService: context.get<IReportIntakeService>(TYPES.ReportIntakeService),
+        caseThreadClosureSweepService: context.get<ICaseThreadClosureSweepService>(
+          TYPES.CaseThreadClosureSweepService
+        ),
+        caseRoleLockdownService: context.get<ICaseRoleLockdownService>(
+          TYPES.CaseRoleLockdownService
+        ),
+        integrityAuditService: context.get<IIntegrityAuditService>(TYPES.IntegrityAuditService),
+        messageDeletionJobs: context.get<IMessageDeletionJobRepository>(
+          TYPES.MessageDeletionJobRepository
+        ),
+        messageCleanupService: context.get<MessageCleanupService>(TYPES.MessageCleanupService),
+        captchaChallengeService: context.get<ICaptchaChallengeService>(
+          TYPES.CaptchaChallengeService
+        ),
+        threadManager: context.get<IThreadManager>(TYPES.ThreadManager),
+        notificationManager: context.get<INotificationManager>(TYPES.NotificationManager),
+        accountQuarantineService: context.get<IAccountQuarantineService>(
+          TYPES.AccountQuarantineService
+        ),
+        actionRequests: context.get<IModerationActionRequestRepository>(
+          TYPES.ModerationActionRequestRepository
+        ),
+        client: context.get<Client>(TYPES.DiscordClient),
+        queueRepository: context.get<IModerationQueueRepository>(TYPES.ModerationQueueRepository),
+        queueService: context.get<IModerationQueueService>(TYPES.ModerationQueueService),
+        configService: context.get<IConfigService>(TYPES.ConfigService),
+        roleGateService: context.get<IRoleGateService>(TYPES.RoleGateService),
+        verificationEventRepository: context.get<IVerificationEventRepository>(
+          TYPES.VerificationEventRepository
+        ),
+        detectionEventsRepository: context.get<IDetectionEventsRepository>(
+          TYPES.DetectionEventsRepository
+        ),
+        securityActionService: context.get<ISecurityActionService>(TYPES.SecurityActionService),
+        userModerationService: context.get<IUserModerationService & ICombinedBanLifecycleService>(
+          TYPES.UserModerationService
+        ),
+      })
+    )
+    .inSingletonScope();
+
   // Bind services to their implementations
   container.bind<IHeuristicService>(TYPES.HeuristicService).to(HeuristicService).inSingletonScope();
 

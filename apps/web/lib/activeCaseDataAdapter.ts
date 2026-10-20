@@ -1,3 +1,10 @@
+import { buildQueuedCaptchaCommand } from './application/adapters/captcha';
+import {
+  evaluateCasePolicy,
+  readCasePolicy,
+  encodeQueuedAction,
+  type QueuedCommand,
+} from '@drasil/application';
 import {
   caseDetailSchema,
   caseSummarySchema,
@@ -235,13 +242,50 @@ const requestTypeByCaseAction: Record<WebCaseAction, ModerationActionRequestActi
   bypass_captcha: 'bypass_captcha_challenge',
 };
 
-function resolveCaseActionRequestType(
-  input: QueueCaseActionInput
-): ModerationActionRequestActionType {
-  if (input.action === 'quarantine_compromised_account' && input.quarantinePhase === 'preview') {
-    return 'preview_account_quarantine';
+type QueuedCaseAction = QueuedCommand | null;
+
+function buildQueuedCaseCommand(input: QueueCaseActionInput, userId: string): QueuedCaseAction {
+  const captcha = buildQueuedCaptchaCommand(input, userId);
+  if (captcha) return captcha;
+  const binding = { caseId: input.caseId, targetUserId: userId };
+  const destructive = { ...binding, reason: input.reason ?? null, detectionEventId: null };
+  switch (input.action) {
+    case 'quarantine_compromised_account':
+      if (input.quarantinePhase === 'preview')
+        return { kind: 'preview_account_quarantine', ...binding };
+      return {
+        kind: 'quarantine_compromised_account',
+        ...binding,
+        reason: input.reason ?? '',
+        previewReference: { kind: 'persisted_preview', requestId: input.previewRequestId ?? '' },
+      };
+    case 'verify_user':
+      return { kind: 'verify_case_user', ...binding };
+    case 'close_no_action':
+      return { kind: 'close_case_no_action', ...binding };
+    case 'kick_user':
+      return { kind: 'kick_case_user', ...destructive };
+    case 'ban_user':
+      return { kind: 'ban_case_user', ...destructive };
+    case 'ban_by_id':
+      return { kind: 'ban_case_user_by_id', ...destructive };
+    case 'create_thread':
+    case 'repair_thread':
+      return {
+        kind: 'repair_active_case',
+        intent: 'moderator_repair',
+        ...binding,
+        mode: input.action,
+      };
+    case 'refresh_notification':
+      return { kind: 'refresh_case_notification', ...binding };
+    case 'reopen_case':
+      return { kind: 'reopen_case', ...binding };
+    case 'sync_existing_ban':
+      return { kind: 'sync_existing_ban', ...binding };
+    default:
+      return null;
   }
-  return requestTypeByCaseAction[input.action];
 }
 
 export function buildCaseActionIdempotencyKey(input: QueueCaseActionInput): string {
@@ -252,13 +296,7 @@ export function buildCaseActionIdempotencyKey(input: QueueCaseActionInput): stri
     }
     return `${base}:${input.attemptId}`;
   }
-  if (input.action !== 'quarantine_compromised_account') {
-    return base;
-  }
-  if (input.quarantinePhase === 'preview') {
-    return `${base}:preview:${input.attemptId ?? 'missing-attempt'}`;
-  }
-  return `${base}:execute:${input.previewRequestId ?? 'missing-preview'}`;
+  return base;
 }
 
 function sortCaseSummariesForHistory(cases: readonly CaseSummary[]): CaseSummary[] {
@@ -530,6 +568,7 @@ export function parseCaseSummaryRow(row: CaseSummaryRow, now = new Date()): Case
   const updatedAt = new Date(toIsoString(row.updated_at));
   const staleHours = Math.max(0, Math.floor((now.getTime() - updatedAt.getTime()) / 3_600_000));
   const presenceState = resolvePresenceState(row);
+  const policy = readCasePolicy(metadataToRecord(row.server_settings));
   const quarantine = readNestedRecord(metadataToRecord(row.metadata), 'account_quarantine');
   const quarantineEffects =
     row.case_kind === 'compromised_account'
@@ -563,7 +602,17 @@ export function parseCaseSummaryRow(row: CaseSummaryRow, now = new Date()): Case
     lastActionType: row.last_action_type,
     lastActionAt: toNullableIsoString(row.last_action_at),
     surfaces: buildSurfaces(row),
-    allowedActions: resolveAllowedActions(row, presenceState),
+    allowedActions: resolveAllowedActions(row, presenceState).filter((action) => {
+      if (action === 'ban_user' || action === 'ban_by_id')
+        return (
+          evaluateCasePolicy({ kind: 'ban_case_user', reason: null }, policy) !== 'policy_disabled'
+        );
+      if (action === 'kick_user')
+        return (
+          evaluateCasePolicy({ kind: 'kick_case_user', reason: null }, policy) !== 'policy_disabled'
+        );
+      return true;
+    }),
     captchaChallenge: row.captcha_status
       ? {
           id: row.captcha_id,
@@ -995,28 +1044,39 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
       return { action: input.action, caseId: input.caseId, requestId: null, status: 'not_allowed' };
     }
 
-    const receipt = await queueModerationActionRequestWithReceipt({
-      actionType: resolveCaseActionRequestType(input),
-      actorId: input.adminId,
-      actorSurface: 'web',
-      idempotencyKey: buildCaseActionIdempotencyKey(input),
-      metadata: {
-        case_action: input.action,
-        ...(input.quarantinePhase ? { quarantine_phase: input.quarantinePhase } : {}),
-        ...(input.previewRequestId ? { preview_request_id: input.previewRequestId } : {}),
-        ...(input.reason ? { reason: input.reason } : {}),
-        ...(input.action === 'retry_captcha' || input.action === 'bypass_captcha'
-          ? {
-              expected_challenge_id: input.expectedCaptchaChallengeId,
-              expected_generation: input.expectedCaptchaGeneration,
-            }
-          : {}),
-        requested_surface: 'web',
-      },
-      serverId: input.guildId,
-      targetUserId: detail.userId,
-      verificationEventId: detail.id,
-    });
+    const command = buildQueuedCaseCommand(input, detail.userId);
+    const receipt = command
+      ? await queueModerationActionRequestWithReceipt(
+          encodeQueuedAction(
+            {
+              guildId: input.guildId,
+              requestId: input.attemptId ?? input.caseId,
+              source: 'web',
+              actor: { kind: 'user', userId: input.adminId },
+            },
+            command
+          )
+        )
+      : await queueModerationActionRequestWithReceipt({
+          actionType: requestTypeByCaseAction[input.action],
+          actorId: input.adminId,
+          actorSurface: 'web',
+          idempotencyKey: buildCaseActionIdempotencyKey(input),
+          metadata: {
+            case_action: input.action,
+            ...(input.reason ? { reason: input.reason } : {}),
+            ...(input.action === 'retry_captcha' || input.action === 'bypass_captcha'
+              ? {
+                  expected_challenge_id: input.expectedCaptchaChallengeId,
+                  expected_generation: input.expectedCaptchaGeneration,
+                }
+              : {}),
+            requested_surface: 'web',
+          },
+          serverId: input.guildId,
+          targetUserId: detail.userId,
+          verificationEventId: detail.id,
+        });
 
     return {
       action: input.action,

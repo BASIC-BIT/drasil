@@ -7,6 +7,7 @@
 export const TYPES = {
   // Core classes
   Bot: Symbol.for('Bot'),
+  BotApplication: Symbol.for('BotApplication'),
 
   // Services
   HeuristicService: Symbol.for('HeuristicService'),

@@ -1,3 +1,8 @@
+import { requireSetupOutcome } from '../application/adapters/setup';
+import { operationConfirmationCommand } from '@drasil/application';
+import { createDiscordActionContext } from '../application/context';
+import { requireOperationsOutcome } from '../application/adapters/operations';
+import type { BotApplication } from '../application/createBotApplication';
 import { ChannelType, ChatInputCommandInteraction, Guild, MessageFlags } from 'discord.js';
 import { IConfigService } from '../config/ConfigService';
 import { ServerSettings } from '../repositories/types';
@@ -5,18 +10,14 @@ import {
   ICaseRoleLockdownService,
   CaseRoleLockdownReport,
 } from '../services/CaseRoleLockdownService';
-import {
-  getCaseRoleLockdownSettings,
-  CASE_ROLE_LOCKDOWN_ALLOWED_CATEGORY_IDS_SETTING_KEY,
-  CASE_ROLE_LOCKDOWN_ALLOWED_CHANNEL_IDS_SETTING_KEY,
-  CASE_ROLE_LOCKDOWN_ENABLED_SETTING_KEY,
-} from '../utils/caseRoleLockdownSettings';
+import { getCaseRoleLockdownSettings } from '../utils/caseRoleLockdownSettings';
 import { truncatePreview } from '../utils/textPreview';
 
 export class LockdownConfigCommandHandler {
   public constructor(
     private readonly configService: IConfigService,
-    private readonly caseRoleLockdownService?: ICaseRoleLockdownService
+    private readonly caseRoleLockdownService?: ICaseRoleLockdownService,
+    private readonly application?: BotApplication
   ) {}
 
   public async handleLockdownConfigCommand(
@@ -41,9 +42,17 @@ export class LockdownConfigCommandHandler {
 
     if (subcommand === 'disable') {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-      await this.configService.updateServerSettings(guild.id, {
-        [CASE_ROLE_LOCKDOWN_ENABLED_SETTING_KEY]: false,
-      });
+      if (!this.application) throw new Error('Setup application is unavailable.');
+      requireSetupOutcome(
+        await this.application.setup.execute(
+          createDiscordActionContext({
+            guildId: guild.id,
+            userId: interaction.user.id,
+            requestId: interaction.id,
+          }),
+          { kind: 'disable_lockdown' }
+        )
+      );
       await interaction.editReply({
         content:
           'Case-role lockdown marked disabled. Existing Discord channel overwrites were not removed.',
@@ -67,12 +76,34 @@ export class LockdownConfigCommandHandler {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     try {
-      const report =
+      if (!this.application) throw new Error('Operations application is unavailable.');
+      const context = createDiscordActionContext({
+        guildId: guild.id,
+        userId: interaction.user.id,
+        requestId: interaction.id,
+      });
+      const command =
         subcommand === 'apply'
-          ? await this.caseRoleLockdownService.applyGuild(guild, interaction.user.id, {
+          ? {
+              kind: 'apply_case_role_lockdown' as const,
               unsyncAllowedChannels: interaction.options.getBoolean('unsync-allowed') ?? false,
-            })
-          : await this.caseRoleLockdownService.auditGuild(guild);
+            }
+          : { kind: 'audit_case_role_lockdown' as const };
+      // The authenticated slash apply subcommand is the shipped explicit execution step.
+      if (subcommand === 'apply')
+        this.application.caseConfirmations.recordVerified(
+          context,
+          operationConfirmationCommand(context, command)
+        );
+      const outcome = requireOperationsOutcome(
+        await this.application.operations.execute(context, command)
+      );
+      if (
+        outcome.kind !== 'audit_case_role_lockdown' &&
+        outcome.kind !== 'apply_case_role_lockdown'
+      )
+        throw new Error('Operation outcome mismatch.');
+      const report = outcome.report;
 
       await interaction.editReply({
         content: this.formatCaseRoleLockdownReport(report, subcommand === 'apply'),
@@ -94,23 +125,22 @@ export class LockdownConfigCommandHandler {
     const channel = interaction.options.getChannel('channel', true);
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-    const serverConfig = await this.configService.getServerConfig(guildId);
-    const settings = getCaseRoleLockdownSettings(serverConfig.settings);
     const isCategory = channel.type === ChannelType.GuildCategory;
-    const channelIds = new Set(settings.allowedChannelIds);
-    const categoryIds = new Set(settings.allowedCategoryIds);
-    const targetIds = isCategory ? categoryIds : channelIds;
-
-    if (added) {
-      targetIds.add(channel.id);
-    } else {
-      targetIds.delete(channel.id);
-    }
-
-    await this.configService.updateServerSettings(guildId, {
-      [CASE_ROLE_LOCKDOWN_ALLOWED_CHANNEL_IDS_SETTING_KEY]: [...channelIds],
-      [CASE_ROLE_LOCKDOWN_ALLOWED_CATEGORY_IDS_SETTING_KEY]: [...categoryIds],
-    });
+    if (!this.application) throw new Error('Setup application is unavailable.');
+    requireSetupOutcome(
+      await this.application.setup.execute(
+        createDiscordActionContext({
+          guildId,
+          userId: interaction.user.id,
+          requestId: interaction.id,
+        }),
+        {
+          kind: added ? 'lockdown_allow_add' : 'lockdown_allow_remove',
+          targetId: channel.id,
+          targetKind: isCategory ? 'category' : 'channel',
+        }
+      )
+    );
 
     await interaction.editReply({
       content: `${isCategory ? 'Category' : 'Channel'} <#${channel.id}> ${added ? 'added to' : 'removed from'} the case-role lockdown allow-list. Run \`/config lockdown audit\` to check for conflicts.`,

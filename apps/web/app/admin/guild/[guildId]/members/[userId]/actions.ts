@@ -1,6 +1,7 @@
 'use server';
 
 import { randomUUID } from 'node:crypto';
+import { evaluateCasePolicy, readCasePolicy } from '@drasil/application';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import type { MemberProfile } from '@drasil/contracts';
@@ -157,7 +158,12 @@ export async function queueMemberOpenCaseAction(
 
   const server = await createSetupDataAdapter().getServer(guildId);
   const reason = readFormString(formData, 'reason');
-  if (server?.settings.admin_case_open_requires_reason === true && !reason) {
+  if (
+    evaluateCasePolicy(
+      { kind: 'open_admin_case', reason },
+      readCasePolicy(server?.settings ?? {})
+    ) === 'reason_required'
+  ) {
     throw new Error('Open case reason is required for this server.');
   }
   const sourceMessageInput = resolveSourceMessageInput(profile, formData);

@@ -1,3 +1,10 @@
+import type { RoleIntakeResult, RoleIntakeProgress, ObservedBanResult } from '@drasil/application';
+export type {
+  RoleIntakeFailure,
+  RoleIntakeResult,
+  RoleIntakeProgress,
+  ObservedBanResult,
+} from '@drasil/application';
 import { randomUUID } from 'crypto';
 import {
   getReportBanAttemptToken,
@@ -127,11 +134,6 @@ interface SuspiciousMemberOptions {
 /**
  * Interface for the SecurityActionService
  */
-export type ObservedBanResult =
-  | { status: 'banned' }
-  | { status: 'already_handled' }
-  | { status: 'banned_updates_pending'; operationId: string }
-  | { status: 'ban_outcome_unknown'; operationId: string };
 export interface ReportBanReviewReference {
   observedBanId?: string;
   operationId: string;
@@ -383,33 +385,6 @@ export interface RoleIntakeOptions {
   delayMs?: number;
   memberTimeoutMs?: number;
   onProgress?: (progress: RoleIntakeProgress) => Promise<void> | void;
-}
-
-export interface RoleIntakeFailure {
-  userId: string;
-  message: string;
-}
-
-export interface RoleIntakeResult {
-  batchId: string;
-  roleId: string;
-  roleName: string;
-  action: AdminCaseAction;
-  execute: boolean;
-  totalMembers: number;
-  eligibleMembers: number;
-  processed: number;
-  opened: number;
-  skippedBots: number;
-  skippedActiveCases: number;
-  skippedOverLimit: number;
-  failed: number;
-  failures: RoleIntakeFailure[];
-}
-
-export interface RoleIntakeProgress {
-  result: RoleIntakeResult;
-  completedMembers: number;
 }
 
 export interface HoneypotRoleAssignmentContext {

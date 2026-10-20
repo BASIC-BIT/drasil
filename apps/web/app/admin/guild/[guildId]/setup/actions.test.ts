@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   session: vi.fn(),
@@ -23,7 +23,11 @@ vi.mock('@/lib/setupArtifactActionQueue', () => ({
   queueReportInstructionsRepairRequest: mocks.queue,
 }));
 
-import { queueReportInstructionsRepair, queueReportInstructionsRepost } from './actions';
+import {
+  saveGuildSetup,
+  queueReportInstructionsRepair,
+  queueReportInstructionsRepost,
+} from './actions';
 
 describe('report panel setup actions', () => {
   beforeEach(() => {
@@ -59,4 +63,30 @@ describe('report panel setup actions', () => {
     await expect(queueReportInstructionsRepost('guild', data)).rejects.toThrow('Administrator');
     expect(mocks.queue).not.toHaveBeenCalled();
   });
+});
+
+it('saves the actual fixture setup form without live authority requests', async () => {
+  vi.stubEnv('NODE_ENV', 'test');
+  vi.stubEnv('DRASIL_WEB_E2E_FIXTURE_MODE', 'true');
+  mocks.session.mockResolvedValue({ userId: 'fixture-admin' });
+  mocks.token.mockResolvedValue({ accessToken: 'fixture-token' });
+  mocks.assertCanManageGuild.mockResolvedValue({ owner: true, permissions: '32' });
+  const fetch = vi.fn(() => {
+    throw new Error('Unexpected live Discord request');
+  });
+  vi.stubGlobal('fetch', fetch);
+  const form = new FormData();
+  form.set('heuristicMessageThreshold', '17');
+  await saveGuildSetup('guild-1', form);
+  const { fixtureServerRecord } = await import('@/lib/e2eFixtures');
+  expect(fixtureServerRecord().heuristic_message_threshold).toBe(17);
+  expect(fixtureServerRecord().updated_by).toBe('fixture-admin');
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+afterEach(async () => {
+  const { resetFixtureServerRecord } = await import('@/lib/e2eFixtures');
+  resetFixtureServerRecord();
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
 });

@@ -3,12 +3,9 @@
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { fetchDiscordGuilds } from '@/lib/discordApi';
-import {
-  queueGuidedReportIntakeRequest,
-  queueReportIntakeCloseRequest,
-  queueUserReportSubmissionRequest,
-} from '@/lib/userReportActionQueue';
-import { createReportIntakePortalDataAdapter } from '@/lib/reportIntakePortalDataAdapter';
+import { submitReportRequest } from '@/lib/userReportActionQueue';
+import { loadReporterOpenIntake } from '@/lib/reportIntakePortalDataAdapter';
+import { createWebActionContext, createWebReportConfirmationPort } from '@/lib/application/context';
 import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
 import { createSetupDataAdapter } from '@/lib/setupDataAdapter';
 
@@ -52,29 +49,29 @@ export async function submitUserReportFromWeb(guildId: string, formData: FormDat
     createSetupDataAdapter().getServer(guildId),
   ]);
   const guild = guilds.find((item) => item.id === guildId);
-  if (!guild || !server?.is_active) {
-    throw new Error('This report destination is not available to the signed-in Discord account.');
-  }
 
   const targetUserId = readTargetUserId(formData);
-  if (targetUserId === session.userId) {
-    throw new Error('You cannot report yourself.');
-  }
-
   const reason = readReason(formData);
-  if (server.settings.user_report_reason_required === true && !reason) {
-    throw new Error('This server requires a report reason.');
-  }
-  if (formData.get('confirmReport') !== 'on') {
-    throw new Error('Confirm the report before submitting it.');
-  }
-
-  const status = await queueUserReportSubmissionRequest({
-    actorId: session.userId,
-    guildId,
-    reason,
-    targetLabel: targetUserId,
+  const context = {
+    ...createWebActionContext({ guildId, userId: session.userId }),
+    source: 'web_report',
+  };
+  const command = {
+    kind: 'submit_user_report' as const,
     targetUserId,
+    targetLabel: targetUserId,
+    reason,
+  };
+  const status = await submitReportRequest({
+    context,
+    command,
+    access: {
+      member: !!guild,
+      active: server?.is_active === true,
+      reasonRequired: server?.settings.user_report_reason_required === true,
+    },
+    confirmations: createWebReportConfirmationPort(context, command, formData),
+    openIntake: () => loadReporterOpenIntake(context),
   });
 
   if (status !== 'queued' && status !== 'processing' && status !== 'completed') {
@@ -100,19 +97,25 @@ export async function startGuidedReportIntakeFromWeb(
     createSetupDataAdapter().getServer(guildId),
   ]);
   const guild = guilds.find((item) => item.id === guildId);
-  if (!guild || !server?.is_active) {
-    throw new Error('This report destination is not available to the signed-in Discord account.');
-  }
 
+  if (!guild || !server?.is_active)
+    throw new Error('This report destination is not available to the signed-in Discord account.');
   const channelId = server.settings.report_instructions_channel_id;
   if (!channelId) {
     throw new Error('This server does not have a report instructions channel configured.');
   }
 
-  const status = await queueGuidedReportIntakeRequest({
-    actorId: session.userId,
-    channelId,
-    guildId,
+  const context = {
+    ...createWebActionContext({ guildId, userId: session.userId }),
+    source: 'web_report',
+  };
+  const command = { kind: 'start_report_intake' as const, channelId };
+  const status = await submitReportRequest({
+    context,
+    command,
+    access: { member: !!guild, active: server?.is_active === true, reasonRequired: false },
+    confirmations: { verify: async () => false },
+    openIntake: () => loadReporterOpenIntake(context),
   });
 
   if (status !== 'queued' && status !== 'processing' && status !== 'completed') {
@@ -138,30 +141,22 @@ export async function closeOpenReportIntakeFromWeb(
     createSetupDataAdapter().getServer(guildId),
   ]);
   const guild = guilds.find((item) => item.id === guildId);
-  if (!guild || !server?.is_active) {
-    throw new Error('This report destination is not available to the signed-in Discord account.');
-  }
 
   const reportIntakeId = readTrimmedFormString(formData, 'reportIntakeId');
   if (!reportIntakeId || !UUID_PATTERN.test(reportIntakeId)) {
     throw new Error('This report intake is no longer available.');
   }
-  if (formData.get('confirmCloseIntake') !== 'on') {
-    throw new Error('Confirm the report intake close before submitting it.');
-  }
-
-  const openIntake = await createReportIntakePortalDataAdapter().getOpenIntakeForReporter({
-    guildId,
-    reporterId: session.userId,
-  });
-  if (!openIntake || openIntake.id !== reportIntakeId) {
-    throw new Error('This report intake is no longer available.');
-  }
-
-  const status = await queueReportIntakeCloseRequest({
-    actorId: session.userId,
-    guildId,
-    reportIntakeId,
+  const context = {
+    ...createWebActionContext({ guildId, userId: session.userId }),
+    source: 'web_report',
+  };
+  const command = { kind: 'close_report_intake' as const, intakeId: reportIntakeId };
+  const status = await submitReportRequest({
+    context,
+    command,
+    access: { member: !!guild, active: server?.is_active === true, reasonRequired: false },
+    confirmations: createWebReportConfirmationPort(context, command, formData),
+    openIntake: () => loadReporterOpenIntake(context),
   });
 
   if (status !== 'queued' && status !== 'processing' && status !== 'completed') {

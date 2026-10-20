@@ -205,17 +205,12 @@ export async function acknowledgeQueueAttentionItems(
   const setupService = createSetupDashboardService();
   await setupService.assertCanManageGuild(guildId, token.accessToken);
   const adapter = createQueueAttentionActionAdapter();
-  const actor = { id: session.userId, surface: 'web' as const };
-  const statuses: QueueAttentionAcknowledgeStatus[] = [];
-
-  for (const queueItemId of queueItemIds) {
-    const result = await adapter.acknowledgeAttentionItem({
-      guildId,
-      queueItemId,
-      actor,
-    });
-    statuses.push(result.status);
-  }
+  const results = await adapter.acknowledgeAttentionItems({
+    guildId,
+    queueItemIds,
+    actor: { id: session.userId, surface: 'web' },
+  });
+  const statuses = results.map((result) => result.status);
 
   revalidatePath(`/admin/guild/${guildId}/inbox`);
   return summarizeQueueAttentionAcknowledgements(statuses);

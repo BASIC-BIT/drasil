@@ -1,3 +1,5 @@
+import { MessageCleanupService } from '../../services/MessageCleanupService';
+import { createBotApplication } from '../../application/createBotApplication';
 import { ModerationActionRequestService } from '../../services/ModerationActionRequestService';
 import { ReportInstructionsManager } from '../../controllers/ReportInstructionsManager';
 import type { Prisma } from '../../db/prisma';
@@ -13,6 +15,9 @@ import {
   MessageDeletionJobMode,
   MessageDeletionJobStatus,
   MessageDeletionScope,
+  MessageDeletionItemStatus,
+  MessageDeletionEvidenceStatus,
+  MessageDeletionDiscoverySource,
   ModerationActionRequest,
   ModerationActionRequestStatus,
   ModerationActionRequestType,
@@ -405,8 +410,8 @@ const banObservedRequest: ModerationActionRequest = {
   action_type: ModerationActionRequestType.BAN_OBSERVED_DETECTION,
   id: 'ban-observed-request-1',
   idempotency_key: 'web:observed-action:ban_user:guild-1:det-1',
-  metadata: { reason: 'Observed ban reason.' },
-  report_intake_id: null,
+  metadata: { reason: 'Observed ban reason.', report_ban_attempt_token: 'attempt-1' },
+  report_intake_id: 'report-1',
 };
 
 const closeNoActionRequest: ModerationActionRequest = {
@@ -705,11 +710,14 @@ describe('ModerationActionRequestService', () => {
       guild,
       id: 'moderator-1',
       joinedAt: new Date('2026-01-01T00:00:00.000Z'),
-      permissions: { has: jest.fn(() => true) },
+      permissions: { has: jest.fn(() => true), bitfield: 8n },
+      roles: { cache: new Map() },
       user: { id: 'moderator-1', tag: 'moderator#0001', username: 'moderator' },
     };
     const role = { guild, id: 'role-1', name: 'Manual Intake' };
     const sourceMessage = {
+      guildId: 'guild-1',
+      author: targetUser,
       channelId: 'source-channel-1',
       id: 'source-message-1',
     };
@@ -982,7 +990,7 @@ describe('ModerationActionRequestService', () => {
       getAdminChannel: jest.fn(async () => adminChannel),
       getServerConfig: jest.fn(async () => ({
         guild_id: 'guild-1',
-        settings: serverSettings,
+        settings: { account_quarantine_enabled: true, captcha_mode: 'manual', ...serverSettings },
       })),
       updateSetupConfiguration: jest.fn(async () => undefined),
       updateServerConfig: jest.fn(async () => undefined),
@@ -1044,6 +1052,7 @@ describe('ModerationActionRequestService', () => {
       validateSetupCandidate: jest.fn(async () => setupDiagnosticsReport),
     };
     const messageDeletionJobs = {
+      recordCombinedOperation: jest.fn(async () => undefined),
       fail: jest.fn(async () => null),
       findById: jest.fn(async (id: string): Promise<MessageDeletionJobWithItems | null> => {
         void id;
@@ -1068,6 +1077,7 @@ describe('ModerationActionRequestService', () => {
     };
     const pendingVerificationEvent = {
       id: 'ver-1',
+      private_evidence_thread_id: 'evidence-thread-1',
       attention_state: CaseAttentionState.REVIEW_REQUIRED,
       case_kind: CaseKind.STANDARD,
       case_revision: 2,
@@ -1087,15 +1097,28 @@ describe('ModerationActionRequestService', () => {
           quarantine_attempt_id: input.attemptId,
         })
       ),
-      findById: jest.fn(async (): Promise<any> => pendingVerificationEvent),
-      findActiveByUserAndServer: jest.fn(async () => ({
-        id: 'ver-1',
-        notification_channel_id: 'admin-channel-1',
-        notification_message_id: 'admin-message-1',
-        server_id: 'guild-1',
-        thread_id: 'thread-1',
-        user_id: 'user-1',
-      })),
+      findById: jest.fn(
+        async (): Promise<any> => ({
+          ...pendingVerificationEvent,
+          status:
+            requests[0]?.action_type === ModerationActionRequestType.REOPEN_CASE
+              ? 'verified'
+              : 'pending',
+        })
+      ),
+      findActiveByUserAndServer: jest.fn(async () =>
+        requests[0]?.action_type === ModerationActionRequestType.REOPEN_CASE
+          ? null
+          : {
+              status: 'pending',
+              id: 'ver-1',
+              notification_channel_id: 'admin-channel-1',
+              notification_message_id: 'admin-message-1',
+              server_id: 'guild-1',
+              thread_id: 'thread-1',
+              user_id: 'user-1',
+            }
+      ),
       updateQuarantineAttempt: jest.fn(async () => pendingVerificationEvent),
     };
     const accountQuarantineService = {
@@ -1111,8 +1134,20 @@ describe('ModerationActionRequestService', () => {
     const captchaChallengeService = {
       bypassChallenge: jest.fn(async () => ({ generation: 1, id: 'challenge-1' })),
       evaluatePassedChallenge: jest.fn(async () => ({ status: 'eligible' as const })),
-      findById: jest.fn(async () => ({ generation: 1, id: 'challenge-1', status: 'passed' })),
+      findById: jest.fn(async () => ({
+        generation: 1,
+        id: 'challenge-1',
+        status: 'passed',
+        server_id: 'guild-1',
+        user_id: 'user-1',
+        verification_event_id: 'ver-1',
+        case_revision_at_issue: 2,
+      })),
       findByCaseId: jest.fn(async () => ({
+        server_id: 'guild-1',
+        user_id: 'user-1',
+        verification_event_id: 'ver-1',
+        case_revision_at_issue: 2,
         delivered_at: null as Date | null,
         delivery_error_code: null as string | null,
         generation: 1,
@@ -1124,25 +1159,41 @@ describe('ModerationActionRequestService', () => {
         delivered: true,
       })),
     };
+    const application = createBotApplication({
+      productAnalyticsService: productAnalyticsService as any,
+      setupDiagnosticsService: setupDiagnosticsService as any,
+      reportIntakeService: reportIntakeService as any,
+      caseThreadClosureSweepService: caseThreadClosureSweepService as never,
+      caseRoleLockdownService: caseRoleLockdownService as never,
+      integrityAuditService: { auditGuild: jest.fn() },
+      messageDeletionJobs: messageDeletionJobs as any,
+      messageCleanupService: messageCleanupService as any,
+      captchaChallengeService: captchaChallengeService as any,
+      threadManager: threadManager as any,
+      notificationManager: notificationManager as any,
+      accountQuarantineService: accountQuarantineService as any,
+      actionRequests: repository,
+      client: client as any,
+      configService: configService as any,
+      verificationEventRepository: verificationEventRepository as any,
+      detectionEventsRepository: {
+        findById: jest.fn(async () => ({
+          id: 'det-1',
+          server_id: 'guild-1',
+          user_id: 'user-1',
+          metadata: { reportIntakeId: 'report-1' },
+        })),
+      } as any,
+      securityActionService: securityActionService as any,
+      userModerationService: userModerationService as any,
+      roleGateService: null,
+      queueService: moderationQueueService as any,
+      queueRepository: {} as any,
+    });
     const service = new ModerationActionRequestService(
       repository,
-      verificationEventRepository as any,
-      client as any,
-      threadManager as any,
-      reportIntakeService as any,
-      configService as any,
-      securityActionService as any,
-      userModerationService as any,
-      moderationQueueService as any,
-      caseThreadClosureSweepService as any,
-      caseRoleLockdownService as any,
-      notificationManager as any,
-      productAnalyticsService as any,
-      setupDiagnosticsService as any,
-      messageDeletionJobs as any,
-      messageCleanupService as any,
-      accountQuarantineService as any,
-      captchaChallengeService as any
+      application,
+      productAnalyticsService as never
     );
 
     return {
@@ -1180,6 +1231,49 @@ describe('ModerationActionRequestService', () => {
       verificationEventRepository,
     };
   }
+
+  it('denies a queued verification after actor permissions are revoked', async () => {
+    const { service, reporterMember, repository, userModerationService } = buildService([
+      verifyRequest,
+    ]);
+    reporterMember.permissions.bitfield = 0n;
+    await service.processPendingRequests();
+    expect(userModerationService.verifyUser).not.toHaveBeenCalled();
+    expect(repository.completed).toEqual([]);
+    expect(repository.failed).toEqual([
+      { id: verifyRequest.id, error: 'Case action denied: permission_denied' },
+    ]);
+  });
+
+  it('denies a queued verification for a different case subject', async () => {
+    const { service, repository, verificationEventRepository, userModerationService } =
+      buildService([verifyRequest]);
+    verificationEventRepository.findById.mockResolvedValue({
+      id: 'ver-1',
+      server_id: 'guild-1',
+      user_id: 'another-user',
+      status: 'pending',
+    });
+    await service.processPendingRequests();
+    expect(userModerationService.verifyUser).not.toHaveBeenCalled();
+    expect(repository.failed).toEqual([
+      { id: verifyRequest.id, error: 'Case action denied: binding_mismatch' },
+    ]);
+  });
+
+  it('fails closed when fresh case policy cannot be read', async () => {
+    const { service, repository, configService, userModerationService } = buildService([
+      verifyRequest,
+    ]);
+    configService.getServerConfig.mockRejectedValueOnce(new Error('Policy read failed'));
+    await service.processPendingRequests();
+    expect(userModerationService.verifyUser).not.toHaveBeenCalled();
+    expect(repository.failed).toEqual([{ id: verifyRequest.id, error: 'Policy read failed' }]);
+    expect(configService.getServerConfig).toHaveBeenCalledWith('guild-1', {
+      forceRefresh: true,
+      failOnReadError: true,
+    });
+  });
 
   it('opens observed cases through the logged-in bot Discord client', async () => {
     const { repository, securityActionService, service, member, moderator } = buildService();
@@ -1399,6 +1493,7 @@ describe('ModerationActionRequestService', () => {
     expect(reportIntakeService.findIntakeById).toHaveBeenCalledWith('intake-1');
     expect(reportIntakeService.closeIntakeForThread).toHaveBeenCalledWith({
       closedById: 'moderator-1',
+      closedByStaff: false,
       threadId: 'report-thread-1',
     });
     expect(reportIntakeThread.send).toHaveBeenCalledWith({
@@ -1461,7 +1556,7 @@ describe('ModerationActionRequestService', () => {
     expect(repository.failed).toEqual([
       {
         id: 'manual-flag-request-1',
-        error: 'Manual-flag request is missing target user.',
+        error: expect.stringContaining('target_user_id'),
       },
     ]);
   });
@@ -1666,7 +1761,11 @@ describe('ModerationActionRequestService', () => {
       banObservedRequest,
     ]);
     guild.members.fetch
-      .mockResolvedValueOnce({ permissions: { has: () => true } } as never)
+      .mockResolvedValueOnce({
+        id: 'moderator-1',
+        permissions: { has: () => true, bitfield: 8n },
+        roles: { cache: new Map() },
+      } as never)
       .mockRejectedValueOnce({ code: 10007 });
 
     await expect(service.processPendingRequests()).resolves.toBe(1);
@@ -1734,6 +1833,7 @@ describe('ModerationActionRequestService', () => {
       requestCaptchaChallengeRequest,
     ]);
     reporterMember.permissions.has.mockReturnValue(false);
+    reporterMember.permissions.bitfield = 0n;
     guild.members.fetch.mockImplementation(async (value: string | { user: string }) => {
       const id = typeof value === 'string' ? value : value.user;
       return id === 'moderator-1' ? reporterMember : { guild, id: 'user-1' };
@@ -1778,6 +1878,23 @@ describe('ModerationActionRequestService', () => {
     const { captchaChallengeService, repository, service } = buildService([
       retryCaptchaChallengeRequest,
     ]);
+    captchaChallengeService.findByCaseId.mockResolvedValue({
+      ...{
+        server_id: 'guild-1',
+        user_id: 'user-1',
+        verification_event_id: 'ver-1',
+        case_revision_at_issue: 2,
+      },
+      server_id: 'guild-1',
+      user_id: 'user-1',
+      verification_event_id: 'ver-1',
+      case_revision_at_issue: 2,
+      id: 'challenge-1',
+      generation: 4,
+      status: 'failed',
+      delivered_at: null,
+      delivery_error_code: null,
+    });
 
     await expect(service.processPendingRequests()).resolves.toBe(1);
 
@@ -1848,6 +1965,12 @@ describe('ModerationActionRequestService', () => {
     };
     const { captchaChallengeService, repository, service } = buildService([request]);
     captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+      ...{
+        server_id: 'guild-1',
+        user_id: 'user-1',
+        verification_event_id: 'ver-1',
+        case_revision_at_issue: 2,
+      },
       bypass_reason: null,
       bypassed_by: null,
       delivered_at: new Date(),
@@ -2068,6 +2191,7 @@ describe('ModerationActionRequestService', () => {
     } as any);
     const compromisedCase = {
       id: 'ver-1',
+      private_evidence_thread_id: 'evidence-thread-1',
       attention_state: CaseAttentionState.REVIEW_REQUIRED,
       case_kind: CaseKind.COMPROMISED_ACCOUNT,
       case_revision: 2,
@@ -2077,9 +2201,7 @@ describe('ModerationActionRequestService', () => {
       thread_id: 'thread-1',
       user_id: 'user-1',
     } as any;
-    verificationEventRepository.findById
-      .mockResolvedValueOnce(compromisedCase)
-      .mockResolvedValueOnce(compromisedCase);
+    verificationEventRepository.findById.mockResolvedValue(compromisedCase);
     verificationEventRepository.claimCaptchaPresentation.mockResolvedValueOnce(null);
 
     await expect(service.processPendingRequests()).resolves.toBe(1);
@@ -2119,7 +2241,7 @@ describe('ModerationActionRequestService', () => {
       status: 'held',
       reason: 'case_changed',
     } as any);
-    verificationEventRepository.findById.mockResolvedValueOnce({
+    verificationEventRepository.findById.mockResolvedValue({
       id: 'ver-1',
       server_id: 'guild-1',
       user_id: 'user-1',
@@ -2160,7 +2282,7 @@ describe('ModerationActionRequestService', () => {
       status: 'held',
       reason: 'case_changed',
     } as any);
-    verificationEventRepository.findById.mockResolvedValueOnce({
+    verificationEventRepository.findById.mockResolvedValue({
       id: 'ver-1',
       server_id: 'guild-1',
       user_id: 'user-1',
@@ -2363,6 +2485,12 @@ describe('ModerationActionRequestService', () => {
     const { captchaChallengeService, notificationManager, repository, service, threadManager } =
       buildService([notifyExpiredCaptchaAttentionRequest]);
     captchaChallengeService.findByCaseId.mockResolvedValue({
+      ...{
+        server_id: 'guild-1',
+        user_id: 'user-1',
+        verification_event_id: 'ver-1',
+        case_revision_at_issue: 2,
+      },
       delivered_at: new Date(),
       delivery_error_code: null,
       generation: 1,
@@ -2410,6 +2538,12 @@ describe('ModerationActionRequestService', () => {
       verificationEventRepository,
     } = buildService([notifyExpiredCaptchaAttentionRequest]);
     captchaChallengeService.findByCaseId.mockResolvedValue({
+      ...{
+        server_id: 'guild-1',
+        user_id: 'user-1',
+        verification_event_id: 'ver-1',
+        case_revision_at_issue: 2,
+      },
       delivered_at: new Date(),
       delivery_error_code: null,
       generation: 1,
@@ -2445,6 +2579,12 @@ describe('ModerationActionRequestService', () => {
     const { captchaChallengeService, notificationManager, repository, service, threadManager } =
       buildService([notifyDeliveryFailedCaptchaAttentionRequest]);
     captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+      ...{
+        server_id: 'guild-1',
+        user_id: 'user-1',
+        verification_event_id: 'ver-1',
+        case_revision_at_issue: 2,
+      },
       delivered_at: null,
       delivery_error_code: 'discord_delivery_failed',
       generation: 1,
@@ -2472,6 +2612,12 @@ describe('ModerationActionRequestService', () => {
     const { captchaChallengeService, notificationManager, repository, service, threadManager } =
       buildService([updateCancelledCaptchaPresentationRequest]);
     captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+      ...{
+        server_id: 'guild-1',
+        user_id: 'user-1',
+        verification_event_id: 'ver-1',
+        case_revision_at_issue: 2,
+      },
       delivered_at: new Date(),
       delivery_error_code: null,
       generation: 1,
@@ -2497,6 +2643,12 @@ describe('ModerationActionRequestService', () => {
     const { captchaChallengeService, notificationManager, repository, service, threadManager } =
       buildService([updateCancelledCaptchaPresentationRequest]);
     captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+      ...{
+        server_id: 'guild-1',
+        user_id: 'user-1',
+        verification_event_id: 'ver-1',
+        case_revision_at_issue: 2,
+      },
       delivered_at: new Date(),
       delivery_error_code: null,
       generation: 1,
@@ -2521,6 +2673,12 @@ describe('ModerationActionRequestService', () => {
     const { captchaChallengeService, notificationManager, repository, service, threadManager } =
       buildService([updateBypassedCaptchaPresentationRequest]);
     captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+      ...{
+        server_id: 'guild-1',
+        user_id: 'user-1',
+        verification_event_id: 'ver-1',
+        case_revision_at_issue: 2,
+      },
       delivered_at: new Date(),
       delivery_error_code: null,
       generation: 1,
@@ -2543,6 +2701,12 @@ describe('ModerationActionRequestService', () => {
     const { captchaChallengeService, notificationManager, repository, service, threadManager } =
       buildService([updateBypassedCaptchaPresentationRequest]);
     captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+      ...{
+        server_id: 'guild-1',
+        user_id: 'user-1',
+        verification_event_id: 'ver-1',
+        case_revision_at_issue: 2,
+      },
       delivered_at: new Date(),
       delivery_error_code: null,
       generation: 1,
@@ -2567,6 +2731,12 @@ describe('ModerationActionRequestService', () => {
     const { captchaChallengeService, notificationManager, repository, service, threadManager } =
       buildService([notifyCaptchaAttentionRequest]);
     captchaChallengeService.findByCaseId.mockResolvedValueOnce({
+      ...{
+        server_id: 'guild-1',
+        user_id: 'user-1',
+        verification_event_id: 'ver-1',
+        case_revision_at_issue: 2,
+      },
       delivered_at: new Date(),
       delivery_error_code: null,
       generation: 2,
@@ -2657,6 +2827,8 @@ describe('ModerationActionRequestService', () => {
       accountQuarantinePreviewRequest,
     ]);
     reporterMember.permissions.has.mockReturnValue(false);
+    reporterMember.permissions.bitfield = 0n;
+    reporterMember.permissions.bitfield = 0n;
 
     await expect(service.processPendingRequests()).resolves.toBe(1);
 
@@ -2717,7 +2889,7 @@ describe('ModerationActionRequestService', () => {
     expect(accountQuarantineService.quarantine).not.toHaveBeenCalled();
     expect(repository.failed).toEqual([
       {
-        error: 'The live account-quarantine preview is missing, stale, or mismatched.',
+        error: 'The live account-quarantine containment state changed; run a new preview.',
         id: accountQuarantineExecuteRequest.id,
       },
     ]);
@@ -2896,6 +3068,8 @@ describe('ModerationActionRequestService', () => {
       accountQuarantineExecuteRequest,
     ]);
     reporterMember.permissions.has.mockReturnValue(false);
+    reporterMember.permissions.bitfield = 0n;
+    reporterMember.permissions.bitfield = 0n;
 
     await expect(service.processPendingRequests()).resolves.toBe(1);
 
@@ -3029,7 +3203,7 @@ describe('ModerationActionRequestService', () => {
     expect(repository.failed).toEqual([
       {
         id: 'ban-request-1',
-        error: 'Moderator ban action is disabled for this server.',
+        error: 'Case action denied: policy_disabled',
       },
     ]);
   });
@@ -3049,7 +3223,7 @@ describe('ModerationActionRequestService', () => {
     expect(repository.failed).toEqual([
       {
         id: 'kick-request-1',
-        error: 'Moderator kick action requires a reason.',
+        error: 'Case action denied: reason_required',
       },
     ]);
   });
@@ -3064,14 +3238,14 @@ describe('ModerationActionRequestService', () => {
     expect(repository.failed).toEqual([
       {
         id: 'kick-observed-request-1',
-        error: 'Observed alert kick actions are disabled for this server.',
+        error: 'Detection action denied: policy_disabled',
       },
     ]);
   });
 
   it('fails observed destructive requests when a required reason is missing', async () => {
     const { repository, securityActionService, service } = buildService(
-      [{ ...banObservedRequest, metadata: {} }],
+      [{ ...banObservedRequest, metadata: { report_ban_attempt_token: 'attempt-1' } }],
       {
         moderator_ban_action_requires_reason: true,
       }
@@ -3085,7 +3259,7 @@ describe('ModerationActionRequestService', () => {
     expect(repository.failed).toEqual([
       {
         id: 'ban-observed-request-1',
-        error: 'Moderator ban action requires a reason.',
+        error: 'Detection action denied: reason_required',
       },
     ]);
   });
@@ -3105,7 +3279,7 @@ describe('ModerationActionRequestService', () => {
     expect(repository.failed).toEqual([
       {
         id: 'open-admin-case-request-1',
-        error: 'Open case action requires a reason.',
+        error: 'Case action denied: reason_required',
       },
     ]);
   });
@@ -3311,6 +3485,7 @@ describe('ModerationActionRequestService', () => {
       completeSetupVerificationRequest,
     ]);
     reporterMember.permissions.has.mockReturnValue(false);
+    reporterMember.permissions.bitfield = 0n;
 
     await expect(service.processPendingRequests()).resolves.toBe(1);
 
@@ -3564,7 +3739,13 @@ describe('ModerationActionRequestService', () => {
         guild.members.fetch.mockRejectedValue(new Error('Discord unavailable'));
       else
         guild.members.fetch.mockResolvedValue(
-          state === 'departed' ? null : { permissions: { has: () => false } }
+          state === 'departed'
+            ? null
+            : {
+                id: upsertReportInstructionsRequest.actor_id,
+                roles: { cache: new Map() },
+                permissions: { bitfield: 0n, has: () => false },
+              }
         );
       await service.processPendingRequests();
       expect(upsert).not.toHaveBeenCalled();
@@ -3576,6 +3757,32 @@ describe('ModerationActionRequestService', () => {
           error: 'Report panel repost requires current Administrator permission.',
         },
       ]);
+    }
+  );
+
+  it.each([
+    syncModerationQueueRequest,
+    clearModerationQueueRequest,
+    closeResolvedThreadsRequest,
+    auditCaseRoleLockdownRequest,
+    applyCaseRoleLockdownRequest,
+    roleIntakeRequest,
+  ])(
+    'rechecks current Administrator permission for queued operation $action_type',
+    async (request) => {
+      const h = buildService([request]);
+      h.reporterMember.permissions.bitfield = 1n << 5n;
+      await expect(h.service.processPendingRequests()).resolves.toBe(1);
+      expect(h.repository.completed).toEqual([]);
+      expect(h.repository.failed).toEqual([
+        { id: request.id, error: 'Operation denied: permission_denied' },
+      ]);
+      expect(h.moderationQueueService.syncServerQueue).not.toHaveBeenCalled();
+      expect(h.moderationQueueService.clearServerQueue).not.toHaveBeenCalled();
+      expect(h.caseThreadClosureSweepService.sweepResolvedCaseThreads).not.toHaveBeenCalled();
+      expect(h.caseRoleLockdownService.auditGuild).not.toHaveBeenCalled();
+      expect(h.caseRoleLockdownService.applyGuild).not.toHaveBeenCalled();
+      expect(h.securityActionService.intakeRoleMembers).not.toHaveBeenCalled();
     }
   );
 
@@ -3790,6 +3997,7 @@ describe('ModerationActionRequestService', () => {
       buildService([previewMessageCleanupRequest]);
     messageDeletionJobs.findById.mockResolvedValue(messageCleanupJob);
     reporterMember.permissions.has.mockReturnValue(false);
+    reporterMember.permissions.bitfield = 0n;
 
     await expect(service.processPendingRequests()).resolves.toBe(1);
 
@@ -3825,6 +4033,85 @@ describe('ModerationActionRequestService', () => {
     });
   });
 
+  it('recovers a reclaimed completed delete-only receipt after case resolution without evidence or deletion effects', async () => {
+    const f = buildService([{ ...executeMessageCleanupRequest, attempts: 2 }]);
+    const job: MessageDeletionJobWithItems = {
+      ...messageCleanupJob,
+      status: MessageDeletionJobStatus.COMPLETED,
+      items: [MessageDeletionItemStatus.DELETED, MessageDeletionItemStatus.DELETE_FAILED].map(
+        (status, index) => ({
+          id: `item-${index}`,
+          job_id: messageCleanupJob.id,
+          message_id: `message-${index}`,
+          channel_id: 'channel-1',
+          author_id: 'user-1',
+          message_created_at: new Date('2026-07-08T18:00:00.000Z'),
+          message_edited_at: null,
+          content_preview: 'reviewed message',
+          attachment_count: 0,
+          discovery_source: MessageDeletionDiscoverySource.DISCORD_SEARCH,
+          bulk_delete_eligible: true,
+          evidence_status: MessageDeletionEvidenceStatus.PRESERVED,
+          status,
+          evidence_message_id: `evidence-${index}`,
+          attempted_at: null,
+          evidence_preserved_at: null,
+          deleted_at: null,
+          completed_at: null,
+          failure_reason: null,
+          metadata: {},
+        })
+      ),
+    };
+    f.messageDeletionJobs.findById.mockResolvedValue(job);
+    const state = await f.verificationEventRepository.findById();
+    f.verificationEventRepository.findById.mockResolvedValue({
+      ...state,
+      status: VerificationStatus.VERIFIED,
+    });
+    const deletion = {
+      preserveMessageEvidence: jest.fn(),
+      deleteMessage: jest.fn(),
+      bulkDeleteMessages: jest.fn(),
+    };
+    const cleanup = new MessageCleanupService(
+      f.client as never,
+      f.messageDeletionJobs as never,
+      f.verificationEventRepository as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      deletion
+    );
+    f.messageCleanupService.executeJob.mockImplementation(() => cleanup.executeJob(job.id));
+
+    await expect(f.service.processPendingRequests()).resolves.toBe(1);
+
+    expect(f.repository.failed).toEqual([]);
+    expect(f.repository.completed).toEqual([
+      {
+        id: executeMessageCleanupRequest.id,
+        result: {
+          action_type: 'execute_case_message_deletion',
+          message_deletion_job_id: job.id,
+          mode: 'delete_only',
+          already_completed: true,
+          preserved_count: 2,
+          deleted_count: 1,
+          delete_failed_count: 1,
+          already_missing_count: 0,
+          changed_since_preview_count: 0,
+          evidence_failed_count: 0,
+          permission_denied_count: 0,
+        },
+      },
+    ]);
+    expect(deletion.preserveMessageEvidence).not.toHaveBeenCalled();
+    expect(deletion.deleteMessage).not.toHaveBeenCalled();
+    expect(deletion.bulkDeleteMessages).not.toHaveBeenCalled();
+    expect(f.userModerationService.performDiscordBanById).not.toHaveBeenCalled();
+  });
+
   it('executes a frozen cleanup preview created by another Administrator', async () => {
     const { messageCleanupService, messageDeletionJobs, repository, service } = buildService([
       executeMessageCleanupRequest,
@@ -3846,6 +4133,7 @@ describe('ModerationActionRequestService', () => {
       buildService([executeMessageCleanupRequest]);
     messageDeletionJobs.findById.mockResolvedValue(messageCleanupJob);
     reporterMember.permissions.has.mockReturnValue(false);
+    reporterMember.permissions.bitfield = 0n;
 
     await expect(service.processPendingRequests()).resolves.toBe(1);
 
@@ -3980,6 +4268,13 @@ describe('ModerationActionRequestService', () => {
     messageDeletionJobs.findById.mockResolvedValue({
       ...messageCleanupJob,
       ban_status: MessageDeletionBanStatus.SUCCEEDED,
+      metadata: {
+        combined_operation: {
+          requestId: 'combined-cleanup-request-1',
+          actorId: 'moderator-1',
+          source: 'web',
+        },
+      },
       mode: MessageDeletionJobMode.BAN_WITH_CLEANUP,
       status: MessageDeletionJobStatus.EXECUTING,
     });
@@ -4004,6 +4299,13 @@ describe('ModerationActionRequestService', () => {
     messageDeletionJobs.findById.mockResolvedValue({
       ...messageCleanupJob,
       ban_status: MessageDeletionBanStatus.SUCCEEDED,
+      metadata: {
+        combined_operation: {
+          requestId: 'combined-cleanup-request-1',
+          actorId: 'moderator-1',
+          source: 'web',
+        },
+      },
       case_finalization_status: MessageDeletionCaseFinalizationStatus.FAILED,
       mode: MessageDeletionJobMode.BAN_WITH_CLEANUP,
       status: MessageDeletionJobStatus.COMPLETED,
@@ -4017,6 +4319,76 @@ describe('ModerationActionRequestService', () => {
     expect(repository.completed).toHaveLength(1);
   });
 
+  it('continues the owned committed cleanup after Administrator permission is revoked', async () => {
+    const {
+      messageCleanupService,
+      messageDeletionJobs,
+      reporterMember,
+      repository,
+      service,
+      userModerationService,
+    } = buildService([combinedBanCleanupRequest]);
+    messageDeletionJobs.findById.mockResolvedValue({
+      ...messageCleanupJob,
+      ban_status: MessageDeletionBanStatus.SUCCEEDED,
+      metadata: {
+        combined_operation: {
+          requestId: 'combined-cleanup-request-1',
+          actorId: 'moderator-1',
+          source: 'web',
+        },
+      },
+      mode: MessageDeletionJobMode.BAN_WITH_CLEANUP,
+    });
+    reporterMember.permissions.has.mockReturnValue(false);
+    reporterMember.permissions.bitfield = 0n;
+    await service.processPendingRequests();
+    expect(userModerationService.performDiscordBanById).not.toHaveBeenCalled();
+    expect(messageCleanupService.executeJob).toHaveBeenCalledWith('cleanup-job-1');
+    expect(repository.completed).toHaveLength(1);
+  });
+
+  it('a later job update cannot let a new request adopt legacy committed cleanup after Administrator revocation', async () => {
+    const { messageCleanupService, messageDeletionJobs, reporterMember, repository, service } =
+      buildService([{ ...combinedBanCleanupRequest, id: 'foreign-new-request' }]);
+    messageDeletionJobs.findById.mockResolvedValue({
+      ...messageCleanupJob,
+      ban_status: MessageDeletionBanStatus.SUCCEEDED,
+      metadata: {},
+      updated_at: new Date('2099-01-01T00:00:00.000Z'),
+      mode: MessageDeletionJobMode.BAN_WITH_CLEANUP,
+    });
+    reporterMember.permissions.has.mockReturnValue(false);
+    reporterMember.permissions.bitfield = 0n;
+    await service.processPendingRequests();
+    expect(messageCleanupService.executeJob).not.toHaveBeenCalled();
+    expect(repository.failed).toEqual([
+      {
+        id: 'foreign-new-request',
+        error: 'Message cleanup requires current Administrator permission.',
+      },
+    ]);
+  });
+
+  it('rejects a queued cleanup when its saved frozen generation changed', async () => {
+    const request = {
+      ...executeMessageCleanupRequest,
+      metadata: {
+        cleanup_mode: 'delete_only',
+        cleanup_scope: 'last_day',
+        reason: messageCleanupJob.reason,
+        cleanup_preview_generation: 'old-generation',
+      },
+    };
+    const { messageCleanupService, messageDeletionJobs, repository, service } = buildService([
+      request,
+    ]);
+    messageDeletionJobs.findById.mockResolvedValue(messageCleanupJob);
+    await service.processPendingRequests();
+    expect(messageCleanupService.executeJob).not.toHaveBeenCalled();
+    expect(repository.failed[0]?.error).toContain('cleanup preview changed');
+  });
+
   it('completes a recovered request without repeating durable case finalization', async () => {
     const {
       messageCleanupService,
@@ -4028,6 +4400,13 @@ describe('ModerationActionRequestService', () => {
     messageDeletionJobs.findById.mockResolvedValue({
       ...messageCleanupJob,
       ban_status: MessageDeletionBanStatus.SUCCEEDED,
+      metadata: {
+        combined_operation: {
+          requestId: 'combined-cleanup-request-1',
+          actorId: 'moderator-1',
+          source: 'web',
+        },
+      },
       case_finalization_status: MessageDeletionCaseFinalizationStatus.SUCCEEDED,
       mode: MessageDeletionJobMode.BAN_WITH_CLEANUP,
       status: MessageDeletionJobStatus.COMPLETED,
@@ -4125,7 +4504,7 @@ describe('ModerationActionRequestService', () => {
     expect(repository.failed).toEqual([
       {
         id: 'request-1',
-        error: 'Open-case request is missing target user or detection event.',
+        error: expect.stringContaining('target_user_id'),
       },
     ]);
   });
@@ -4148,7 +4527,7 @@ describe('ModerationActionRequestService', () => {
     expect(repository.failed).toEqual([
       {
         id: 'verify-request-1',
-        error: 'Verify-case request is missing target user or case id.',
+        error: expect.stringContaining('caseId'),
       },
     ]);
   });
@@ -4165,9 +4544,20 @@ describe('ModerationActionRequestService', () => {
     expect(repository.failed).toEqual([
       {
         id: 'refresh-notification-request-1',
-        error: 'Refresh-notification request is missing target user or case id.',
+        error: expect.stringContaining('caseId'),
       },
     ]);
+  });
+
+  it('fails unknown persisted actions before any external effect', async () => {
+    const { repository, service, client } = buildService([
+      { ...baseRequest, action_type: 'future_unknown_action' as ModerationActionRequestType },
+    ]);
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+    expect(repository.completed).toEqual([]);
+    expect(repository.failed).toHaveLength(1);
+    expect(client.guilds.fetch).not.toHaveBeenCalled();
+    expect(client.users.fetch).not.toHaveBeenCalled();
   });
 
   it('returns zero when no action request is queued', async () => {

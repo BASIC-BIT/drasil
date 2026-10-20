@@ -129,7 +129,17 @@ export function fixtureGuildResources(): DiscordGuildResources {
   };
 }
 
+let savedFixtureServer: SetupServerRecord | null = null;
+
+export function resetFixtureServerRecord(): void {
+  savedFixtureServer = null;
+}
+
 export function fixtureServerRecord(): SetupServerRecord {
+  return structuredClone(savedFixtureServer ?? initialFixtureServerRecord());
+}
+
+function initialFixtureServerRecord(): SetupServerRecord {
   return {
     guild_id: fixtureGuildId,
     case_role_id: 'case-role',
@@ -362,7 +372,7 @@ export function updateFixtureServerRecord(update: GuildSetupUpdate): SetupServer
   const settings = { ...current.settings };
   applyFixtureServerSettingsUpdate(settings, update);
 
-  return {
+  savedFixtureServer = {
     ...current,
     case_role_id: update.caseRoleId !== undefined ? update.caseRoleId : current.case_role_id,
     admin_channel_id:
@@ -391,6 +401,7 @@ export function updateFixtureServerRecord(update: GuildSetupUpdate): SetupServer
     updated_by: update.updatedBy ?? current.updated_by,
     updated_at: fixtureTimestampIso,
   };
+  return fixtureServerRecord();
 }
 
 export function fixtureActiveCaseSummaries(): CaseSummary[] {

@@ -1,3 +1,4 @@
+import { createWebActionContext } from '@/lib/application/context';
 import { NextRequest, NextResponse } from 'next/server';
 import { decodeCaptchaIdentity, getCaptchaIdentityCookieName } from '@/lib/captchaSession';
 import {
@@ -60,7 +61,12 @@ export async function POST(
       return redirectToChallenge(request, token, 'retry');
     }
 
-    const started = await beginCaptchaAttempt({ token, identity, idempotencyKey });
+    const context = {
+      ...createWebActionContext({ guildId: challenge.serverId, userId: identity.userId }),
+      requestId: idempotencyKey,
+      source: 'captcha',
+    };
+    const started = await beginCaptchaAttempt(context, { token, identity, idempotencyKey });
     if (started.state === 'duplicate') {
       const result = started.previousState === 'passed' ? 'completed' : 'retry';
       return redirectToChallenge(request, token, result);
@@ -84,7 +90,9 @@ export async function POST(
       expectedCdata: buildCaptchaCdata(started.challenge.id, started.challenge.generation),
       idempotencyKey,
     });
-    const completed = await completeCaptchaAttempt({
+    const completed = await completeCaptchaAttempt(context, {
+      challengeId: started.challenge.id,
+      generation: started.challenge.generation,
       attemptId: started.attemptId,
       validation,
     });

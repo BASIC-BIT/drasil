@@ -1,3 +1,4 @@
+import { encodeQueuedAction, type QueuedDetectionCommand } from '@drasil/application';
 import type { ModerationInboxAction } from '@drasil/contracts';
 import { isWebE2eFixtureMode } from './e2eFixtures';
 import {
@@ -35,6 +36,7 @@ export async function queueObservedAlertActionRequest(input: {
   readonly detectionEventId: string;
   readonly guildId: string;
   readonly reason?: string | null;
+  readonly reportId?: string | null;
   readonly targetUserId: string;
 }): Promise<ModerationActionRequestReceipt> {
   if (isWebE2eFixtureMode()) {
@@ -44,20 +46,56 @@ export async function queueObservedAlertActionRequest(input: {
     };
   }
 
-  return queueModerationActionRequestWithReceipt({
-    actionType: observedAlertRequestTypes[input.action],
-    actorId: input.actorId,
-    actorSurface: input.actorSurface,
-    detectionEventId: input.detectionEventId,
-    idempotencyKey: `web:observed-action:${input.action}:${input.guildId}:${input.detectionEventId}`,
-    metadata: {
-      inbox_action: input.action,
-      reason: input.reason ?? null,
-      requested_surface: input.actorSurface,
-    },
-    serverId: input.guildId,
-    targetUserId: input.targetUserId,
-  });
+  if (input.action !== 'open_case') {
+    const target = { targetUserId: input.targetUserId, detectionEventId: input.detectionEventId };
+    const command: QueuedDetectionCommand =
+      input.action === 'ban_user'
+        ? {
+            kind: 'ban_observed_detection',
+            ...target,
+            reason: input.reason ?? null,
+            subject: input.reportId
+              ? { kind: 'report', reportId: input.reportId }
+              : { kind: 'observed' },
+          }
+        : input.action === 'kick_user'
+          ? { kind: 'kick_observed_detection', ...target, reason: input.reason ?? null }
+          : {
+              kind:
+                input.action === 'dismiss_no_action'
+                  ? 'dismiss_observed_detection'
+                  : 'mark_observed_detection_false_positive',
+              ...target,
+            };
+    return queueModerationActionRequestWithReceipt(
+      encodeQueuedAction(
+        {
+          guildId: input.guildId,
+          requestId: input.detectionEventId,
+          source: input.actorSurface,
+          actor: { kind: 'user', userId: input.actorId },
+        },
+        command
+      )
+    );
+  }
+  return queueModerationActionRequestWithReceipt(
+    encodeQueuedAction(
+      {
+        guildId: input.guildId,
+        requestId: input.detectionEventId,
+        source: input.actorSurface,
+        actor: { kind: 'user', userId: input.actorId },
+      },
+      {
+        kind: 'open_case_from_observed_detection',
+        targetUserId: input.targetUserId,
+        detectionEventId: input.detectionEventId,
+        reportId: null,
+        origin: { kind: 'observed_alert', reason: input.reason ?? null },
+      }
+    )
+  );
 }
 
 export async function queueObservedAlertUndoActionRequest(input: {
@@ -71,17 +109,19 @@ export async function queueObservedAlertUndoActionRequest(input: {
     return 'queued';
   }
 
-  return queueModerationActionRequest({
-    actionType: 'undo_observed_detection_action',
-    actorId: input.actorId,
-    actorSurface: input.actorSurface,
-    detectionEventId: input.detectionEventId,
-    idempotencyKey: `web:observed-action:undo:${input.guildId}:${input.detectionEventId}`,
-    metadata: {
-      inbox_action: 'undo_observed_action',
-      requested_surface: input.actorSurface,
-    },
-    serverId: input.guildId,
-    targetUserId: input.targetUserId,
-  });
+  return queueModerationActionRequest(
+    encodeQueuedAction(
+      {
+        guildId: input.guildId,
+        requestId: input.detectionEventId,
+        source: input.actorSurface,
+        actor: { kind: 'user', userId: input.actorId },
+      },
+      {
+        kind: 'undo_observed_detection_action',
+        targetUserId: input.targetUserId,
+        detectionEventId: input.detectionEventId,
+      }
+    )
+  );
 }
