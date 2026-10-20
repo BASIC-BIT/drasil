@@ -1,3 +1,5 @@
+import { ModerationCommandHandler } from '../../controllers/ModerationCommandHandler';
+import { handleSlashCommandConfirmationButton } from '../../utils/slashCommandConfirmations';
 import { createBotApplication } from '../../application/createBotApplication';
 import { Prisma, PrismaClient } from '../../db/prisma';
 import { CaseRoleReleaseReconciliationService } from '../../services/CaseRoleReleaseReconciliationService';
@@ -11,7 +13,17 @@ import {
   IRoleQuarantineService,
 } from '../../services/RoleQuarantineService';
 import { NotificationManager } from '../../services/NotificationManager';
-import { ChannelType, Client, EmbedBuilder, Guild, GuildMember, Role, User } from 'discord.js';
+import {
+  ChannelType,
+  Client,
+  EmbedBuilder,
+  Guild,
+  GuildMember,
+  Role,
+  User,
+  type ChatInputCommandInteraction,
+  type ButtonInteraction,
+} from 'discord.js';
 import { SecurityActionService } from '../../services/SecurityActionService';
 import { UserModerationService } from '../../services/UserModerationService';
 import { AdminActionService } from '../../services/AdminActionService';
@@ -3107,4 +3119,132 @@ integration('shared uncertain-ban operator review', () => {
     });
     expect(f.ban).toHaveBeenCalledTimes(1);
   });
+});
+
+integration('shared accounting execution scope', () => {
+  const originalGlobalAdmins = process.env.DRASIL_GLOBAL_ADMIN_IDS;
+  afterEach(() => {
+    if (originalGlobalAdmins === undefined) delete process.env.DRASIL_GLOBAL_ADMIN_IDS;
+    else process.env.DRASIL_GLOBAL_ADMIN_IDS = originalGlobalAdmins;
+  });
+  it.each([
+    ModerationActionRequestType.IGNORE_DETECTION_ACCOUNTING,
+    ModerationActionRequestType.RESTORE_DETECTION_ACCOUNTING,
+  ])(
+    'queued %s denies revoked Manage Server even with Moderate Members and writes no audit',
+    async (actionType) => {
+      const f = await fixture(false);
+      await getPrismaClient().moderation_action_requests.delete({ where: { id: f.request.id } });
+      if (actionType === ModerationActionRequestType.RESTORE_DETECTION_ACCOUNTING)
+        await f.detections.markExcludedFromAccounting(f.detection.id, {
+          excluded_from_accounting: true,
+        });
+      const before = await f.detections.findById(f.detection.id);
+      const request = await f.requests.enqueue({
+        serverId: 'guild',
+        actorId: 'moderator',
+        actorSurface: 'web',
+        targetUserId: 'target',
+        detectionEventId: f.detection.id,
+        actionType,
+        idempotencyKey: `accounting:${actionType}`,
+        metadata: { reason: 'Reviewed' },
+      });
+      (f.guild.members.fetch as jest.Mock).mockImplementation(async (value) =>
+        (typeof value === 'object' ? value.user : value) === 'moderator'
+          ? {
+              id: 'moderator',
+              permissions: { bitfield: 1n << 40n, has: () => false },
+              roles: { cache: new Map() },
+            }
+          : f.member
+      );
+      await f.worker().processPendingRequests();
+      expect(await f.requests.findById(request.id)).toMatchObject({
+        status: 'failed',
+        last_error: 'Detection action denied: permission_denied',
+      });
+      expect(await f.detections.findById(f.detection.id)).toEqual(before);
+      expect(await getPrismaClient().admin_actions.count()).toBe(0);
+    }
+  );
+  it.each(
+    ['ignore-detection', 'restore-detection'].flatMap((subcommand) =>
+      ['global', 'not-global', 'foreign', 'global-revoked'].map((scope) => ({ subcommand, scope }))
+    )
+  )(
+    'slash $subcommand preserves accounting scope $scope through real confirmation',
+    async ({ subcommand, scope }) => {
+      const f = await fixture(false);
+      process.env.DRASIL_GLOBAL_ADMIN_IDS =
+        scope === 'not-global' ? 'other-admin' : ' other-admin, moderator , ';
+      if (scope === 'foreign')
+        await getPrismaClient().servers.create({ data: { guild_id: 'foreign' } });
+      await getPrismaClient().detection_events.update({
+        where: { id: f.detection.id },
+        data: { server_id: scope === 'foreign' ? 'foreign' : null },
+      });
+      if (subcommand === 'restore-detection')
+        await f.detections.markExcludedFromAccounting(f.detection.id, {
+          excluded_from_accounting: true,
+        });
+      const before = await f.detections.findById(f.detection.id);
+      let permissions = 32n;
+      (f.guild.members.fetch as jest.Mock).mockImplementation(async (value) =>
+        (typeof value === 'object' ? value.user : value) === 'moderator'
+          ? {
+              id: 'moderator',
+              permissions: { bitfield: permissions, has: () => true },
+              roles: { cache: new Map() },
+            }
+          : f.member
+      );
+      const handler = new ModerationCommandHandler(
+        f.config as never,
+        f.security,
+        async () => undefined,
+        undefined,
+        undefined,
+        f.application
+      );
+      const interaction = {
+        id: `audit-${scope}-${subcommand}`,
+        guild: f.guild,
+        guildId: 'guild',
+        user: f.moderator,
+        memberPermissions: { has: () => true },
+        options: {
+          getSubcommand: () => subcommand,
+          getString: (name: string) => (name === 'detection-id' ? f.detection.id : 'Reviewed'),
+        },
+        reply: jest.fn(),
+        editReply: jest.fn(),
+      } as unknown as ChatInputCommandInteraction;
+      await handler.handleAuditCommand(interaction);
+      const reply = (interaction.reply as jest.Mock).mock.calls[0][0];
+      expect(reply.components).toHaveLength(1);
+      if (scope === 'global-revoked') permissions = 1n << 40n;
+      await handleSlashCommandConfirmationButton({
+        id: 'audit-confirm',
+        customId: reply.components[0].components[0].toJSON().custom_id,
+        guildId: 'guild',
+        user: f.moderator,
+        reply: jest.fn(),
+        update: jest.fn(),
+        editReply: interaction.editReply,
+      } as unknown as ButtonInteraction);
+      const after = await f.detections.findById(f.detection.id);
+      if (scope === 'global') {
+        expect(after?.metadata?.excluded_from_accounting === true).toBe(
+          subcommand === 'ignore-detection'
+        );
+        expect(await getPrismaClient().admin_actions.findMany()).toMatchObject([
+          { server_id: null, admin_id: 'moderator', user_id: 'target' },
+        ]);
+      } else {
+        expect(after).toEqual(before);
+        expect(await getPrismaClient().admin_actions.count()).toBe(0);
+      }
+    }
+  );
 });

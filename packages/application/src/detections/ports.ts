@@ -12,11 +12,12 @@ export interface DetectionPolicy {
   readonly kickRequiresReason: boolean;
 }
 export interface DetectionFacts {
-  readonly guildId: string;
+  readonly guildId: string | null;
   readonly targetUserId: string;
   readonly reportId: string | null;
 }
 export interface DetectionOperation extends DetectionFacts {
+  readonly guildId: string;
   readonly id: string;
   readonly detectionEventId: string;
   readonly actorId: string;
@@ -65,6 +66,7 @@ export interface DetectionWorkflows {
 }
 export interface DetectionDependencies {
   readonly authority: AuthorityPort;
+  readonly globalAccountingAdmins: { containsFresh(userId: string): Promise<boolean> };
   readonly confirmations: ConfirmationPort;
   readonly settings: { loadFresh(guildId: string): Promise<DetectionPolicy> };
   readonly repository: {

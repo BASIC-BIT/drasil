@@ -395,3 +395,45 @@ describe('CommandHandler moderation commands (unit)', () => {
     });
   });
 });
+
+describe('accounting slash execution authority', () => {
+  it.each(['ignore-detection', 'restore-detection'])(
+    'rechecks Manage Server after opening %s confirmation',
+    async (subcommand) => {
+      let permissions = PermissionFlagsBits.ManageGuild;
+      const f = buildHandler({
+        caseAuthority: {
+          async loadFresh(guildId, userId) {
+            return {
+              guildId,
+              userId,
+              present: true,
+              owner: false,
+              permissions: permissions.toString(),
+              roleIds: [],
+            };
+          },
+        },
+      });
+      const interaction = {
+        id: `audit-${subcommand}`,
+        commandName: 'audit',
+        guild: { id: 'guild-1' },
+        guildId: 'guild-1',
+        user: { id: 'moderator' },
+        memberPermissions: { has: () => true },
+        options: {
+          getSubcommand: () => subcommand,
+          getString: (name: string) => (name === 'detection-id' ? 'det-1' : 'Reviewed'),
+        },
+        reply: jest.fn(),
+        editReply: jest.fn(),
+      } as any;
+      await f.handler.handleSlashCommand(interaction);
+      permissions = PermissionFlagsBits.ModerateMembers;
+      await confirmLastSlashCommand(interaction);
+      expect(f.securityActionService.excludeDetectionFromAccounting).not.toHaveBeenCalled();
+      expect(f.securityActionService.restoreDetectionAccounting).not.toHaveBeenCalled();
+    }
+  );
+});

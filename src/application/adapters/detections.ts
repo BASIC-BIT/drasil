@@ -5,6 +5,7 @@ import {
   type AuthorityPort,
   type DetectionActions,
   type DetectionDependencies,
+  type DetectionFacts,
   type DetectionOutcome,
   type DetectionOperation,
 } from '@drasil/application';
@@ -30,6 +31,7 @@ export interface BotDetectionDependencies extends Pick<
 }
 export interface BotDetectionRuntime {
   readonly actions: DetectionActions;
+  findDetection(id: string): Promise<DetectionFacts | null>;
   forRequest(request: ModerationActionRequest): DetectionActions;
 }
 function record(value: unknown): Record<string, unknown> {
@@ -68,6 +70,16 @@ export function createBotDetectionRuntime(
     )
       throw new Error(`Drasil is missing ${label} permission in this guild.`);
   };
+  const findDetection = async (id: string): Promise<DetectionFacts | null> => {
+    const detection = await deps.detectionEventsRepository.findById(id);
+    if (!detection) return null;
+    const reportId = record(detection.metadata).reportIntakeId;
+    return {
+      guildId: detection.server_id,
+      targetUserId: detection.user_id,
+      reportId: typeof reportId === 'string' ? reportId : null,
+    };
+  };
   const create = (envelope: ModerationActionRequest | null): DetectionActions => {
     const ownedRequest = async (id: string): Promise<ModerationActionRequest> => {
       const persisted = await deps.actionRequests.findById(id);
@@ -83,6 +95,15 @@ export function createBotDetectionRuntime(
     };
     const dependencies: DetectionDependencies = {
       authority,
+      globalAccountingAdmins: {
+        async containsFresh(userId): Promise<boolean> {
+          return (process.env.DRASIL_GLOBAL_ADMIN_IDS ?? '')
+            .split(',')
+            .map((id) => id.trim())
+            .filter((id) => id.length > 0)
+            .includes(userId);
+        },
+      },
       confirmations: deps.confirmations,
       settings: {
         async loadFresh(guildId) {
@@ -100,16 +121,7 @@ export function createBotDetectionRuntime(
         },
       },
       repository: {
-        async findDetection(id) {
-          const d = await deps.detectionEventsRepository.findById(id);
-          if (!d || !d.server_id) return null;
-          const reportId = record(d.metadata).reportIntakeId;
-          return {
-            guildId: d.server_id,
-            targetUserId: d.user_id,
-            reportId: typeof reportId === 'string' ? reportId : null,
-          };
-        },
+        findDetection,
         async findOperation(id) {
           const r = await deps.actionRequests.findById(id);
           if (
@@ -255,7 +267,7 @@ export function createBotDetectionRuntime(
     };
     return createDetectionActions(dependencies);
   };
-  return { actions: create(null), forRequest: create };
+  return { actions: create(null), forRequest: create, findDetection };
 }
 export function requireDetectionOutcome(
   result: Awaited<ReturnType<DetectionActions['execute']>>

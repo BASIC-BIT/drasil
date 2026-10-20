@@ -154,7 +154,9 @@ async function authorize(
             'review_uncertain_report_ban',
           ].includes(command.kind)
         ? 1n << 2n
-        : (1n << 5n) | (1n << 40n);
+        : isAccountingCommand(command)
+          ? 1n << 5n
+          : (1n << 5n) | (1n << 40n);
   return actor.owner || (bits & (1n << 3n)) !== 0n || (bits & required) !== 0n
     ? null
     : 'permission_denied';
@@ -165,12 +167,15 @@ async function checkDetection(
   command: QueuedDetectionCommand
 ): Promise<ActionDenialCode | null> {
   const detection = await deps.repository.findDetection(command.detectionEventId);
-  if (
-    !detection ||
-    detection.guildId !== context.guildId ||
-    detection.targetUserId !== command.targetUserId
-  )
-    return 'binding_mismatch';
+  if (!detection || detection.targetUserId !== command.targetUserId) return 'binding_mismatch';
+  if (detection.guildId !== context.guildId) {
+    const globalAccounting =
+      detection.guildId === null &&
+      isAccountingCommand(command) &&
+      context.actor.kind === 'user' &&
+      (await deps.globalAccountingAdmins.containsFresh(context.actor.userId));
+    if (!globalAccounting) return 'binding_mismatch';
+  }
   if (
     command.kind === 'ban_observed_detection' &&
     detection.reportId !== (command.subject.kind === 'report' ? command.subject.reportId : null)
@@ -252,4 +257,11 @@ async function checkReviewBinding(
   )
     return 'binding_mismatch';
   return operation.continuation === 'uncertain' ? null : 'stale_state';
+}
+
+function isAccountingCommand(command: DetectionCommand): boolean {
+  return (
+    command.kind === 'ignore_detection_accounting' ||
+    command.kind === 'restore_detection_accounting'
+  );
 }

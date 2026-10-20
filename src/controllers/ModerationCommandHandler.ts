@@ -422,6 +422,15 @@ export class ModerationCommandHandler {
       return;
     }
 
+    if (!this.application) throw new Error('Detection application is unavailable.');
+    const detection = await this.application.detectionRuntime.findDetection(detectionEventId);
+    if (!detection) {
+      await interaction.reply({
+        content: `Detection ${detectionEventId} was not found or is not auditable from this server.`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
     const isRestore = subcommand === 'restore-detection';
     await requestSlashCommandConfirmation(interaction, {
       message: `${isRestore ? 'Restore' : 'Ignore'} detection ${detectionEventId} for future accounting?`,
@@ -433,19 +442,30 @@ export class ModerationCommandHandler {
           components: [],
         });
         try {
-          const updatedDetection = isRestore
-            ? await this.securityActionService.restoreDetectionAccounting(
-                guild.id,
-                detectionEventId,
-                interaction.user,
-                reason
-              )
-            : await this.securityActionService.excludeDetectionFromAccounting(
-                guild.id,
-                detectionEventId,
-                interaction.user,
-                reason
-              );
+          if (!this.application) throw new Error('Detection application is unavailable.');
+          const context = createDiscordActionContext({
+            guildId: guild.id,
+            userId: interaction.user.id,
+            requestId: buttonInteraction.id,
+          });
+          const command = {
+            kind: isRestore
+              ? ('restore_detection_accounting' as const)
+              : ('ignore_detection_accounting' as const),
+            targetUserId: detection.targetUserId,
+            detectionEventId,
+            reason: reason ?? null,
+          };
+          this.application.caseConfirmations.recordVerified(context, command);
+          const outcome = requireDetectionOutcome(
+            await this.application.detections.execute(context, command)
+          );
+          if (
+            outcome.kind !== 'restore_detection_accounting' &&
+            outcome.kind !== 'ignore_detection_accounting'
+          )
+            throw new Error('Accounting outcome mismatch.');
+          const updatedDetection = outcome.succeeded;
           await buttonInteraction.editReply({
             content: updatedDetection
               ? isRestore

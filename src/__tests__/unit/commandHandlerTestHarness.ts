@@ -44,6 +44,7 @@ export type HandlerOverrides = Partial<{
   integrityAuditService: any;
   client: any;
   caseAuthority: AuthorityPort;
+  detectionEventsRepository: any;
 }>;
 
 export const buildHandler = (overrides: HandlerOverrides = {}) => {
@@ -229,7 +230,13 @@ export const buildHandler = (overrides: HandlerOverrides = {}) => {
         } as any),
       configService,
       verificationEventRepository: caseRepository,
-      detectionEventsRepository: { findById: jest.fn() } as any,
+      detectionEventsRepository:
+        overrides.detectionEventsRepository ??
+        ({
+          findById: jest
+            .fn()
+            .mockResolvedValue({ server_id: 'guild-1', user_id: 'target', metadata: {} }),
+        } as any),
       securityActionService,
       userModerationService,
       roleGateService: null,

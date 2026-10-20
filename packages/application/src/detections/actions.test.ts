@@ -21,6 +21,7 @@ function fixture(): {
 } {
   let banCalls = 0;
   const deps: DetectionDependencies = {
+    globalAccountingAdmins: { containsFresh: async () => false },
     authority: {
       loadFresh: async () => ({
         guildId: 'guild',
@@ -376,3 +377,65 @@ test('safe undo does not depend on unrelated enforcement policy availability', a
     outcome: { kind: 'undo_observed_detection_action', undoneAction: 'dismiss' },
   });
 });
+
+test.each(['ignore_detection_accounting', 'restore_detection_accounting'] as const)(
+  'accounting %s requires Manage Server even when Moderate Members remains',
+  async (kind) => {
+    const f = fixture();
+    f.deps.authority.loadFresh = async (): ReturnType<
+      DetectionDependencies['authority']['loadFresh']
+    > => ({
+      guildId: 'guild',
+      userId: 'actor',
+      present: true,
+      owner: false,
+      permissions: (1n << 40n).toString(),
+      roleIds: [],
+    });
+    expect(
+      await f.actions.execute(context, {
+        kind,
+        targetUserId: 'target',
+        detectionEventId: 'detection',
+        reason: null,
+      })
+    ).toEqual({ kind: 'denied', code: 'permission_denied' });
+  }
+);
+
+test.each(['ignore_detection_accounting', 'restore_detection_accounting'] as const)(
+  'accounting %s limits the global-admin exception to null-guild detections',
+  async (kind) => {
+    const f = fixture();
+    f.deps.authority.loadFresh = async (): ReturnType<
+      DetectionDependencies['authority']['loadFresh']
+    > => ({
+      guildId: 'guild',
+      userId: 'actor',
+      present: true,
+      owner: false,
+      permissions: '32',
+      roleIds: [],
+    });
+    f.deps.repository.findDetection = async (): ReturnType<
+      DetectionDependencies['repository']['findDetection']
+    > => ({ guildId: null, targetUserId: 'target', reportId: null });
+    const command = { kind, targetUserId: 'target', detectionEventId: 'detection', reason: null };
+    expect(await f.actions.execute(context, command)).toEqual({
+      kind: 'denied',
+      code: 'binding_mismatch',
+    });
+    f.deps.globalAccountingAdmins.containsFresh = async (): Promise<boolean> => true;
+    expect(await f.actions.execute(context, command)).toEqual({
+      kind: 'outcome',
+      outcome: { kind, succeeded: true },
+    });
+    f.deps.repository.findDetection = async (): ReturnType<
+      DetectionDependencies['repository']['findDetection']
+    > => ({ guildId: 'foreign', targetUserId: 'target', reportId: null });
+    expect(await f.actions.execute(context, command)).toEqual({
+      kind: 'denied',
+      code: 'binding_mismatch',
+    });
+  }
+);
