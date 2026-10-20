@@ -51,3 +51,6 @@ export * from './setup/settings';
 export * from './setup/commands';
 export * from './setup/ports';
 export * from './setup/actions';
+
+export * from './delegation/commands';
+export * from './delegation/types';

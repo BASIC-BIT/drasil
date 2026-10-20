@@ -16,8 +16,9 @@ FROM base AS deps
 
 # Copy only what we need for a deterministic install. We include `scripts/` because
 # `npm ci` runs our `postinstall` hook (Prisma generate) which lives there.
-COPY package.json package-lock.json ./
+COPY package.json package-lock.json .npmrc ./
 COPY apps/web/package.json ./apps/web/package.json
+COPY apps/web/lib/mcp/runtime ./apps/web/lib/mcp/runtime
 COPY packages/contracts/package.json ./packages/contracts/package.json
 COPY packages/application/package.json ./packages/application/package.json
 COPY prisma ./prisma
