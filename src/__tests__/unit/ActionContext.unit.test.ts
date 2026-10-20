@@ -1,4 +1,4 @@
-import { createBotAuthority } from '../../application/adapters/attention';
+import { createBotAuthority } from '../../application/adapters/authority';
 import type { Client } from 'discord.js';
 import { createDiscordActionContext } from '../../application/context';
 import { createAttentionActions } from '@drasil/application';

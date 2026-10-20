@@ -1,12 +1,18 @@
 import { beforeEach, expect, test, vi } from 'vitest';
 import { queueModerationQueueOperation } from './moderationQueueOperationActionQueue';
-import { queueModerationActionRequest } from './moderationActionRequestQueue';
 import { type QueuedOperationCommand, decodeQueuedAction } from '@drasil/application';
 vi.mock('./e2eFixtures', () => ({ isWebE2eFixtureMode: () => false }));
-vi.mock('./moderationActionRequestQueue', () => ({
-  queueModerationActionRequest: vi.fn(async () => 'queued'),
+const mocks = vi.hoisted(() => ({
+  query: vi.fn().mockResolvedValue({ rows: [{ id: 'request', status: 'queued' }] }),
 }));
-const queue = vi.mocked(queueModerationActionRequest);
+vi.mock('./setupDataAdapter', () => ({ getPostgresPool: () => ({ query: mocks.query }) }));
+const queue = mocks.query;
+const context = {
+  guildId: 'guild',
+  requestId: 'submission-1',
+  source: 'web',
+  actor: { kind: 'user' as const, userId: 'admin' },
+};
 const commands: QueuedOperationCommand[] = [
   { kind: 'sync_moderation_queue' },
   { kind: 'clear_moderation_queue' },
@@ -26,22 +32,24 @@ beforeEach(() => vi.clearAllMocks());
 test.each(commands)(
   'queues shared typed operation $kind preserving metadata and idempotency',
   async (command) => {
-    expect(
-      await queueModerationQueueOperation({ guildId: 'guild', actorId: 'admin', command })
-    ).toBe('queued');
-    const input = queue.mock.calls[0][0];
-    expect(input.idempotencyKey).toMatch(new RegExp(`^web:operation:${command.kind}:guild:`));
-    expect(input.actorSurface).toBe('web');
-    expect(input.targetUserId).toBeNull();
+    expect(await queueModerationQueueOperation({ context, command })).toMatchObject({
+      id: 'request',
+      status: 'queued',
+    });
+    const values = queue.mock.calls[0][1];
+    expect(values[9]).toMatch(new RegExp(`^web:operation:${command.kind}:guild:`));
+    expect(values[2]).toBe('admin');
+    expect(values[3]).toBe('web');
+    expect(values[4]).toBeNull();
     expect(
       decodeQueuedAction({
         id: 'request',
-        server_id: input.serverId,
-        action_type: input.actionType,
-        actor_id: input.actorId,
-        actor_surface: input.actorSurface,
-        target_user_id: input.targetUserId,
-        metadata: input.metadata,
+        server_id: values[0],
+        action_type: values[1],
+        actor_id: values[2],
+        actor_surface: values[3],
+        target_user_id: values[4],
+        metadata: JSON.parse(values[10]),
       }).command
     ).toEqual(command);
   }
@@ -49,8 +57,7 @@ test.each(commands)(
 test('rejects injected actor context at typed submission boundary', async () => {
   await expect(
     queueModerationQueueOperation({
-      guildId: 'guild',
-      actorId: 'admin',
+      context,
       command: { kind: 'sync_moderation_queue', actor: 'forged' } as never,
     })
   ).rejects.toThrow();

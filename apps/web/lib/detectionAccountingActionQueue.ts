@@ -1,9 +1,7 @@
-import { encodeQueuedAction } from '@drasil/application';
+import type { ActionContext } from '@drasil/application';
+import { submitQueuedAction } from './application/queuedSubmission';
 import { isWebE2eFixtureMode } from './e2eFixtures';
-import {
-  queueModerationActionRequest,
-  type ModerationActionRequestQueueStatus,
-} from './moderationActionRequestQueue';
+import type { ModerationActionRequestReceipt } from './moderationActionRequestQueue';
 
 export type DetectionAccountingWebAction = 'ignore_detection' | 'restore_detection';
 
@@ -20,31 +18,25 @@ export function isDetectionAccountingWebAction(
 
 export async function queueDetectionAccountingActionRequest(input: {
   readonly action: DetectionAccountingWebAction;
-  readonly actorId: string;
-  readonly actorSurface: string;
+  readonly context: ActionContext;
   readonly detectionEventId: string;
-  readonly guildId: string;
   readonly reason?: string | null;
   readonly targetUserId: string;
-}): Promise<ModerationActionRequestQueueStatus> {
+}): Promise<ModerationActionRequestReceipt> {
   if (isWebE2eFixtureMode()) {
-    return 'queued';
+    return {
+      id: `fixture-detection-accounting-${input.action}-${input.detectionEventId}`,
+      status: 'queued',
+    };
   }
 
-  return queueModerationActionRequest(
-    encodeQueuedAction(
-      {
-        guildId: input.guildId,
-        requestId: input.detectionEventId,
-        source: input.actorSurface,
-        actor: { kind: 'user', userId: input.actorId },
-      },
-      {
-        kind: detectionAccountingRequestTypes[input.action],
-        targetUserId: input.targetUserId,
-        detectionEventId: input.detectionEventId,
-        reason: input.reason ?? null,
-      }
-    )
-  );
+  return submitQueuedAction({
+    context: input.context,
+    command: {
+      kind: detectionAccountingRequestTypes[input.action],
+      targetUserId: input.targetUserId,
+      detectionEventId: input.detectionEventId,
+      reason: input.reason ?? null,
+    },
+  });
 }

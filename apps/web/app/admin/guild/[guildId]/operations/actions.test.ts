@@ -29,7 +29,7 @@ beforeEach(() => {
   m.session.mockResolvedValue({ userId: 'admin' });
   m.token.mockResolvedValue({ accessToken: 'token' });
   m.guild.mockResolvedValue({ owner: false, permissions: '8' });
-  m.queue.mockResolvedValue('queued');
+  m.queue.mockResolvedValue({ id: 'request', status: 'queued' });
 });
 const confirmed: readonly [ModerationQueueOperationAction, string][] = [
   ['clear_moderation_queue', 'confirmClearQueue'],
@@ -51,8 +51,11 @@ test.each(confirmed)(
     await queueModerationQueueOperationAction('guild', kind, form);
     expect(m.queue).toHaveBeenCalledWith(
       expect.objectContaining({
-        actorId: 'admin',
-        guildId: 'guild',
+        context: expect.objectContaining({
+          guildId: 'guild',
+          source: 'web',
+          actor: { kind: 'user', userId: 'admin' },
+        }),
         command: expect.objectContaining({ kind }),
       })
     );
@@ -64,8 +67,11 @@ test('locks apply unsync to the submitted checkbox and uses the authenticated ac
   form.set('actorId', 'forged');
   await queueModerationQueueOperationAction('guild', 'apply_case_role_lockdown', form);
   expect(m.queue).toHaveBeenCalledWith({
-    actorId: 'admin',
-    guildId: 'guild',
+    context: expect.objectContaining({
+      guildId: 'guild',
+      source: 'web',
+      actor: { kind: 'user', userId: 'admin' },
+    }),
     command: { kind: 'apply_case_role_lockdown', unsyncAllowedChannels: false },
   });
 });
@@ -76,8 +82,11 @@ test('role preview needs no execution confirmation and keeps reason and bounded 
   form.set('reason', ' reason ');
   await queueModerationQueueOperationAction('guild', 'intake_role_members', form);
   expect(m.queue).toHaveBeenCalledWith({
-    actorId: 'admin',
-    guildId: 'guild',
+    context: expect.objectContaining({
+      guildId: 'guild',
+      source: 'web',
+      actor: { kind: 'user', userId: 'admin' },
+    }),
     command: {
       kind: 'intake_role_members',
       execute: false,

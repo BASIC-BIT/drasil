@@ -1,7 +1,5 @@
 'use server';
 
-import { encodeQueuedAction } from '@drasil/application';
-
 import { isReportClosureAction } from '@drasil/application';
 import { createWebActionContext } from '@/lib/application/context';
 import { createReportDetailDataAdapter } from '@/lib/reportDetailDataAdapter';
@@ -13,7 +11,7 @@ import {
   hasPermission,
   parsePermissions,
 } from '@/lib/discordPermissions';
-import { queueModerationActionRequestWithReceipt } from '@/lib/moderationActionRequestQueue';
+import { submitQueuedAction } from '@/lib/application/queuedSubmission';
 import { queueFixtureReportBan } from '@/lib/reportBanFixtures';
 import { isWebE2eFixtureMode } from '@/lib/e2eFixtures';
 import { revalidatePath } from 'next/cache';
@@ -247,23 +245,21 @@ export async function banSubmittedReport(
       throw new Error('Drasil is missing Ban Members permission.');
     const receipt = isWebE2eFixtureMode()
       ? await queueFixtureReportBan(reportId)
-      : await queueModerationActionRequestWithReceipt(
-          encodeQueuedAction(
-            {
-              guildId,
-              requestId: detail.latestDetectionId,
-              source: 'web_report',
-              actor: { kind: 'user', userId: session.userId },
-            },
-            {
-              kind: 'ban_observed_detection',
-              targetUserId: detail.targetUserId,
-              detectionEventId: detail.latestDetectionId,
-              subject: { kind: 'report', reportId },
-              reason: reason || null,
-            }
-          )
-        );
+      : await submitQueuedAction({
+          context: createWebActionContext({
+            guildId,
+            userId: session.userId,
+            requestId: detail.latestDetectionId,
+            source: 'web_report',
+          }),
+          command: {
+            kind: 'ban_observed_detection',
+            targetUserId: detail.targetUserId,
+            detectionEventId: detail.latestDetectionId,
+            subject: { kind: 'report', reportId },
+            reason: reason || null,
+          },
+        });
     revalidatePath(`/admin/guild/${guildId}/reports/${reportId}`);
     revalidatePath(`/admin/guild/${guildId}/reports`);
     revalidatePath(`/admin/guild/${guildId}/inbox`);

@@ -17,7 +17,7 @@ import { createWebSetupActions } from '@/lib/application/adapters/setup';
 import { createWebActionContext } from '@/lib/application/context';
 import { DISCORD_PERMISSIONS, hasPermission, parsePermissions } from '@/lib/discordPermissions';
 import {
-  queueCompleteSetupVerificationRequest,
+  queueCompleteSetupVerificationRequestWithReceipt,
   queueReportInstructionsRepairRequest,
 } from '@/lib/setupArtifactActionQueue';
 import { createSetupDashboardService } from '@/lib/setupDashboardService';
@@ -199,11 +199,10 @@ export async function queueCompleteSetupVerification(
     throw new Error('Choose a case role and admin alert channel before queueing core setup.');
   }
 
-  const status = await queueCompleteSetupVerificationRequest({
-    actorId: session.userId,
+  const { status } = await queueCompleteSetupVerificationRequestWithReceipt({
+    context: createWebActionContext({ guildId, userId: session.userId }),
     adminChannelId,
     caseRoleId,
-    guildId,
     reportInstructionsChannelId: readOptionalFormString(formData, 'reportInstructionsChannelId'),
     verificationChannelId: readOptionalFormString(formData, 'verificationChannelId'),
   });
@@ -251,10 +250,13 @@ async function queueReportInstructions(
     throw new Error('Choose an admin or report instructions channel before queueing repair.');
   }
 
-  const status = await queueReportInstructionsRepairRequest({
-    actorId: session.userId,
+  const { status } = await queueReportInstructionsRepairRequest({
+    context: createWebActionContext({
+      guildId,
+      userId: session.userId,
+      requestId: readOptionalFormString(formData, 'reportInstructionsSubmissionId') ?? undefined,
+    }),
     channelId,
-    guildId,
     repost,
     expectedMessageId: readOptionalFormString(formData, 'reportInstructionsMessageId'),
     expectedChannelId: readOptionalFormString(formData, 'reportInstructionsExpectedChannelId'),

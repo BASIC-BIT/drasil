@@ -1,12 +1,10 @@
-import { encodeQueuedAction, type QueuedDetectionCommand } from '@drasil/application';
+import type { ActionContext, QueuedDetectionCommand } from '@drasil/application';
 import type { ModerationInboxAction } from '@drasil/contracts';
+import { submitQueuedAction } from './application/queuedSubmission';
 import { isWebE2eFixtureMode } from './e2eFixtures';
-import {
-  queueModerationActionRequest,
-  queueModerationActionRequestWithReceipt,
-  type ModerationActionRequestActionType,
-  type ModerationActionRequestQueueStatus,
-  type ModerationActionRequestReceipt,
+import type {
+  ModerationActionRequestActionType,
+  ModerationActionRequestReceipt,
 } from './moderationActionRequestQueue';
 
 export type ObservedAlertWebAction = Extract<
@@ -31,10 +29,8 @@ export function isObservedAlertWebAction(
 
 export async function queueObservedAlertActionRequest(input: {
   readonly action: ObservedAlertWebAction;
-  readonly actorId: string;
-  readonly actorSurface: string;
+  readonly context: ActionContext;
   readonly detectionEventId: string;
-  readonly guildId: string;
   readonly reason?: string | null;
   readonly reportId?: string | null;
   readonly targetUserId: string;
@@ -67,61 +63,35 @@ export async function queueObservedAlertActionRequest(input: {
                   : 'mark_observed_detection_false_positive',
               ...target,
             };
-    return queueModerationActionRequestWithReceipt(
-      encodeQueuedAction(
-        {
-          guildId: input.guildId,
-          requestId: input.detectionEventId,
-          source: input.actorSurface,
-          actor: { kind: 'user', userId: input.actorId },
-        },
-        command
-      )
-    );
+    return submitQueuedAction({ context: input.context, command });
   }
-  return queueModerationActionRequestWithReceipt(
-    encodeQueuedAction(
-      {
-        guildId: input.guildId,
-        requestId: input.detectionEventId,
-        source: input.actorSurface,
-        actor: { kind: 'user', userId: input.actorId },
-      },
-      {
-        kind: 'open_case_from_observed_detection',
-        targetUserId: input.targetUserId,
-        detectionEventId: input.detectionEventId,
-        reportId: null,
-        origin: { kind: 'observed_alert', reason: input.reason ?? null },
-      }
-    )
-  );
+  return submitQueuedAction({
+    context: input.context,
+    command: {
+      kind: 'open_case_from_observed_detection',
+      targetUserId: input.targetUserId,
+      detectionEventId: input.detectionEventId,
+      reportId: null,
+      origin: { kind: 'observed_alert', reason: input.reason ?? null },
+    },
+  });
 }
 
 export async function queueObservedAlertUndoActionRequest(input: {
-  readonly actorId: string;
-  readonly actorSurface: string;
+  readonly context: ActionContext;
   readonly detectionEventId: string;
-  readonly guildId: string;
   readonly targetUserId: string;
-}): Promise<ModerationActionRequestQueueStatus> {
+}): Promise<ModerationActionRequestReceipt> {
   if (isWebE2eFixtureMode()) {
-    return 'queued';
+    return { id: `fixture-observed-undo-${input.detectionEventId}`, status: 'queued' };
   }
 
-  return queueModerationActionRequest(
-    encodeQueuedAction(
-      {
-        guildId: input.guildId,
-        requestId: input.detectionEventId,
-        source: input.actorSurface,
-        actor: { kind: 'user', userId: input.actorId },
-      },
-      {
-        kind: 'undo_observed_detection_action',
-        targetUserId: input.targetUserId,
-        detectionEventId: input.detectionEventId,
-      }
-    )
-  );
+  return submitQueuedAction({
+    context: input.context,
+    command: {
+      kind: 'undo_observed_detection_action',
+      targetUserId: input.targetUserId,
+      detectionEventId: input.detectionEventId,
+    },
+  });
 }

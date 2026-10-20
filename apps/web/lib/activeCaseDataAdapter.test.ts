@@ -1,7 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { QueueCaseActionInput } from './activeCaseDataAdapter';
+const persistence = vi.hoisted(() => ({ query: vi.fn() }));
+vi.mock('./setupDataAdapter', () => ({ getPostgresPool: () => persistence }));
 import {
-  buildCaseActionIdempotencyKey,
   FixtureActiveCaseDataAdapter,
+  PostgresActiveCaseDataAdapter,
   parseCaseSummaryRow,
   resolveCaseActionQueueStatus,
   resolveReportIntakeId,
@@ -41,31 +44,144 @@ const baseRow = {
   captcha_id: '11111111-1111-4111-8111-111111111111',
 };
 
-describe('activeCaseDataAdapter', () => {
-  it('uses a fresh idempotency key for each repeatable CAPTCHA action', () => {
-    const base = {
-      adminId: 'moderator-1',
-      attemptId: 'attempt-2',
-      caseId: 'ver-1',
-      guildId: 'guild-1',
-    };
-
-    expect(buildCaseActionIdempotencyKey({ ...base, action: 'retry_captcha' })).toBe(
-      'web:case-action:retry_captcha:guild-1:ver-1:attempt-2'
-    );
-    expect(buildCaseActionIdempotencyKey({ ...base, action: 'bypass_captcha' })).toBe(
-      'web:case-action:bypass_captcha:guild-1:ver-1:attempt-2'
-    );
-    expect(() =>
-      buildCaseActionIdempotencyKey({
-        action: 'retry_captcha',
-        adminId: 'moderator-1',
-        caseId: 'ver-1',
-        guildId: 'guild-1',
-      })
-    ).toThrow('A unique attempt ID is required for repeatable CAPTCHA actions.');
+describe('case action admission and submission', () => {
+  const challengeId = '11111111-1111-4111-8111-111111111111';
+  const input: QueueCaseActionInput = {
+    action: 'retry_captcha',
+    adminId: 'moderator',
+    guildId: 'guild',
+    caseId: 'case',
+    attemptId: 'attempt-1',
+    expectedCaptchaChallengeId: challengeId,
+    expectedCaptchaGeneration: 2,
+  };
+  function arrange() {
+    const adapter = new PostgresActiveCaseDataAdapter();
+    const summary = parseCaseSummaryRow({
+      ...baseRow,
+      id: 'case',
+      server_id: 'guild',
+      user_id: 'user',
+      captcha_id: challengeId,
+      captcha_status: 'pending',
+      captcha_generation: 2,
+      captcha_request_source: 'moderator',
+      captcha_pass_effect: 'evidence_only',
+      captcha_submission_count: 0,
+      captcha_expires_at: new Date('2026-10-21T00:00:00Z'),
+      captcha_requested_at: new Date('2026-10-20T00:00:00Z'),
+      captcha_delivered_at: null,
+      captcha_delivery_error_code: null,
+      captcha_passed_at: null,
+      captcha_bypassed_at: null,
+      captcha_bypassed_by: null,
+      captcha_bypass_reason: null,
+    });
+    vi.spyOn(adapter, 'getCaseDetail').mockResolvedValue({
+      ...summary,
+      notes: null,
+      evidenceItems: [],
+      messageContext: [],
+      detectionHistory: [],
+      moderationOutcomes: [],
+      allowedActions: ['retry_captcha', 'bypass_captcha', 'quarantine_compromised_account'],
+    });
+    return adapter;
+  }
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    persistence.query.mockReset();
   });
 
+  it('does not enqueue missing repeatable attempt', async () => {
+    const adapter = arrange();
+    for (const action of ['retry_captcha', 'bypass_captcha'] as const) {
+      expect((await adapter.queueCaseAction({ ...input, action, attemptId: null })).status).toBe(
+        'not_allowed'
+      );
+    }
+    expect(persistence.query).not.toHaveBeenCalled();
+  });
+
+  it('does not enqueue stale challenge generation', async () => {
+    const adapter = arrange();
+    for (const action of ['retry_captcha', 'bypass_captcha'] as const) {
+      for (const expectedCaptchaGeneration of [1, null, undefined]) {
+        expect(
+          (await adapter.queueCaseAction({ ...input, action, expectedCaptchaGeneration })).status
+        ).toBe('not_allowed');
+      }
+      expect(
+        (await adapter.queueCaseAction({ ...input, action, expectedCaptchaChallengeId: null }))
+          .status
+      ).toBe('not_allowed');
+    }
+    expect(persistence.query).not.toHaveBeenCalled();
+  });
+
+  it('does not enqueue an unavailable quarantine preview', async () => {
+    const adapter = arrange();
+    expect(
+      (
+        await adapter.queueCaseAction({
+          ...input,
+          action: 'quarantine_compromised_account',
+          quarantinePhase: 'execute',
+          previewRequestId: null,
+        })
+      ).status
+    ).toBe('not_allowed');
+    expect(persistence.query).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      action: 'retry_captcha',
+      attemptId: 'attempt-1',
+      key: 'web:case-action:retry_captcha:guild:case:attempt-1',
+      actionType: 'retry_captcha_challenge',
+    },
+    {
+      action: 'bypass_captcha',
+      attemptId: 'attempt-2',
+      key: 'web:case-action:bypass_captcha:guild:case:attempt-2',
+      actionType: 'bypass_captcha_challenge',
+    },
+  ] as const)(
+    'persists the submitted $action attempt and challenge binding',
+    async ({ action, attemptId, key, actionType }) => {
+      const adapter = arrange();
+      persistence.query.mockResolvedValueOnce({ rows: [{ id: 'request', status: 'queued' }] });
+      expect(
+        await adapter.queueCaseAction({ ...input, action, attemptId, reason: 'Reviewed evidence' })
+      ).toEqual({ action, caseId: 'case', requestId: 'request', status: 'queued' });
+      expect(persistence.query).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining('insert into moderation_action_requests'),
+        [
+          'guild',
+          actionType,
+          'moderator',
+          'web',
+          'user',
+          null,
+          null,
+          'case',
+          null,
+          key,
+          JSON.stringify({
+            case_action: action,
+            requested_surface: 'web',
+            expected_challenge_id: challengeId,
+            expected_generation: 2,
+            ...(action === 'bypass_captcha' ? { reason: 'Reviewed evidence' } : {}),
+          }),
+        ]
+      );
+    }
+  );
+});
+
+describe('activeCaseDataAdapter', () => {
   it('preserves failed queue receipts for inline action feedback', () => {
     expect(resolveCaseActionQueueStatus('queued')).toBe('queued');
     expect(resolveCaseActionQueueStatus('processing')).toBe('queued');

@@ -1,5 +1,3 @@
-import type { QueueCaseActionInput } from '../../activeCaseDataAdapter';
-import type { QueuedCommand } from '@drasil/application';
 import {
   createCaptchaBrowserActions,
   encodeQueuedAction,
@@ -47,34 +45,4 @@ export function encodeWebCaptchaEffect(
     },
     command
   );
-}
-
-export function buildQueuedCaptchaCommand(
-  input: QueueCaseActionInput,
-  userId: string
-): QueuedCommand | null {
-  const binding = { caseId: input.caseId, targetUserId: userId };
-  switch (input.action) {
-    case 'challenge_user':
-      return { kind: 'request_captcha_challenge', ...binding };
-    case 'retry_captcha':
-    case 'bypass_captcha':
-      if (!input.expectedCaptchaChallengeId || !input.expectedCaptchaGeneration) return null;
-      return input.action === 'retry_captcha'
-        ? {
-            kind: 'retry_captcha_challenge',
-            ...binding,
-            expectedChallengeId: input.expectedCaptchaChallengeId,
-            expectedGeneration: input.expectedCaptchaGeneration,
-          }
-        : {
-            kind: 'bypass_captcha_challenge',
-            ...binding,
-            expectedChallengeId: input.expectedCaptchaChallengeId,
-            expectedGeneration: input.expectedCaptchaGeneration,
-            reason: input.reason ?? '',
-          };
-    default:
-      return null;
-  }
 }

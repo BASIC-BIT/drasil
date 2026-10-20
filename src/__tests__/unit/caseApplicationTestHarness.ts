@@ -149,11 +149,6 @@ export function buildCaseApplication(
     }),
     operations: operationsRuntime.actions,
     operationsRuntime,
-    messageCleanup: {
-      async execute() {
-        throw new Error('Not arranged for these units');
-      },
-    },
     messageCleanupRuntime: {
       forRequest() {
         throw new Error('Not arranged for these units');

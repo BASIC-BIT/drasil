@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   matchesConfirmation,
+  confirmationBindingFor,
   type ActionContext,
   type ConfirmationCommand,
   type ConfirmationPort,
@@ -9,11 +10,13 @@ import {
 export function createWebActionContext(input: {
   readonly guildId: string;
   readonly userId: string;
+  readonly requestId?: string;
+  readonly source?: string;
 }): ActionContext {
   return {
     guildId: input.guildId,
-    requestId: randomUUID(),
-    source: 'web',
+    requestId: input.requestId ?? randomUUID(),
+    source: input.source ?? 'web',
     actor: { kind: 'user', userId: input.userId },
   };
 }
@@ -25,21 +28,7 @@ export function createWebConfirmationPort(
   formData: FormData | undefined
 ): ConfirmationPort {
   const evidence =
-    context.actor.kind === 'user' && formData?.get('confirmAction') === 'on'
-      ? {
-          guildId: context.guildId,
-          actorId: context.actor.userId,
-          action: command.kind,
-          targetId:
-            'intakeId' in command
-              ? command.intakeId
-              : 'caseId' in command
-                ? command.caseId
-                : 'operationId' in command
-                  ? command.operationId
-                  : command.targetUserId,
-        }
-      : null;
+    formData?.get('confirmAction') === 'on' ? confirmationBindingFor(context, command) : null;
   return {
     async verify(candidateContext, candidateCommand): Promise<boolean> {
       return matchesConfirmation(candidateContext, candidateCommand, evidence);

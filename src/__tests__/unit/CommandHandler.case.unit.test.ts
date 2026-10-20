@@ -1,4 +1,4 @@
-import { createBotAuthority } from '../../application/adapters/attention';
+import { createBotAuthority } from '../../application/adapters/authority';
 import { MessageFlags, PermissionFlagsBits, type Client } from 'discord.js';
 import { buildHandler } from './commandHandlerTestHarness';
 import { handleSlashCommandConfirmationButton } from '../../utils/slashCommandConfirmations';

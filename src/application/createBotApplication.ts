@@ -35,12 +35,12 @@ import {
   createAttentionActions,
   type AttentionActions,
   type CaseActions,
-  type MessageCleanupActions,
 } from '@drasil/application';
 import type { Client } from 'discord.js';
 import type { IModerationQueueRepository } from '../repositories/ModerationQueueRepository';
 import type { IModerationQueueService } from '../services/ModerationQueueService';
-import { createBotAuthority, createBotAttentionMessageDeleter } from './adapters/attention';
+import { createBotAuthority } from './adapters/authority';
+import { createBotAttentionMessageDeleter } from './adapters/attention';
 
 export interface BotApplication {
   readonly setup: BotSetupRuntime['actions'];
@@ -48,7 +48,6 @@ export interface BotApplication {
   readonly reports: ReturnType<typeof createBotReportActions>;
   readonly operations: BotOperationsRuntime['actions'];
   readonly operationsRuntime: BotOperationsRuntime;
-  readonly messageCleanup: MessageCleanupActions;
   readonly messageCleanupRuntime: BotMessageCleanupRuntime;
   readonly captcha: BotCaptchaRuntime['actions'];
   readonly captchaRuntime: BotCaptchaRuntime;
@@ -101,11 +100,6 @@ export function createBotApplication(
     operations: operationsRuntime.actions,
     operationsRuntime,
     messageCleanupRuntime,
-    messageCleanup: {
-      async execute(): ReturnType<MessageCleanupActions['execute']> {
-        throw new Error('Cleanup requires a persisted request runtime.');
-      },
-    },
     captcha: captchaRuntime.actions,
     captchaRuntime,
     quarantine: quarantineRuntime.actions,

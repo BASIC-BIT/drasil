@@ -21,7 +21,7 @@ import type { IVerificationEventRepository } from '../../repositories/Verificati
 import type { IDetectionEventsRepository } from '../../repositories/DetectionEventsRepository';
 import type { ISecurityActionService } from '../../services/SecurityActionService';
 import type { IUserModerationService } from '../../services/UserModerationService';
-import { createBotAuthority } from './attention';
+import { createBotAuthority } from './authority';
 
 export interface BotCaseDependencies {
   readonly roleGateService: IRoleGateService | null;

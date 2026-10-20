@@ -1,3 +1,4 @@
+import type { ObservedBanResult } from '@drasil/application';
 import { MessageCleanupService } from '../../services/MessageCleanupService';
 import { createBotApplication } from '../../application/createBotApplication';
 import { ModerationActionRequestService } from '../../services/ModerationActionRequestService';
@@ -869,6 +870,9 @@ describe('ModerationActionRequestService', () => {
     const securityActionService = {
       banObservedDetection: jest.fn(async () => ({ status: 'banned' })),
       banObservedDetectionById: jest.fn(async () => ({ status: 'banned' })),
+      reconcileReportBan: jest.fn<Promise<ObservedBanResult>, [ModerationActionRequest]>(
+        async () => ({ status: 'banned' })
+      ),
       dismissObservedDetection: jest.fn(async () => true),
       excludeDetectionFromAccounting: jest.fn(async () => ({ id: 'det-1' })),
       kickObservedDetection: jest.fn(async () => true),
@@ -1197,6 +1201,7 @@ describe('ModerationActionRequestService', () => {
     );
 
     return {
+      application,
       accountQuarantineService,
       adminChannel,
       client,
@@ -1754,6 +1759,125 @@ describe('ModerationActionRequestService', () => {
       },
     ]);
     expect(repository.failed).toEqual([]);
+  });
+
+  it('rejects a stale report-ban attempt before enforcement', async () => {
+    const { repository, securityActionService, service } = buildService([banObservedRequest]);
+    repository.byId.set(banObservedRequest.id, {
+      ...banObservedRequest,
+      metadata: {
+        ...(banObservedRequest.metadata as Prisma.JsonObject),
+        report_ban_attempt_token: 'new-owner',
+      },
+    });
+    const fail = jest.spyOn(repository, 'fail');
+
+    await service.processPendingRequests();
+
+    expect(securityActionService.banObservedDetection).not.toHaveBeenCalled();
+    expect(securityActionService.banObservedDetectionById).not.toHaveBeenCalled();
+    expect(securityActionService.reconcileReportBan).not.toHaveBeenCalled();
+    expect(fail).toHaveBeenCalledWith(
+      banObservedRequest.id,
+      'Detection action denied: binding_mismatch',
+      'attempt-1'
+    );
+  });
+
+  it.each([
+    {
+      phase: 'discord_confirmed',
+      result: { status: 'banned_updates_pending', operationId: banObservedRequest.id },
+    },
+    {
+      phase: 'reconciliation_required',
+      result: { status: 'ban_outcome_unknown', operationId: banObservedRequest.id },
+    },
+  ] satisfies Array<{ phase: string; result: ObservedBanResult }>)(
+    'preserves $phase report-ban recovery receipts without repeating enforcement',
+    async ({ phase, result }) => {
+      const { application, repository, reporterMember, securityActionService, service } =
+        buildService([]);
+      const recovery = {
+        ...banObservedRequest,
+        metadata: { report_ban_attempt_token: 'recovery-attempt', report_ban_phase: phase },
+      };
+      repository.byId.set(recovery.id, recovery);
+      jest.spyOn(repository, 'claimReportBanReconciliation').mockResolvedValueOnce(recovery);
+      const evidence = jest.spyOn(application.caseConfirmations, 'recordVerified');
+      reporterMember.permissions.bitfield = 0n;
+      securityActionService.reconcileReportBan.mockResolvedValueOnce(result);
+
+      await expect(service.processPendingRequests()).resolves.toBe(0);
+
+      expect(evidence).not.toHaveBeenCalled();
+      expect(securityActionService.reconcileReportBan).toHaveBeenCalledWith(recovery);
+      expect(securityActionService.banObservedDetection).not.toHaveBeenCalled();
+      expect(securityActionService.banObservedDetectionById).not.toHaveBeenCalled();
+      expect(repository.complete).toHaveBeenCalledWith(
+        recovery.id,
+        expect.objectContaining({
+          action_type: 'ban_observed_detection',
+          observed_ban_result: result,
+        }),
+        'recovery-attempt'
+      );
+    }
+  );
+
+  it('does not record another completion for already-handled report-ban recovery', async () => {
+    const { repository, securityActionService, service } = buildService([]);
+    const recovery = {
+      ...banObservedRequest,
+      result: { observed_ban_result: { status: 'banned' } },
+    };
+    repository.byId.set(recovery.id, recovery);
+    jest.spyOn(repository, 'claimReportBanReconciliation').mockResolvedValueOnce(recovery);
+
+    await service.processPendingRequests();
+
+    expect(repository.complete).not.toHaveBeenCalled();
+    expect(repository.failed).toEqual([]);
+    expect(securityActionService.reconcileReportBan).not.toHaveBeenCalled();
+    expect(securityActionService.banObservedDetection).not.toHaveBeenCalled();
+    expect(securityActionService.banObservedDetectionById).not.toHaveBeenCalled();
+  });
+
+  it('recovers recorded report-ban enforcement after a completion write fails without banning twice', async () => {
+    const { repository, reporterMember, securityActionService, service } = buildService([
+      banObservedRequest,
+    ]);
+    const committed = {
+      ...banObservedRequest,
+      metadata: { report_ban_attempt_token: 'attempt-1', report_ban_phase: 'discord_confirmed' },
+    };
+    securityActionService.banObservedDetection.mockImplementationOnce(async () => {
+      repository.byId.set(committed.id, committed);
+      return { status: 'banned' };
+    });
+    repository.complete.mockRejectedValueOnce(new Error('completion interrupted'));
+    await service.processPendingRequests();
+    expect(repository.failed).toEqual([{ id: committed.id, error: 'completion interrupted' }]);
+
+    const recovery = {
+      ...committed,
+      metadata: { ...committed.metadata, report_ban_attempt_token: 'reclaimed-attempt' },
+    };
+    repository.byId.set(recovery.id, recovery);
+    jest.spyOn(repository, 'claimReportBanReconciliation').mockResolvedValueOnce(recovery);
+    reporterMember.permissions.bitfield = 0n;
+    await service.processPendingRequests();
+
+    expect(securityActionService.banObservedDetection).toHaveBeenCalledTimes(1);
+    expect(securityActionService.banObservedDetectionById).not.toHaveBeenCalled();
+    expect(securityActionService.reconcileReportBan).toHaveBeenCalledWith(recovery);
+    expect(repository.complete).toHaveBeenLastCalledWith(
+      recovery.id,
+      expect.objectContaining({
+        observed_ban_result: { status: 'banned' },
+      }),
+      'reclaimed-attempt'
+    );
   });
 
   it('bans departed observed alert users by ID through the logged-in bot Discord client', async () => {
@@ -4387,6 +4511,63 @@ describe('ModerationActionRequestService', () => {
     await service.processPendingRequests();
     expect(messageCleanupService.executeJob).not.toHaveBeenCalled();
     expect(repository.failed[0]?.error).toContain('cleanup preview changed');
+  });
+
+  it.each([false, true])(
+    'runs completion hooks only after persisted completion (write fails: %s)',
+    async (writeFails) => {
+      const { messageDeletionJobs, repository, service, userModerationService } = buildService([
+        combinedBanCleanupRequest,
+      ]);
+      messageDeletionJobs.findById.mockResolvedValue({
+        ...messageCleanupJob,
+        mode: MessageDeletionJobMode.BAN_WITH_CLEANUP,
+      });
+      if (writeFails)
+        repository.complete.mockRejectedValueOnce(new Error('completion write failed'));
+
+      await service.processPendingRequests();
+
+      expect(repository.complete).toHaveBeenCalledTimes(1);
+      expect(userModerationService.finalizeSuccessfulCombinedBan).toHaveBeenCalledTimes(1);
+      if (writeFails) {
+        expect(userModerationService.clearCombinedBanCleanupMarker).not.toHaveBeenCalled();
+        expect(repository.failed).toEqual([
+          { id: combinedBanCleanupRequest.id, error: 'completion write failed' },
+        ]);
+      } else {
+        expect(userModerationService.clearCombinedBanCleanupMarker).toHaveBeenCalledTimes(1);
+        expect(repository.complete.mock.invocationCallOrder[0]).toBeLessThan(
+          userModerationService.clearCombinedBanCleanupMarker.mock.invocationCallOrder[0]
+        );
+        expect(repository.failed).toEqual([]);
+      }
+    }
+  );
+
+  it('retains completed cleanup when its completion hook fails', async () => {
+    const { messageDeletionJobs, repository, service, userModerationService } = buildService([
+      combinedBanCleanupRequest,
+    ]);
+    messageDeletionJobs.findById.mockResolvedValue({
+      ...messageCleanupJob,
+      mode: MessageDeletionJobMode.BAN_WITH_CLEANUP,
+    });
+    userModerationService.clearCombinedBanCleanupMarker.mockRejectedValueOnce(
+      new Error('marker write failed')
+    );
+    const warning = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await service.processPendingRequests();
+      expect(repository.completed).toHaveLength(1);
+      expect(repository.failed).toEqual([]);
+      expect(warning).toHaveBeenCalledWith(
+        'Failed to clear completed cleanup marker for job cleanup-job-1:',
+        expect.objectContaining({ message: 'marker write failed' })
+      );
+    } finally {
+      warning.mockRestore();
+    }
   });
 
   it('completes a recovered request without repeating durable case finalization', async () => {

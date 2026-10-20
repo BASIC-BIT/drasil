@@ -16,24 +16,37 @@ export type ConfirmationCommand = { readonly kind: string } & (
 export interface ConfirmationPort {
   verify(context: ActionContext, command: ConfirmationCommand): Promise<boolean>;
 }
-export function matchesConfirmation(
+export function confirmationBindingFor(
   context: ActionContext,
-  command: ConfirmationCommand,
-  evidence: ConfirmationBinding | null
-): boolean {
-  return (
-    context.actor.kind === 'user' &&
-    evidence !== null &&
-    evidence.guildId === context.guildId &&
-    evidence.actorId === context.actor.userId &&
-    evidence.action === command.kind &&
-    evidence.targetId ===
-      ('intakeId' in command
+  command: ConfirmationCommand
+): ConfirmationBinding | null {
+  if (context.actor.kind !== 'user') return null;
+  return {
+    guildId: context.guildId,
+    actorId: context.actor.userId,
+    action: command.kind,
+    targetId:
+      'intakeId' in command
         ? command.intakeId
         : 'caseId' in command
           ? command.caseId
           : 'operationId' in command
             ? command.operationId
-            : command.targetUserId)
+            : command.targetUserId,
+  };
+}
+export function matchesConfirmation(
+  context: ActionContext,
+  command: ConfirmationCommand,
+  evidence: ConfirmationBinding | null
+): boolean {
+  const binding = confirmationBindingFor(context, command);
+  return (
+    binding !== null &&
+    evidence !== null &&
+    evidence.guildId === binding.guildId &&
+    evidence.actorId === binding.actorId &&
+    evidence.action === binding.action &&
+    evidence.targetId === binding.targetId
   );
 }

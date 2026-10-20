@@ -17,10 +17,10 @@ import {
   type MessageCleanupJob,
   type QueuedCommand,
 } from '@drasil/application';
-import type { BotApplication } from '../../application/createBotApplication';
+import type { ModerationActionRequest } from '../../repositories/types';
 import type { BotSetupRuntime } from '../../application/adapters/setup';
 import { createDiscordActionContext } from '../../application/context';
-import { dispatchQueuedAction } from '../../application/requestDispatch';
+import { prepareQueuedAction, type QueuedRequestRuntime } from '../../application/requestDispatch';
 
 const directContext = createDiscordActionContext({
   guildId: 'guild',
@@ -46,7 +46,7 @@ function arrange(family: 'case' | 'report' | 'captcha' | 'cleanup' | 'setup', pr
       roleIds: [],
     }),
   };
-  let app = mock<BotApplication>();
+  let app = mock<QueuedRequestRuntime>();
   let command: QueuedCommand;
   let direct = async (context: ActionContext): Promise<unknown> => {
     throw new Error(`Unconfigured ${family} fixture entry: ${context.requestId}`);
@@ -93,7 +93,7 @@ function arrange(family: 'case' | 'report' | 'captcha' | 'cleanup' | 'setup', pr
       });
       const actions = createCaseActions(deps);
       const execute = actions.execute;
-      app = mock<BotApplication>({
+      app = mock<QueuedRequestRuntime>({
         cases: { execute: (context, input) => trace(context, () => execute(context, input)) },
       });
       command = {
@@ -121,7 +121,7 @@ function arrange(family: 'case' | 'report' | 'captcha' | 'cleanup' | 'setup', pr
         return { status: 'submitted', targetUserId: input.targetUserId };
       });
       const actions = createReportActions(deps);
-      app = mock<BotApplication>({
+      app = mock<QueuedRequestRuntime>({
         reports: {
           execute: (context, input) => trace(context, () => actions.execute(context, input)),
         },
@@ -167,14 +167,15 @@ function arrange(family: 'case' | 'report' | 'captcha' | 'cleanup' | 'setup', pr
         };
       });
       const actions = createCaptchaActions(deps);
-      app = mock<BotApplication>({
-        captcha: {
-          execute: (context, input) => trace(context, () => actions.execute(context, input)),
-        },
+      const bound: ReturnType<QueuedRequestRuntime['captchaRuntime']['forRequest']> = {
+        execute: (context, input) => trace(context, () => actions.execute(context, input)),
+      };
+      app = mock<QueuedRequestRuntime>({
+        captchaRuntime: mock<QueuedRequestRuntime['captchaRuntime']>({ forRequest: () => bound }),
       });
       command = { kind: 'request_captcha_challenge', caseId: 'case', targetUserId: 'target' };
       const input = command;
-      direct = (context) => app.captcha.execute(context, input);
+      direct = (context) => bound.execute(context, input);
       break;
     }
     case 'cleanup': {
@@ -211,10 +212,13 @@ function arrange(family: 'case' | 'report' | 'captcha' | 'cleanup' | 'setup', pr
         return job;
       });
       const actions = createMessageCleanupActions(deps);
-      app = mock<BotApplication>({
-        messageCleanup: {
-          execute: (context, input) => trace(context, () => actions.execute(context, input)),
-        },
+      const bound: ReturnType<QueuedRequestRuntime['messageCleanupRuntime']['forRequest']> = {
+        execute: (context, input) => trace(context, () => actions.execute(context, input)),
+      };
+      app = mock<QueuedRequestRuntime>({
+        messageCleanupRuntime: mock<QueuedRequestRuntime['messageCleanupRuntime']>({
+          forRequest: () => bound,
+        }),
       });
       command = {
         kind: 'preview_case_message_deletion',
@@ -228,7 +232,7 @@ function arrange(family: 'case' | 'report' | 'captcha' | 'cleanup' | 'setup', pr
         previewReference: { jobId: 'job', generation: null },
       };
       const input = command;
-      direct = (context) => app.messageCleanup.execute(context, input);
+      direct = (context) => bound.execute(context, input);
       break;
     }
     case 'setup': {
@@ -245,7 +249,7 @@ function arrange(family: 'case' | 'report' | 'captcha' | 'cleanup' | 'setup', pr
         return { action: 'updated', messageId: 'panel' };
       });
       const actions = createSetupActions(deps);
-      app = mock<BotApplication>({
+      app = mock<QueuedRequestRuntime>({
         setupRuntime: mock<BotSetupRuntime>({
           execute: (context, input) => trace(context, () => actions.execute(context, input)),
         }),
@@ -258,12 +262,12 @@ function arrange(family: 'case' | 'report' | 'captcha' | 'cleanup' | 'setup', pr
   }
   return { app, command, direct, effects, contexts, decisions };
 }
-function queued(command: QueuedCommand, source = 'web') {
+function queued(runtime: QueuedRequestRuntime, command: QueuedCommand, source = 'web') {
   const encoded = encodeQueuedAction({ ...queuedContext, source }, command);
-  return decodeQueuedAction({
+  const request = mock<ModerationActionRequest>({
     id: 'durable-request-id',
     server_id: encoded.serverId,
-    action_type: encoded.actionType,
+    action_type: encoded.actionType as ModerationActionRequest['action_type'],
     actor_id: encoded.actorId,
     actor_surface: encoded.actorSurface,
     target_user_id: encoded.targetUserId,
@@ -273,6 +277,7 @@ function queued(command: QueuedCommand, source = 'web') {
     message_deletion_job_id: encoded.messageDeletionJobId,
     metadata: encoded.metadata,
   });
+  return prepareQueuedAction({ runtime, action: decodeQueuedAction(request), request });
 }
 describe.each(['case', 'report', 'captcha', 'cleanup', 'setup'] as const)(
   '%s cross-entry parity',
@@ -286,7 +291,7 @@ describe.each(['case', 'report', 'captcha', 'cleanup', 'setup'] as const)(
         family === 'cleanup' ? { ...directContext, source: 'web_case' } : directContext;
       const source = family === 'cleanup' ? 'web_case' : family === 'report' ? 'web_report' : 'web';
       const directDecision = await direct.direct(context);
-      await dispatchQueuedAction(worker.app, queued(worker.command, source));
+      await queued(worker.app, worker.command, source)();
       const workerDecision = worker.decisions[0];
       expect(directDecision).toMatchObject({ kind: 'outcome' });
       expect(directDecision).toEqual(workerDecision);
@@ -311,13 +316,11 @@ describe.each(['case', 'report', 'captcha', 'cleanup', 'setup'] as const)(
         family === 'cleanup' ? { ...directContext, source: 'web_case' } : directContext;
       const directDecision = await direct.direct(context);
       await expect(
-        dispatchQueuedAction(
+        queued(
           worker.app,
-          queued(
-            worker.command,
-            family === 'cleanup' ? 'web_case' : family === 'report' ? 'web_report' : 'web'
-          )
-        )
+          worker.command,
+          family === 'cleanup' ? 'web_case' : family === 'report' ? 'web_report' : 'web'
+        )()
       ).rejects.toThrow();
       expect(directDecision).toEqual({ kind: 'denied', code: 'actor_unavailable' });
       expect(directDecision).toEqual(worker.decisions[0]);

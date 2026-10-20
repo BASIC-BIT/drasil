@@ -35,7 +35,7 @@ describe('report panel setup actions', () => {
     mocks.session.mockResolvedValue({ userId: 'admin' });
     mocks.token.mockResolvedValue({ accessToken: 'token' });
     mocks.assertCanManageGuild.mockResolvedValue({ owner: true, permissions: '0' });
-    mocks.queue.mockResolvedValue('queued');
+    mocks.queue.mockResolvedValue({ id: 'request', status: 'queued' });
   });
 
   it.each([false, true])('passes explicit repost=%s with the rendered panel ID', async (repost) => {
@@ -46,9 +46,13 @@ describe('report panel setup actions', () => {
     data.set('reportInstructionsSubmissionId', 'submission-1');
     await (repost ? queueReportInstructionsRepost : queueReportInstructionsRepair)('guild', data);
     expect(mocks.queue).toHaveBeenCalledWith({
-      actorId: 'admin',
+      context: {
+        guildId: 'guild',
+        source: 'web',
+        requestId: 'submission-1',
+        actor: { kind: 'user', userId: 'admin' },
+      },
       channelId: 'channel',
-      guildId: 'guild',
       repost,
       expectedMessageId: 'old-panel',
       expectedChannelId: 'original-channel',

@@ -497,7 +497,7 @@ describe('captcha completion transaction', () => {
     expect(query.mock.calls.at(-1)?.[0]).toBe('commit');
   });
   it('rolls the pass transaction back when its durable effect cannot be inserted', async () => {
-    const { query } = createDatabaseHarness();
+    const { client, query } = createDatabaseHarness();
     mocked.insertModerationActionRequestWithReceipt.mockRejectedValueOnce(
       new Error('queue unavailable')
     );
@@ -515,6 +515,12 @@ describe('captcha completion transaction', () => {
         },
       })
     ).rejects.toThrow('queue unavailable');
+    expect(mocked.insertModerationActionRequestWithReceipt).toHaveBeenCalledWith(
+      client,
+      expect.objectContaining({ actionType: 'apply_captcha_pass' })
+    );
+    expect(query.mock.calls.some(([sql]) => sql.includes("set status = 'passed'"))).toBe(true);
+    expect(client.release).toHaveBeenCalledOnce();
     expect(query.mock.calls.at(-1)?.[0]).toBe('rollback');
     expect(query.mock.calls.some(([sql]) => sql === 'commit')).toBe(false);
   });

@@ -1,3 +1,4 @@
+import { createWebAuthority } from './adapters/authority';
 import { createWebSetupActions } from './adapters/setup';
 import type { SetupUpdateActions } from '@drasil/application';
 import { createWebCaptchaActions } from './adapters/captcha';
@@ -11,7 +12,6 @@ import {
 import {
   PostgresQueueAttentionRepository,
   createWebAttentionMessageDeleter,
-  createWebAuthority,
 } from './adapters/attention';
 
 import {

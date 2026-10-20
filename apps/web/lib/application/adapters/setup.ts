@@ -3,7 +3,7 @@ import {
   type AuthorityPort,
   type SetupUpdateActions,
 } from '@drasil/application';
-import { createWebAuthority } from './attention';
+import { createWebAuthority } from './authority';
 import { createSetupDataAdapter, type SetupDataAdapter } from '../../setupDataAdapter';
 import { captchaProviderConfigurationIssues } from '../../turnstile';
 import { fixtureAdminSession, fixtureGuilds, isWebE2eFixtureMode } from '../../e2eFixtures';

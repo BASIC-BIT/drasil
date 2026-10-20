@@ -1,5 +1,6 @@
 'use server';
 
+import { createWebActionContext } from '@/lib/application/context';
 import { queuedOperationCommandSchema, type QueuedOperationCommand } from '@drasil/application';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
@@ -147,9 +148,8 @@ export async function queueModerationQueueOperationAction(
   const guild = await setupService.assertCanManageGuild(guildId, token.accessToken);
   assertAdministrator(guild);
 
-  const status = await queueModerationQueueOperation({
-    actorId: session.userId,
-    guildId,
+  const { status } = await queueModerationQueueOperation({
+    context: createWebActionContext({ guildId, userId: session.userId }),
     command,
   });
 

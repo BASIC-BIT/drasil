@@ -50,3 +50,30 @@ test.each<OperationCommand>([
     await store.confirmations.verify(context, operationConfirmationCommand(context, command))
   ).toBe(false);
 });
+
+test('uses case identity by default and retains explicitly supplied evidence', async () => {
+  const store = createCaseConfirmationStore();
+  const command = { kind: 'ban_case_user', caseId: 'case', targetUserId: 'target' };
+  store.recordVerified(context, command);
+  expect(await store.confirmations.verify(context, { ...command, targetUserId: 'other' })).toBe(
+    true
+  );
+  expect(await store.confirmations.verify(context, command)).toBe(false);
+  store.recordVerified(context, command, {
+    guildId: context.guildId,
+    actorId: 'other-actor',
+    action: command.kind,
+    targetId: 'case',
+  });
+  expect(await store.confirmations.verify(context, command)).toBe(false);
+});
+
+test('rejects recording confirmation for system actors', () => {
+  const store = createCaseConfirmationStore();
+  expect(() =>
+    store.recordVerified(
+      { ...context, actor: { kind: 'system', purpose: 'captcha_pass' } },
+      { kind: 'ban_case_user', caseId: 'case' }
+    )
+  ).toThrow('A case confirmation needs a user actor.');
+});

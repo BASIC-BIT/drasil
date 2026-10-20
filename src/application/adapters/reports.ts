@@ -37,7 +37,7 @@ import { getCaseResponderSettings } from '../../utils/caseResponderSettings';
 import { messageAttachmentsToReportMetadata } from '../../utils/reportAttachments';
 import { buildReportIntakeAdminActionsCustomId } from '../../utils/reportIntakeAdminActions';
 import { NotificationPresentationBuilder } from '../../services/NotificationPresentationBuilder';
-import { createBotAuthority } from './attention';
+import { createBotAuthority } from './authority';
 
 export interface BotReportDependencies {
   readonly client: Client;

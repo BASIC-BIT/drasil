@@ -77,6 +77,10 @@ export const mutationMethods = {
   ],
   'src/controllers/SetupVerificationModalHandler.ts': ['handleSetupVerificationModalSubmit'],
   'apps/web/lib/activeCaseDataAdapter.ts': ['queueCaseAction'],
+  'apps/web/lib/application/queuedSubmission.ts': [
+    'submitQueuedAction',
+    'submitSerializedSetupAction',
+  ],
   'apps/web/lib/reportQueueDataAdapter.ts': ['closeSubmittedReport', 'openCaseFromSubmittedReport'],
   'apps/web/lib/queueAttentionActionAdapter.ts': [
     'acknowledgeAttentionItem',

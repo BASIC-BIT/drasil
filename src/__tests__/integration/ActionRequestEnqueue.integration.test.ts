@@ -1,14 +1,16 @@
 import { Pool } from 'pg';
+import type { EnqueueInput } from '@drasil/application';
 import { insertModerationActionRequestWithReceipt } from '../../../apps/web/lib/moderationActionRequestQueue';
 import { getPrismaClient } from '../testDb';
 import {
   ModerationActionRequestRepository,
   getReportBanAttemptToken,
 } from '../../repositories/ModerationActionRequestRepository';
-import {
-  ModerationActionRequestCreate,
-  ModerationActionRequestType,
-} from '../../repositories/types';
+import { ModerationActionRequestType } from '../../repositories/types';
+
+interface PersistenceInput extends Omit<EnqueueInput, 'actionType'> {
+  readonly actionType: ModerationActionRequestType;
+}
 
 jest.mock('../../../apps/web/lib/setupDataAdapter', () => ({ getPostgresPool: jest.fn() }));
 const integration = process.env.JEST_INTEGRATION === '1' ? describe : describe.skip;
@@ -34,7 +36,7 @@ integration.each(['prisma', 'pg'] as const)('enqueue contract: %s', (client) => 
         metadata: {},
       },
     });
-    const input: ModerationActionRequestCreate = {
+    const input: PersistenceInput = {
       serverId: 'guild',
       actorId: 'moderator',
       actorSurface: 'web',
@@ -47,10 +49,7 @@ integration.each(['prisma', 'pg'] as const)('enqueue contract: %s', (client) => 
     const enqueue = (value = input) =>
       client === 'prisma'
         ? repository.enqueue(value)
-        : insertModerationActionRequestWithReceipt(pool, {
-            ...value,
-            metadata: value.metadata as import('@drasil/application').EnqueueInput['metadata'],
-          });
+        : insertModerationActionRequestWithReceipt(pool, value);
     const receipt = await enqueue();
     const read = () => repository.findById(receipt.id);
     return { prisma, repository, detection, input, enqueue, receipt, read };
@@ -176,7 +175,7 @@ integration.each(['prisma', 'pg'] as const)('enqueue contract: %s', (client) => 
         data: { status },
       });
       const before = await f.read();
-      const patches: Partial<ModerationActionRequestCreate>[] = [
+      const patches: Partial<typeof f.input>[] = [
         { serverId: 'foreign' },
         { targetUserId: 'other' },
         { actionType: ModerationActionRequestType.KICK_OBSERVED_DETECTION },

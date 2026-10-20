@@ -1,10 +1,7 @@
-import { buildQueuedCaptchaCommand } from './application/adapters/captcha';
-import {
-  evaluateCasePolicy,
-  readCasePolicy,
-  encodeQueuedAction,
-  type QueuedCommand,
-} from '@drasil/application';
+import { buildQueuedCaseCommand } from './application/caseCommands';
+import { createWebActionContext } from './application/context';
+import { submitQueuedAction } from './application/queuedSubmission';
+import { evaluateCasePolicy, readCasePolicy } from '@drasil/application';
 import {
   caseDetailSchema,
   caseSummarySchema,
@@ -31,11 +28,7 @@ import {
 } from './e2eFixtures';
 import { discordDesktopUrl, discordMessageUrl } from './discordUrls';
 import { getPostgresPool } from './setupDataAdapter';
-import {
-  queueModerationActionRequestWithReceipt,
-  type ModerationActionRequestActionType,
-  type ModerationActionRequestQueueStatus,
-} from './moderationActionRequestQueue';
+import type { ModerationActionRequestQueueStatus } from './moderationActionRequestQueue';
 
 export type WebCaseAction = Extract<
   CaseAction,
@@ -224,80 +217,6 @@ const THREAD_REPAIR_ACTIONS_BY_STATE = [
 ] as const satisfies readonly (readonly (readonly CaseAction[])[])[];
 
 const uuidSchema = z.string().uuid();
-
-const requestTypeByCaseAction: Record<WebCaseAction, ModerationActionRequestActionType> = {
-  ban_by_id: 'ban_case_user_by_id',
-  ban_user: 'ban_case_user',
-  close_no_action: 'close_case_no_action',
-  create_thread: 'repair_active_case',
-  kick_user: 'kick_case_user',
-  repair_thread: 'repair_active_case',
-  refresh_notification: 'refresh_case_notification',
-  reopen_case: 'reopen_case',
-  sync_existing_ban: 'sync_existing_ban',
-  verify_user: 'verify_case_user',
-  quarantine_compromised_account: 'quarantine_compromised_account',
-  challenge_user: 'request_captcha_challenge',
-  retry_captcha: 'retry_captcha_challenge',
-  bypass_captcha: 'bypass_captcha_challenge',
-};
-
-type QueuedCaseAction = QueuedCommand | null;
-
-function buildQueuedCaseCommand(input: QueueCaseActionInput, userId: string): QueuedCaseAction {
-  const captcha = buildQueuedCaptchaCommand(input, userId);
-  if (captcha) return captcha;
-  const binding = { caseId: input.caseId, targetUserId: userId };
-  const destructive = { ...binding, reason: input.reason ?? null, detectionEventId: null };
-  switch (input.action) {
-    case 'quarantine_compromised_account':
-      if (input.quarantinePhase === 'preview')
-        return { kind: 'preview_account_quarantine', ...binding };
-      return {
-        kind: 'quarantine_compromised_account',
-        ...binding,
-        reason: input.reason ?? '',
-        previewReference: { kind: 'persisted_preview', requestId: input.previewRequestId ?? '' },
-      };
-    case 'verify_user':
-      return { kind: 'verify_case_user', ...binding };
-    case 'close_no_action':
-      return { kind: 'close_case_no_action', ...binding };
-    case 'kick_user':
-      return { kind: 'kick_case_user', ...destructive };
-    case 'ban_user':
-      return { kind: 'ban_case_user', ...destructive };
-    case 'ban_by_id':
-      return { kind: 'ban_case_user_by_id', ...destructive };
-    case 'create_thread':
-    case 'repair_thread':
-      return {
-        kind: 'repair_active_case',
-        intent: 'moderator_repair',
-        ...binding,
-        mode: input.action,
-      };
-    case 'refresh_notification':
-      return { kind: 'refresh_case_notification', ...binding };
-    case 'reopen_case':
-      return { kind: 'reopen_case', ...binding };
-    case 'sync_existing_ban':
-      return { kind: 'sync_existing_ban', ...binding };
-    default:
-      return null;
-  }
-}
-
-export function buildCaseActionIdempotencyKey(input: QueueCaseActionInput): string {
-  const base = `web:case-action:${input.action}:${input.guildId}:${input.caseId}`;
-  if (input.action === 'retry_captcha' || input.action === 'bypass_captcha') {
-    if (!input.attemptId) {
-      throw new Error('A unique attempt ID is required for repeatable CAPTCHA actions.');
-    }
-    return `${base}:${input.attemptId}`;
-  }
-  return base;
-}
 
 function sortCaseSummariesForHistory(cases: readonly CaseSummary[]): CaseSummary[] {
   return [...cases].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
@@ -1044,39 +963,19 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
       return { action: input.action, caseId: input.caseId, requestId: null, status: 'not_allowed' };
     }
 
-    const command = buildQueuedCaseCommand(input, detail.userId);
-    const receipt = command
-      ? await queueModerationActionRequestWithReceipt(
-          encodeQueuedAction(
-            {
-              guildId: input.guildId,
-              requestId: input.attemptId ?? input.caseId,
-              source: 'web',
-              actor: { kind: 'user', userId: input.adminId },
-            },
-            command
-          )
-        )
-      : await queueModerationActionRequestWithReceipt({
-          actionType: requestTypeByCaseAction[input.action],
-          actorId: input.adminId,
-          actorSurface: 'web',
-          idempotencyKey: buildCaseActionIdempotencyKey(input),
-          metadata: {
-            case_action: input.action,
-            ...(input.reason ? { reason: input.reason } : {}),
-            ...(input.action === 'retry_captcha' || input.action === 'bypass_captcha'
-              ? {
-                  expected_challenge_id: input.expectedCaptchaChallengeId,
-                  expected_generation: input.expectedCaptchaGeneration,
-                }
-              : {}),
-            requested_surface: 'web',
-          },
-          serverId: input.guildId,
-          targetUserId: detail.userId,
-          verificationEventId: detail.id,
-        });
+    const result = buildQueuedCaseCommand(input, detail.userId);
+    if (result.kind === 'denied') {
+      return { action: input.action, caseId: input.caseId, requestId: null, status: 'not_allowed' };
+    }
+    const receipt = await submitQueuedAction({
+      context: createWebActionContext({
+        guildId: input.guildId,
+        userId: input.adminId,
+        requestId: input.attemptId ?? input.caseId,
+        source: 'web',
+      }),
+      command: result.outcome,
+    });
 
     return {
       action: input.action,

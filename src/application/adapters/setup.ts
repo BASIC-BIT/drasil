@@ -33,7 +33,7 @@ import {
 import type { IModerationActionRequestRepository } from '../../repositories/ModerationActionRequestRepository';
 import type { Server, VerificationChannelPermissionSyncState } from '../../repositories/types';
 import { Prisma } from '../../db/prisma';
-import { createBotAuthority } from './attention';
+import { createBotAuthority } from './authority';
 import { createCaseConfirmationStore } from '../context';
 import { z } from 'zod';
 

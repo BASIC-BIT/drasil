@@ -5,9 +5,16 @@ import {
   type QueuedCommand,
   type QueuedJson,
 } from '@drasil/application';
-import { dispatchQueuedAction, queuedActionHandlers } from '../../application/requestDispatch';
-import type { BotApplication } from '../../application/createBotApplication';
-import { ModerationActionRequestType } from '../../repositories/types';
+import {
+  prepareQueuedAction,
+  queuedActionHandlers,
+  type QueuedRequestRuntime,
+} from '../../application/requestDispatch';
+import { mock } from 'jest-mock-extended';
+import {
+  ModerationActionRequestType,
+  type ModerationActionRequest,
+} from '../../repositories/types';
 
 // Stored-row fixtures are independent of the encoder. All forty shipped enum values
 // must decode, reach their owning family, and retain the receipt/storage projection.
@@ -311,9 +318,9 @@ it.each(kinds)('decodes and dispatches the shipped %s row with its receipt', asy
   jest.useFakeTimers().setSystemTime(new Date('2026-10-20T00:00:00.000Z'));
   try {
     const fixture: Fixture = fixtures[kind];
-    const action = decodeQueuedAction({
+    const request = mock<ModerationActionRequest>({
       id: 'request',
-      action_type: kind,
+      action_type: kind as ModerationActionRequestType,
       server_id: 'guild',
       actor_surface: fixture.source ?? 'web',
       actor_id: fixture.source === 'captcha' ? 'drasil:captcha' : 'moderator',
@@ -324,6 +331,7 @@ it.each(kinds)('decodes and dispatches the shipped %s row with its receipt', asy
       message_deletion_job_id: 'job',
       metadata: fixture.metadata ?? {},
     });
+    const action = decodeQueuedAction(request);
     expect(queuedCommandSchemas[kind].safeParse(action.command).success).toBe(true);
     expect(JSON.stringify(action)).not.toContain('private');
     const encoded = encodeQueuedAction(
@@ -346,8 +354,25 @@ it.each(kinds)('decodes and dispatches the shipped %s row with its receipt', asy
         ...(fixture.family === 'captcha' ? { action_type: kind } : { kind }),
       },
     });
-    const app = { [fixture.family]: { execute, preview: execute } } as unknown as BotApplication;
-    const receipt = await dispatchQueuedAction(app, action);
+    const forRequest = jest.fn().mockReturnValue({ execute, preview: execute });
+    const factory = {
+      detections: 'detectionRuntime',
+      quarantine: 'quarantineRuntime',
+      captcha: 'captchaRuntime',
+      messageCleanup: 'messageCleanupRuntime',
+      cases: null,
+      operations: null,
+      reports: null,
+      setupRuntime: null,
+    }[fixture.family];
+    const runtime = (factory
+      ? { [factory]: { forRequest } }
+      : { [fixture.family]: { execute, preview: execute } }) as unknown as QueuedRequestRuntime;
+    const prepared = prepareQueuedAction({ runtime, action, request });
+    expect(execute).not.toHaveBeenCalled();
+    if (factory) expect(forRequest).toHaveBeenCalledWith(request);
+    const receipt = await prepared();
+    expect(forRequest).toHaveBeenCalledTimes(factory ? 1 : 0);
     expect(receipt).toMatchSnapshot('receipt');
     expect(execute).toHaveBeenCalledTimes(1);
     expect(execute.mock.calls[0][0]).toEqual(action.context);

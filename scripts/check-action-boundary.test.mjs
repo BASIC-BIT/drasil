@@ -122,6 +122,24 @@ test('domain_internal_call_is_allowed', () => {
     (result) => assert.equal(result.status, 0, result.stderr)
   );
 });
+for (const method of ['submitQueuedAction', 'submitSerializedSetupAction']) {
+  test(`typed_submission_cannot_bypass_shared_execution_through_${method}`, () => {
+    check(
+      {
+        'src/services/UserModerationService.ts': 'export interface Workflow { banUser(): void; }',
+        'apps/web/lib/application/queuedSubmission.ts': `
+          import type { Workflow } from '../../../../src/services/UserModerationService';
+          function enforce(workflow: Workflow) { const alias = workflow.banUser; alias(); }
+          export function ${method}(workflow: Workflow) { enforce(workflow); }
+        `,
+      },
+      (result) => {
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr, /direct workflow call banUser/);
+      }
+    );
+  });
+}
 for (const [owner, method] of [
   ['controllers/ReportInstructionsManager', 'upsertReportInstructionsMessage'],
   ['controllers/ReportInstructionsManager', 'clearReportInstructions'],

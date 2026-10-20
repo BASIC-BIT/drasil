@@ -22,7 +22,7 @@ import {
 } from '../../repositories/types';
 import type { MessageCleanupService } from '../../services/MessageCleanupService';
 import type { ICombinedBanLifecycleService } from '../../services/UserModerationService';
-import { createBotAuthority } from './attention';
+import { createBotAuthority } from './authority';
 import { createCaseConfirmationStore } from '../context';
 import { getDetectionResponseSettings } from '../../utils/detectionResponseSettings';
 

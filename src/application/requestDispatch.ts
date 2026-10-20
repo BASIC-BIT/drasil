@@ -17,6 +17,7 @@ import {
 import { dispatchQuarantineAction, type QueuedQuarantineOutcome } from './quarantineDispatch';
 import { dispatchDetectionAction, type QueuedDetectionOutcome } from './detectionDispatch';
 import type { BotApplication } from './createBotApplication';
+import type { ModerationActionRequest } from '../repositories/types';
 import { requireCaseOutcome } from './adapters/cases';
 
 type CaseReceipt = { readonly target_user_id: string; readonly verification_event_id: string };
@@ -76,199 +77,229 @@ export type QueuedActionOutcome =
           }
         | { readonly action_type: 'sync_existing_ban'; readonly synced_count: number }
       ));
-export type QueuedHandler = (
-  application: BotApplication,
-  action: DecodedQueuedAction
-) => Promise<QueuedActionOutcome>;
+export type QueuedRequestRuntime = Pick<
+  BotApplication,
+  | 'cases'
+  | 'reports'
+  | 'operations'
+  | 'setupRuntime'
+  | 'caseConfirmations'
+  | 'captchaRuntime'
+  | 'messageCleanupRuntime'
+  | 'quarantineRuntime'
+  | 'detectionRuntime'
+>;
+export interface QueuedDispatchInput {
+  readonly runtime: QueuedRequestRuntime;
+  readonly action: DecodedQueuedAction;
+  readonly request: ModerationActionRequest;
+}
+export type QueuedHandler = (input: QueuedDispatchInput) => () => Promise<QueuedActionOutcome>;
 
-function handler<K extends QueuedCommand['kind']>(
+function handler<K extends QueuedCommand['kind'], Actions>(
   kind: K,
+  select: (runtime: QueuedRequestRuntime, request: ModerationActionRequest) => Actions,
   execute: (
-    application: BotApplication,
+    actions: Actions,
     context: ActionContext,
     command: Extract<QueuedCommand, { kind: K }>
   ) => Promise<QueuedActionOutcome>
 ): QueuedHandler {
-  return (application, action) => {
+  return ({ runtime, action, request }) => {
     if (action.command.kind !== kind) throw new Error('Queued handler binding mismatch.');
+    const actions = select(runtime, request);
     // TypeScript cannot narrow a discriminated union against a generic parameter.
-    return execute(
-      application,
-      action.context,
-      action.command as Extract<QueuedCommand, { kind: K }>
-    );
+    const command = action.command as Extract<QueuedCommand, { kind: K }>;
+    return () => execute(actions, action.context, command);
   };
 }
 export const queuedActionHandlers = {
   open_case_from_observed_detection: handler(
     'open_case_from_observed_detection',
-    (application, context, command) => dispatchCaseAction(application, context, command)
+    (runtime) => runtime.cases,
+    dispatchCaseAction
   ),
-  open_admin_case: handler('open_admin_case', (application, context, command) =>
-    dispatchCaseAction(application, context, command)
+  open_admin_case: handler('open_admin_case', (runtime) => runtime.cases, dispatchCaseAction),
+  manual_flag_user: handler('manual_flag_user', (runtime) => runtime.cases, dispatchCaseAction),
+  verify_case_user: handler('verify_case_user', (runtime) => runtime.cases, dispatchCaseAction),
+  close_case_no_action: handler(
+    'close_case_no_action',
+    (runtime) => runtime.cases,
+    dispatchCaseAction
   ),
-  manual_flag_user: handler('manual_flag_user', (application, context, command) =>
-    dispatchCaseAction(application, context, command)
+  kick_case_user: handler('kick_case_user', (runtime) => runtime.cases, dispatchCaseAction),
+  ban_case_user: handler('ban_case_user', (runtime) => runtime.cases, dispatchCaseAction),
+  ban_case_user_by_id: handler(
+    'ban_case_user_by_id',
+    (runtime) => runtime.cases,
+    dispatchCaseAction
   ),
-  verify_case_user: handler('verify_case_user', (application, context, command) =>
-    dispatchCaseAction(application, context, command)
+  repair_active_case: handler('repair_active_case', (runtime) => runtime.cases, dispatchCaseAction),
+  reopen_case: handler('reopen_case', (runtime) => runtime.cases, dispatchCaseAction),
+  refresh_case_notification: handler(
+    'refresh_case_notification',
+    (runtime) => runtime.cases,
+    dispatchCaseAction
   ),
-  close_case_no_action: handler('close_case_no_action', (application, context, command) =>
-    dispatchCaseAction(application, context, command)
-  ),
-  kick_case_user: handler('kick_case_user', (application, context, command) =>
-    dispatchCaseAction(application, context, command)
-  ),
-  ban_case_user: handler('ban_case_user', (application, context, command) =>
-    dispatchCaseAction(application, context, command)
-  ),
-  ban_case_user_by_id: handler('ban_case_user_by_id', (application, context, command) =>
-    dispatchCaseAction(application, context, command)
-  ),
-  repair_active_case: handler('repair_active_case', (application, context, command) =>
-    dispatchCaseAction(application, context, command)
-  ),
-  reopen_case: handler('reopen_case', (application, context, command) =>
-    dispatchCaseAction(application, context, command)
-  ),
-  refresh_case_notification: handler('refresh_case_notification', (application, context, command) =>
-    dispatchCaseAction(application, context, command)
-  ),
-  sync_existing_ban: handler('sync_existing_ban', (application, context, command) =>
-    dispatchCaseAction(application, context, command)
-  ),
+  sync_existing_ban: handler('sync_existing_ban', (runtime) => runtime.cases, dispatchCaseAction),
   dismiss_observed_detection: handler(
     'dismiss_observed_detection',
-    (application, context, command) =>
-      dispatchDetectionAction(application.detections, context, command)
+    (runtime, request) => runtime.detectionRuntime.forRequest(request),
+    dispatchDetectionAction
   ),
   mark_observed_detection_false_positive: handler(
     'mark_observed_detection_false_positive',
-    (application, context, command) =>
-      dispatchDetectionAction(application.detections, context, command)
+    (runtime, request) => runtime.detectionRuntime.forRequest(request),
+    dispatchDetectionAction
   ),
   undo_observed_detection_action: handler(
     'undo_observed_detection_action',
-    (application, context, command) =>
-      dispatchDetectionAction(application.detections, context, command)
+    (runtime, request) => runtime.detectionRuntime.forRequest(request),
+    dispatchDetectionAction
   ),
-  kick_observed_detection: handler('kick_observed_detection', (application, context, command) =>
-    dispatchDetectionAction(application.detections, context, command)
+  kick_observed_detection: handler(
+    'kick_observed_detection',
+    (runtime, request) => runtime.detectionRuntime.forRequest(request),
+    dispatchDetectionAction
   ),
-  ban_observed_detection: handler('ban_observed_detection', (application, context, command) =>
-    dispatchDetectionAction(application.detections, context, command)
+  ban_observed_detection: handler(
+    'ban_observed_detection',
+    (runtime, request) => runtime.detectionRuntime.forRequest(request),
+    dispatchDetectionAction
   ),
   ignore_detection_accounting: handler(
     'ignore_detection_accounting',
-    (application, context, command) =>
-      dispatchDetectionAction(application.detections, context, command)
+    (runtime, request) => runtime.detectionRuntime.forRequest(request),
+    dispatchDetectionAction
   ),
   restore_detection_accounting: handler(
     'restore_detection_accounting',
-    (application, context, command) =>
-      dispatchDetectionAction(application.detections, context, command)
+    (runtime, request) => runtime.detectionRuntime.forRequest(request),
+    dispatchDetectionAction
   ),
   preview_account_quarantine: handler(
     'preview_account_quarantine',
-    (application, context, command) =>
-      dispatchQuarantineAction(application.quarantine, context, command)
+    (runtime, request) => runtime.quarantineRuntime.forRequest(request),
+    dispatchQuarantineAction
   ),
   quarantine_compromised_account: handler(
     'quarantine_compromised_account',
-    (application, context, command) =>
-      dispatchQuarantineAction(application.quarantine, context, command)
+    (runtime, request) => runtime.quarantineRuntime.forRequest(request),
+    dispatchQuarantineAction
   ),
   request_captcha_challenge: handler(
     'request_captcha_challenge',
-    async (application, context, command) =>
-      requireCaptchaOutcome(await application.captcha.execute(context, command))
+    (runtime, request) => runtime.captchaRuntime.forRequest(request),
+    async (actions, context, command) =>
+      requireCaptchaOutcome(await actions.execute(context, command))
   ),
   retry_captcha_challenge: handler(
     'retry_captcha_challenge',
-    async (application, context, command) =>
-      requireCaptchaOutcome(await application.captcha.execute(context, command))
+    (runtime, request) => runtime.captchaRuntime.forRequest(request),
+    async (actions, context, command) =>
+      requireCaptchaOutcome(await actions.execute(context, command))
   ),
   bypass_captcha_challenge: handler(
     'bypass_captcha_challenge',
-    async (application, context, command) =>
-      requireCaptchaOutcome(await application.captcha.execute(context, command))
+    (runtime, request) => runtime.captchaRuntime.forRequest(request),
+    async (actions, context, command) =>
+      requireCaptchaOutcome(await actions.execute(context, command))
   ),
-  apply_captcha_pass: handler('apply_captcha_pass', async (application, context, command) =>
-    requireCaptchaOutcome(await application.captcha.execute(context, command))
+  apply_captcha_pass: handler(
+    'apply_captcha_pass',
+    (runtime, request) => runtime.captchaRuntime.forRequest(request),
+    async (actions, context, command) =>
+      requireCaptchaOutcome(await actions.execute(context, command))
   ),
   notify_captcha_attention: handler(
     'notify_captcha_attention',
-    async (application, context, command) =>
-      requireCaptchaOutcome(await application.captcha.execute(context, command))
+    (runtime, request) => runtime.captchaRuntime.forRequest(request),
+    async (actions, context, command) =>
+      requireCaptchaOutcome(await actions.execute(context, command))
   ),
   preview_case_message_deletion: handler(
     'preview_case_message_deletion',
-    (application, context, command) =>
-      dispatchMessageCleanupAction(application.messageCleanup, context, command)
+    (runtime, request) => runtime.messageCleanupRuntime.forRequest(request),
+    dispatchMessageCleanupAction
   ),
   execute_case_message_deletion: handler(
     'execute_case_message_deletion',
-    (application, context, command) =>
-      dispatchMessageCleanupAction(application.messageCleanup, context, command)
+    (runtime, request) => runtime.messageCleanupRuntime.forRequest(request),
+    dispatchMessageCleanupAction
   ),
   ban_case_user_with_message_cleanup: handler(
     'ban_case_user_with_message_cleanup',
-    (application, context, command) =>
-      dispatchMessageCleanupAction(application.messageCleanup, context, command)
+    (runtime, request) => runtime.messageCleanupRuntime.forRequest(request),
+    dispatchMessageCleanupAction
   ),
-  sync_moderation_queue: handler('sync_moderation_queue', (application, context, command) =>
-    dispatchOperationsAction(application.operations, context, command)
+  sync_moderation_queue: handler(
+    'sync_moderation_queue',
+    (runtime) => runtime.operations,
+    dispatchOperationsAction
   ),
-  clear_moderation_queue: handler('clear_moderation_queue', (application, context, command) =>
-    dispatchOperationsAction(application.operations, context, command)
+  clear_moderation_queue: handler(
+    'clear_moderation_queue',
+    (runtime) => runtime.operations,
+    dispatchOperationsAction
   ),
   close_resolved_case_threads: handler(
     'close_resolved_case_threads',
-    (application, context, command) =>
-      dispatchOperationsAction(application.operations, context, command)
+    (runtime) => runtime.operations,
+    dispatchOperationsAction
   ),
-  audit_case_role_lockdown: handler('audit_case_role_lockdown', (application, context, command) =>
-    dispatchOperationsAction(application.operations, context, command)
+  audit_case_role_lockdown: handler(
+    'audit_case_role_lockdown',
+    (runtime) => runtime.operations,
+    dispatchOperationsAction
   ),
-  apply_case_role_lockdown: handler('apply_case_role_lockdown', (application, context, command) =>
-    dispatchOperationsAction(application.operations, context, command)
+  apply_case_role_lockdown: handler(
+    'apply_case_role_lockdown',
+    (runtime) => runtime.operations,
+    dispatchOperationsAction
   ),
-  intake_role_members: handler('intake_role_members', (application, context, command) =>
-    dispatchOperationsAction(application.operations, context, command)
+  intake_role_members: handler(
+    'intake_role_members',
+    (runtime) => runtime.operations,
+    dispatchOperationsAction
   ),
-  submit_user_report: handler('submit_user_report', (application, context, command) =>
-    dispatchReportAction(application.reports, context, command)
+  submit_user_report: handler(
+    'submit_user_report',
+    (runtime) => runtime.reports,
+    dispatchReportAction
   ),
-  start_report_intake: handler('start_report_intake', (application, context, command) =>
-    dispatchReportAction(application.reports, context, command)
+  start_report_intake: handler(
+    'start_report_intake',
+    (runtime) => runtime.reports,
+    dispatchReportAction
   ),
-  close_report_intake: handler('close_report_intake', (application, context, command) =>
-    dispatchReportAction(application.reports, context, command)
+  close_report_intake: handler(
+    'close_report_intake',
+    (runtime) => runtime.reports,
+    dispatchReportAction
   ),
   complete_setup_verification: handler(
     'complete_setup_verification',
-    (application, context, command) =>
-      dispatchSetupAction(application.setupRuntime, context, command)
+    (runtime) => runtime.setupRuntime,
+    dispatchSetupAction
   ),
   upsert_report_instructions: handler(
     'upsert_report_instructions',
-    (application, context, command) =>
-      dispatchSetupAction(application.setupRuntime, context, command)
+    (runtime) => runtime.setupRuntime,
+    dispatchSetupAction
   ),
 } satisfies Record<QueuedCommand['kind'], QueuedHandler>;
 
-export function dispatchQueuedAction(
-  application: BotApplication,
-  action: DecodedQueuedAction
-): Promise<QueuedActionOutcome> {
-  return queuedActionHandlers[action.command.kind](application, action);
+export function prepareQueuedAction(
+  input: QueuedDispatchInput
+): () => Promise<QueuedActionOutcome> {
+  return queuedActionHandlers[input.action.command.kind](input);
 }
 async function dispatchCaseAction(
-  application: BotApplication,
+  actions: QueuedRequestRuntime['cases'],
   context: ActionContext,
   command: CaseCommand
 ): Promise<QueuedActionOutcome> {
-  const outcome = requireCaseOutcome(await application.cases.execute(context, command));
+  const outcome = requireCaseOutcome(await actions.execute(context, command));
   const target = { target_user_id: command.targetUserId };
   switch (outcome.kind) {
     case 'open_case_from_observed_detection': {

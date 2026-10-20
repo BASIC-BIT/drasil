@@ -11,9 +11,8 @@ import type {
   ReportReviewRepository,
   QueueMessageDeleter,
 } from '@drasil/application';
-import { encodeQueuedAction } from '@drasil/application';
 import { deleteBotMessage } from '../../discordApi';
-import { queueModerationActionRequestWithReceipt } from '../../moderationActionRequestQueue';
+import { submitQueuedAction } from '../queuedSubmission';
 import { getPostgresPool } from '../../setupDataAdapter';
 
 export class PostgresReportReviewRepository implements ReportReviewRepository {
@@ -98,14 +97,15 @@ export class PostgresQueuedReportCaseOpener implements ReportCaseOpener {
       userId: string;
     }
   ): Promise<ReportCaseOpenResult> {
-    const receipt = await queueModerationActionRequestWithReceipt(
-      encodeQueuedAction(context, {
+    const receipt = await submitQueuedAction({
+      context,
+      command: {
         kind: 'open_case_from_observed_detection',
         detectionEventId: input.detectionEventId,
         targetUserId: input.userId,
         reportId: input.reportId,
-      })
-    );
+      },
+    });
     if (receipt.status === 'failed') {
       throw new Error('Report case action could not be queued. Refresh the inbox and try again.');
     }
