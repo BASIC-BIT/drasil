@@ -245,6 +245,15 @@ function buildQueuedCaseCommand(input: QueueCaseActionInput, userId: string): Qu
   const binding = { caseId: input.caseId, targetUserId: userId };
   const destructive = { ...binding, reason: input.reason ?? null, detectionEventId: null };
   switch (input.action) {
+    case 'quarantine_compromised_account':
+      if (input.quarantinePhase === 'preview')
+        return { kind: 'preview_account_quarantine', ...binding };
+      return {
+        kind: 'quarantine_compromised_account',
+        ...binding,
+        reason: input.reason ?? '',
+        previewReference: { kind: 'persisted_preview', requestId: input.previewRequestId ?? '' },
+      };
     case 'verify_user':
       return { kind: 'verify_case_user', ...binding };
     case 'close_no_action':
@@ -274,15 +283,6 @@ function buildQueuedCaseCommand(input: QueueCaseActionInput, userId: string): Qu
   }
 }
 
-function resolveCaseActionRequestType(
-  input: QueueCaseActionInput
-): ModerationActionRequestActionType {
-  if (input.action === 'quarantine_compromised_account' && input.quarantinePhase === 'preview') {
-    return 'preview_account_quarantine';
-  }
-  return requestTypeByCaseAction[input.action];
-}
-
 export function buildCaseActionIdempotencyKey(input: QueueCaseActionInput): string {
   const base = `web:case-action:${input.action}:${input.guildId}:${input.caseId}`;
   if (input.action === 'retry_captcha' || input.action === 'bypass_captcha') {
@@ -291,13 +291,7 @@ export function buildCaseActionIdempotencyKey(input: QueueCaseActionInput): stri
     }
     return `${base}:${input.attemptId}`;
   }
-  if (input.action !== 'quarantine_compromised_account') {
-    return base;
-  }
-  if (input.quarantinePhase === 'preview') {
-    return `${base}:preview:${input.attemptId ?? 'missing-attempt'}`;
-  }
-  return `${base}:execute:${input.previewRequestId ?? 'missing-preview'}`;
+  return base;
 }
 
 function sortCaseSummariesForHistory(cases: readonly CaseSummary[]): CaseSummary[] {
@@ -1051,7 +1045,7 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
           encodeQueuedAction(
             {
               guildId: input.guildId,
-              requestId: input.caseId,
+              requestId: input.attemptId ?? input.caseId,
               source: 'web',
               actor: { kind: 'user', userId: input.adminId },
             },
@@ -1059,14 +1053,12 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
           )
         )
       : await queueModerationActionRequestWithReceipt({
-          actionType: resolveCaseActionRequestType(input),
+          actionType: requestTypeByCaseAction[input.action],
           actorId: input.adminId,
           actorSurface: 'web',
           idempotencyKey: buildCaseActionIdempotencyKey(input),
           metadata: {
             case_action: input.action,
-            ...(input.quarantinePhase ? { quarantine_phase: input.quarantinePhase } : {}),
-            ...(input.previewRequestId ? { preview_request_id: input.previewRequestId } : {}),
             ...(input.reason ? { reason: input.reason } : {}),
             ...(input.action === 'retry_captcha' || input.action === 'bypass_captcha'
               ? {

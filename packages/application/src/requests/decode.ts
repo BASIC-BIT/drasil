@@ -57,6 +57,22 @@ export function decodeQueuedAction(row: unknown): DecodedQueuedAction {
           mode: metadata.case_action === 'create_thread' ? 'create_thread' : 'repair_thread',
         });
         break;
+      case 'preview_account_quarantine':
+      case 'quarantine_compromised_account':
+        command = queuedCommandSchema.parse({
+          ...target,
+          caseId: parsed.verification_event_id,
+          ...(parsed.action_type === 'quarantine_compromised_account'
+            ? {
+                reason,
+                previewReference: {
+                  kind: 'persisted_preview',
+                  requestId: metadata.preview_request_id,
+                },
+              }
+            : {}),
+        });
+        break;
       case 'manual_flag_user':
         command = queuedCommandSchema.parse({ ...target, reason });
         break;

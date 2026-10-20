@@ -42,28 +42,6 @@ const baseRow = {
 };
 
 describe('activeCaseDataAdapter', () => {
-  it('binds account-quarantine execution idempotency to its completed preview', () => {
-    const base = {
-      action: 'quarantine_compromised_account' as const,
-      adminId: 'moderator-1',
-      attemptId: 'attempt-1',
-      caseId: 'ver-1',
-      guildId: 'guild-1',
-      quarantinePhase: 'preview' as const,
-    };
-
-    expect(buildCaseActionIdempotencyKey(base)).toBe(
-      'web:case-action:quarantine_compromised_account:guild-1:ver-1:preview:attempt-1'
-    );
-    expect(
-      buildCaseActionIdempotencyKey({
-        ...base,
-        quarantinePhase: 'execute',
-        previewRequestId: 'preview-1',
-      })
-    ).toBe('web:case-action:quarantine_compromised_account:guild-1:ver-1:execute:preview-1');
-  });
-
   it('uses a fresh idempotency key for each repeatable CAPTCHA action', () => {
     const base = {
       adminId: 'moderator-1',

@@ -986,7 +986,7 @@ describe('ModerationActionRequestService', () => {
       getAdminChannel: jest.fn(async () => adminChannel),
       getServerConfig: jest.fn(async () => ({
         guild_id: 'guild-1',
-        settings: serverSettings,
+        settings: { account_quarantine_enabled: true, ...serverSettings },
       })),
       updateSetupConfiguration: jest.fn(async () => undefined),
       updateServerConfig: jest.fn(async () => undefined),
@@ -1100,14 +1100,19 @@ describe('ModerationActionRequestService', () => {
               : 'pending',
         })
       ),
-      findActiveByUserAndServer: jest.fn(async () => ({
-        id: 'ver-1',
-        notification_channel_id: 'admin-channel-1',
-        notification_message_id: 'admin-message-1',
-        server_id: 'guild-1',
-        thread_id: 'thread-1',
-        user_id: 'user-1',
-      })),
+      findActiveByUserAndServer: jest.fn(async () =>
+        requests[0]?.action_type === ModerationActionRequestType.REOPEN_CASE
+          ? null
+          : {
+              status: 'pending',
+              id: 'ver-1',
+              notification_channel_id: 'admin-channel-1',
+              notification_message_id: 'admin-message-1',
+              server_id: 'guild-1',
+              thread_id: 'thread-1',
+              user_id: 'user-1',
+            }
+      ),
       updateQuarantineAttempt: jest.fn(async () => pendingVerificationEvent),
     };
     const accountQuarantineService = {
@@ -1137,6 +1142,7 @@ describe('ModerationActionRequestService', () => {
       })),
     };
     const application = createBotApplication({
+      accountQuarantineService: accountQuarantineService as any,
       actionRequests: repository,
       client: client as any,
       configService: configService as any,
@@ -1172,7 +1178,6 @@ describe('ModerationActionRequestService', () => {
       setupDiagnosticsService as any,
       messageDeletionJobs as any,
       messageCleanupService as any,
-      accountQuarantineService as any,
       captchaChallengeService as any,
       application
     );
@@ -2736,6 +2741,7 @@ describe('ModerationActionRequestService', () => {
       accountQuarantinePreviewRequest,
     ]);
     reporterMember.permissions.has.mockReturnValue(false);
+    reporterMember.permissions.bitfield = 0n;
 
     await expect(service.processPendingRequests()).resolves.toBe(1);
 
@@ -2796,7 +2802,7 @@ describe('ModerationActionRequestService', () => {
     expect(accountQuarantineService.quarantine).not.toHaveBeenCalled();
     expect(repository.failed).toEqual([
       {
-        error: 'The live account-quarantine preview is missing, stale, or mismatched.',
+        error: 'The live account-quarantine containment state changed; run a new preview.',
         id: accountQuarantineExecuteRequest.id,
       },
     ]);
@@ -2975,6 +2981,7 @@ describe('ModerationActionRequestService', () => {
       accountQuarantineExecuteRequest,
     ]);
     reporterMember.permissions.has.mockReturnValue(false);
+    reporterMember.permissions.bitfield = 0n;
 
     await expect(service.processPendingRequests()).resolves.toBe(1);
 

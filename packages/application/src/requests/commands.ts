@@ -1,3 +1,7 @@
+import {
+  queuedQuarantineCommandSchema,
+  type QueuedQuarantineCommand,
+} from '../containment/commands';
 import { z } from 'zod';
 import { queuedDetectionCommandSchema, type QueuedDetectionCommand } from '../detections/commands';
 import { caseCommandSchema, type CaseCommand } from '../cases/commands';
@@ -23,5 +27,9 @@ const queuedCaseCommandSchema = caseCommandSchema.refine(
   'Ordinary staff moderation, native case openings and administrator slash repairs execute directly.'
 );
 
-export type QueuedCommand = QueuedCaseCommand | QueuedDetectionCommand;
-export const queuedCommandSchema = z.union([queuedCaseCommandSchema, queuedDetectionCommandSchema]);
+export type QueuedCommand = QueuedCaseCommand | QueuedDetectionCommand | QueuedQuarantineCommand;
+export const queuedCommandSchema = z.union([
+  queuedCaseCommandSchema,
+  queuedDetectionCommandSchema,
+  queuedQuarantineCommandSchema,
+]);

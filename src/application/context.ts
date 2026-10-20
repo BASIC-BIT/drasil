@@ -1,6 +1,8 @@
 import {
   matchesConfirmation,
   type ActionContext,
+  type QuarantinePreviewBinding,
+  type QuarantineExecuteInput,
   type ConfirmationCommand,
   type ConfirmationBinding,
   type ConfirmationPort,
@@ -53,6 +55,47 @@ export function createCaseConfirmationStore(): {
         bindings.delete(context.requestId);
         return matchesConfirmation(context, command, binding);
       },
+    },
+  };
+}
+
+// Discord custom IDs retain their shipped short fingerprint. The full preview
+// binding is held by the authenticated runtime, never reconstructed from the ID.
+export interface QuarantinePreviewStore {
+  record(binding: QuarantinePreviewBinding): void;
+  resolve(context: ActionContext, input: QuarantineExecuteInput): QuarantinePreviewBinding | null;
+}
+export function createQuarantinePreviewStore(): QuarantinePreviewStore {
+  const bindings = new Map<string, QuarantinePreviewBinding>();
+  const key = (
+    binding: { guildId: string; actorId: string; caseId: string; targetUserId: string },
+    fingerprint: string
+  ): string =>
+    JSON.stringify([
+      binding.guildId,
+      binding.actorId,
+      binding.caseId,
+      binding.targetUserId,
+      fingerprint,
+    ]);
+  return {
+    record(binding: QuarantinePreviewBinding): void {
+      for (const [id, entry] of bindings) if (entry.expiresAt <= Date.now()) bindings.delete(id);
+      bindings.set(key(binding, binding.fingerprint.slice(0, 20)), binding);
+    },
+    resolve(
+      context: ActionContext,
+      input: QuarantineExecuteInput
+    ): QuarantinePreviewBinding | null {
+      if (context.actor.kind !== 'user' || input.previewReference.kind !== 'discord_confirmation')
+        return null;
+      const id = key(
+        { ...input, guildId: context.guildId, actorId: context.actor.userId },
+        input.previewReference.fingerprint
+      );
+      const binding = bindings.get(id) ?? null;
+      bindings.delete(id);
+      return binding;
     },
   };
 }

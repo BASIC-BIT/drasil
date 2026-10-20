@@ -174,6 +174,7 @@ async function fixture() {
       .mockResolvedValue({ settings: { moderator_ban_action_enabled: true } }),
   };
   const application = createBotApplication({
+    accountQuarantineService: null,
     client,
     actionRequests: requests,
     configService: config as never,
@@ -203,7 +204,6 @@ async function fixture() {
       {} as never,
       {} as never,
       {} as never,
-      undefined,
       undefined,
       application
     );

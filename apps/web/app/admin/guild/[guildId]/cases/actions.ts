@@ -203,7 +203,13 @@ async function assertCanQueueCaseAction(
         reason: null,
       };
     }
-    if (formData?.get('confirmAction') !== 'on') {
+    const confirmationCommand = { kind: 'quarantine_compromised_account', caseId };
+    if (
+      !(await createWebConfirmationPort(actionContext, confirmationCommand, formData).verify(
+        actionContext,
+        confirmationCommand
+      ))
+    ) {
       throw new Error('Confirm the account quarantine before queueing it.');
     }
     const reason = readFormString(formData, 'reason');

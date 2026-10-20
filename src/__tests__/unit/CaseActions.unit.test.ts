@@ -122,6 +122,7 @@ async function arrange() {
     }),
   } as unknown as ISecurityActionService;
   const application = createBotApplication({
+    accountQuarantineService: null,
     actionRequests: {} as never,
     client,
     configService,

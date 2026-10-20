@@ -1,3 +1,4 @@
+import { dispatchQuarantineAction, type QueuedQuarantineOutcome } from './quarantineDispatch';
 import { dispatchDetectionAction, type QueuedDetectionOutcome } from './detectionDispatch';
 import type { BotApplication } from './createBotApplication';
 import type { CaseCommand, CaseOutcome, DecodedQueuedAction } from '@drasil/application';
@@ -5,6 +6,7 @@ import { requireCaseOutcome } from './adapters/cases';
 
 type CaseReceipt = { readonly target_user_id: string; readonly verification_event_id: string };
 export type QueuedActionOutcome =
+  | QueuedQuarantineOutcome
   | QueuedDetectionOutcome
   | {
       readonly action_type: 'open_case_from_observed_detection';
@@ -60,6 +62,9 @@ export async function dispatchQueuedAction(
 ): Promise<QueuedActionOutcome> {
   const { command, context } = action;
   switch (command.kind) {
+    case 'preview_account_quarantine':
+    case 'quarantine_compromised_account':
+      return dispatchQuarantineAction(application.quarantine, context, command);
     case 'dismiss_observed_detection':
     case 'mark_observed_detection_false_positive':
     case 'undo_observed_detection_action':

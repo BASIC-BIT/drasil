@@ -19,3 +19,8 @@ export * from './cases/policy';
 export * from './detections/commands';
 export * from './detections/ports';
 export * from './detections/actions';
+
+export * from './containment/ports';
+export * from './containment/quarantine';
+export * from './containment/fingerprint';
+export * from './containment/commands';

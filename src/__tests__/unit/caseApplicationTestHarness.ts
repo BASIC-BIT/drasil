@@ -1,3 +1,7 @@
+import {
+  createBotQuarantineRuntime,
+  type BotQuarantineDependencies,
+} from '../../application/adapters/quarantine';
 import { createBotDetectionRuntime } from '../../application/adapters/detections';
 import { createCaseConfirmationStore } from '../../application/context';
 import { createCaseActions, type AuthorityPort } from '@drasil/application';
@@ -11,7 +15,9 @@ import {
 // These runtime facts are explicit; execution-time revocation is covered with the
 // actual Discord authority adapter in CaseActions.unit.test.ts.
 export function buildCaseApplication(
-  deps: Omit<BotCaseDependencies, 'confirmations'>,
+  deps: Omit<BotCaseDependencies, 'confirmations'> & {
+    readonly accountQuarantineService?: BotQuarantineDependencies['accountQuarantineService'];
+  },
   authority?: AuthorityPort
 ): BotApplication {
   const caseConfirmations = createCaseConfirmationStore();
@@ -45,7 +51,25 @@ export function buildCaseApplication(
       },
     }
   );
+  const quarantineRuntime = createBotQuarantineRuntime(
+    {
+      ...deps,
+      accountQuarantineService: deps.accountQuarantineService ?? null,
+      actionRequests: {
+        async findById() {
+          return null;
+        },
+      } as never,
+    },
+    authority ?? {
+      async loadFresh(guildId, userId) {
+        return { guildId, userId, present: true, owner: false, permissions: '8', roleIds: [] };
+      },
+    }
+  );
   return {
+    quarantine: quarantineRuntime.actions,
+    quarantineRuntime,
     detections: detectionRuntime.actions,
     detectionRuntime,
     cases: createCaseActions({

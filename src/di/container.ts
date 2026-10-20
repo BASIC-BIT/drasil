@@ -281,6 +281,9 @@ function configureServices(container: Container): void {
     .bind<BotApplication>(TYPES.BotApplication)
     .toDynamicValue((context) =>
       createBotApplication({
+        accountQuarantineService: context.get<IAccountQuarantineService>(
+          TYPES.AccountQuarantineService
+        ),
         actionRequests: context.get<IModerationActionRequestRepository>(
           TYPES.ModerationActionRequestRepository
         ),

@@ -1,4 +1,9 @@
 import {
+  createBotQuarantineRuntime,
+  type BotQuarantineRuntime,
+  type BotQuarantineDependencies,
+} from './adapters/quarantine';
+import {
   createBotDetectionRuntime,
   type BotDetectionDependencies,
   type BotDetectionRuntime,
@@ -16,6 +21,8 @@ import type { IModerationQueueService } from '../services/ModerationQueueService
 import { createBotAuthority, createBotAttentionMessageDeleter } from './adapters/attention';
 
 export interface BotApplication {
+  readonly quarantine: BotQuarantineRuntime['actions'];
+  readonly quarantineRuntime: BotQuarantineRuntime;
   readonly detections: BotDetectionRuntime['actions'];
   readonly detectionRuntime: BotDetectionRuntime;
   readonly attention: AttentionActions;
@@ -26,6 +33,7 @@ export interface BotApplication {
 export function createBotApplication(
   deps: Omit<BotCaseDependencies, 'confirmations'> & {
     readonly client: Client;
+    readonly accountQuarantineService: BotQuarantineDependencies['accountQuarantineService'];
     readonly actionRequests: BotDetectionDependencies['actionRequests'];
     readonly queueRepository: IModerationQueueRepository;
     readonly queueService: IModerationQueueService;
@@ -36,7 +44,10 @@ export function createBotApplication(
     ...deps,
     confirmations: caseConfirmations.confirmations,
   });
+  const quarantineRuntime = createBotQuarantineRuntime(deps);
   return {
+    quarantine: quarantineRuntime.actions,
+    quarantineRuntime,
     detections: detectionRuntime.actions,
     detectionRuntime,
     cases: createBotCaseActions({ ...deps, confirmations: caseConfirmations.confirmations }),

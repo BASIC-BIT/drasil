@@ -24,6 +24,21 @@ export function encodeQueuedAction(context: ActionContext, input: QueuedCommand)
     targetUserId: command.targetUserId,
   };
   switch (command.kind) {
+    case 'preview_account_quarantine':
+    case 'quarantine_compromised_account':
+      return {
+        ...base,
+        verificationEventId: command.caseId,
+        idempotencyKey: `${context.source}:case-action:quarantine_compromised_account:${context.guildId}:${command.caseId}:${command.kind === 'preview_account_quarantine' ? `preview:${context.requestId}` : `execute:${command.previewReference.requestId}`}`,
+        metadata: {
+          case_action: 'quarantine_compromised_account',
+          quarantine_phase: command.kind === 'preview_account_quarantine' ? 'preview' : 'execute',
+          requested_surface: context.source,
+          ...(command.kind === 'quarantine_compromised_account'
+            ? { reason: command.reason, preview_request_id: command.previewReference.requestId }
+            : {}),
+        },
+      };
     case 'dismiss_observed_detection':
     case 'mark_observed_detection_false_positive':
     case 'undo_observed_detection_action':
