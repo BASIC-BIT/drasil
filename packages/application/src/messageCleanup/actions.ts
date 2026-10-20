@@ -173,7 +173,9 @@ export function createMessageCleanupActions(
             );
           return { kind: 'denied', code: denial };
         }
-        if (!committed && state.status !== 'pending')
+        const completedDeletion =
+          command.kind === 'execute_case_message_deletion' && job.status === 'completed';
+        if (!committed && !completedDeletion && state.status !== 'pending')
           return { kind: 'denied', code: 'stale_state' };
       }
       if (command.kind === 'preview_case_message_deletion')

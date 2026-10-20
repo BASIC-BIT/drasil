@@ -243,3 +243,76 @@ it('authorized legacy continuation never repeats its committed ban', async () =>
   expect((await f.actions.execute(context, command)).kind).toBe('outcome');
   expect(f.ban).not.toHaveBeenCalled();
 });
+
+function completedDeleteOnly(): Harness & { input: MessageCleanupCommand } {
+  const f = setup();
+  f.job.mode = 'delete_only';
+  f.job.status = 'completed';
+  f.deps.cases.find = async (): ReturnType<MessageCleanupDependencies['cases']['find']> => ({
+    id: 'case',
+    guildId: 'guild',
+    targetUserId: 'user',
+    status: 'verified',
+    evidenceThreadId: 'evidence',
+  });
+  f.cleanup.mockResolvedValue({
+    alreadyCompleted: true,
+    preservedCount: 2,
+    deletedCount: 1,
+    alreadyMissingCount: 0,
+    changedCount: 0,
+    evidenceFailedCount: 0,
+    deleteFailedCount: 1,
+    permissionDeniedCount: 0,
+  });
+  return {
+    ...f,
+    input: { ...command, kind: 'execute_case_message_deletion', mode: 'delete_only' },
+  };
+}
+it('recovers completed delete-only counts after the bound case resolves', async () => {
+  const f = completedDeleteOnly();
+  expect(await f.actions.execute(context, f.input)).toMatchObject({
+    kind: 'outcome',
+    outcome: {
+      alreadyCompleted: true,
+      preservedCount: 2,
+      deletedCount: 1,
+      deleteFailedCount: 1,
+      banned: false,
+    },
+  });
+  expect(f.ban).not.toHaveBeenCalled();
+});
+it.each(['ready', 'executing', 'failed'])(
+  'keeps pending-case checks for %s delete-only jobs',
+  async (status) => {
+    const f = completedDeleteOnly();
+    f.job.status = status;
+    expect(await f.actions.execute(context, f.input)).toEqual({
+      kind: 'denied',
+      code: 'stale_state',
+    });
+    expect(f.cleanup).not.toHaveBeenCalled();
+  }
+);
+it.each(['authority', 'confirmation', 'generation', 'subject'] as const)(
+  'retains %s checks for completed delete-only receipt recovery',
+  async (check) => {
+    const f = completedDeleteOnly();
+    if (check === 'authority')
+      f.loadFresh.mockResolvedValue({
+        guildId: 'guild',
+        userId: 'admin',
+        present: true,
+        owner: false,
+        permissions: '0',
+        roleIds: [],
+      });
+    if (check === 'confirmation') f.deps.confirmations.verify = async (): Promise<boolean> => false;
+    if (check === 'generation') f.job.generation = 'changed-generation';
+    if (check === 'subject') f.job.targetUserId = 'another-user';
+    expect((await f.actions.execute(context, f.input)).kind).toBe('denied');
+    expect(f.cleanup).not.toHaveBeenCalled();
+  }
+);

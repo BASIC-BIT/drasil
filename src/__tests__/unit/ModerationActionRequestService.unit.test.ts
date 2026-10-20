@@ -1,3 +1,4 @@
+import { MessageCleanupService } from '../../services/MessageCleanupService';
 import { createBotApplication } from '../../application/createBotApplication';
 import { ModerationActionRequestService } from '../../services/ModerationActionRequestService';
 import { ReportInstructionsManager } from '../../controllers/ReportInstructionsManager';
@@ -14,6 +15,9 @@ import {
   MessageDeletionJobMode,
   MessageDeletionJobStatus,
   MessageDeletionScope,
+  MessageDeletionItemStatus,
+  MessageDeletionEvidenceStatus,
+  MessageDeletionDiscoverySource,
   ModerationActionRequest,
   ModerationActionRequestStatus,
   ModerationActionRequestType,
@@ -4000,6 +4004,85 @@ describe('ModerationActionRequestService', () => {
         preserved_count: 2,
       }),
     });
+  });
+
+  it('recovers a reclaimed completed delete-only receipt after case resolution without evidence or deletion effects', async () => {
+    const f = buildService([{ ...executeMessageCleanupRequest, attempts: 2 }]);
+    const job: MessageDeletionJobWithItems = {
+      ...messageCleanupJob,
+      status: MessageDeletionJobStatus.COMPLETED,
+      items: [MessageDeletionItemStatus.DELETED, MessageDeletionItemStatus.DELETE_FAILED].map(
+        (status, index) => ({
+          id: `item-${index}`,
+          job_id: messageCleanupJob.id,
+          message_id: `message-${index}`,
+          channel_id: 'channel-1',
+          author_id: 'user-1',
+          message_created_at: new Date('2026-07-08T18:00:00.000Z'),
+          message_edited_at: null,
+          content_preview: 'reviewed message',
+          attachment_count: 0,
+          discovery_source: MessageDeletionDiscoverySource.DISCORD_SEARCH,
+          bulk_delete_eligible: true,
+          evidence_status: MessageDeletionEvidenceStatus.PRESERVED,
+          status,
+          evidence_message_id: `evidence-${index}`,
+          attempted_at: null,
+          evidence_preserved_at: null,
+          deleted_at: null,
+          completed_at: null,
+          failure_reason: null,
+          metadata: {},
+        })
+      ),
+    };
+    f.messageDeletionJobs.findById.mockResolvedValue(job);
+    const state = await f.verificationEventRepository.findById();
+    f.verificationEventRepository.findById.mockResolvedValue({
+      ...state,
+      status: VerificationStatus.VERIFIED,
+    });
+    const deletion = {
+      preserveMessageEvidence: jest.fn(),
+      deleteMessage: jest.fn(),
+      bulkDeleteMessages: jest.fn(),
+    };
+    const cleanup = new MessageCleanupService(
+      f.client as never,
+      f.messageDeletionJobs as never,
+      f.verificationEventRepository as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      deletion
+    );
+    f.messageCleanupService.executeJob.mockImplementation(() => cleanup.executeJob(job.id));
+
+    await expect(f.service.processPendingRequests()).resolves.toBe(1);
+
+    expect(f.repository.failed).toEqual([]);
+    expect(f.repository.completed).toEqual([
+      {
+        id: executeMessageCleanupRequest.id,
+        result: {
+          action_type: 'execute_case_message_deletion',
+          message_deletion_job_id: job.id,
+          mode: 'delete_only',
+          already_completed: true,
+          preserved_count: 2,
+          deleted_count: 1,
+          delete_failed_count: 1,
+          already_missing_count: 0,
+          changed_since_preview_count: 0,
+          evidence_failed_count: 0,
+          permission_denied_count: 0,
+        },
+      },
+    ]);
+    expect(deletion.preserveMessageEvidence).not.toHaveBeenCalled();
+    expect(deletion.deleteMessage).not.toHaveBeenCalled();
+    expect(deletion.bulkDeleteMessages).not.toHaveBeenCalled();
+    expect(f.userModerationService.performDiscordBanById).not.toHaveBeenCalled();
   });
 
   it('executes a frozen cleanup preview created by another Administrator', async () => {
