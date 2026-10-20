@@ -1,6 +1,52 @@
 import type { ActionResult, QueuedCommand } from '@drasil/application';
 import type { QueueCaseActionInput } from '../activeCaseDataAdapter';
 
+function buildRepeatedCaptchaCommand(
+  input: QueueCaseActionInput & { readonly action: 'retry_captcha' | 'bypass_captcha' },
+  userId: string
+): ActionResult<QueuedCommand> {
+  if (
+    !input.expectedCaptchaChallengeId ||
+    !input.expectedCaptchaGeneration ||
+    !Number.isInteger(input.expectedCaptchaGeneration) ||
+    input.expectedCaptchaGeneration < 1
+  )
+    return { kind: 'denied', code: 'stale_state' };
+  const binding = {
+    caseId: input.caseId,
+    targetUserId: userId,
+    expectedChallengeId: input.expectedCaptchaChallengeId,
+    expectedGeneration: input.expectedCaptchaGeneration,
+  };
+  return {
+    kind: 'outcome',
+    outcome:
+      input.action === 'retry_captcha'
+        ? { kind: 'retry_captcha_challenge', ...binding }
+        : { kind: 'bypass_captcha_challenge', ...binding, reason: input.reason ?? '' },
+  };
+}
+
+function buildQuarantineCommand(
+  input: QueueCaseActionInput,
+  userId: string
+): ActionResult<QueuedCommand> {
+  const binding = { caseId: input.caseId, targetUserId: userId };
+  if (input.quarantinePhase === 'preview' && input.attemptId)
+    return { kind: 'outcome', outcome: { kind: 'preview_account_quarantine', ...binding } };
+  if (input.quarantinePhase !== 'execute' || !input.previewRequestId)
+    return { kind: 'denied', code: 'stale_state' };
+  return {
+    kind: 'outcome',
+    outcome: {
+      kind: 'quarantine_compromised_account',
+      ...binding,
+      reason: input.reason ?? '',
+      previewReference: { kind: 'persisted_preview', requestId: input.previewRequestId },
+    },
+  };
+}
+
 export function buildQueuedCaseCommand(
   input: QueueCaseActionInput,
   userId: string
@@ -11,45 +57,10 @@ export function buildQueuedCaseCommand(
     case 'challenge_user':
       return { kind: 'outcome', outcome: { kind: 'request_captcha_challenge', ...binding } };
     case 'retry_captcha':
-    case 'bypass_captcha': {
-      if (
-        !input.expectedCaptchaChallengeId ||
-        !input.expectedCaptchaGeneration ||
-        !Number.isInteger(input.expectedCaptchaGeneration) ||
-        input.expectedCaptchaGeneration < 1
-      )
-        return { kind: 'denied', code: 'stale_state' };
-      const expected = {
-        expectedChallengeId: input.expectedCaptchaChallengeId,
-        expectedGeneration: input.expectedCaptchaGeneration,
-      };
-      return {
-        kind: 'outcome',
-        outcome:
-          input.action === 'retry_captcha'
-            ? { kind: 'retry_captcha_challenge', ...binding, ...expected }
-            : {
-                kind: 'bypass_captcha_challenge',
-                ...binding,
-                ...expected,
-                reason: input.reason ?? '',
-              },
-      };
-    }
+    case 'bypass_captcha':
+      return buildRepeatedCaptchaCommand({ ...input, action: input.action }, userId);
     case 'quarantine_compromised_account':
-      if (input.quarantinePhase === 'preview' && input.attemptId)
-        return { kind: 'outcome', outcome: { kind: 'preview_account_quarantine', ...binding } };
-      if (input.quarantinePhase !== 'execute' || !input.previewRequestId)
-        return { kind: 'denied', code: 'stale_state' };
-      return {
-        kind: 'outcome',
-        outcome: {
-          kind: 'quarantine_compromised_account',
-          ...binding,
-          reason: input.reason ?? '',
-          previewReference: { kind: 'persisted_preview', requestId: input.previewRequestId },
-        },
-      };
+      return buildQuarantineCommand(input, userId);
     case 'verify_user':
       return { kind: 'outcome', outcome: { kind: 'verify_case_user', ...binding } };
     case 'close_no_action':

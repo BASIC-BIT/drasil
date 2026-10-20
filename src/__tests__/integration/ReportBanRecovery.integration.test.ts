@@ -1,4 +1,5 @@
 import { mock } from 'jest-mock-extended';
+import type { EnqueueInput } from '@drasil/application';
 import type { IIntegrityAuditService } from '../../services/IntegrityAuditService';
 import type { ICaseRoleLockdownService } from '../../services/CaseRoleLockdownService';
 import type { ICaseThreadClosureSweepService } from '../../services/CaseThreadClosureSweepService';
@@ -10,6 +11,10 @@ import { CaseRoleReleaseReconciliationService } from '../../services/CaseRoleRel
 import { RoleQuarantineSnapshotRepository } from '../../repositories/RoleQuarantineSnapshotRepository';
 import { Pool } from 'pg';
 import { insertModerationActionRequestWithReceipt } from '../../../apps/web/lib/moderationActionRequestQueue';
+interface PersistenceInput extends Omit<EnqueueInput, 'actionType'> {
+  readonly actionType: ModerationActionRequestType;
+}
+
 jest.mock('../../../apps/web/lib/setupDataAdapter', () => ({ getPostgresPool: jest.fn() }));
 import { MessageContextRepository } from '../../repositories/MessageContextRepository';
 import {
@@ -40,7 +45,6 @@ import {
   ModerationOutcomeSource,
   DetectionType,
   ModerationActionRequestType,
-  ModerationActionRequestCreate,
   ReportIntakeStatus,
   VerificationStatus,
 } from '../../repositories/types';
@@ -422,13 +426,13 @@ integration('report-ban stale worker recovery with real services and Postgres', 
         await f.security.undoObservedDetectionAction('guild', 'target', f.detection.id, f.moderator)
       ).toBe(AdminActionType.DISMISS);
       expect((await f.reports.findById(f.report.id))?.status).toBe('submitted');
-      const input = {
+      const input: PersistenceInput = {
         serverId: 'guild',
         targetUserId: 'target',
         actorId: 'new-moderator',
         actorSurface: 'web',
         detectionEventId: f.detection.id,
-        reportIntakeId: withReport ? f.report.id : undefined,
+        reportIntakeId: withReport ? f.report.id : null,
         idempotencyKey: f.request.idempotency_key,
         actionType: ModerationActionRequestType.BAN_OBSERVED_DETECTION,
         metadata: {
@@ -535,7 +539,7 @@ integration('report-ban stale worker recovery with real services and Postgres', 
       { observed_ban_result: { status: 'already_handled' } },
       getReportBanAttemptToken(f.request)
     );
-    const input: ModerationActionRequestCreate & { metadata: Record<string, string> } = {
+    let input: PersistenceInput = {
       serverId: 'guild',
       actorId: 'moderator',
       actorSurface: 'web',
@@ -605,24 +609,30 @@ integration('report-ban stale worker recovery with real services and Postgres', 
         where: { id: f.report.id },
         data: { confirmed_target_user_id: 'reporter' },
       });
-    if (guard === 'changed-target') input.targetUserId = 'reporter';
+    if (guard === 'changed-target') input = { ...input, targetUserId: 'reporter' };
     if (guard === 'changed-server') {
       await new ServerRepository(prisma).getOrCreateServer('other-guild');
-      input.serverId = 'other-guild';
+      input = { ...input, serverId: 'other-guild' };
     }
     if (guard === 'changed-detection')
-      input.detectionEventId = (
-        await f.detections.create({
-          server_id: 'guild',
-          user_id: 'target',
-          detection_type: DetectionType.USER_REPORT,
-          confidence: 1,
-          metadata: { reportIntakeId: f.report.id },
-        })
-      ).id;
-    if (guard === 'changed-report') input.reportIntakeId = undefined;
+      input = {
+        ...input,
+        detectionEventId: (
+          await f.detections.create({
+            server_id: 'guild',
+            user_id: 'target',
+            detection_type: DetectionType.USER_REPORT,
+            confidence: 1,
+            metadata: { reportIntakeId: f.report.id },
+          })
+        ).id,
+      };
+    if (guard === 'changed-report') input = { ...input, reportIntakeId: null };
     if (guard === 'changed-action')
-      input.actionType = ModerationActionRequestType.OPEN_CASE_FROM_OBSERVED_DETECTION;
+      input = {
+        ...input,
+        actionType: ModerationActionRequestType.OPEN_CASE_FROM_OBSERVED_DETECTION,
+      };
     const before = await f.requests.findById(f.request.id);
     const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
     try {
@@ -651,7 +661,7 @@ integration('report-ban stale worker recovery with real services and Postgres', 
       expect(
         await f.security.undoObservedDetectionAction('guild', 'target', f.detection.id, f.moderator)
       ).toBe(AdminActionType.DISMISS);
-      const input = {
+      const input: PersistenceInput = {
         serverId: 'guild',
         actorId: 'moderator',
         actorSurface: 'web',
@@ -660,6 +670,7 @@ integration('report-ban stale worker recovery with real services and Postgres', 
         detectionEventId: f.detection.id,
         reportIntakeId: f.report.id,
         idempotencyKey: f.request.idempotency_key,
+        metadata: {},
       };
       const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
       try {
@@ -2833,12 +2844,12 @@ integration('report-ban stale worker recovery with real services and Postgres', 
       ]);
       const oldSnapshot = (await f.requests.findById(f.request.id))!;
       await f.security.reconcileReportBan(oldSnapshot);
-      const input = {
+      const input: PersistenceInput = {
         serverId: 'guild',
         targetUserId: 'target',
         actorId: 'moderator',
         actorSurface: surface,
-        actionType: 'ban_observed_detection' as const,
+        actionType: ModerationActionRequestType.BAN_OBSERVED_DETECTION,
         reportIntakeId: f.report.id,
         detectionEventId: f.detection.id,
         idempotencyKey: f.request.idempotency_key,
@@ -2919,15 +2930,16 @@ integration('report-ban stale worker recovery with real services and Postgres', 
     'retains uncertain failed %s requests instead of rotating the attempt',
     async (surface) => {
       const f = await fixture();
-      const input = {
+      const input: PersistenceInput = {
         serverId: 'guild',
         targetUserId: 'target',
         actorId: 'moderator',
         actorSurface: surface,
-        actionType: 'ban_observed_detection' as const,
+        actionType: ModerationActionRequestType.BAN_OBSERVED_DETECTION,
         reportIntakeId: f.report.id,
         detectionEventId: f.detection.id,
         idempotencyKey: f.request.idempotency_key,
+        metadata: {},
       };
       for (const [phase, status] of [
         ['enforcement_started', null],
