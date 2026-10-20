@@ -2,7 +2,7 @@
 
 Date: 2026-10-20
 
-Status: Written design for review. Implementation is not yet approved.
+Status: Approved for implementation planning on 2026-10-20. Product implementation awaits plan review.
 
 Related work: #89, merged PRs #255 and #257, [action boundary](../../dev/action-boundary.md), [caller inventory](../../dev/action-boundary-inventory.md).
 
