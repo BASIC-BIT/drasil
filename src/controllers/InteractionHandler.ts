@@ -2844,13 +2844,14 @@ export class InteractionHandler implements IInteractionHandler {
       return;
     }
 
+    // Claim the original confirmation before permission/policy reads can yield to another submit.
+    this.pendingModerationActionConfirmations.delete(id);
     if (
       !(await this.ensureModerationActionAllowed(interaction, interaction.guildId, pending.action))
     ) {
       return;
     }
 
-    this.pendingModerationActionConfirmations.delete(id);
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     try {

@@ -2821,6 +2821,124 @@ describe('InteractionHandler (unit)', () => {
     });
   });
 
+  async function prepareNativeBanConfirmation(): Promise<{
+    handler: InteractionHandler;
+    modalId: string;
+  }> {
+    const handler = buildHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const reason = {
+      id: 'reason-1',
+      customId: 'moderation_action_reason:ban:user-1',
+      guildId: 'guild-1',
+      user: { id: 'moderator-1' },
+      fields: { getTextInputValue: () => 'native ban reason' },
+      reply: jest.fn(),
+      replied: false,
+      deferred: false,
+    } as unknown as ModalSubmitInteraction;
+    grantOnlyBanMembersPermission(reason);
+    await handler.handleModalSubmit(reason);
+    const reply = (reason.reply as jest.Mock).mock.calls[0][0];
+    const button = buildInteraction(
+      reply.components[0].components[0].toJSON().custom_id,
+      'guild-1',
+      { id: 'moderator-1' } as User
+    );
+    grantOnlyBanMembersPermission(button);
+    await handler.handleButtonInteraction(button);
+    const modalId = (button.showModal as jest.Mock).mock.calls[0][0].toJSON().custom_id;
+    return { handler, modalId };
+  }
+
+  function nativeBanSubmission(modalId: string, requestId: string): ModalSubmitInteraction {
+    const interaction = {
+      id: requestId,
+      customId: modalId,
+      guildId: 'guild-1',
+      user: { id: 'moderator-1' },
+      fields: { getTextInputValue: () => 'BAN' },
+      reply: jest.fn(),
+      deferReply: jest.fn(),
+      editReply: jest.fn(),
+      replied: false,
+      deferred: false,
+    } as unknown as ModalSubmitInteraction;
+    grantOnlyBanMembersPermission(interaction);
+    return interaction;
+  }
+
+  it('consumes native pending confirmation once across overlapping valid submissions', async () => {
+    const { handler, modalId } = await prepareNativeBanConfirmation();
+    let releasePolicyRead = (): void => {
+      throw new Error('Policy read not arranged');
+    };
+    let signalPolicyRead = (): void => {
+      throw new Error('Policy read signal not arranged');
+    };
+    const heldPolicyRead = new Promise<void>((resolve) => {
+      releasePolicyRead = resolve;
+    });
+    const policyReadStarted = new Promise<void>((resolve) => {
+      signalPolicyRead = resolve;
+    });
+    (configService.getServerConfig as jest.Mock).mockImplementationOnce(async () => {
+      signalPolicyRead();
+      await heldPolicyRead;
+      return { settings: {} };
+    });
+
+    const first = handler.handleModalSubmit(nativeBanSubmission(modalId, 'first-confirmation'));
+    await policyReadStarted;
+    const second = nativeBanSubmission(modalId, 'second-confirmation');
+    try {
+      await handler.handleModalSubmit(second);
+    } finally {
+      releasePolicyRead();
+      await first;
+    }
+
+    expect(userModerationService.banUser).toHaveBeenCalledTimes(1);
+    expect(userModerationService.banUserById).not.toHaveBeenCalled();
+    expect(second.reply).toHaveBeenCalledWith({
+      content: 'That confirmation expired. Start the action again if you still want to continue.',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('consumes valid native confirmation when policy denies it before a later retry', async () => {
+    const { handler, modalId } = await prepareNativeBanConfirmation();
+    (configService.getServerConfig as jest.Mock).mockResolvedValue({
+      settings: { moderator_ban_action_enabled: false },
+    });
+    const denied = nativeBanSubmission(modalId, 'denied-confirmation');
+    await handler.handleModalSubmit(denied);
+    expect(userModerationService.banUser).not.toHaveBeenCalled();
+    expect(denied.reply).toHaveBeenCalledWith({
+      content:
+        'Drasil ban actions are disabled for this server or the bot lacks Ban Members permission.',
+      flags: MessageFlags.Ephemeral,
+    });
+
+    (configService.getServerConfig as jest.Mock).mockResolvedValue({ settings: {} });
+    const retry = nativeBanSubmission(modalId, 'retried-confirmation');
+    await handler.handleModalSubmit(retry);
+    expect(userModerationService.banUser).not.toHaveBeenCalled();
+    expect(userModerationService.banUserById).not.toHaveBeenCalled();
+    expect(retry.reply).toHaveBeenCalledWith({
+      content: 'That confirmation expired. Start the action again if you still want to continue.',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
   it.each(['ban_reason', 'kick_reason', 'expired', 'wrong_actor', 'wrong_guild'] as const)(
     'native confirmation blocks %s before enforcement',
     async (scenario) => {
