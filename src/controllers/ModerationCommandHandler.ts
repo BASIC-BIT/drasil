@@ -72,6 +72,7 @@ export class ModerationCommandHandler {
     }
     const operationId = interaction.options.getString('operation', true);
     const reason = interaction.options.getString('reason', true).trim();
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     try {
       if (!reason) throw new Error('A review reason is required.');
       if (!this.application) throw new Error('Detection application is unavailable.');
@@ -118,9 +119,8 @@ export class ModerationCommandHandler {
         },
       });
     } catch (error) {
-      await interaction.reply({
+      await interaction.editReply({
         content: error instanceof Error ? error.message : 'Could not prepare review.',
-        flags: MessageFlags.Ephemeral,
       });
     }
   }

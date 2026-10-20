@@ -3927,6 +3927,8 @@ describe('InteractionHandler (unit)', () => {
         }),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
     } as unknown as ModalSubmitInteraction;
 
     await handler.handleModalSubmit(interaction);
@@ -3937,10 +3939,9 @@ describe('InteractionHandler (unit)', () => {
       verificationChannelId: '123456789012345680',
       settingsPatch: {},
     });
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content:
         'Setup complete.\nCase role: <@&123456789012345678>\nAdmin channel: <#123456789012345679>\nVerification channel: <#123456789012345680>',
-      flags: MessageFlags.Ephemeral,
       allowedMentions: { parse: [] },
     });
     expect(notificationManager.setupVerificationChannel).not.toHaveBeenCalled();
@@ -4000,6 +4001,8 @@ describe('InteractionHandler (unit)', () => {
         }),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
     } as unknown as ModalSubmitInteraction;
 
     await handler.handleModalSubmit(interaction);
@@ -4016,10 +4019,9 @@ describe('InteractionHandler (unit)', () => {
       verificationChannelId: '123456789012345681',
       settingsPatch: {},
     });
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content:
         'Setup complete.\nCase role: <@&123456789012345678>\nAdmin channel: <#123456789012345679>\nCreated verification channel: <#123456789012345681>',
-      flags: MessageFlags.Ephemeral,
       allowedMentions: { parse: [] },
     });
   });
@@ -4062,15 +4064,16 @@ describe('InteractionHandler (unit)', () => {
         }),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
     } as unknown as ModalSubmitInteraction;
 
     await handler.handleModalSubmit(interaction);
 
     expect(configService.updateServerConfig).not.toHaveBeenCalled();
     expect(notificationManager.setupVerificationChannel).not.toHaveBeenCalled();
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: 'Setup diagnostics are not available in this runtime.',
-      flags: MessageFlags.Ephemeral,
     });
   });
 
@@ -4162,6 +4165,8 @@ describe('InteractionHandler (unit)', () => {
         }),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
     } as unknown as ModalSubmitInteraction;
 
     await handler.handleModalSubmit(interaction);
@@ -4170,11 +4175,10 @@ describe('InteractionHandler (unit)', () => {
     expect(createdChannel.delete).toHaveBeenCalledWith(
       'Rolling back Drasil setup after final validation failed'
     );
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining(
         'Created verification channel <#123456789012345681> was removed.'
       ),
-      flags: MessageFlags.Ephemeral,
       allowedMentions: { parse: [] },
     });
   });
@@ -4866,15 +4870,16 @@ describe('InteractionHandler (unit)', () => {
         }),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
     } as unknown as ModalSubmitInteraction;
 
     await handler.handleModalSubmit(interaction);
 
     expect(configService.updateServerConfig).not.toHaveBeenCalled();
     expect(notificationManager.setupVerificationChannel).not.toHaveBeenCalled();
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: 'You need administrator permissions to complete setup.',
-      flags: MessageFlags.Ephemeral,
     });
   });
 });

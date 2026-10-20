@@ -89,9 +89,8 @@ export async function requestSlashCommandConfirmation(
   });
 
   try {
-    await interaction.reply({
+    const response = {
       content: options.message,
-      flags: MessageFlags.Ephemeral,
       allowedMentions: { parse: [] },
       components: [
         new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -105,7 +104,12 @@ export async function requestSlashCommandConfirmation(
             .setStyle(ButtonStyle.Secondary)
         ),
       ],
-    });
+    };
+    if (interaction.deferred) {
+      await interaction.editReply(response);
+    } else {
+      await interaction.reply({ ...response, flags: MessageFlags.Ephemeral });
+    }
   } catch (error) {
     pendingConfirmations.delete(id);
     throw error;

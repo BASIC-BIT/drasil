@@ -1,7 +1,7 @@
 import { MessageFlags, PermissionFlagsBits, User } from 'discord.js';
 import { MODERATOR_BAN_ACTION_ENABLED_SETTING_KEY } from '../../utils/detectionResponseSettings';
 import { handleSlashCommandConfirmationButton } from '../../utils/slashCommandConfirmations';
-import { buildHandler } from './commandHandlerTestHarness';
+import { buildHandler, configurationResponseMocks } from './commandHandlerTestHarness';
 import {
   BAN_USER_CONTEXT_COMMAND_NAME,
   KICK_USER_CONTEXT_COMMAND_NAME,
@@ -9,7 +9,7 @@ import {
 import { MODERATION_ACTION_REASON_FIELD_ID } from '../../utils/moderationActionCustomIds';
 
 const confirmLastSlashCommand = async (interaction: any): Promise<void> => {
-  const reply = interaction.reply.mock.calls.at(-1)?.[0];
+  const reply = interaction[interaction.deferred ? 'editReply' : 'reply'].mock.calls.at(-1)?.[0];
   const confirmButton = reply.components[0].components[0];
   const customId = confirmButton.toJSON().custom_id;
   await handleSlashCommandConfirmationButton({
@@ -26,6 +26,7 @@ describe('CommandHandler moderation commands (unit)', () => {
   it('offers actor-bound confirmation for reviewing an uncertain report ban', async () => {
     const { handler, securityActionService } = buildHandler();
     const interaction = {
+      ...configurationResponseMocks(),
       commandName: 'review-report-ban',
       guild: { id: 'guild-1' },
       user: { id: 'moderator' },
@@ -38,7 +39,7 @@ describe('CommandHandler moderation commands (unit)', () => {
       editReply: jest.fn().mockResolvedValue(undefined),
     } as any;
     await handler.handleSlashCommand(interaction);
-    expect(interaction.reply).toHaveBeenCalledWith(
+    expect(interaction.editReply).toHaveBeenCalledWith(
       expect.objectContaining({
         content: expect.stringContaining('historical outcome remains uncertain'),
         components: expect.any(Array),
@@ -61,6 +62,7 @@ describe('CommandHandler moderation commands (unit)', () => {
         .mockRejectedValue(new Error('Ban Members permission is required.')),
     });
     const interaction = {
+      ...configurationResponseMocks(),
       commandName: 'review-report-ban',
       guild: { id: 'guild-1' },
       user: { id: 'actor' },
@@ -68,9 +70,8 @@ describe('CommandHandler moderation commands (unit)', () => {
       reply: jest.fn().mockResolvedValue(undefined),
     } as any;
     await handler.handleSlashCommand(interaction);
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: 'Ban Members permission is required.',
-      flags: MessageFlags.Ephemeral,
     });
   });
 

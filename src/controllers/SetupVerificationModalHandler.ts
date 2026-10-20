@@ -80,41 +80,39 @@ export class SetupVerificationModalHandler {
       return;
     }
 
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
     let setupFailureDetail = 'Please check permissions and try again.';
 
     try {
       const guild = await this.client.guilds.fetch(interaction.guildId);
       const moderator = await guild.members.fetch(interaction.user.id).catch(() => null);
       if (!moderator || !moderator.permissions.has(PermissionFlagsBits.Administrator)) {
-        await interaction.reply({
+        await interaction.editReply({
           content: 'You need administrator permissions to complete setup.',
-          flags: MessageFlags.Ephemeral,
         });
         return;
       }
 
       if (!this.setupDiagnosticsService || !this.application) {
-        await interaction.reply({
+        await interaction.editReply({
           content: 'Setup diagnostics are not available in this runtime.',
-          flags: MessageFlags.Ephemeral,
         });
         return;
       }
 
       const caseRole = await guild.roles.fetch(caseRoleId);
       if (!caseRole) {
-        await interaction.reply({
+        await interaction.editReply({
           content: `Could not find case role <@&${caseRoleId}> in this server.`,
-          flags: MessageFlags.Ephemeral,
         });
         return;
       }
 
       const adminChannel = await guild.channels.fetch(adminChannelId);
       if (!adminChannel || adminChannel.type !== ChannelType.GuildText) {
-        await interaction.reply({
+        await interaction.editReply({
           content: `Admin channel must be a text channel in this server. Received: <#${adminChannelId}>.`,
-          flags: MessageFlags.Ephemeral,
         });
         return;
       }
@@ -122,9 +120,8 @@ export class SetupVerificationModalHandler {
       if (providedVerificationChannelId) {
         const verificationChannel = await guild.channels.fetch(providedVerificationChannelId);
         if (!verificationChannel || verificationChannel.type !== ChannelType.GuildText) {
-          await interaction.reply({
+          await interaction.editReply({
             content: `Verification channel must be a text channel in this server. Received: <#${providedVerificationChannelId}>.`,
-            flags: MessageFlags.Ephemeral,
           });
           return;
         }
@@ -169,18 +166,17 @@ export class SetupVerificationModalHandler {
         throw new Error('Choose setup resources before continuing.');
 
       if (setupResult.status === 'candidate_validation_failed') {
-        await interaction.reply({
+        await interaction.editReply({
           content:
             'Setup not saved. Fix these errors before completing setup:\n' +
             this.formatSetupErrorMessages(setupResult.report),
-          flags: MessageFlags.Ephemeral,
           allowedMentions: { parse: [] },
         });
         return;
       }
 
       if (setupResult.status === 'final_validation_failed') {
-        await interaction.reply({
+        await interaction.editReply({
           content:
             'Setup not saved. Fix these errors before completing setup:\n' +
             this.formatSetupErrorMessages(setupResult.report) +
@@ -188,7 +184,6 @@ export class SetupVerificationModalHandler {
               setupResult.setupFailureDetail,
               setupResult.createdVerificationChannelId
             ),
-          flags: MessageFlags.Ephemeral,
           allowedMentions: { parse: [] },
         });
         return;
@@ -209,13 +204,12 @@ export class SetupVerificationModalHandler {
           ? `Created verification channel: <#${setupResult.verificationChannelId}>`
           : `Verification channel: <#${setupResult.verificationChannelId}>`;
 
-      await interaction.reply({
+      await interaction.editReply({
         content:
           'Setup complete.\n' +
           `Case role: <@&${setupResult.caseRoleId}>\n` +
           `Admin channel: <#${adminChannelId}>\n` +
           `${verificationChannelMessage}`,
-        flags: MessageFlags.Ephemeral,
         allowedMentions: { parse: [] },
       });
     } catch (error) {
@@ -225,14 +219,9 @@ export class SetupVerificationModalHandler {
       );
       const errorResponse = {
         content: `Failed to complete setup verification. ${setupFailureDetail}`,
-        flags: MessageFlags.Ephemeral,
       } as const;
 
-      if (interaction.replied || interaction.deferred) {
-        await interaction.followUp(errorResponse);
-      } else {
-        await interaction.reply(errorResponse);
-      }
+      await interaction.editReply(errorResponse);
     }
   }
 

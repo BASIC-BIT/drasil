@@ -284,7 +284,7 @@ describe.each(['case', 'report', 'captcha', 'cleanup', 'setup'] as const)(
       // durable invocation both retain the actual web_case provenance.
       const context =
         family === 'cleanup' ? { ...directContext, source: 'web_case' } : directContext;
-      const source = family === 'cleanup' ? 'web_case' : 'web';
+      const source = family === 'cleanup' ? 'web_case' : family === 'report' ? 'web_report' : 'web';
       const directDecision = await direct.direct(context);
       await dispatchQueuedAction(worker.app, queued(worker.command, source));
       const workerDecision = worker.decisions[0];
@@ -296,6 +296,8 @@ describe.each(['case', 'report', 'captcha', 'cleanup', 'setup'] as const)(
       expect(directDomainEffects).toEqual(workerDomainEffects);
       const auditSources = [direct.contexts[0].source, worker.contexts[0].source];
       if (family === 'cleanup') expect(auditSources).toEqual(['web_case', 'web_case']);
+      else if (family === 'report')
+        expect(auditSources).toEqual(['discord_interaction', 'web_report']);
       else expect(auditSources).toEqual(['discord_interaction', 'web']);
       expect([direct.contexts[0].requestId, worker.contexts[0].requestId]).toEqual([
         'interaction-id',
@@ -311,7 +313,10 @@ describe.each(['case', 'report', 'captcha', 'cleanup', 'setup'] as const)(
       await expect(
         dispatchQueuedAction(
           worker.app,
-          queued(worker.command, family === 'cleanup' ? 'web_case' : 'web')
+          queued(
+            worker.command,
+            family === 'cleanup' ? 'web_case' : family === 'report' ? 'web_report' : 'web'
+          )
         )
       ).rejects.toThrow();
       expect(directDecision).toEqual({ kind: 'denied', code: 'actor_unavailable' });
