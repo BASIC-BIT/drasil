@@ -42,12 +42,6 @@ export async function insertModerationActionRequestWithReceipt(
   return { id: row.id, messageDeletionJobId: row.message_deletion_job_id, status: row.status };
 }
 
-export async function queueSerializedModerationActionRequestWithReceipt(
-  input: EnqueueInput
-): Promise<ModerationActionRequestReceipt> {
-  return insertSerializedSetupRequestWithReceipt(getPostgresPool(), input);
-}
-
 export async function insertSerializedSetupRequestWithReceipt(
   pool: Pool,
   input: EnqueueInput

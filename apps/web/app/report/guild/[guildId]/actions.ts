@@ -52,10 +52,7 @@ export async function submitUserReportFromWeb(guildId: string, formData: FormDat
 
   const targetUserId = readTargetUserId(formData);
   const reason = readReason(formData);
-  const context = {
-    ...createWebActionContext({ guildId, userId: session.userId }),
-    source: 'web_report',
-  };
+  const context = createWebActionContext({ guildId, userId: session.userId, source: 'web_report' });
   const command = {
     kind: 'submit_user_report' as const,
     targetUserId,
@@ -105,10 +102,7 @@ export async function startGuidedReportIntakeFromWeb(
     throw new Error('This server does not have a report instructions channel configured.');
   }
 
-  const context = {
-    ...createWebActionContext({ guildId, userId: session.userId }),
-    source: 'web_report',
-  };
+  const context = createWebActionContext({ guildId, userId: session.userId, source: 'web_report' });
   const command = { kind: 'start_report_intake' as const, channelId };
   const status = await submitReportRequest({
     context,
@@ -146,10 +140,7 @@ export async function closeOpenReportIntakeFromWeb(
   if (!reportIntakeId || !UUID_PATTERN.test(reportIntakeId)) {
     throw new Error('This report intake is no longer available.');
   }
-  const context = {
-    ...createWebActionContext({ guildId, userId: session.userId }),
-    source: 'web_report',
-  };
+  const context = createWebActionContext({ guildId, userId: session.userId, source: 'web_report' });
   const command = { kind: 'close_report_intake' as const, intakeId: reportIntakeId };
   const status = await submitReportRequest({
     context,

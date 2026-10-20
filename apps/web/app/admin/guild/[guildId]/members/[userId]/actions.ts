@@ -11,8 +11,9 @@ import {
   type DetectionAccountingWebAction,
 } from '@/lib/detectionAccountingActionQueue';
 import { DISCORD_PERMISSIONS, hasPermission, parsePermissions } from '@/lib/discordPermissions';
-import { queueMemberManualFlagActionRequest } from '@/lib/memberManualFlagActionQueue';
-import { queueMemberOpenCaseActionRequest } from '@/lib/memberOpenCaseActionQueue';
+import { createWebActionContext } from '@/lib/application/context';
+import { submitQueuedAction } from '@/lib/application/queuedSubmission';
+import { isWebE2eFixtureMode } from '@/lib/e2eFixtures';
 import { createMemberProfileDataAdapter } from '@/lib/memberProfileDataAdapter';
 import { queueObservedAlertUndoActionRequest } from '@/lib/observedAlertActionQueue';
 import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
@@ -110,11 +111,13 @@ export async function queueObservedDetectionUndoAction(
     throw new Error('Observed detection action is no longer available to undo.');
   }
 
-  const status = await queueObservedAlertUndoActionRequest({
-    actorId: session.userId,
-    actorSurface: 'web',
+  const { status } = await queueObservedAlertUndoActionRequest({
+    context: createWebActionContext({
+      guildId,
+      userId: session.userId,
+      requestId: detectionEventId,
+    }),
     detectionEventId,
-    guildId,
     targetUserId,
   });
 
@@ -168,17 +171,29 @@ export async function queueMemberOpenCaseAction(
   }
   const sourceMessageInput = resolveSourceMessageInput(profile, formData);
 
-  const status = await queueMemberOpenCaseActionRequest({
-    actorId: session.userId,
-    actorSurface: 'web',
+  const context = createWebActionContext({
     guildId,
-    reason,
+    userId: session.userId,
     requestId: readRequestId(formData),
-    sourceChannelId: sourceMessageInput?.sourceChannelId,
-    sourceDetectionEventId: sourceMessageInput?.sourceDetectionEventId,
-    sourceMessageId: sourceMessageInput?.sourceMessageId,
-    targetUserId,
   });
+  const { status } = isWebE2eFixtureMode()
+    ? { status: 'queued' }
+    : await submitQueuedAction({
+        context,
+        command: {
+          kind: 'open_admin_case',
+          intent: 'dashboard_case_open',
+          targetUserId,
+          reason,
+          detectionEventId: sourceMessageInput?.sourceDetectionEventId ?? null,
+          selectedMessage: sourceMessageInput
+            ? {
+                channelId: sourceMessageInput.sourceChannelId,
+                messageId: sourceMessageInput.sourceMessageId,
+              }
+            : null,
+        },
+      });
 
   revalidatePath(`/admin/guild/${guildId}/inbox`);
   revalidatePath(`/admin/guild/${guildId}/cases`);
@@ -218,14 +233,21 @@ export async function queueMemberManualFlagAction(
     throw new Error('This member is no longer available for manual flagging.');
   }
 
-  const status = await queueMemberManualFlagActionRequest({
-    actorId: session.userId,
-    actorSurface: 'web',
+  const context = createWebActionContext({
     guildId,
-    reason: readFormString(formData, 'reason'),
+    userId: session.userId,
     requestId: readRequestId(formData),
-    targetUserId,
   });
+  const { status } = isWebE2eFixtureMode()
+    ? { status: 'queued' }
+    : await submitQueuedAction({
+        context,
+        command: {
+          kind: 'manual_flag_user',
+          targetUserId,
+          reason: readFormString(formData, 'reason'),
+        },
+      });
 
   revalidatePath(`/admin/guild/${guildId}/inbox`);
   revalidatePath(`/admin/guild/${guildId}/cases`);
@@ -273,12 +295,14 @@ export async function queueDetectionAccountingAction(
     throw new Error('Detection already counts toward future accounting.');
   }
 
-  const status = await queueDetectionAccountingActionRequest({
+  const { status } = await queueDetectionAccountingActionRequest({
     action,
-    actorId: session.userId,
-    actorSurface: 'web',
+    context: createWebActionContext({
+      guildId,
+      userId: session.userId,
+      requestId: detectionEventId,
+    }),
     detectionEventId,
-    guildId,
     reason: readFormString(formData, 'reason'),
     targetUserId,
   });

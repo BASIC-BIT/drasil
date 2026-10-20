@@ -1,3 +1,4 @@
+import { getPostgresPool } from './setupDataAdapter';
 import { buildEnqueueStatement } from '@drasil/application/postgres';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -13,7 +14,7 @@ vi.mock('./setupDataAdapter', () => ({
 
 import {
   insertModerationActionRequestWithReceipt,
-  queueSerializedModerationActionRequestWithReceipt,
+  insertSerializedSetupRequestWithReceipt,
 } from './moderationActionRequestQueue';
 
 const sharedStatement = buildEnqueueStatement({
@@ -26,7 +27,7 @@ const sharedStatement = buildEnqueueStatement({
   metadata: {},
 });
 
-describe('queueSerializedModerationActionRequestWithReceipt', () => {
+describe('insertSerializedSetupRequestWithReceipt', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.connect.mockResolvedValue({ query: mocks.query, release: mocks.release });
@@ -41,7 +42,7 @@ describe('queueSerializedModerationActionRequestWithReceipt', () => {
       })
       .mockResolvedValueOnce({ rows: [] });
 
-    const result = await queueSerializedModerationActionRequestWithReceipt({
+    const result = await insertSerializedSetupRequestWithReceipt(getPostgresPool(), {
       actionType: 'complete_setup_verification',
       actorId: 'admin-2',
       actorSurface: 'web',
@@ -74,7 +75,7 @@ describe('queueSerializedModerationActionRequestWithReceipt', () => {
       .mockResolvedValueOnce({ rows: [] });
 
     await expect(
-      queueSerializedModerationActionRequestWithReceipt({
+      insertSerializedSetupRequestWithReceipt(getPostgresPool(), {
         actionType: 'complete_setup_verification',
         actorId: 'admin-2',
         actorSurface: 'web',
@@ -97,7 +98,7 @@ describe('queueSerializedModerationActionRequestWithReceipt', () => {
       .mockResolvedValueOnce({ rows: [{ id: 'request-2', status: 'queued' }] })
       .mockResolvedValueOnce({ rows: [] });
 
-    const result = await queueSerializedModerationActionRequestWithReceipt({
+    const result = await insertSerializedSetupRequestWithReceipt(getPostgresPool(), {
       actionType: 'complete_setup_verification',
       actorId: 'admin-2',
       actorSurface: 'web',

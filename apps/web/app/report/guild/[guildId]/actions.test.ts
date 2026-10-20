@@ -21,10 +21,10 @@ vi.mock('@/lib/session', () => ({
 vi.mock('@/lib/discordApi', () => ({ fetchDiscordGuilds: m.guilds }));
 vi.mock('@/lib/setupDataAdapter', () => ({
   createSetupDataAdapter: () => ({ getServer: m.server }),
-  getPostgresPool: () => ({ query: m.query }),
+  getPostgresPool: () => ({ query: m.queue }),
 }));
 vi.mock('@/lib/reportIntakePortalDataAdapter', () => ({ loadReporterOpenIntake: m.openIntake }));
-vi.mock('@/lib/moderationActionRequestQueue', () => ({ queueModerationActionRequest: m.queue }));
+
 vi.mock('@/lib/e2eFixtures', () => ({ isWebE2eFixtureMode: () => false }));
 import {
   submitUserReportFromWeb,
@@ -47,7 +47,7 @@ beforeEach(() => {
     settings: { report_instructions_channel_id: 'channel' },
   });
   m.openIntake.mockResolvedValue({ id: intakeId });
-  m.queue.mockResolvedValue('queued');
+  m.queue.mockResolvedValue({ rows: [{ id: 'request', status: 'queued' }] });
   m.query.mockResolvedValue({ rows: [] });
 });
 it('uses authenticated reporter identity and codec metadata for submitted user reports', async () => {
@@ -63,19 +63,20 @@ it('uses authenticated reporter identity and codec metadata for submitted user r
       })
     )
   ).rejects.toThrow('/report/guild/guild?queued=1');
-  expect(m.queue).toHaveBeenCalledWith(
-    expect.objectContaining({
-      actorId: 'reporter',
-      actorSurface: 'web_report',
-      targetUserId: '123456789012345678',
-      metadata: {
-        report_action: 'submit_user_report',
-        requested_surface: 'web_report',
-        reason: 'evidence',
-        target_label: '123456789012345678',
-      },
-    })
-  );
+  const values = m.queue.mock.calls[1][1];
+  expect(values.slice(0, 5)).toEqual([
+    'guild',
+    'submit_user_report',
+    'reporter',
+    'web_report',
+    '123456789012345678',
+  ]);
+  expect(JSON.parse(values[10])).toEqual({
+    report_action: 'submit_user_report',
+    requested_surface: 'web_report',
+    reason: 'evidence',
+    target_label: '123456789012345678',
+  });
 });
 it('requires current reason policy and an authenticated confirmation before admission', async () => {
   m.server.mockResolvedValue({ is_active: true, settings: { user_report_reason_required: true } });
@@ -110,17 +111,19 @@ it('keeps guided creation durable and resolves the configured channel server sid
   await expect(
     startGuidedReportIntakeFromWeb('guild', form({ channelId: 'spoofed' }))
   ).rejects.toThrow('guided=queued');
-  expect(m.queue).toHaveBeenCalledWith(
-    expect.objectContaining({
-      actionType: 'start_report_intake',
-      targetUserId: null,
-      metadata: {
-        channel_id: 'channel',
-        report_action: 'start_report_intake',
-        requested_surface: 'web_report',
-      },
-    })
-  );
+  const values = m.queue.mock.calls[0][1];
+  expect(values.slice(0, 5)).toEqual([
+    'guild',
+    'start_report_intake',
+    'reporter',
+    'web_report',
+    null,
+  ]);
+  expect(JSON.parse(values[10])).toEqual({
+    channel_id: 'channel',
+    report_action: 'start_report_intake',
+    requested_surface: 'web_report',
+  });
 });
 it('denies an account that no longer has the destination server', async () => {
   m.guilds.mockResolvedValue([]);
