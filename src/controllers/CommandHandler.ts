@@ -161,7 +161,8 @@ export class CommandHandler implements ICommandHandler {
     this.reportCommandHandler = new ReportCommandHandler(
       reportSubmissionService,
       reportInstructionsManager,
-      (interaction) => this.replyGuildInstallRequired(interaction)
+      (interaction) => this.replyGuildInstallRequired(interaction),
+      application?.reports
     );
     this.setupCommandHandler = new SetupCommandHandler(
       this.configService,

@@ -1,6 +1,6 @@
 import type { BotApplication } from '../../application/createBotApplication';
 import { buildCaseApplication } from './caseApplicationTestHarness';
-import type { ReportInteractionHandler } from '../../controllers/ReportInteractionHandler';
+import { createBotReportActions } from '../../application/adapters/reports';
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -89,10 +89,6 @@ function buildHandler(
   const handler = new InteractionHandler(...args);
   handlerApplications.set(handler, args[12]);
   return handler;
-}
-
-interface ReportNotificationTestAccess {
-  notifyReportIntakeThreadOpened: ReportInteractionHandler['notifyReportIntakeThreadOpened'];
 }
 
 const buildMember = (guildId: string, userId: string, displayName = 'test-user'): GuildMember =>
@@ -3502,16 +3498,52 @@ describe('InteractionHandler (unit)', () => {
         requests as never,
         reports as never
       );
-      const reportHandler = (
-        handler as unknown as {
-          reportInteractionHandler: ReportNotificationTestAccess;
+      const reporter = buildMember('guild-1', 'reporter');
+      const reportActions = createBotReportActions(
+        {
+          client: {
+            guilds: { fetch: async () => ({ members: { fetch: async () => reporter } }) },
+            channels: {
+              fetch: async () => ({
+                id: 'intake-channel',
+                guildId: 'guild-1',
+                type: ChannelType.GuildText,
+              }),
+            },
+          } as unknown as Client,
+          configService,
+          securityActionService,
+          reportIntakeService: {
+            findOpenIntakeForReporter: async () => null,
+            openIntakeFromThread: async () => ({ ...report, reporter_id: 'reporter' }),
+          } as never,
+          threadManager: {
+            createReportIntakeThread: async () => ({
+              id: 'report-thread',
+              url: 'https://example.test/thread',
+            }),
+            activateReportIntakeThread: async () => true,
+          } as never,
+        },
+        {
+          loadFresh: async (guildId, userId) => ({
+            guildId,
+            userId,
+            present: true,
+            owner: false,
+            permissions: '0',
+            roleIds: [],
+          }),
         }
-      ).reportInteractionHandler;
-      await reportHandler.notifyReportIntakeThreadOpened(
-        'guild-1',
-        buildMember('guild-1', 'reporter'),
-        { id: 'report-thread', url: 'https://example.test/thread' } as never,
-        report.id
+      );
+      await reportActions.execute(
+        {
+          guildId: 'guild-1',
+          requestId: 'start-report',
+          source: 'discord_interaction',
+          actor: { kind: 'user', userId: 'reporter' },
+        },
+        { kind: 'start_report_intake', channelId: 'intake-channel' }
       );
       const notification = adminChannel.send.mock.calls[0][0];
       const menu = buildInteraction(

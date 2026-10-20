@@ -1,3 +1,6 @@
+import type { ReportActions } from '@drasil/application';
+import { createDiscordActionContext } from '../application/context';
+import { requireReportOutcome } from '../application/adapters/reports';
 import { formatInlineIdentifier } from '../utils/discordUserIdentity';
 import {
   ActionRowBuilder,
@@ -32,7 +35,8 @@ export class ReportCommandHandler {
   public constructor(
     private readonly reportSubmissionService: ReportSubmissionService,
     private readonly reportInstructionsManager: ReportInstructionsManager,
-    private readonly replyGuildInstallRequired: ReplyGuildInstallRequired
+    private readonly replyGuildInstallRequired: ReplyGuildInstallRequired,
+    private readonly reports?: ReportActions
   ) {}
 
   public async handleReportCommand(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -47,12 +51,10 @@ export class ReportCommandHandler {
     const targetUser = interaction.options.getUser('user', true);
     const reason = interaction.options.getString('reason')?.trim() || undefined;
 
-    const result = await this.reportSubmissionService.submitUserReport({
-      guild,
-      reporter: interaction.user,
+    const result = await this.submitReport(interaction, {
       targetUserId: targetUser.id,
-      targetLabel: targetUser.globalName ?? targetUser.username,
-      reason,
+      targetLabel: targetUser.globalName || targetUser.username || targetUser.id,
+      reason: reason ?? null,
       passUndefinedReason: true,
     });
     await this.replyUserReportResult(interaction, result, {
@@ -74,11 +76,10 @@ export class ReportCommandHandler {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     const targetUser = interaction.targetUser;
-    const result = await this.reportSubmissionService.submitUserReport({
-      guild,
-      reporter: interaction.user,
+    const result = await this.submitReport(interaction, {
       targetUserId: targetUser.id,
-      targetLabel: targetUser.globalName ?? targetUser.username,
+      targetLabel: targetUser.globalName || targetUser.username || targetUser.id,
+      reason: null,
     });
     await this.replyUserReportResult(interaction, result, {
       reasonRequiredMessage: 'This server requires a report reason. Please use `/report` instead.',
@@ -189,6 +190,35 @@ export class ReportCommandHandler {
             : 'Report panel setup failed. Check channel permissions and retry.',
         allowedMentions: { parse: [] },
       });
+    }
+  }
+
+  private async submitReport(
+    interaction: ChatInputCommandInteraction | UserContextMenuCommandInteraction,
+    input: {
+      targetUserId: string;
+      targetLabel: string;
+      reason: string | null;
+      passUndefinedReason?: boolean;
+    }
+  ): Promise<UserReportSubmissionResult> {
+    if (!this.reports || !interaction.guildId)
+      throw new Error('Report application is unavailable.');
+    if (input.targetUserId === interaction.user.id) return { status: 'self_report' };
+    try {
+      const result = await this.reports.execute(
+        createDiscordActionContext({
+          guildId: interaction.guildId,
+          userId: interaction.user.id,
+          requestId: interaction.id,
+        }),
+        { kind: 'submit_user_report', ...input }
+      );
+      if (result.kind === 'denied' && result.code === 'reason_required')
+        return { status: 'reason_required' };
+      return requireReportOutcome(result, 'submit_user_report').result;
+    } catch (error) {
+      return { status: 'failed', error };
     }
   }
 

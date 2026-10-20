@@ -41,11 +41,13 @@ export function createCaseConfirmationStore(): {
           actorId: context.actor.userId,
           action: command.kind,
           targetId:
-            'caseId' in command
-              ? command.caseId
-              : 'operationId' in command
-                ? command.operationId
-                : command.targetUserId,
+            'intakeId' in command
+              ? command.intakeId
+              : 'caseId' in command
+                ? command.caseId
+                : 'operationId' in command
+                  ? command.operationId
+                  : command.targetUserId,
         }
       );
     },

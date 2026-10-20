@@ -37,3 +37,12 @@ export * from './operations/commands';
 export * from './operations/ports';
 export * from './operations/actions';
 export * from './operations/reports';
+export * from './reports/actions';
+export * from './reports/commands';
+export type {
+  ReportDependencies,
+  ReportIntakeState,
+  ReportSubmissionResult,
+} from './reports/ports';
+
+export * from './reports/submission';

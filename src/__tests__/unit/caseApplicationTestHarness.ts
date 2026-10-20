@@ -1,3 +1,4 @@
+import { buildReportActions } from './reportApplicationTestHarness';
 import { mock } from 'jest-mock-extended';
 import {
   createBotOperationsRuntime,
@@ -119,6 +120,11 @@ export function buildCaseApplication(
     }
   );
   return {
+    reports: buildReportActions({
+      ...deps,
+      reportIntakeService: {} as never,
+      threadManager: deps.threadManager ?? ({} as never),
+    }),
     operations: operationsRuntime.actions,
     operationsRuntime,
     messageCleanup: {

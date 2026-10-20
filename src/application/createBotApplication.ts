@@ -1,3 +1,4 @@
+import { createBotReportActions, type BotReportDependencies } from './adapters/reports';
 import {
   createBotOperationsRuntime,
   type BotOperationsRuntime,
@@ -37,6 +38,7 @@ import type { IModerationQueueService } from '../services/ModerationQueueService
 import { createBotAuthority, createBotAttentionMessageDeleter } from './adapters/attention';
 
 export interface BotApplication {
+  readonly reports: ReturnType<typeof createBotReportActions>;
   readonly operations: BotOperationsRuntime['actions'];
   readonly operationsRuntime: BotOperationsRuntime;
   readonly messageCleanup: MessageCleanupActions;
@@ -54,6 +56,7 @@ export interface BotApplication {
 }
 export function createBotApplication(
   deps: BotOperationsDependencies &
+    Pick<BotReportDependencies, 'reportIntakeService'> &
     Omit<BotCaseDependencies, 'confirmations'> &
     BotMessageCleanupDependencies &
     Pick<
@@ -83,6 +86,7 @@ export function createBotApplication(
   const messageCleanupRuntime = createBotMessageCleanupRuntime(deps);
   const quarantineRuntime = createBotQuarantineRuntime(deps);
   return {
+    reports: createBotReportActions(deps),
     operations: operationsRuntime.actions,
     operationsRuntime,
     messageCleanupRuntime,

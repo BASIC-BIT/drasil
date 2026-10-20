@@ -1,3 +1,4 @@
+import { buildReportActions } from './reportApplicationTestHarness';
 import type { AuthorityPort } from '@drasil/application';
 import { buildCaseApplication } from './caseApplicationTestHarness';
 import { CommandHandler } from '../../controllers/CommandHandler';
@@ -261,7 +262,16 @@ export const buildHandler = (overrides: HandlerOverrides = {}) => {
       overrides.moderationQueueService,
       overrides.integrityAuditService,
       undefined,
-      application
+      {
+        ...application,
+        reports: buildReportActions({
+          client,
+          configService,
+          securityActionService,
+          threadManager: {} as never,
+          reportIntakeService: {} as never,
+        }),
+      }
     ),
     client,
     userModerationService,

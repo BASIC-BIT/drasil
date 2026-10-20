@@ -1,10 +1,12 @@
+import { isQueuedReportCommand } from '../reports/commands';
+import { encodeReportAction } from './reports';
 import { encodeOperationAction } from './operations';
 import { isQueuedOperationCommand } from '../operations/commands';
 import { encodeMessageCleanupAction } from './messageCleanup';
 import { encodeCaptchaAction } from './captcha';
 import { encodeDetectionAction } from './detections';
 import type { ActionContext } from '../context';
-import { queuedCommandSchema, type QueuedCommand } from './commands';
+import { queuedCommandSchema, isQueuedCaptchaCommand, type QueuedCommand } from './commands';
 import type { EnqueueInput } from './receipt';
 const caseAction = {
   verify_case_user: 'verify_user',
@@ -19,15 +21,9 @@ const caseAction = {
 } as const;
 export function encodeQueuedAction(context: ActionContext, input: QueuedCommand): EnqueueInput {
   const command = queuedCommandSchema.parse(input);
+  if (isQueuedReportCommand(command)) return encodeReportAction(context, command);
   if (isQueuedOperationCommand(command)) return encodeOperationAction(context, command);
-  if (
-    command.kind === 'request_captcha_challenge' ||
-    command.kind === 'retry_captcha_challenge' ||
-    command.kind === 'bypass_captcha_challenge' ||
-    command.kind === 'apply_captcha_pass' ||
-    command.kind === 'notify_captcha_attention'
-  )
-    return encodeCaptchaAction(context, command);
+  if (isQueuedCaptchaCommand(command)) return encodeCaptchaAction(context, command);
   if (context.actor.kind !== 'user') throw new Error('Case submission requires a user actor.');
   const base = {
     actionType: command.kind,

@@ -1,3 +1,5 @@
+import { isQueuedReportKind } from '../reports/commands';
+import { decodeReportCommand } from './reports';
 import { isQueuedOperationKind } from '../operations/commands';
 import { decodeOperationCommand } from './operations';
 import { decodeMessageCleanupCommand } from './messageCleanup';
@@ -22,7 +24,11 @@ const queuedRowSchema = z
     metadata: z.record(z.unknown()).nullable().optional(),
   })
   .superRefine((row, ctx) => {
-    if (row.target_user_id === null && !isQueuedOperationKind(row.action_type))
+    if (
+      row.target_user_id === null &&
+      !isQueuedOperationKind(row.action_type) &&
+      !isQueuedReportKind(row.action_type)
+    )
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['target_user_id'],
@@ -117,6 +123,7 @@ export function decodeQueuedAction(row: unknown): DecodedQueuedAction {
 
 function decodeFamilyCommand(row: QueuedRow, reason: string | null): QueuedCommand | null {
   return (
+    decodeReportCommand(row) ??
     decodeOperationCommand(row) ??
     decodeMessageCleanupCommand(row) ??
     decodeCaptchaCommand(row) ??

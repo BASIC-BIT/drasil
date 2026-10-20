@@ -1,3 +1,11 @@
+import {
+  encodeQueuedAction,
+  type QueuedReportCommand,
+  createReportRequestSubmission,
+  type ActionContext,
+  type ConfirmationPort,
+  type ReportAdmissionFacts,
+} from '@drasil/application';
 import { randomUUID } from 'node:crypto';
 import { isWebE2eFixtureMode } from './e2eFixtures';
 import {
@@ -40,19 +48,11 @@ export async function queueUserReportSubmissionRequest(input: {
     targetUserId: input.targetUserId,
   });
 
-  return queueModerationActionRequest({
-    actionType: 'submit_user_report',
-    actorId: input.actorId,
-    actorSurface: 'web_report',
-    idempotencyKey: `web:report:submit_user_report:${input.guildId}:${input.targetUserId}:${randomUUID()}`,
-    metadata: {
-      reason: input.reason ?? null,
-      report_action: 'submit_user_report',
-      requested_surface: 'web_report',
-      target_label: input.targetLabel,
-    },
-    serverId: input.guildId,
+  return queueReportRequest(input, {
+    kind: 'submit_user_report',
     targetUserId: input.targetUserId,
+    targetLabel: input.targetLabel,
+    reason: input.reason ?? null,
   });
 }
 
@@ -65,18 +65,7 @@ export async function queueGuidedReportIntakeRequest(input: {
     return 'queued';
   }
 
-  return queueModerationActionRequest({
-    actionType: 'start_report_intake',
-    actorId: input.actorId,
-    actorSurface: 'web_report',
-    idempotencyKey: `web:report:start_report_intake:${input.guildId}:${input.actorId}:${randomUUID()}`,
-    metadata: {
-      channel_id: input.channelId,
-      report_action: 'start_report_intake',
-      requested_surface: 'web_report',
-    },
-    serverId: input.guildId,
-  });
+  return queueReportRequest(input, { kind: 'start_report_intake', channelId: input.channelId });
 }
 
 export async function queueReportIntakeCloseRequest(input: {
@@ -88,16 +77,65 @@ export async function queueReportIntakeCloseRequest(input: {
     return 'queued';
   }
 
-  return queueModerationActionRequest({
-    actionType: 'close_report_intake',
-    actorId: input.actorId,
-    actorSurface: 'web_report',
-    idempotencyKey: `web:report:close_report_intake:${input.guildId}:${input.reportIntakeId}:${randomUUID()}`,
-    metadata: {
-      report_action: 'close_report_intake',
-      requested_surface: 'web_report',
+  return queueReportRequest(input, { kind: 'close_report_intake', intakeId: input.reportIntakeId });
+}
+
+function queueReportRequest(
+  input: { actorId: string; guildId: string },
+  command: QueuedReportCommand
+): Promise<ModerationActionRequestQueueStatus> {
+  return queueModerationActionRequest(
+    encodeQueuedAction(
+      {
+        guildId: input.guildId,
+        requestId: randomUUID(),
+        source: 'web_report',
+        actor: { kind: 'user', userId: input.actorId },
+      },
+      command
+    )
+  );
+}
+
+export async function submitReportRequest(input: {
+  readonly context: ActionContext;
+  readonly command: QueuedReportCommand;
+  readonly access: ReportAdmissionFacts;
+  readonly confirmations: ConfirmationPort;
+  readonly openIntake: () => Promise<{ readonly id: string } | null>;
+}): Promise<ModerationActionRequestQueueStatus> {
+  const actions = createReportRequestSubmission({
+    access: { load: async () => input.access },
+    intakes: { openForReporter: input.openIntake },
+    confirmations: input.confirmations,
+    queue: {
+      async enqueue(context, command) {
+        if (context.actor.kind !== 'user') throw new Error('Reporter session is unavailable.');
+        const identity = { guildId: context.guildId, actorId: context.actor.userId };
+        switch (command.kind) {
+          case 'submit_user_report':
+            return queueUserReportSubmissionRequest({ ...identity, ...command });
+          case 'start_report_intake':
+            return queueGuidedReportIntakeRequest({ ...identity, channelId: command.channelId });
+          case 'close_report_intake':
+            return queueReportIntakeCloseRequest({ ...identity, reportIntakeId: command.intakeId });
+        }
+      },
     },
-    reportIntakeId: input.reportIntakeId,
-    serverId: input.guildId,
   });
+  const result = await actions.execute(input.context, input.command);
+  if (result.kind === 'outcome') return result.outcome.status;
+  const errors = {
+    actor_unavailable: 'This report destination is not available to the signed-in Discord account.',
+    permission_denied: 'You cannot report yourself.',
+    reason_required: 'This server requires a report reason.',
+    stale_state: 'This report intake is no longer available.',
+    confirmation_required:
+      input.command.kind === 'close_report_intake'
+        ? 'Confirm the report intake close before submitting it.'
+        : 'Confirm the report before submitting it.',
+    binding_mismatch: 'This report does not match the signed-in account.',
+    policy_disabled: 'Reporting is unavailable.',
+  };
+  throw new Error(errors[result.code]);
 }

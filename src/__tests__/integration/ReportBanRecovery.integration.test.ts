@@ -227,6 +227,7 @@ async function fixture(withReport = true, quarantine?: IRoleQuarantineService) {
       .mockResolvedValue({ settings: { moderator_ban_action_enabled: true } }),
   };
   const application = createBotApplication({
+    reportIntakeService: {} as any,
     integrityAuditService: mock<IIntegrityAuditService>(),
     caseRoleLockdownService: mock<ICaseRoleLockdownService>(),
     caseThreadClosureSweepService: mock<ICaseThreadClosureSweepService>(),

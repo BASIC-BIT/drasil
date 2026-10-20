@@ -257,7 +257,8 @@ export class InteractionHandler implements IInteractionHandler {
       this.configService,
       this.threadManager,
       reportIntakeService,
-      (interaction, intakeId) => this.showReportBanModal(interaction, intakeId)
+      (interaction, intakeId) => this.showReportBanModal(interaction, intakeId),
+      application?.reports
     );
     this.setupVerificationModalHandler = new SetupVerificationModalHandler(
       this.client,

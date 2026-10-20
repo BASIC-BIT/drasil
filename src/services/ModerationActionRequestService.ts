@@ -1,14 +1,12 @@
 import {
   operationConfirmationCommand,
   isQueuedOperationCommand,
+  isQueuedReportCommand,
   decodeQueuedAction,
 } from '@drasil/application';
 import type { BotApplication } from '../application/createBotApplication';
 import { dispatchQueuedAction } from '../application/requestDispatch';
 import {
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
   ChannelType,
   Client,
   Guild,
@@ -16,7 +14,6 @@ import {
   Message,
   PermissionFlagsBits,
   TextChannel,
-  ThreadChannel,
   User,
 } from 'discord.js';
 import { inject, injectable, optional } from 'inversify';
@@ -38,12 +35,9 @@ import {
   ModerationActionRequestType,
   type VerificationChannelPermissionSyncState,
 } from '../repositories/types';
-import { buildReportIntakeAdminActionsCustomId } from '../utils/reportIntakeAdminActions';
 import { IModerationQueueService } from './ModerationQueueService';
 import { INotificationManager } from './NotificationManager';
-import { NotificationPresentationBuilder } from './NotificationPresentationBuilder';
 import { IProductAnalyticsService } from './ProductAnalyticsService';
-import { ReportSubmissionService } from './ReportSubmissionService';
 import { IReportIntakeService } from './ReportIntakeService';
 import { ISecurityActionService } from './SecurityActionService';
 import { ISetupDiagnosticsService, SetupDiagnosticReport } from './SetupDiagnosticsService';
@@ -68,7 +62,6 @@ export interface IModerationActionRequestService {
 export class ModerationActionRequestService implements IModerationActionRequestService {
   private timer: ReturnType<typeof setInterval> | null = null;
   private processingPromise: Promise<number> | null = null;
-  private readonly presentationBuilder = new NotificationPresentationBuilder();
   private readonly requestProcessors: Partial<
     Record<ModerationActionRequestType, (request: ModerationActionRequest) => Promise<void>>
   > = {
@@ -76,9 +69,12 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       this.executeCaseRequest(request),
     [ModerationActionRequestType.OPEN_ADMIN_CASE]: (request) => this.executeCaseRequest(request),
     [ModerationActionRequestType.MANUAL_FLAG_USER]: (request) => this.executeCaseRequest(request),
-    [ModerationActionRequestType.SUBMIT_USER_REPORT]: (request) => this.submitUserReport(request),
-    [ModerationActionRequestType.START_REPORT_INTAKE]: (request) => this.startReportIntake(request),
-    [ModerationActionRequestType.CLOSE_REPORT_INTAKE]: (request) => this.closeReportIntake(request),
+    [ModerationActionRequestType.SUBMIT_USER_REPORT]: (request) =>
+      this.executeReportRequest(request),
+    [ModerationActionRequestType.START_REPORT_INTAKE]: (request) =>
+      this.executeReportRequest(request),
+    [ModerationActionRequestType.CLOSE_REPORT_INTAKE]: (request) =>
+      this.executeReportRequest(request),
     [ModerationActionRequestType.DISMISS_OBSERVED_DETECTION]: (request) =>
       this.executeDetectionRequest(request),
     [ModerationActionRequestType.MARK_OBSERVED_DETECTION_FALSE_POSITIVE]: (request) =>
@@ -294,7 +290,8 @@ export class ModerationActionRequestService implements IModerationActionRequestS
           },
         }
       : decoded;
-    if (isQueuedOperationCommand(action.command)) throw new Error('Detection request mismatch.');
+    if (isQueuedOperationCommand(action.command) || isQueuedReportCommand(action.command))
+      throw new Error('Detection request mismatch.');
     if (!recovery)
       this.application.caseConfirmations.recordVerified(action.context, action.command);
     const outcome = await dispatchQueuedAction(
@@ -312,7 +309,8 @@ export class ModerationActionRequestService implements IModerationActionRequestS
 
   private async executeCaseRequest(request: ModerationActionRequest): Promise<void> {
     const action = decodeQueuedAction(request);
-    if (isQueuedOperationCommand(action.command)) throw new Error('Case request mismatch.');
+    if (isQueuedOperationCommand(action.command) || isQueuedReportCommand(action.command))
+      throw new Error('Case request mismatch.');
     if (!this.application) throw new Error('Case application is unavailable.');
     // The persisted form submission supplies confirmation evidence; the shared
     // operation still checks fresh authority, mutable policy and case binding.
@@ -321,180 +319,11 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     await this.repository.complete(request.id, outcome);
   }
 
-  private async submitUserReport(request: ModerationActionRequest): Promise<void> {
-    if (!request.target_user_id) {
-      throw new Error('User-report request is missing target user.');
-    }
-
-    const guild = await this.fetchGuild(request.server_id);
-    const reporterMember = await guild.members.fetch(request.actor_id).catch(() => null);
-    if (!reporterMember) {
-      throw new Error('Reporter is not a member of the request guild.');
-    }
-
-    const reporter = await this.fetchUser(request.actor_id);
-    const targetLabel =
-      this.readMetadataString(request.metadata, 'target_label') ?? request.target_user_id;
-    const reason = this.readMetadataString(request.metadata, 'reason')?.trim() || undefined;
-    const result = await new ReportSubmissionService(
-      this.configService,
-      this.securityActionService
-    ).submitUserReport({
-      guild,
-      reason,
-      reporter,
-      targetLabel,
-      targetUserId: request.target_user_id,
-    });
-
-    if (result.status !== 'submitted') {
-      throw new Error(this.describeUserReportFailure(result));
-    }
-
-    await this.repository.complete(request.id, {
-      action_type: request.action_type,
-      reporter_id: request.actor_id,
-      server_id: request.server_id,
-      submitted: true,
-      target_user_id: result.targetUserId,
-    });
-  }
-
-  private async startReportIntake(request: ModerationActionRequest): Promise<void> {
-    const channelId = this.readMetadataString(request.metadata, 'channel_id');
-    if (!channelId) {
-      throw new Error('Report-intake request is missing target channel.');
-    }
-
-    const guild = await this.fetchGuild(request.server_id);
-    const reporter = await guild.members.fetch(request.actor_id).catch(() => null);
-    if (!reporter) {
-      throw new Error('Reporter is not a member of the request guild.');
-    }
-
-    const existingIntake = await this.reportIntakeService.findOpenIntakeForReporter({
-      reporterId: reporter.id,
-      serverId: request.server_id,
-    });
-    if (existingIntake) {
-      await this.repository.complete(request.id, {
-        action_type: request.action_type,
-        existing_open_intake: true,
-        intake_id: existingIntake.id,
-        opened: false,
-        server_id: request.server_id,
-        thread_id: existingIntake.thread_id,
-      });
-      return;
-    }
-
-    const targetChannel = await this.fetchRequestTextChannel(
-      request.server_id,
-      channelId,
-      'Report intake channel'
-    );
-    let thread: ThreadChannel | null = null;
-    let intakeId: string | null = null;
-    try {
-      thread = await this.threadManager.createReportIntakeThread(targetChannel, reporter);
-      if (!thread) {
-        throw new Error('Could not open a private report thread.');
-      }
-
-      const intake = await this.reportIntakeService.openIntakeFromThread({
-        channelId: targetChannel.id,
-        reporter,
-        serverId: request.server_id,
-        threadId: thread.id,
-      });
-      intakeId = intake.id;
-
-      const activated = await this.threadManager.activateReportIntakeThread(
-        thread,
-        reporter,
-        intake.id
-      );
-      if (!activated) {
-        await this.reportIntakeService.markOpenFailed({
-          intakeId: intake.id,
-          reason: 'thread_activation_failed',
-        });
-        await this.deleteFailedReportIntakeThread(thread);
-        throw new Error('Could not prepare the private report thread.');
-      }
-
-      await this.notifyReportIntakeStarted(request.server_id, reporter, thread, intake.id);
-
-      await this.repository.complete(request.id, {
-        action_type: request.action_type,
-        channel_id: targetChannel.id,
-        intake_id: intake.id,
-        opened: true,
-        reporter_id: reporter.id,
-        server_id: request.server_id,
-        thread_id: thread.id,
-        thread_url: thread.url,
-      });
-    } catch (error) {
-      if (thread && !intakeId) {
-        await this.deleteFailedReportIntakeThread(thread);
-      }
-      throw error;
-    }
-  }
-
-  private async closeReportIntake(request: ModerationActionRequest): Promise<void> {
-    if (!request.report_intake_id) {
-      throw new Error('Close-report-intake request is missing report intake.');
-    }
-
-    const intake = await this.reportIntakeService.findIntakeById(request.report_intake_id);
-    if (!intake || intake.server_id !== request.server_id) {
-      throw new Error('Report intake is no longer available.');
-    }
-    if (!intake.thread_id) {
-      throw new Error('Report intake does not have a Discord thread to close.');
-    }
-
-    const thread = await this.fetchReportIntakeThread(intake.thread_id, request.server_id);
-    if (!thread) {
-      throw new Error('Report intake thread could not be loaded.');
-    }
-
-    const result = await this.reportIntakeService.closeIntakeForThread({
-      closedById: request.actor_id,
-      threadId: intake.thread_id,
-    });
-    if (!result.closed) {
-      throw new Error(result.message);
-    }
-
-    await thread
-      .send({
-        allowedMentions: { parse: [] },
-        content: result.message,
-      })
-      .catch((error) => {
-        console.warn(`Failed to post report intake closeout in thread ${thread.id}:`, error);
-      });
-
-    const archived = result.shouldArchiveThread
-      ? await this.archiveReportIntakeThread(thread, 'Report intake closed')
-      : thread.archived;
-    const acknowledgement =
-      result.shouldArchiveThread && !archived
-        ? `${result.message}\nDrasil couldn't archive this thread.`
-        : result.message;
-
-    await this.repository.complete(request.id, {
-      action_type: request.action_type,
-      closed: true,
-      message: acknowledgement,
-      report_intake_id: request.report_intake_id,
-      server_id: request.server_id,
-      thread_archived: archived,
-      thread_id: intake.thread_id,
-    });
+  private async executeReportRequest(request: ModerationActionRequest): Promise<void> {
+    if (!this.application) throw new Error('Report application is unavailable.');
+    const action = decodeQueuedAction(request);
+    const outcome = await dispatchQueuedAction(this.application, action);
+    await this.repository.complete(request.id, outcome);
   }
 
   private async executeOperationsRequest(request: ModerationActionRequest): Promise<void> {
@@ -514,7 +343,8 @@ export class ModerationActionRequestService implements IModerationActionRequestS
   private async executeCaptchaRequest(request: ModerationActionRequest): Promise<void> {
     if (!this.application) throw new Error('CAPTCHA application is unavailable.');
     const action = await this.application.captchaRuntime.decodeRequest(request);
-    if (isQueuedOperationCommand(action.command)) throw new Error('CAPTCHA request mismatch.');
+    if (isQueuedOperationCommand(action.command) || isQueuedReportCommand(action.command))
+      throw new Error('CAPTCHA request mismatch.');
     if (action.context.actor.kind === 'user')
       this.application.caseConfirmations.recordVerified(action.context, action.command);
     const outcome = await dispatchQueuedAction(
@@ -768,84 +598,6 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     });
   }
 
-  private async notifyReportIntakeStarted(
-    guildId: string,
-    reporter: GuildMember,
-    thread: ThreadChannel,
-    reportIntakeId: string
-  ): Promise<void> {
-    try {
-      const adminChannel = await this.configService.getAdminChannel(guildId);
-      const serverConfig = await this.configService.getServerConfig(guildId);
-      const roleIds = this.presentationBuilder.getCaseNotificationRoleIds(serverConfig);
-      const content = this.presentationBuilder.formatRoleMentions(roleIds);
-      await adminChannel?.send({
-        ...(content ? { content } : {}),
-        allowedMentions: this.presentationBuilder.createAdminAllowedMentions(roleIds),
-        components: [
-          new ActionRowBuilder<ButtonBuilder>().addComponents(
-            new ButtonBuilder()
-              .setCustomId(buildReportIntakeAdminActionsCustomId(reportIntakeId))
-              .setLabel('Admin Actions')
-              .setStyle(ButtonStyle.Primary)
-          ),
-        ],
-        embeds: [this.presentationBuilder.createReportIntakeStartedEmbed(reporter, thread)],
-      });
-    } catch (error) {
-      console.warn(`Failed to notify admin channel for report intake thread ${thread.id}:`, error);
-    }
-  }
-
-  private async deleteFailedReportIntakeThread(thread: ThreadChannel): Promise<void> {
-    const deletable = thread as ThreadChannel & {
-      delete?: (reason?: string) => Promise<unknown>;
-    };
-    if (typeof deletable.delete !== 'function') {
-      return;
-    }
-
-    try {
-      await deletable.delete('Report intake setup failed before reporter activation.');
-    } catch (error) {
-      console.warn(`Failed to delete failed report intake thread ${thread.id}:`, error);
-    }
-  }
-
-  private async fetchReportIntakeThread(
-    threadId: string,
-    serverId: string
-  ): Promise<ThreadChannel | null> {
-    const channel = await this.client.channels.fetch(threadId).catch(() => null);
-    const isThread = Boolean(
-      channel &&
-      'isThread' in channel &&
-      typeof channel.isThread === 'function' &&
-      channel.isThread()
-    );
-    if (!isThread) {
-      return null;
-    }
-
-    const thread = channel as ThreadChannel;
-    if (thread.guildId !== serverId) {
-      throw new Error('Report intake thread does not belong to the request guild.');
-    }
-    return thread;
-  }
-
-  private async archiveReportIntakeThread(thread: ThreadChannel, reason: string): Promise<boolean> {
-    if (thread.archived) return true;
-    if (typeof thread.setArchived !== 'function') return false;
-    try {
-      await thread.setArchived(true, reason);
-      return true;
-    } catch (error) {
-      console.warn(`Failed to archive report intake thread ${thread.id}:`, error);
-      return false;
-    }
-  }
-
   private async fetchRequestTextChannel(
     serverId: string,
     channelId: string,
@@ -885,25 +637,6 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     }
 
     return `Setup workflow failed with status ${result.status}.`;
-  }
-
-  private describeUserReportFailure(result: {
-    error?: unknown;
-    label?: string;
-    status: string;
-  }): string {
-    switch (result.status) {
-      case 'self_report':
-        return 'Reporter cannot report themselves.';
-      case 'reason_required':
-        return 'This server requires a report reason.';
-      case 'member_not_found':
-        return `Reported member ${result.label ?? 'unknown'} was not found in this guild.`;
-      case 'failed':
-        return `Report submission failed: ${this.errorMessage(result.error)}`;
-      default:
-        return `Report submission failed with status ${result.status}.`;
-    }
   }
 
   private formatSetupDiagnosticSummary(report: SetupDiagnosticReport): string {

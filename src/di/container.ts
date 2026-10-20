@@ -285,6 +285,7 @@ function configureServices(container: Container): void {
     .bind<BotApplication>(TYPES.BotApplication)
     .toDynamicValue((context) =>
       createBotApplication({
+        reportIntakeService: context.get<IReportIntakeService>(TYPES.ReportIntakeService),
         caseThreadClosureSweepService: context.get<ICaseThreadClosureSweepService>(
           TYPES.CaseThreadClosureSweepService
         ),

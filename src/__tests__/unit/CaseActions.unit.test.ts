@@ -126,6 +126,7 @@ async function arrange() {
     }),
   } as unknown as ISecurityActionService;
   const application = createBotApplication({
+    reportIntakeService: {} as any,
     integrityAuditService: mock<IIntegrityAuditService>(),
     caseRoleLockdownService: mock<ICaseRoleLockdownService>(),
     caseThreadClosureSweepService: mock<ICaseThreadClosureSweepService>(),

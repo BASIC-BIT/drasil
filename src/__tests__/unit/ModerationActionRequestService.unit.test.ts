@@ -1160,6 +1160,7 @@ describe('ModerationActionRequestService', () => {
       })),
     };
     const application = createBotApplication({
+      reportIntakeService: reportIntakeService as any,
       caseThreadClosureSweepService: caseThreadClosureSweepService as never,
       caseRoleLockdownService: caseRoleLockdownService as never,
       integrityAuditService: { auditGuild: jest.fn() },
@@ -1502,6 +1503,7 @@ describe('ModerationActionRequestService', () => {
     expect(reportIntakeService.findIntakeById).toHaveBeenCalledWith('intake-1');
     expect(reportIntakeService.closeIntakeForThread).toHaveBeenCalledWith({
       closedById: 'moderator-1',
+      closedByStaff: false,
       threadId: 'report-thread-1',
     });
     expect(reportIntakeThread.send).toHaveBeenCalledWith({

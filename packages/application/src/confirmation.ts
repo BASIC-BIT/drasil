@@ -10,6 +10,7 @@ export interface ConfirmationBinding {
 export type ConfirmationCommand = { readonly kind: string } & (
   | { readonly targetUserId: string }
   | { readonly caseId: string }
+  | { readonly intakeId: string }
   | { readonly operationId: string }
 );
 export interface ConfirmationPort {
@@ -27,10 +28,12 @@ export function matchesConfirmation(
     evidence.actorId === context.actor.userId &&
     evidence.action === command.kind &&
     evidence.targetId ===
-      ('caseId' in command
-        ? command.caseId
-        : 'operationId' in command
-          ? command.operationId
-          : command.targetUserId)
+      ('intakeId' in command
+        ? command.intakeId
+        : 'caseId' in command
+          ? command.caseId
+          : 'operationId' in command
+            ? command.operationId
+            : command.targetUserId)
   );
 }

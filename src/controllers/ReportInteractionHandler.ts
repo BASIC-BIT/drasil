@@ -1,3 +1,6 @@
+import type { ReportActions, ReportCommand, ReportOutcome } from '@drasil/application';
+import { createDiscordActionContext } from '../application/context';
+import { requireReportOutcome } from '../application/adapters/reports';
 import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
 import {
   ActionRowBuilder,
@@ -8,14 +11,11 @@ import {
   ComponentType,
   Client,
   Guild,
-  GuildMember,
   InteractionContextType,
   MessageFlags,
   ModalSubmitInteraction,
   PermissionFlagsBits,
-  TextChannel,
   ThreadChannel,
-  User,
 } from 'discord.js';
 import { IConfigService } from '../config/ConfigService';
 import { DiscordUserResolver } from '../services/DiscordUserResolver';
@@ -26,20 +26,13 @@ import {
   REPORT_INTAKE_CONFIRM_CUSTOM_ID_PREFIX,
   REPORT_INTAKE_REJECT_CUSTOM_ID_PREFIX,
 } from '../services/ReportIntakeService';
-import { NotificationPresentationBuilder } from '../services/NotificationPresentationBuilder';
-import { type MessageReportAttachment } from '../services/SecurityActionService';
 import { ReportSubmissionService } from '../services/ReportSubmissionService';
 import { IThreadManager } from '../services/ThreadManager';
 import { ReportIntake, ReportIntakeStatus } from '../repositories/types';
 import { formatInlineIdentifier } from '../utils/discordUserIdentity';
-import {
-  REPORT_MESSAGE_REASON_FIELD_ID,
-  USER_REPORT_MESSAGE_CONTENT_MAX_LENGTH,
-} from '../utils/userReportSettings';
+import { REPORT_MESSAGE_REASON_FIELD_ID } from '../utils/userReportSettings';
 import { canModerateReportIntake } from '../utils/reportIntakeStaffAuthorization';
-import { messageAttachmentsToReportMetadata } from '../utils/reportAttachments';
 import {
-  buildReportIntakeAdminActionsCustomId,
   buildReportIntakeAdminBanCustomId,
   buildReportIntakeAdminCancelCustomId,
   buildReportIntakeAdminCloseCustomId,
@@ -69,7 +62,6 @@ type ReportIntakeAdminResponseMode = 'reply' | 'update';
 
 export class ReportInteractionHandler {
   private readonly userResolver: DiscordUserResolver;
-  private readonly presentationBuilder = new NotificationPresentationBuilder();
 
   public constructor(
     private readonly client: Client,
@@ -80,16 +72,16 @@ export class ReportInteractionHandler {
     private readonly showReportBan?: (
       interaction: ButtonInteraction,
       intakeId: string
-    ) => Promise<void>
+    ) => Promise<void>,
+    private readonly reports?: ReportActions
   ) {
     this.userResolver = new DiscordUserResolver(client);
   }
 
   public async handleReportUserInitiate(interaction: ButtonInteraction): Promise<void> {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    let openedThreadUrl: string | null = null;
 
-    let thread: ThreadChannel | null = null;
-    let intakeActivated = false;
     try {
       if (!this.reportIntakeService) {
         await interaction.editReply({ content: 'Report intake tracking is not available.' });
@@ -121,70 +113,30 @@ export class ReportInteractionHandler {
         return;
       }
 
-      const existingIntake = await this.reportIntakeService.findOpenIntakeForReporter({
-        serverId: guildId,
-        reporterId: reporter.id,
-      });
-      if (existingIntake) {
-        await interaction.editReply({
-          content: this.buildExistingReportIntakeMessage(guildId, existingIntake.thread_id),
-        });
-        return;
-      }
-
-      thread = await this.threadManager.createReportIntakeThread(
-        interaction.channel as TextChannel,
-        reporter
-      );
-      if (!thread) {
-        await interaction.editReply({
-          content:
-            'Could not open a private report thread. Please ask a server admin to check Drasil thread permissions.',
-        });
-        return;
-      }
-
-      const intake = await this.reportIntakeService.openIntakeFromThread({
-        serverId: guildId,
-        reporter,
-        threadId: thread.id,
+      const outcome = await this.executeReport(interaction, {
+        kind: 'start_report_intake',
         channelId: interaction.channel.id,
       });
-
-      const activated = await this.threadManager.activateReportIntakeThread(
-        thread,
-        reporter,
-        intake.id
-      );
-      if (!activated) {
-        await this.reportIntakeService.markOpenFailed({
-          intakeId: intake.id,
-          reason: 'thread_activation_failed',
-        });
-        await this.deleteFailedReportIntakeThread(thread);
-        thread = null;
+      if (outcome.kind !== 'start_report_intake') return;
+      if (outcome.status === 'existing' && outcome.intake) {
         await interaction.editReply({
-          content:
-            'Could not prepare the private report thread. Please ask a server admin to check Drasil thread permissions.',
+          content: this.buildExistingReportIntakeMessage(guildId, outcome.intake.threadId),
         });
         return;
       }
-      intakeActivated = true;
-
-      await interaction.editReply({
-        content: `Opened a private report thread: ${thread.url}\nAdd what happened there.`,
-      });
-
-      await this.notifyReportIntakeThreadOpened(guildId, reporter, thread, intake.id);
+      if (outcome.status === 'opened') openedThreadUrl = outcome.threadUrl ?? null;
+      const content =
+        outcome.status === 'opened'
+          ? `Opened a private report thread: ${outcome.threadUrl}\nAdd what happened there.`
+          : outcome.status === 'activation_failed'
+            ? 'Could not prepare the private report thread. Please ask a server admin to check Drasil thread permissions.'
+            : 'Could not open a private report thread. Please ask a server admin to check Drasil thread permissions.';
+      await interaction.editReply({ content });
     } catch (error) {
       console.error('Error opening report intake thread:', error);
-      if (thread && !intakeActivated) {
-        await this.deleteFailedReportIntakeThread(thread);
-      }
-      const content =
-        intakeActivated && thread
-          ? `Opened a private report thread: ${thread.url}\nAdd what happened there.`
-          : 'An error occurred while opening the report thread. Please try again later.';
+      const content = openedThreadUrl
+        ? `Opened a private report thread: ${openedThreadUrl}\nAdd what happened there.`
+        : 'An error occurred while opening the report thread. Please try again later.';
       await interaction.editReply({ content }).catch((replyError) => {
         console.warn('Failed to update report intake interaction after setup error:', replyError);
       });
@@ -232,77 +184,27 @@ export class ReportInteractionHandler {
         return;
       }
 
-      const confirmation = await this.reportIntakeService.confirmCandidate({
+      const outcome = await this.executeReport(interaction, {
+        kind: 'confirm_intake_candidate',
         intakeId,
         targetUserId,
-        confirmedById: interaction.user.id,
-        confirmedByStaff: context.canModerate,
+        threadId: interaction.channelId,
         promptMessageId: interaction.message.id,
       });
-      if (!confirmation.confirmed || !confirmation.reason) {
-        await interaction.editReply({ content: confirmation.message });
+      if (outcome.kind !== 'confirm_intake_candidate') return;
+      if (outcome.status !== 'submitted') {
+        await interaction.editReply({ content: outcome.message });
         return;
       }
       selectionAccepted = true;
-
-      const reporter = await this.resolveReportIntakeReporter(
-        confirmation.reporterId,
-        interaction.user
-      );
-
-      const submission = await this.reportSubmissionService.submitConfirmedReportIntake(
-        targetMember,
-        reporter,
-        confirmation.reason,
-        {
-          intakeId,
-          ...(confirmation.attachments?.length ? { attachments: confirmation.attachments } : {}),
-        }
-      );
-      if (submission.status === 'failed') {
-        throw submission.error;
-      }
       submissionSucceeded = true;
-      statusRecorded = await this.reportIntakeService
-        .markSubmitted({
-          intakeId,
-          targetUserId,
-          submittedById: interaction.user.id,
-        })
-        .catch((error: unknown) => {
-          console.warn(`Failed to record submitted report ${intakeId}:`, error);
-          return false;
-        });
+      statusRecorded = outcome.statusRecorded === true;
       const acknowledgement = statusRecorded
         ? 'Report submitted.'
         : "Report submitted. Drasil couldn't record its final status. Please ask a moderator to review this thread.";
       await interaction
         .editReply({ content: acknowledgement })
         .catch((error: unknown) => console.warn('Failed to deliver report receipt:', error));
-      const threadChannel = this.getThreadChannel(interaction.channel);
-      if (threadChannel) {
-        const receipt = `Report submitted for ${this.formatReportTargetLabel(targetMember)}.`;
-        await threadChannel
-          .send({
-            content: statusRecorded
-              ? receipt
-              : `${receipt}\nDrasil couldn't record its final status. Please ask a moderator to review this thread.`,
-            allowedMentions: { parse: [] },
-          })
-          .catch((error: unknown) =>
-            console.warn('Failed to post submitted report receipt:', error)
-          );
-      }
-      await this.threadManager
-        .retireReportConfirmationPrompts(
-          context.intake,
-          getReportConfirmationMessageIds(context.intake, interaction.message.id)
-        )
-        .catch((error: unknown) =>
-          console.warn('Failed to retire submitted report confirmations:', error)
-        );
-      if (statusRecorded && threadChannel)
-        await this.archiveReportIntakeThread(threadChannel, 'Report intake submitted');
     } catch (error) {
       console.error(
         'Error confirming report intake target:',
@@ -342,13 +244,15 @@ export class ReportInteractionHandler {
       const context = await this.resolveReportConfirmationContext(interaction, intakeId);
       if (!context) return;
 
-      const result = await this.reportIntakeService.rejectCandidates({
+      const outcome = await this.executeReport(interaction, {
+        kind: 'reject_intake_candidates',
         intakeId,
-        rejectedById: interaction.user.id,
-        promptToken,
-        rejectedByStaff: context.canModerate,
+        threadId: interaction.channelId,
         promptMessageId: interaction.message.id,
+        promptToken,
       });
+      if (outcome.kind !== 'reject_intake_candidates') return;
+      const result = outcome.result;
       await interaction.editReply({ content: result.message }).catch((error: unknown) => {
         console.warn('Failed to deliver report selection result:', error);
       });
@@ -489,34 +393,25 @@ export class ReportInteractionHandler {
     let reportSubmitted = false;
     try {
       const fetchedTargetUser = await this.client.users.fetch(targetUserId).catch(() => null);
-      const targetUser =
-        fetchedTargetUser ?? ({ id: targetUserId, username: targetUserId } as User);
-      const message = await this.fetchReportMessage(channelId, messageId);
       const contextNumber = Number(contextRaw);
       const interactionContext =
         contextRaw === 'x' || Number.isNaN(contextNumber)
           ? undefined
           : (contextNumber as InteractionContextType);
 
-      const reportPayload = {
-        messageId,
-        channelId,
-        guildId,
-        content: message?.content.slice(0, USER_REPORT_MESSAGE_CONTENT_MAX_LENGTH),
-        reason,
-        interactionContext,
-        ...(message?.attachments.length ? { attachments: message.attachments } : {}),
-      };
-
-      const submission = await this.reportSubmissionService.submitMessageReport(
-        targetUser,
-        interaction.user,
-        reportPayload
+      const outcome = await this.executeReport(
+        interaction,
+        {
+          kind: 'submit_message_report',
+          targetUserId,
+          messageId,
+          channelId,
+          reason: reason ?? null,
+          ...(interactionContext === undefined ? {} : { interactionContext }),
+        },
+        guildId ?? '0'
       );
-      if (submission.status === 'failed') {
-        throw submission.error;
-      }
-
+      if (outcome.kind !== 'submit_message_report') return;
       reportSubmitted = true;
       await interaction.editReply({
         content: fetchedTargetUser?.username
@@ -603,14 +498,14 @@ export class ReportInteractionHandler {
         return;
       }
 
-      const guild = await this.client.guilds.fetch(interaction.guildId);
-      const submission = await this.reportSubmissionService.submitUserReport({
-        guild,
-        reporter: interaction.user,
+      const outcome = await this.executeReport(interaction, {
+        kind: 'submit_user_report',
         targetUserId,
         targetLabel: targetUserInputString,
-        reason,
+        reason: reason ?? null,
       });
+      if (outcome.kind !== 'submit_user_report') return;
+      const submission = outcome.result;
       if (submission.status === 'member_not_found') {
         await interaction.editReply({
           content: `Could not find a user matching "${targetUserInputString}" in this server.`,
@@ -628,9 +523,6 @@ export class ReportInteractionHandler {
           content: 'You cannot report yourself.',
         });
         return;
-      }
-      if (submission.status === 'failed') {
-        throw submission.error;
       }
 
       reportSubmitted = true;
@@ -955,11 +847,26 @@ export class ReportInteractionHandler {
       await interaction.deferUpdate();
     }
 
-    const result = await this.reportIntakeService.closeIntakeForThread({
-      threadId: context.intake.thread_id,
-      closedById: interaction.user.id,
-      closedByStaff: context.canModerate,
-    });
+    if (!this.reports) throw new Error('Report application is unavailable.');
+    const action = await this.reports.execute(
+      createDiscordActionContext({
+        guildId: context.intake.server_id,
+        userId: interaction.user.id,
+        requestId: interaction.id,
+      }),
+      { kind: 'close_report_intake', intakeId: context.intake.id }
+    );
+    if (action.kind === 'denied') {
+      await this.respondToReportIntakeAdminInteraction(
+        interaction,
+        { content: 'Only the reporter or a moderator can close this report.', components: [] },
+        'update'
+      );
+      return false;
+    }
+    const outcome = action.outcome;
+    if (outcome.kind !== 'close_report_intake') return false;
+    const result = outcome.result;
 
     if (!result.closed) {
       await this.respondToReportIntakeAdminInteraction(
@@ -970,28 +877,9 @@ export class ReportInteractionHandler {
       return false;
     }
 
-    await context.thread
-      .send({
-        content: result.message,
-        allowedMentions: { parse: [] },
-      })
-      .catch((error) => {
-        console.warn(
-          `Failed to post report intake closeout message in thread ${context.thread?.id}:`,
-          error
-        );
-      });
-
-    const archived = result.shouldArchiveThread
-      ? await this.archiveReportIntakeThread(context.thread, 'Report intake closed')
-      : false;
-    const acknowledgement =
-      result.shouldArchiveThread && !archived
-        ? `${result.message}\nDrasil couldn't archive this thread.`
-        : result.message;
     await this.respondToReportIntakeAdminInteraction(
       interaction,
-      { content: acknowledgement, components: [] },
+      { content: result.message, components: [] },
       'update'
     ).catch((error: unknown) => console.warn('Failed to deliver report closeout:', error));
     return true;
@@ -1102,73 +990,22 @@ export class ReportInteractionHandler {
     return `Continue in your existing report thread. ${cancelHint}`;
   }
 
-  private async deleteFailedReportIntakeThread(thread: ThreadChannel): Promise<void> {
-    try {
-      await thread.delete('Report intake setup failed before reporter activation.');
-    } catch (error) {
-      console.warn(`Failed to delete failed report intake thread ${thread.id}:`, error);
-    }
-  }
-
-  private async archiveReportIntakeThread(
-    thread: ReportIntakeThreadChannel,
-    reason: string
-  ): Promise<boolean> {
-    if (thread.archived) return true;
-    if (typeof thread.setArchived !== 'function') return false;
-    try {
-      await thread.setArchived(true, reason);
-      return true;
-    } catch (error) {
-      console.warn(`Failed to archive report intake thread ${thread.id}:`, error);
-      return false;
-    }
-  }
-
-  private async notifyReportIntakeThreadOpened(
-    guildId: string,
-    reporter: GuildMember,
-    thread: ThreadChannel,
-    reportIntakeId: string
-  ): Promise<void> {
-    try {
-      const adminChannel = await this.configService.getAdminChannel(guildId);
-      const serverConfig = await this.configService.getServerConfig(guildId);
-      const roleIds = this.presentationBuilder.getCaseNotificationRoleIds(serverConfig);
-      const content = this.presentationBuilder.formatRoleMentions(roleIds);
-      await adminChannel?.send({
-        ...(content ? { content } : {}),
-        embeds: [this.presentationBuilder.createReportIntakeStartedEmbed(reporter, thread)],
-        components: [
-          new ActionRowBuilder<ButtonBuilder>().addComponents(
-            new ButtonBuilder()
-              .setCustomId(buildReportIntakeAdminActionsCustomId(reportIntakeId))
-              .setLabel('Admin Actions')
-              .setStyle(ButtonStyle.Primary)
-          ),
-        ],
-        allowedMentions: this.presentationBuilder.createAdminAllowedMentions(roleIds),
-      });
-    } catch (error) {
-      console.warn(`Failed to notify admin channel for report intake thread ${thread.id}:`, error);
-    }
-  }
-
-  private async resolveReportIntakeReporter(
-    reporterId: string | undefined,
-    fallback: User
-  ): Promise<User> {
-    if (!reporterId || reporterId === fallback.id) {
-      return fallback;
-    }
-
-    return this.client.users.fetch(reporterId).catch(
-      () =>
-        ({
-          id: reporterId,
-          username: 'unknown',
-          tag: 'unknown',
-        }) as User
+  private async executeReport(
+    interaction: ButtonInteraction | ModalSubmitInteraction,
+    command: ReportCommand,
+    guildId = interaction.guildId ?? '0'
+  ): Promise<ReportOutcome> {
+    if (!this.reports) throw new Error('Report application is unavailable.');
+    return requireReportOutcome(
+      await this.reports.execute(
+        createDiscordActionContext({
+          guildId,
+          userId: interaction.user.id,
+          requestId: interaction.id,
+        }),
+        command
+      ),
+      command.kind
     );
   }
 
@@ -1182,29 +1019,6 @@ export class ReportInteractionHandler {
       channel.isThread()
     );
     return isThread ? (channel as unknown as ReportIntakeThreadChannel) : null;
-  }
-
-  private formatReportTargetLabel(member: GuildMember): string {
-    return member.user.username?.trim()
-      ? `@${formatInlineIdentifier(member.user.username)}`
-      : `user ${formatInlineIdentifier(member.id)}`;
-  }
-
-  private async fetchReportMessage(
-    channelId: string,
-    messageId: string
-  ): Promise<{ content: string; attachments: MessageReportAttachment[] } | null> {
-    const channel = await this.client.channels.fetch(channelId).catch(() => null);
-    if (!channel || !('messages' in channel)) {
-      return null;
-    }
-
-    const message = await channel.messages.fetch(messageId).catch(() => null);
-    if (!message || typeof message.content !== 'string') {
-      return null;
-    }
-
-    return { content: message.content, attachments: messageAttachmentsToReportMetadata(message) };
   }
 
   public isReportIntakeConfirmCustomId(customId: string): boolean {

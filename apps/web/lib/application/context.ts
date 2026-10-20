@@ -31,11 +31,13 @@ export function createWebConfirmationPort(
           actorId: context.actor.userId,
           action: command.kind,
           targetId:
-            'caseId' in command
-              ? command.caseId
-              : 'operationId' in command
-                ? command.operationId
-                : command.targetUserId,
+            'intakeId' in command
+              ? command.intakeId
+              : 'caseId' in command
+                ? command.caseId
+                : 'operationId' in command
+                  ? command.operationId
+                  : command.targetUserId,
         }
       : null;
   return {
@@ -43,4 +45,15 @@ export function createWebConfirmationPort(
       return matchesConfirmation(candidateContext, candidateCommand, evidence);
     },
   };
+}
+
+export function createWebReportConfirmationPort(
+  context: ActionContext,
+  command: ConfirmationCommand,
+  formData: FormData
+): ConfirmationPort {
+  const field = command.kind === 'close_report_intake' ? 'confirmCloseIntake' : 'confirmReport';
+  const normalized = new FormData();
+  if (formData.get(field) === 'on') normalized.set('confirmAction', 'on');
+  return createWebConfirmationPort(context, command, normalized);
 }
