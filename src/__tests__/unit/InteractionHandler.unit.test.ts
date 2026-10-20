@@ -3268,6 +3268,20 @@ describe('InteractionHandler (unit)', () => {
       requests as never,
       reports as never
     );
+    const originalReport = await reports.findById();
+    reports.findById.mockResolvedValueOnce({
+      ...originalReport,
+      server_id: 'guild-1',
+      status: 'submitted',
+      confirmed_target_user_id: 'user-1',
+      metadata: {},
+    });
+    const open = buildInteraction('report_intake_admin:b:report-1', 'guild-1', {
+      id: 'admin-1',
+    } as User);
+    Object.assign(open, { channelId: 'report-thread' });
+    grantOnlyBanMembersPermission(open);
+    await handler.handleButtonInteraction(open);
     const interaction = {
       customId: 'report_ban:report-1:user-1',
       channelId:
@@ -3384,7 +3398,7 @@ describe('InteractionHandler (unit)', () => {
     expect(securityActionService.banObservedDetection).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
+  it.each([false, true, 'detection-changed', 'replayed'])(
     'runs the admin notification menu through modal submission (channel changed: %s)',
     async (changed) => {
       enableModeratorBanActions();
@@ -3473,8 +3487,13 @@ describe('InteractionHandler (unit)', () => {
       grantOnlyBanMembersPermission(click);
       await handler.handleButtonInteraction(click);
       const modal = (click.showModal as jest.Mock).mock.calls[0][0].toJSON();
-      if (changed)
+      if (changed === true)
         (configService.getAdminChannel as jest.Mock).mockResolvedValue({ id: 'new-admin-channel' });
+      if (changed === 'detection-changed')
+        detections.findByReportIntakeId.mockResolvedValue({
+          ...detection,
+          id: 'replacement-detection',
+        });
       const submit = {
         customId: modal.custom_id,
         guildId: 'guild-1',
@@ -3488,7 +3507,10 @@ describe('InteractionHandler (unit)', () => {
       } as unknown as ModalSubmitInteraction;
       grantOnlyBanMembersPermission(submit);
       await handler.handleModalSubmit(submit);
-      expect(requests.enqueue).toHaveBeenCalledTimes(changed ? 0 : 1);
+      if (changed === 'replayed') await handler.handleModalSubmit(submit);
+      expect(requests.enqueue).toHaveBeenCalledTimes(
+        changed === true || changed === 'detection-changed' ? 0 : 1
+      );
     }
   );
 

@@ -1,7 +1,7 @@
 import {
   matchesConfirmation,
   type ActionContext,
-  type CaseCommand,
+  type ConfirmationCommand,
   type ConfirmationBinding,
   type ConfirmationPort,
 } from '@drasil/application';
@@ -24,7 +24,7 @@ export function createCaseConfirmationStore(): {
   readonly confirmations: ConfirmationPort;
   recordVerified(
     context: ActionContext,
-    command: CaseCommand,
+    command: ConfirmationCommand,
     evidence?: ConfirmationBinding
   ): void;
 } {
@@ -38,7 +38,12 @@ export function createCaseConfirmationStore(): {
           guildId: context.guildId,
           actorId: context.actor.userId,
           action: command.kind,
-          targetId: 'caseId' in command ? command.caseId : command.targetUserId,
+          targetId:
+            'caseId' in command
+              ? command.caseId
+              : 'operationId' in command
+                ? command.operationId
+                : command.targetUserId,
         }
       );
     },

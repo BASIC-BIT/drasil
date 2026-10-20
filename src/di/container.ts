@@ -281,6 +281,9 @@ function configureServices(container: Container): void {
     .bind<BotApplication>(TYPES.BotApplication)
     .toDynamicValue((context) =>
       createBotApplication({
+        actionRequests: context.get<IModerationActionRequestRepository>(
+          TYPES.ModerationActionRequestRepository
+        ),
         client: context.get<Client>(TYPES.DiscordClient),
         queueRepository: context.get<IModerationQueueRepository>(TYPES.ModerationQueueRepository),
         queueService: context.get<IModerationQueueService>(TYPES.ModerationQueueService),

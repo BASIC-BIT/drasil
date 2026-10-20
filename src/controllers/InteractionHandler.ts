@@ -1,4 +1,11 @@
-import type { CaseCommand, CaseOutcome } from '@drasil/application';
+import { requireDetectionOutcome } from '../application/adapters/detections';
+import {
+  encodeQueuedAction,
+  type DetectionCommand,
+  type DetectionOutcome,
+  type CaseCommand,
+  type CaseOutcome,
+} from '@drasil/application';
 import { CaseActionDeniedError, requireCaseOutcome } from '../application/adapters/cases';
 import type { BotApplication } from '../application/createBotApplication';
 import { createDiscordActionContext } from '../application/context';
@@ -170,6 +177,10 @@ export class InteractionHandler implements IInteractionHandler {
   private detectionEventsRepository?: IDetectionEventsRepository;
   private accountQuarantineService?: IAccountQuarantineService;
   private captchaChallengeService?: ICaptchaChallengeService;
+  private readonly pendingReportBanModals = new Map<
+    string,
+    { readonly detectionEventId: string; readonly expiresAt: number }
+  >();
   private readonly pendingCaseModalBindings = new Map<
     string,
     { readonly caseId: string; readonly expiresAt: number }
@@ -2036,6 +2047,21 @@ export class InteractionHandler implements IInteractionHandler {
     }
   }
 
+  private async executeDetectionAction(
+    interaction: ButtonInteraction | ModalSubmitInteraction,
+    command: DetectionCommand
+  ): Promise<DetectionOutcome> {
+    if (!this.application || !interaction.guildId)
+      throw new Error('Detection application is unavailable.');
+    const context = createDiscordActionContext({
+      guildId: interaction.guildId,
+      userId: interaction.user.id,
+      requestId: interaction.id,
+    });
+    this.application.caseConfirmations.recordVerified(context, command);
+    return requireDetectionOutcome(await this.application.detections.execute(context, command));
+  }
+
   private async bindCaseModal(
     interaction: ButtonInteraction,
     guildId: string,
@@ -3405,15 +3431,6 @@ export class InteractionHandler implements IInteractionHandler {
     });
   }
 
-  private async getObservedTargetMember(guildId: string, userId: string): Promise<GuildMember> {
-    const guild = await this.client.guilds.fetch(guildId);
-    const member = await guild.members.fetch(userId).catch(() => null);
-    if (!member) {
-      throw new Error(`Could not find member ${userId} in guild ${guildId}`);
-    }
-    return member;
-  }
-
   private getModerationPermissions(): bigint[] {
     return [PermissionFlagsBits.ManageGuild, PermissionFlagsBits.ModerateMembers];
   }
@@ -3690,17 +3707,19 @@ export class InteractionHandler implements IInteractionHandler {
       return;
     }
 
-    const reason = providedReason || OBSERVED_KICK_DEFAULT_REASON;
+    const reason = providedReason || null;
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     try {
-      const member = await this.getObservedTargetMember(interaction.guildId, parsed.userId);
-      const kicked = await this.securityActionService.kickObservedDetection(
-        member,
-        parsed.detectionEventId,
-        interaction.user,
-        reason
-      );
+      const outcome = await this.executeDetectionAction(interaction, {
+        kind: 'kick_observed_detection',
+        targetUserId: parsed.userId,
+        detectionEventId: parsed.detectionEventId,
+        reason,
+      });
+      if (outcome.kind !== 'kick_observed_detection')
+        throw new Error('Detection outcome mismatch.');
+      const kicked = outcome.succeeded;
       await interaction.editReply({
         content: kicked
           ? `Kicked <@${parsed.userId}> from the observed alert.`
@@ -3804,6 +3823,20 @@ export class InteractionHandler implements IInteractionHandler {
           : OBSERVED_BAN_DEFAULT_REASON
       );
     modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(reasonInput));
+    if (reportId) {
+      for (const [key, value] of this.pendingReportBanModals)
+        if (value.expiresAt <= Date.now()) this.pendingReportBanModals.delete(key);
+      const key = `${guildId}:${interaction.user.id}:report_ban:${reportId}:${userId}`;
+      const pending = this.pendingReportBanModals.get(key);
+      if (pending && pending.detectionEventId !== detectionEventId)
+        throw new Error(
+          'A confirmation for another detection is still pending. Let it expire before retrying.'
+        );
+      this.pendingReportBanModals.set(key, {
+        detectionEventId,
+        expiresAt: Date.now() + MODERATION_ACTION_CONFIRMATION_TTL_MS,
+      });
+    }
     await interaction.showModal(modal);
   }
 
@@ -3819,9 +3852,26 @@ export class InteractionHandler implements IInteractionHandler {
     const reportParts = interaction.customId.startsWith('report_ban:')
       ? interaction.customId.split(':')
       : null;
+    const pendingKey = `${interaction.guildId}:${interaction.user.id}:${interaction.customId}`;
+    const pending = this.pendingReportBanModals.get(pendingKey);
+    this.pendingReportBanModals.delete(pendingKey);
+    if (reportParts && (!pending || pending.expiresAt <= Date.now())) {
+      await interaction.reply({
+        content: 'The report ban confirmation expired. Refresh the report and retry.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
     const reportDetection = reportParts
       ? await this.detectionEventsRepository?.findByReportIntakeId(reportParts[1])
       : null;
+    if (reportParts && reportDetection?.id !== pending?.detectionEventId) {
+      await interaction.reply({
+        content: 'The report detection changed. Refresh the report and retry.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
     const parsed =
       reportParts && reportDetection
         ? { action: 'ban_modal', userId: reportParts[2], detectionEventId: reportDetection.id }
@@ -3866,7 +3916,7 @@ export class InteractionHandler implements IInteractionHandler {
       return;
     }
 
-    const reason = providedReason || OBSERVED_BAN_DEFAULT_REASON;
+    const reason = providedReason || null;
     try {
       if (!this.actionRequests || !this.detectionEventsRepository)
         throw new Error('Moderation request queue is unavailable.');
@@ -3900,16 +3950,24 @@ export class InteractionHandler implements IInteractionHandler {
         )
           throw new Error('Report is no longer available for this ban.');
       }
-      const request = await this.actionRequests.enqueue({
-        serverId: interaction.guildId,
-        actorId: interaction.user.id,
-        actorSurface: 'discord_interaction',
-        actionType: ModerationActionRequestType.BAN_OBSERVED_DETECTION,
+      const command = {
+        kind: 'ban_observed_detection' as const,
         targetUserId: parsed.userId,
         detectionEventId: parsed.detectionEventId,
-        reportIntakeId: reportId,
-        idempotencyKey: `observed-ban:${interaction.guildId}:${parsed.detectionEventId}`,
-        metadata: { reason, requested_action: 'ban_user' },
+        reason,
+        subject: reportId ? { kind: 'report' as const, reportId } : { kind: 'observed' as const },
+      };
+      const encoded = encodeQueuedAction(
+        createDiscordActionContext({
+          guildId: interaction.guildId,
+          userId: interaction.user.id,
+          requestId: interaction.id,
+        }),
+        command
+      );
+      const request = await this.actionRequests.enqueue({
+        ...encoded,
+        actionType: ModerationActionRequestType.BAN_OBSERVED_DETECTION,
       });
       await interaction.reply({
         content: `Ban queued for <@${parsed.userId}>. Operation: ${request.id}. If the outcome remains uncertain, use /review-report-ban with this operation ID.`,
@@ -3937,13 +3995,20 @@ export class InteractionHandler implements IInteractionHandler {
     actionType: AdminActionType.DISMISS | AdminActionType.FALSE_POSITIVE,
     kind: 'alert' | 'report' = 'alert'
   ): Promise<void> {
-    const dismissed = await this.securityActionService.dismissObservedDetection(
-      guildId,
-      userId,
+    const outcome = await this.executeDetectionAction(interaction, {
+      kind:
+        actionType === AdminActionType.FALSE_POSITIVE
+          ? 'mark_observed_detection_false_positive'
+          : 'dismiss_observed_detection',
+      targetUserId: userId,
       detectionEventId,
-      interaction.user,
-      actionType
-    );
+    });
+    if (
+      outcome.kind !== 'dismiss_observed_detection' &&
+      outcome.kind !== 'mark_observed_detection_false_positive'
+    )
+      throw new Error('Detection outcome mismatch.');
+    const dismissed = outcome.succeeded;
     await interaction.editReply({
       content: !dismissed
         ? `This observed alert for <@${userId}> was already actioned.`
@@ -3962,12 +4027,14 @@ export class InteractionHandler implements IInteractionHandler {
     userId: string,
     detectionEventId: string
   ): Promise<void> {
-    const undoneAction = await this.securityActionService.undoObservedDetectionAction(
-      guildId,
-      userId,
+    const outcome = await this.executeDetectionAction(interaction, {
+      kind: 'undo_observed_detection_action',
+      targetUserId: userId,
       detectionEventId,
-      interaction.user
-    );
+    });
+    if (outcome.kind !== 'undo_observed_detection_action')
+      throw new Error('Detection outcome mismatch.');
+    const undoneAction = outcome.undoneAction;
     await interaction.editReply({
       content: !undoneAction
         ? `This observed alert for <@${userId}> does not have a dismissal to undo.`

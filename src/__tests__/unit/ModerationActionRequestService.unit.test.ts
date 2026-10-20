@@ -406,8 +406,8 @@ const banObservedRequest: ModerationActionRequest = {
   action_type: ModerationActionRequestType.BAN_OBSERVED_DETECTION,
   id: 'ban-observed-request-1',
   idempotency_key: 'web:observed-action:ban_user:guild-1:det-1',
-  metadata: { reason: 'Observed ban reason.' },
-  report_intake_id: null,
+  metadata: { reason: 'Observed ban reason.', report_ban_attempt_token: 'attempt-1' },
+  report_intake_id: 'report-1',
 };
 
 const closeNoActionRequest: ModerationActionRequest = {
@@ -1137,6 +1137,7 @@ describe('ModerationActionRequestService', () => {
       })),
     };
     const application = createBotApplication({
+      actionRequests: repository,
       client: client as any,
       configService: configService as any,
       verificationEventRepository: verificationEventRepository as any,
@@ -1740,7 +1741,11 @@ describe('ModerationActionRequestService', () => {
       banObservedRequest,
     ]);
     guild.members.fetch
-      .mockResolvedValueOnce({ permissions: { has: () => true } } as never)
+      .mockResolvedValueOnce({
+        id: 'moderator-1',
+        permissions: { has: () => true, bitfield: 8n },
+        roles: { cache: new Map() },
+      } as never)
       .mockRejectedValueOnce({ code: 10007 });
 
     await expect(service.processPendingRequests()).resolves.toBe(1);
@@ -3138,14 +3143,14 @@ describe('ModerationActionRequestService', () => {
     expect(repository.failed).toEqual([
       {
         id: 'kick-observed-request-1',
-        error: 'Observed alert kick actions are disabled for this server.',
+        error: 'Detection action denied: policy_disabled',
       },
     ]);
   });
 
   it('fails observed destructive requests when a required reason is missing', async () => {
     const { repository, securityActionService, service } = buildService(
-      [{ ...banObservedRequest, metadata: {} }],
+      [{ ...banObservedRequest, metadata: { report_ban_attempt_token: 'attempt-1' } }],
       {
         moderator_ban_action_requires_reason: true,
       }
@@ -3159,7 +3164,7 @@ describe('ModerationActionRequestService', () => {
     expect(repository.failed).toEqual([
       {
         id: 'ban-observed-request-1',
-        error: 'Moderator ban action requires a reason.',
+        error: 'Detection action denied: reason_required',
       },
     ]);
   });

@@ -47,7 +47,7 @@ describe('CommandHandler moderation commands (unit)', () => {
     expect(securityActionService.reviewUncertainReportBan).not.toHaveBeenCalled();
     await confirmLastSlashCommand(interaction);
     expect(securityActionService.reviewUncertainReportBan).toHaveBeenCalledWith(
-      interaction.guild,
+      expect.objectContaining({ id: interaction.guild.id }),
       expect.objectContaining({ attemptToken: 'attempt-1' }),
       interaction.user,
       'Reviewed audit trail'

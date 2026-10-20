@@ -1,3 +1,5 @@
+import type { ObservedBanResult } from '@drasil/application';
+export type { ObservedBanResult } from '@drasil/application';
 import { randomUUID } from 'crypto';
 import {
   getReportBanAttemptToken,
@@ -127,11 +129,6 @@ interface SuspiciousMemberOptions {
 /**
  * Interface for the SecurityActionService
  */
-export type ObservedBanResult =
-  | { status: 'banned' }
-  | { status: 'already_handled' }
-  | { status: 'banned_updates_pending'; operationId: string }
-  | { status: 'ban_outcome_unknown'; operationId: string };
 export interface ReportBanReviewReference {
   observedBanId?: string;
   operationId: string;

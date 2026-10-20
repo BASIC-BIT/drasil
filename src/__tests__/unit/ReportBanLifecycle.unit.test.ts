@@ -1,3 +1,4 @@
+import { createBotApplication } from '../../application/createBotApplication';
 import { getReportBanAttemptToken } from '../../repositories/ModerationActionRequestRepository';
 import { NotificationManager } from '../../services/NotificationManager';
 import { EmbedBuilder, Client, Guild, GuildMember, User } from 'discord.js';
@@ -49,6 +50,7 @@ async function fixture() {
   const banFetch = jest.fn().mockResolvedValue({ user });
   const guild = {
     id: 'guild',
+    roles: { fetch: jest.fn() },
     bans: { create: ban, fetch: banFetch },
     members: {
       fetch: jest.fn(),
@@ -68,7 +70,13 @@ async function fixture() {
     ban,
   } as unknown as GuildMember;
   (guild.members.fetch as jest.Mock).mockImplementation(async (id) =>
-    id === moderator.id ? { permissions: { has: () => true } } : member
+    (typeof id === 'object' ? id.user : id) === moderator.id
+      ? {
+          id: moderator.id,
+          permissions: { has: () => true, bitfield: 8n },
+          roles: { cache: new Map() },
+        }
+      : member
   );
   const notifications = {
     markObservedDetectionActionTaken: jest.fn().mockResolvedValue(true),
@@ -160,6 +168,23 @@ async function fixture() {
           request
         )
       : security.banObservedDetection(member, detection.id, moderator, 'Confirmed spam', request);
+  const config = {
+    getServerConfig: jest
+      .fn()
+      .mockResolvedValue({ settings: { moderator_ban_action_enabled: true } }),
+  };
+  const application = createBotApplication({
+    client,
+    actionRequests: requests,
+    configService: config as never,
+    securityActionService: security,
+    userModerationService: moderation,
+    detectionEventsRepository: detections,
+    verificationEventRepository: cases,
+    roleGateService: null,
+    queueService: queue as never,
+    queueRepository: {} as never,
+  });
   const worker = () =>
     new ModerationActionRequestService(
       requests,
@@ -167,11 +192,7 @@ async function fixture() {
       client,
       threads as never,
       {} as never,
-      {
-        getServerConfig: jest
-          .fn()
-          .mockResolvedValue({ settings: { moderator_ban_action_enabled: true } }),
-      } as never,
+      config as never,
       security,
       moderation,
       queue as never,
@@ -181,7 +202,10 @@ async function fixture() {
       {} as never,
       {} as never,
       {} as never,
-      {} as never
+      {} as never,
+      undefined,
+      undefined,
+      application
     );
   return {
     analytics,
@@ -558,10 +582,12 @@ describe('report-bound observed bans with real services', () => {
   it('rechecks actor permission at worker execution', async () => {
     const f = await fixture();
     (f.guild.members.fetch as jest.Mock).mockResolvedValueOnce({
-      permissions: { has: () => false },
+      id: 'moderator',
+      permissions: { has: () => false, bitfield: 0n },
+      roles: { cache: new Map() },
     });
     await f.worker().processPendingRequests();
-    expect((await f.requests.findById(f.request.id))?.last_error).toContain('Moderator no longer');
+    expect((await f.requests.findById(f.request.id))?.last_error).toContain('permission_denied');
     expect(f.ban).not.toHaveBeenCalled();
   });
   it('releases ownership after Discord definitively rejects enforcement', async () => {

@@ -1,3 +1,4 @@
+import { encodeDetectionAction } from './detections';
 import type { ActionContext } from '../context';
 import { queuedCommandSchema, type QueuedCommand } from './commands';
 import type { EnqueueInput } from './receipt';
@@ -23,6 +24,14 @@ export function encodeQueuedAction(context: ActionContext, input: QueuedCommand)
     targetUserId: command.targetUserId,
   };
   switch (command.kind) {
+    case 'dismiss_observed_detection':
+    case 'mark_observed_detection_false_positive':
+    case 'undo_observed_detection_action':
+    case 'kick_observed_detection':
+    case 'ban_observed_detection':
+    case 'ignore_detection_accounting':
+    case 'restore_detection_accounting':
+      return encodeDetectionAction(context, command);
     case 'open_case_from_observed_detection':
       return {
         ...base,

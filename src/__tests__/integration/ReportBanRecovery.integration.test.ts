@@ -1,3 +1,4 @@
+import { createBotApplication } from '../../application/createBotApplication';
 import { Prisma, PrismaClient } from '../../db/prisma';
 import { CaseRoleReleaseReconciliationService } from '../../services/CaseRoleReleaseReconciliationService';
 import { RoleQuarantineSnapshotRepository } from '../../repositories/RoleQuarantineSnapshotRepository';
@@ -66,6 +67,7 @@ async function fixture(withReport = true, quarantine?: IRoleQuarantineService) {
   const banFetch = jest.fn().mockResolvedValue({ user });
   const guild = {
     id: 'guild',
+    roles: { fetch: jest.fn() },
     bans: { create: ban, fetch: banFetch },
     members: {
       fetch: jest.fn(),
@@ -87,7 +89,11 @@ async function fixture(withReport = true, quarantine?: IRoleQuarantineService) {
   } as unknown as GuildMember;
   (guild.members.fetch as jest.Mock).mockImplementation(async (id) =>
     (typeof id === 'object' ? id.user : id) === moderator.id
-      ? { permissions: { has: () => true } }
+      ? {
+          id: moderator.id,
+          permissions: { has: () => true, bitfield: 8n },
+          roles: { cache: new Map() },
+        }
       : member
   );
   const notifications = {
@@ -199,6 +205,23 @@ async function fixture(withReport = true, quarantine?: IRoleQuarantineService) {
           request
         )
       : security.banObservedDetection(member, detection.id, moderator, 'Confirmed spam', request);
+  const config = {
+    getServerConfig: jest
+      .fn()
+      .mockResolvedValue({ settings: { moderator_ban_action_enabled: true } }),
+  };
+  const application = createBotApplication({
+    client,
+    actionRequests: requests,
+    configService: config as never,
+    securityActionService: security,
+    userModerationService: moderation,
+    detectionEventsRepository: detections,
+    verificationEventRepository: cases,
+    roleGateService: null,
+    queueService: queue as never,
+    queueRepository: {} as never,
+  });
   const worker = () =>
     new ModerationActionRequestService(
       requests,
@@ -206,11 +229,7 @@ async function fixture(withReport = true, quarantine?: IRoleQuarantineService) {
       client,
       threads as never,
       {} as never,
-      {
-        getServerConfig: jest
-          .fn()
-          .mockResolvedValue({ settings: { moderator_ban_action_enabled: true } }),
-      } as never,
+      config as never,
       security,
       moderation,
       queue as never,
@@ -220,9 +239,14 @@ async function fixture(withReport = true, quarantine?: IRoleQuarantineService) {
       {} as never,
       {} as never,
       {} as never,
-      {} as never
+      {} as never,
+      undefined,
+      undefined,
+      application
     );
   return {
+    application,
+    config,
     analytics,
     detections,
     reports,
@@ -410,7 +434,11 @@ integration('report-ban stale worker recovery with real services and Postgres', 
       (f.guild.members.fetch as jest.Mock).mockImplementation(async (input) =>
         (typeof input === 'object' ? input.user : input) === 'target'
           ? f.member
-          : { permissions: { has: () => true } }
+          : {
+              id: typeof input === 'object' ? input.user : input,
+              permissions: { has: () => true, bitfield: 8n },
+              roles: { cache: new Map() },
+            }
       );
       (f.client.users.fetch as jest.Mock).mockImplementation(async (id) => ({ id }));
       await getPrismaClient().moderation_action_requests.update({
@@ -702,7 +730,11 @@ integration('report-ban stale worker recovery with real services and Postgres', 
         if (typeof input === 'string' || !input.force) return { permissions: { has: () => true } };
         if (state === 'departed') throw { code: 10007 };
         if (state === 'failure') throw new Error('member fetch unavailable');
-        return { permissions: { has: () => state === 'allowed' } };
+        return {
+          id: 'moderator',
+          permissions: { has: () => state === 'allowed', bitfield: state === 'allowed' ? 4n : 0n },
+          roles: { cache: new Map() },
+        };
       });
       await f.worker().processPendingRequests();
       expect(f.ban).toHaveBeenCalledTimes(state === 'allowed' ? 1 : 0);
@@ -2927,4 +2959,152 @@ integration('report-ban stale worker recovery with real services and Postgres', 
       expect(f.ban).not.toHaveBeenCalled();
     }
   );
+});
+
+integration('shared detection action persistence boundary', () => {
+  it('revoked_actor_cannot_start_report_ban', async () => {
+    const f = await fixture();
+    (f.guild.members.fetch as jest.Mock).mockImplementation(async (value) =>
+      (typeof value === 'object' ? value.user : value) === 'moderator'
+        ? {
+            id: 'moderator',
+            permissions: { bitfield: 0n, has: () => false },
+            roles: { cache: new Map() },
+          }
+        : f.member
+    );
+    await f.worker().processPendingRequests();
+    const banCallsAfterRevocation = f.ban.mock.calls.length;
+    expect(banCallsAfterRevocation).toBe(0);
+    expect(await f.requests.findById(f.request.id)).toMatchObject({
+      status: 'failed',
+      last_error: 'Detection action denied: permission_denied',
+    });
+  });
+  it('confirmed_ban_recovery_finishes_after_policy_disable', async () => {
+    const f = await fixture();
+    jest
+      .spyOn(f.moderation, 'finalizeObservedBan')
+      .mockRejectedValueOnce(new Error('interrupted follow-up'));
+    await f.worker().processPendingRequests();
+    expect(f.ban).toHaveBeenCalledTimes(1);
+    f.config.getServerConfig.mockResolvedValue({
+      settings: { moderator_ban_action_enabled: false },
+    });
+    (f.guild.members.fetch as jest.Mock).mockImplementation(async () => {
+      throw { code: 10007 };
+    });
+    await f.requests.mergeMetadata(
+      f.request.id,
+      {
+        report_ban_lease_until: new Date(0).toISOString(),
+        report_ban_retry_at: new Date(0).toISOString(),
+      },
+      getReportBanAttemptToken(f.request)
+    );
+    await f.worker().processPendingRequests();
+    const recovered = await f.requests.findById(f.request.id);
+    const recoveredReceipt = (recovered?.result as { observed_ban_result: { status: string } })
+      .observed_ban_result;
+    const banCallsAcrossRecovery = f.ban.mock.calls.length;
+    expect(banCallsAcrossRecovery).toBe(1);
+    expect(recoveredReceipt.status).toBe('banned');
+    expect(recovered?.actor_id).toBe('moderator');
+    expect((await f.actionRepo.getActionHistory('target', 'guild'))[0].admin_id).toBe('moderator');
+  });
+  it('uncertain_ban_never_reenforces', async () => {
+    const f = await fixture();
+    f.ban.mockRejectedValue(new Error('transport lost'));
+    f.banFetch.mockRejectedValue({ code: 10026 });
+    await f.worker().processPendingRequests();
+    f.config.getServerConfig.mockResolvedValue({
+      settings: { moderator_ban_action_enabled: false },
+    });
+    await f.requests.mergeMetadata(
+      f.request.id,
+      {
+        report_ban_lease_until: new Date(0).toISOString(),
+        report_ban_retry_at: new Date(0).toISOString(),
+      },
+      getReportBanAttemptToken(f.request)
+    );
+    await f.worker().processPendingRequests();
+    const recovered = await f.requests.findById(f.request.id);
+    const uncertainReceipt = (recovered?.result as { observed_ban_result: { status: string } })
+      .observed_ban_result;
+    expect(uncertainReceipt.status).toBe('ban_outcome_unknown');
+    expect(f.ban).toHaveBeenCalledTimes(1);
+  });
+  it('accounting_change_is_guild_bound', async () => {
+    const f = await fixture();
+    const before = await f.detections.findById(f.detection.id);
+    const context = {
+      guildId: 'foreign',
+      requestId: 'accounting',
+      source: 'web',
+      actor: { kind: 'user' as const, userId: 'moderator' },
+    };
+    const command = {
+      kind: 'ignore_detection_accounting' as const,
+      targetUserId: 'target',
+      detectionEventId: f.detection.id,
+      reason: null,
+    };
+    f.application.caseConfirmations.recordVerified(context, command);
+    // Current actor is authorized in the requested guild, but the detection belongs elsewhere.
+    (f.client.guilds.fetch as jest.Mock).mockResolvedValue({ ...f.guild, id: 'foreign' });
+    expect(await f.application.detections.execute(context, command)).toEqual({
+      kind: 'denied',
+      code: 'binding_mismatch',
+    });
+    const foreignDetectionAccountingUnchanged =
+      JSON.stringify(await f.detections.findById(f.detection.id)) === JSON.stringify(before);
+    expect(foreignDetectionAccountingUnchanged).toBe(true);
+  });
+});
+
+integration('shared uncertain-ban operator review', () => {
+  it('keeps attempt fencing private and consumes a bound review without reenforcement', async () => {
+    const f = await fixture();
+    f.ban.mockRejectedValue(new Error('transport lost'));
+    f.banFetch.mockRejectedValue({ code: 10026 });
+    await f.worker().processPendingRequests();
+    const context = {
+      guildId: 'guild',
+      requestId: 'review-prepare',
+      source: 'discord_interaction',
+      actor: { kind: 'user' as const, userId: 'moderator' },
+    };
+    const prepared = await f.application.detections.execute(context, {
+      kind: 'prepare_report_ban_review',
+      operationId: f.request.id,
+    });
+    if (prepared.kind !== 'outcome' || prepared.outcome.kind !== 'prepare_report_ban_review')
+      throw new Error('Expected review preparation');
+    expect(prepared.outcome.reference).not.toHaveProperty('attemptToken');
+    const command = {
+      kind: 'review_uncertain_report_ban' as const,
+      ...prepared.outcome.reference,
+      reason: 'Checked current ban and audit trail',
+    };
+    const reviewContext = { ...context, requestId: 'review-confirm' };
+    f.application.caseConfirmations.recordVerified(reviewContext, command);
+    expect(await f.application.detections.execute(reviewContext, command)).toEqual({
+      kind: 'outcome',
+      outcome: { kind: 'review_uncertain_report_ban', succeeded: true },
+    });
+    const persisted = await f.requests.findById(f.request.id);
+    expect(persisted?.result).toMatchObject({
+      observed_ban_result: { status: 'ban_reviewed_no_current_ban' },
+    });
+    expect((await f.reports.findById(f.report.id))?.metadata).not.toHaveProperty(
+      'report_ban_operation_id'
+    );
+    f.application.caseConfirmations.recordVerified(reviewContext, command);
+    await expect(f.application.detections.execute(reviewContext, command)).resolves.toEqual({
+      kind: 'denied',
+      code: 'stale_state',
+    });
+    expect(f.ban).toHaveBeenCalledTimes(1);
+  });
 });

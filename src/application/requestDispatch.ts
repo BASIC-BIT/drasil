@@ -1,9 +1,11 @@
+import { dispatchDetectionAction, type QueuedDetectionOutcome } from './detectionDispatch';
 import type { BotApplication } from './createBotApplication';
 import type { CaseCommand, CaseOutcome, DecodedQueuedAction } from '@drasil/application';
 import { requireCaseOutcome } from './adapters/cases';
 
 type CaseReceipt = { readonly target_user_id: string; readonly verification_event_id: string };
 export type QueuedActionOutcome =
+  | QueuedDetectionOutcome
   | {
       readonly action_type: 'open_case_from_observed_detection';
       readonly target_user_id: string;
@@ -57,6 +59,16 @@ export async function dispatchQueuedAction(
   action: DecodedQueuedAction
 ): Promise<QueuedActionOutcome> {
   const { command, context } = action;
+  switch (command.kind) {
+    case 'dismiss_observed_detection':
+    case 'mark_observed_detection_false_positive':
+    case 'undo_observed_detection_action':
+    case 'kick_observed_detection':
+    case 'ban_observed_detection':
+    case 'ignore_detection_accounting':
+    case 'restore_detection_accounting':
+      return dispatchDetectionAction(application.detections, context, command);
+  }
   const outcome = requireCaseOutcome(await application.cases.execute(context, command));
   const target = { target_user_id: command.targetUserId };
   switch (outcome.kind) {

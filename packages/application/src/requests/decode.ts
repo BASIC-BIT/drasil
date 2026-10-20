@@ -1,3 +1,4 @@
+import { decodeDetectionCommand } from './detections';
 import { z } from 'zod';
 import type { ActionContext } from '../context';
 import { queuedCommandSchema, type QueuedCommand } from './commands';
@@ -14,6 +15,7 @@ const queuedRowSchema = z.object({
   verification_event_id: id.nullable().optional(),
   metadata: z.record(z.unknown()).nullable().optional(),
 });
+export type QueuedRow = z.infer<typeof queuedRowSchema>;
 export interface DecodedQueuedAction {
   readonly context: ActionContext;
   readonly command: QueuedCommand;
@@ -24,48 +26,53 @@ export function decodeQueuedAction(row: unknown): DecodedQueuedAction {
   const reason = typeof metadata.reason === 'string' ? metadata.reason : null;
   const target = { kind: parsed.action_type, targetUserId: parsed.target_user_id };
   let command: QueuedCommand;
-  switch (parsed.action_type) {
-    case 'open_case_from_observed_detection':
-      command = queuedCommandSchema.parse({
-        ...target,
-        detectionEventId: parsed.detection_event_id,
-        reportId: parsed.report_intake_id ?? null,
-      });
-      break;
-    case 'open_admin_case':
-      command = queuedCommandSchema.parse({
-        ...target,
-        intent: 'dashboard_case_open',
-        reason,
-        detectionEventId: parsed.detection_event_id ?? null,
-        selectedMessage:
-          metadata.source_channel_id || metadata.source_message_id
-            ? { channelId: metadata.source_channel_id, messageId: metadata.source_message_id }
-            : null,
-      });
-      break;
-    case 'repair_active_case':
-      command = queuedCommandSchema.parse({
-        ...target,
-        caseId: parsed.verification_event_id,
-        mode: metadata.case_action === 'create_thread' ? 'create_thread' : 'repair_thread',
-      });
-      break;
-    case 'manual_flag_user':
-      command = queuedCommandSchema.parse({ ...target, reason });
-      break;
-    case 'kick_case_user':
-    case 'ban_case_user':
-    case 'ban_case_user_by_id':
-      command = queuedCommandSchema.parse({
-        ...target,
-        caseId: parsed.verification_event_id,
-        reason,
-        detectionEventId: parsed.detection_event_id ?? null,
-      });
-      break;
-    default:
-      command = queuedCommandSchema.parse({ ...target, caseId: parsed.verification_event_id });
+  const detectionCommand = decodeDetectionCommand(parsed, reason);
+  if (detectionCommand) {
+    command = detectionCommand;
+  } else {
+    switch (parsed.action_type) {
+      case 'open_case_from_observed_detection':
+        command = queuedCommandSchema.parse({
+          ...target,
+          detectionEventId: parsed.detection_event_id,
+          reportId: parsed.report_intake_id ?? null,
+        });
+        break;
+      case 'open_admin_case':
+        command = queuedCommandSchema.parse({
+          ...target,
+          intent: 'dashboard_case_open',
+          reason,
+          detectionEventId: parsed.detection_event_id ?? null,
+          selectedMessage:
+            metadata.source_channel_id || metadata.source_message_id
+              ? { channelId: metadata.source_channel_id, messageId: metadata.source_message_id }
+              : null,
+        });
+        break;
+      case 'repair_active_case':
+        command = queuedCommandSchema.parse({
+          ...target,
+          caseId: parsed.verification_event_id,
+          mode: metadata.case_action === 'create_thread' ? 'create_thread' : 'repair_thread',
+        });
+        break;
+      case 'manual_flag_user':
+        command = queuedCommandSchema.parse({ ...target, reason });
+        break;
+      case 'kick_case_user':
+      case 'ban_case_user':
+      case 'ban_case_user_by_id':
+        command = queuedCommandSchema.parse({
+          ...target,
+          caseId: parsed.verification_event_id,
+          reason,
+          detectionEventId: parsed.detection_event_id ?? null,
+        });
+        break;
+      default:
+        command = queuedCommandSchema.parse({ ...target, caseId: parsed.verification_event_id });
+    }
   }
   return {
     context: {

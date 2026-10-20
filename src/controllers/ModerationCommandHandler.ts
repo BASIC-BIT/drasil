@@ -1,3 +1,4 @@
+import { requireDetectionOutcome } from '../application/adapters/detections';
 import type { BotApplication } from '../application/createBotApplication';
 import { createDiscordActionContext } from '../application/context';
 import { requireCaseOutcome } from '../application/adapters/cases';
@@ -65,11 +66,21 @@ export class ModerationCommandHandler {
     const reason = interaction.options.getString('reason', true).trim();
     try {
       if (!reason) throw new Error('A review reason is required.');
-      const reference = await this.securityActionService.prepareReportBanReview(
-        guild,
-        operationId,
-        interaction.user
+      if (!this.application) throw new Error('Detection application is unavailable.');
+      const context = createDiscordActionContext({
+        guildId: guild.id,
+        userId: interaction.user.id,
+        requestId: interaction.id,
+      });
+      const prepared = requireDetectionOutcome(
+        await this.application.detections.execute(context, {
+          kind: 'prepare_report_ban_review',
+          operationId,
+        })
       );
+      if (prepared.kind !== 'prepare_report_ban_review')
+        throw new Error('Review outcome mismatch.');
+      const reference = prepared.reference;
       await requestSlashCommandConfirmation(interaction, {
         message: `Review operation ${operationId} for user ${reference.targetUserId}? If no current ban exists, release its claims. The historical outcome remains uncertain. This does not ban or unban anyone. Reason: ${reason}`,
         confirmLabel: 'Record Review',
@@ -80,11 +91,12 @@ export class ModerationCommandHandler {
             components: [],
           });
           try {
-            await this.securityActionService.reviewUncertainReportBan(
-              guild,
-              reference,
-              interaction.user,
-              reason
+            if (!this.application) throw new Error('Detection application is unavailable.');
+            const reviewContext = { ...context, requestId: button.id };
+            const command = { kind: 'review_uncertain_report_ban' as const, ...reference, reason };
+            this.application.caseConfirmations.recordVerified(reviewContext, command);
+            requireDetectionOutcome(
+              await this.application.detections.execute(reviewContext, command)
             );
             await button.editReply({
               content:

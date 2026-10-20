@@ -141,3 +141,76 @@ it('decodes old dashboard openings with explicit intent without changing their s
     decoded.command
   );
 });
+
+it.each([
+  { kind: 'dismiss_observed_detection' },
+  { kind: 'mark_observed_detection_false_positive' },
+  { kind: 'undo_observed_detection_action' },
+  { kind: 'kick_observed_detection', reason: null },
+  { kind: 'ban_observed_detection', reason: null, subject: { kind: 'observed' } },
+  {
+    kind: 'ban_observed_detection',
+    reason: 'provided',
+    subject: { kind: 'report', reportId: 'report-1' },
+  },
+  { kind: 'ignore_detection_accounting', reason: null },
+  { kind: 'restore_detection_accounting', reason: 'correction' },
+])('round-trips detection queue variant $kind without leaking runtime tokens', (variant) => {
+  const command = queuedCommandSchema.parse({
+    ...variant,
+    targetUserId: 'user-1',
+    detectionEventId: 'det-1',
+  });
+  const encoded = encodeQueuedAction(context, command);
+  const decoded = decodeQueuedAction({
+    id: 'operation',
+    server_id: encoded.serverId,
+    action_type: encoded.actionType,
+    actor_id: encoded.actorId,
+    actor_surface: encoded.actorSurface,
+    target_user_id: encoded.targetUserId,
+    detection_event_id: encoded.detectionEventId,
+    report_intake_id: encoded.reportIntakeId,
+    metadata: { ...encoded.metadata, report_ban_attempt_token: 'private-token' },
+  });
+  expect(decoded.command).toEqual(command);
+  expect(JSON.stringify(decoded)).not.toContain('private-token');
+  expect(queuedCommandSchema.safeParse({ ...command, attemptToken: 'untrusted' }).success).toBe(
+    false
+  );
+});
+it.each(['web_report', 'discord_interaction'])(
+  'preserves direct report ban source %s and shipped key',
+  (source) => {
+    const encoded = encodeQueuedAction(
+      { ...context, source },
+      {
+        kind: 'ban_observed_detection',
+        targetUserId: 'target',
+        detectionEventId: 'detection',
+        subject: { kind: 'report', reportId: 'report' },
+        reason: null,
+      }
+    );
+    expect(encoded).toMatchObject({
+      actorSurface: source,
+      reportIntakeId: 'report',
+      idempotencyKey: 'observed-ban:guild-1:detection',
+      metadata: { reason: null, requested_action: 'ban_user' },
+    });
+  }
+);
+it('decodes the shipped observed open-case wrapper without changing its intent', () => {
+  expect(
+    decodeQueuedAction({
+      id: 'operation',
+      server_id: 'guild-1',
+      action_type: 'open_case_from_observed_detection',
+      actor_id: 'moderator-1',
+      actor_surface: 'web',
+      target_user_id: 'user-1',
+      detection_event_id: 'det-1',
+      metadata: { inbox_action: 'open_case', reason: null, requested_surface: 'web' },
+    }).command
+  ).toEqual({ ...command, reportId: null });
+});

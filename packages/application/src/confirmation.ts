@@ -10,6 +10,7 @@ export interface ConfirmationBinding {
 export type ConfirmationCommand = { readonly kind: string } & (
   | { readonly targetUserId: string }
   | { readonly caseId: string }
+  | { readonly operationId: string }
 );
 export interface ConfirmationPort {
   verify(context: ActionContext, command: ConfirmationCommand): Promise<boolean>;
@@ -25,6 +26,11 @@ export function matchesConfirmation(
     evidence.guildId === context.guildId &&
     evidence.actorId === context.actor.userId &&
     evidence.action === command.kind &&
-    evidence.targetId === ('caseId' in command ? command.caseId : command.targetUserId)
+    evidence.targetId ===
+      ('caseId' in command
+        ? command.caseId
+        : 'operationId' in command
+          ? command.operationId
+          : command.targetUserId)
   );
 }

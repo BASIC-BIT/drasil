@@ -1,5 +1,7 @@
 'use server';
 
+import { encodeQueuedAction } from '@drasil/application';
+
 import { isReportClosureAction } from '@drasil/application';
 import { createWebActionContext } from '@/lib/application/context';
 import { createReportDetailDataAdapter } from '@/lib/reportDetailDataAdapter';
@@ -245,20 +247,23 @@ export async function banSubmittedReport(
       throw new Error('Drasil is missing Ban Members permission.');
     const receipt = isWebE2eFixtureMode()
       ? await queueFixtureReportBan(reportId)
-      : await queueModerationActionRequestWithReceipt({
-          actionType: 'ban_observed_detection',
-          actorId: session.userId,
-          actorSurface: 'web_report',
-          serverId: guildId,
-          reportIntakeId: reportId,
-          detectionEventId: detail.latestDetectionId,
-          targetUserId: detail.targetUserId,
-          idempotencyKey: `observed-ban:${guildId}:${detail.latestDetectionId}`,
-          metadata: {
-            reason: reason || 'Banned from observed suspicious notification',
-            requested_action: 'ban_user',
-          },
-        });
+      : await queueModerationActionRequestWithReceipt(
+          encodeQueuedAction(
+            {
+              guildId,
+              requestId: detail.latestDetectionId,
+              source: 'web_report',
+              actor: { kind: 'user', userId: session.userId },
+            },
+            {
+              kind: 'ban_observed_detection',
+              targetUserId: detail.targetUserId,
+              detectionEventId: detail.latestDetectionId,
+              subject: { kind: 'report', reportId },
+              reason: reason || null,
+            }
+          )
+        );
     revalidatePath(`/admin/guild/${guildId}/reports/${reportId}`);
     revalidatePath(`/admin/guild/${guildId}/reports`);
     revalidatePath(`/admin/guild/${guildId}/inbox`);

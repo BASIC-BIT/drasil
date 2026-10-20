@@ -1,4 +1,11 @@
 import type { QueuedCommand } from './commands';
+export type QueuedJson =
+  | string
+  | number
+  | boolean
+  | null
+  | QueuedJson[]
+  | { [key: string]: QueuedJson };
 export interface QueuedActionReceipt {
   readonly id: string;
   readonly status: 'queued' | 'processing' | 'completed' | 'failed';
@@ -14,5 +21,5 @@ export interface EnqueueInput {
   readonly reportIntakeId?: string | null;
   readonly verificationEventId?: string | null;
   readonly idempotencyKey: string;
-  readonly metadata: Record<string, unknown>;
+  readonly metadata: { [key: string]: QueuedJson };
 }

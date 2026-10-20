@@ -32,7 +32,6 @@ import {
 import { IMessageDeletionJobRepository } from '../repositories/MessageDeletionJobRepository';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
 import {
-  AdminActionType,
   CaseAttentionState,
   CaseContainmentStatus,
   CaseKind,
@@ -76,8 +75,6 @@ import type { ICaptchaChallengeService } from './CaptchaChallengeService';
 const DEFAULT_POLL_INTERVAL_MS = 5000;
 const DEFAULT_MAX_REQUESTS_PER_TICK = 5;
 const REQUEST_HEARTBEAT_INTERVAL_MS = 60_000;
-const OBSERVED_BAN_DEFAULT_REASON = 'Banned from observed suspicious notification';
-const OBSERVED_KICK_DEFAULT_REASON = 'Kicked from observed suspicious notification';
 const ACCOUNT_QUARANTINE_PREVIEW_MAX_AGE_MS = 10 * 60 * 1000;
 
 export interface IModerationActionRequestService {
@@ -102,19 +99,19 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     [ModerationActionRequestType.START_REPORT_INTAKE]: (request) => this.startReportIntake(request),
     [ModerationActionRequestType.CLOSE_REPORT_INTAKE]: (request) => this.closeReportIntake(request),
     [ModerationActionRequestType.DISMISS_OBSERVED_DETECTION]: (request) =>
-      this.dismissObservedDetection(request, AdminActionType.DISMISS),
+      this.executeDetectionRequest(request),
     [ModerationActionRequestType.MARK_OBSERVED_DETECTION_FALSE_POSITIVE]: (request) =>
-      this.dismissObservedDetection(request, AdminActionType.FALSE_POSITIVE),
+      this.executeDetectionRequest(request),
     [ModerationActionRequestType.UNDO_OBSERVED_DETECTION_ACTION]: (request) =>
-      this.undoObservedDetectionAction(request),
+      this.executeDetectionRequest(request),
     [ModerationActionRequestType.KICK_OBSERVED_DETECTION]: (request) =>
-      this.kickObservedDetection(request),
+      this.executeDetectionRequest(request),
     [ModerationActionRequestType.BAN_OBSERVED_DETECTION]: (request) =>
-      this.banObservedDetection(request),
+      this.executeDetectionRequest(request),
     [ModerationActionRequestType.IGNORE_DETECTION_ACCOUNTING]: (request) =>
-      this.ignoreDetectionAccounting(request),
+      this.executeDetectionRequest(request),
     [ModerationActionRequestType.RESTORE_DETECTION_ACCOUNTING]: (request) =>
-      this.restoreDetectionAccounting(request),
+      this.executeDetectionRequest(request),
     [ModerationActionRequestType.VERIFY_CASE_USER]: (request) => this.executeCaseRequest(request),
     [ModerationActionRequestType.PREVIEW_ACCOUNT_QUARANTINE]: (request) =>
       this.previewAccountQuarantine(request),
@@ -256,19 +253,7 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       }, REQUEST_HEARTBEAT_INTERVAL_MS);
       heartbeat.unref();
       try {
-        const result = await this.securityActionService.reconcileReportBan(recovery);
-        if (result.status !== 'already_handled')
-          await this.repository.complete(
-            recovery.id,
-            {
-              action_type: recovery.action_type,
-              observed_ban_result: result,
-              report_intake_id: recovery.report_intake_id,
-              detection_event_id: recovery.detection_event_id,
-              target_user_id: recovery.target_user_id,
-            },
-            getReportBanAttemptToken(recovery)
-          );
+        await this.executeDetectionRequest(recovery, true);
       } catch (error) {
         console.warn('Report ban reconciliation failed:', error);
       } finally {
@@ -319,6 +304,36 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     } finally {
       clearInterval(heartbeat);
     }
+  }
+
+  private async executeDetectionRequest(
+    request: ModerationActionRequest,
+    recovery = false
+  ): Promise<void> {
+    if (!this.application) throw new Error('Detection application is unavailable.');
+    const decoded = decodeQueuedAction(request);
+    const action = recovery
+      ? {
+          ...decoded,
+          context: {
+            ...decoded.context,
+            actor: { kind: 'system' as const, purpose: 'report_ban_recovery' as const },
+          },
+        }
+      : decoded;
+    if (!recovery)
+      this.application.caseConfirmations.recordVerified(action.context, action.command);
+    const outcome = await dispatchQueuedAction(
+      { ...this.application, detections: this.application.detectionRuntime.forRequest(request) },
+      action
+    );
+    if (
+      recovery &&
+      outcome.action_type === 'ban_observed_detection' &&
+      outcome.observed_ban_result.status === 'already_handled'
+    )
+      return;
+    await this.repository.complete(request.id, outcome, getReportBanAttemptToken(request));
   }
 
   private async executeCaseRequest(request: ModerationActionRequest): Promise<void> {
@@ -505,171 +520,6 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       thread_archived: archived,
       thread_id: intake.thread_id,
     });
-  }
-
-  private async dismissObservedDetection(
-    request: ModerationActionRequest,
-    actionType: AdminActionType.DISMISS | AdminActionType.FALSE_POSITIVE
-  ): Promise<void> {
-    if (!request.target_user_id || !request.detection_event_id) {
-      throw new Error('Observed dismissal request is missing target user or detection event.');
-    }
-
-    const moderator = await this.fetchModerator(request.actor_id);
-    const dismissed = await this.securityActionService.dismissObservedDetection(
-      request.server_id,
-      request.target_user_id,
-      request.detection_event_id,
-      moderator,
-      actionType
-    );
-
-    await this.repository.complete(request.id, {
-      action_type: request.action_type,
-      detection_event_id: request.detection_event_id,
-      dismissed,
-      target_user_id: request.target_user_id,
-    });
-  }
-
-  private async undoObservedDetectionAction(request: ModerationActionRequest): Promise<void> {
-    if (!request.target_user_id || !request.detection_event_id) {
-      throw new Error('Observed undo request is missing target user or detection event.');
-    }
-
-    const moderator = await this.fetchModerator(request.actor_id);
-    const undoneAction = await this.securityActionService.undoObservedDetectionAction(
-      request.server_id,
-      request.target_user_id,
-      request.detection_event_id,
-      moderator
-    );
-
-    await this.repository.complete(request.id, {
-      action_type: request.action_type,
-      detection_event_id: request.detection_event_id,
-      target_user_id: request.target_user_id,
-      undone_action: undoneAction,
-    });
-  }
-
-  private async ignoreDetectionAccounting(request: ModerationActionRequest): Promise<void> {
-    if (!request.detection_event_id) {
-      throw new Error('Detection accounting ignore request is missing detection event.');
-    }
-
-    const moderator = await this.fetchModerator(request.actor_id);
-    const reason = this.readMetadataString(request.metadata, 'reason')?.trim();
-    const updatedDetection = await this.securityActionService.excludeDetectionFromAccounting(
-      request.server_id,
-      request.detection_event_id,
-      moderator,
-      reason || undefined
-    );
-
-    await this.repository.complete(request.id, {
-      action_type: request.action_type,
-      detection_event_id: request.detection_event_id,
-      ignored: Boolean(updatedDetection),
-      target_user_id: request.target_user_id,
-    });
-  }
-
-  private async restoreDetectionAccounting(request: ModerationActionRequest): Promise<void> {
-    if (!request.detection_event_id) {
-      throw new Error('Detection accounting restore request is missing detection event.');
-    }
-
-    const moderator = await this.fetchModerator(request.actor_id);
-    const reason = this.readMetadataString(request.metadata, 'reason')?.trim();
-    const updatedDetection = await this.securityActionService.restoreDetectionAccounting(
-      request.server_id,
-      request.detection_event_id,
-      moderator,
-      reason || undefined
-    );
-
-    await this.repository.complete(request.id, {
-      action_type: request.action_type,
-      detection_event_id: request.detection_event_id,
-      restored: Boolean(updatedDetection),
-      target_user_id: request.target_user_id,
-    });
-  }
-
-  private async kickObservedDetection(request: ModerationActionRequest): Promise<void> {
-    if (!request.target_user_id || !request.detection_event_id) {
-      throw new Error('Observed kick request is missing target user or detection event.');
-    }
-
-    const reason = await this.resolveObservedDestructiveActionReason(request, 'kick');
-    const [member, moderator] = await Promise.all([
-      this.fetchGuildMember(request.server_id, request.target_user_id),
-      this.fetchModerator(request.actor_id),
-    ]);
-    await this.assertBotPermission(member.guild, PermissionFlagsBits.KickMembers, 'Kick Members');
-    const kicked = await this.securityActionService.kickObservedDetection(
-      member,
-      request.detection_event_id,
-      moderator,
-      reason
-    );
-
-    await this.repository.complete(request.id, {
-      action_type: request.action_type,
-      detection_event_id: request.detection_event_id,
-      kicked,
-      target_user_id: request.target_user_id,
-    });
-  }
-
-  private async banObservedDetection(request: ModerationActionRequest): Promise<void> {
-    if (!request.target_user_id || !request.detection_event_id) {
-      throw new Error('Observed ban request is missing target user or detection event.');
-    }
-
-    const reason = await this.resolveObservedDestructiveActionReason(request, 'ban');
-    const [guild, moderator] = await Promise.all([
-      this.fetchGuild(request.server_id),
-      this.fetchModerator(request.actor_id),
-    ]);
-    await this.assertBotPermission(guild, PermissionFlagsBits.BanMembers, 'Ban Members');
-    const actor = await guild.members.fetch({ user: request.actor_id, force: true });
-    if (!actor.permissions.has(PermissionFlagsBits.BanMembers))
-      throw new Error('Moderator no longer has Ban Members permission.');
-    const member = await guild.members.fetch(request.target_user_id).catch((error) => {
-      if (isDiscordErrorCode(error, DISCORD_UNKNOWN_MEMBER_ERROR_CODE)) return null;
-      throw error;
-    });
-    const banned = member
-      ? await this.securityActionService.banObservedDetection(
-          member,
-          request.detection_event_id,
-          moderator,
-          reason,
-          request
-        )
-      : await this.securityActionService.banObservedDetectionById(
-          guild,
-          request.target_user_id,
-          request.detection_event_id,
-          moderator,
-          reason,
-          request
-        );
-
-    await this.repository.complete(
-      request.id,
-      {
-        action_type: request.action_type,
-        ban_by_id: !member,
-        observed_ban_result: banned,
-        report_intake_id: request.report_intake_id,
-        detection_event_id: request.detection_event_id,
-        target_user_id: request.target_user_id,
-      },
-      getReportBanAttemptToken(request)
-    );
   }
 
   private async syncModerationQueue(request: ModerationActionRequest): Promise<void> {
@@ -2406,34 +2256,6 @@ export class ModerationActionRequestService implements IModerationActionRequestS
     if (!settings.moderatorBanActionEnabled) {
       throw new Error('Moderator ban action is disabled for this server.');
     }
-  }
-
-  private async resolveObservedDestructiveActionReason(
-    request: ModerationActionRequest,
-    action: 'ban' | 'kick'
-  ): Promise<string> {
-    const config = await this.configService.getServerConfig(request.server_id);
-    const settings = getDetectionResponseSettings(config.settings);
-    const isBan = action === 'ban';
-    const actionLabel = isBan ? 'ban' : 'kick';
-    const enabled = isBan ? settings.moderatorBanActionEnabled : settings.observedActionKickEnabled;
-    const requiresReason = isBan
-      ? settings.moderatorBanActionRequiresReason
-      : settings.moderatorKickActionRequiresReason;
-    if (!enabled) {
-      throw new Error(
-        isBan
-          ? 'Moderator ban action is disabled for this server.'
-          : 'Observed alert kick actions are disabled for this server.'
-      );
-    }
-
-    const reason = this.readMetadataString(request.metadata, 'reason')?.trim();
-    if (requiresReason && !reason) {
-      throw new Error(`Moderator ${actionLabel} action requires a reason.`);
-    }
-
-    return reason || (isBan ? OBSERVED_BAN_DEFAULT_REASON : OBSERVED_KICK_DEFAULT_REASON);
   }
 
   private readMetadataString(metadata: unknown, key: string): string | null {

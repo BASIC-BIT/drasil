@@ -30,7 +30,12 @@ export function createWebConfirmationPort(
           guildId: context.guildId,
           actorId: context.actor.userId,
           action: command.kind,
-          targetId: 'caseId' in command ? command.caseId : command.targetUserId,
+          targetId:
+            'caseId' in command
+              ? command.caseId
+              : 'operationId' in command
+                ? command.operationId
+                : command.targetUserId,
         }
       : null;
   return {
