@@ -143,6 +143,7 @@ test('selected_message_survives_case_open', async () => {
   const fixture = arrange();
   await fixture.actions.execute(context, {
     kind: 'open_admin_case',
+    intent: 'native_case_open',
     targetUserId: 'target-1',
     reason: null,
     detectionEventId: null,
@@ -270,6 +271,7 @@ test('selected_message_binding_is_checked_by_the_shared_operation', async () => 
   expect(
     await fixture.actions.execute(context, {
       kind: 'open_admin_case',
+      intent: 'native_case_open',
       targetUserId: 'target-1',
       reason: null,
       detectionEventId: null,
@@ -312,5 +314,40 @@ test.each(['administrator_repair', 'refresh'] as const)(
       kind: 'denied',
       code: 'permission_denied',
     });
+  }
+);
+
+test.each([
+  ['native_case_open', 1n << 40n, 'web', true],
+  ['native_case_open', 1n << 5n, 'discord_interaction', false],
+  ['dashboard_case_open', 1n << 5n, 'discord_interaction', true],
+  ['dashboard_case_open', 1n << 40n, 'web', false],
+] as const)(
+  'opening intent %s uses permissions %s independently of source %s',
+  async (intent, bits, source, allowed) => {
+    const fixture = arrange();
+    fixture.deps.authority.loadFresh = async (): ReturnType<
+      CaseDependencies['authority']['loadFresh']
+    > => ({
+      guildId: 'guild-1',
+      userId: 'actor-1',
+      owner: false,
+      present: true,
+      permissions: bits.toString(),
+      roleIds: [],
+    });
+    const result = await fixture.actions.execute(
+      { ...context, source },
+      {
+        kind: 'open_admin_case',
+        intent,
+        targetUserId: 'target-1',
+        reason: null,
+        detectionEventId: null,
+        selectedMessage: null,
+      }
+    );
+    if (allowed) expect(result.kind).toBe('outcome');
+    else expect(result).toEqual({ kind: 'denied', code: 'permission_denied' });
   }
 );

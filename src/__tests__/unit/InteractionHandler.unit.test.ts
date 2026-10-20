@@ -59,7 +59,10 @@ import {
 } from '../../controllers/CaseCommandHandler';
 import { buildReportIntakeAdminActionsCustomId } from '../../utils/reportIntakeAdminActions';
 import { buildAccountQuarantinePreviewFingerprint } from '../../utils/accountQuarantinePreview';
-import { buildAdminActionCustomId } from '../../utils/adminActionCustomIds';
+import {
+  buildAdminActionCustomId,
+  parseAdminActionCustomId,
+} from '../../utils/adminActionCustomIds';
 import type { AccountQuarantinePreview } from '../../services/AccountQuarantineService';
 
 function buildHandler(
@@ -112,7 +115,7 @@ const buildInteraction = (customId: string, guildId: string, user: User): Button
   const interaction = {
     id: 'interaction-1',
     message: { id: 'message-ver-1' },
-    channelId: 'thread-ver-1',
+    channelId: 'admin-text-channel',
     customId,
     guildId,
     channel: { id: 'channel-1', type: ChannelType.GuildText },
@@ -1705,6 +1708,7 @@ describe('InteractionHandler (unit)', () => {
       metadata: null,
     };
     verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    verificationEventRepository.findById.mockResolvedValue(verificationEvent);
     verificationEventRepository.findByUserAndServer.mockResolvedValue([verificationEvent]);
     (client.guilds.fetch as jest.Mock).mockResolvedValue({
       bans: { fetch: jest.fn().mockResolvedValue({ user: { id: 'user-1' } }) },
@@ -1730,6 +1734,10 @@ describe('InteractionHandler (unit)', () => {
     } as User);
     grantOnlyBanMembersPermission(interaction);
 
+    Object.assign(interaction, {
+      message: { id: verificationEvent.notification_message_id },
+      channelId: 'admin-text-channel',
+    });
     await handler.handleButtonInteraction(interaction);
 
     expect(interaction.reply).toHaveBeenCalledWith(
@@ -1782,6 +1790,7 @@ describe('InteractionHandler (unit)', () => {
       metadata: { membership_state: 'left_or_removed' },
     };
     verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    verificationEventRepository.findById.mockResolvedValue(verificationEvent);
     verificationEventRepository.findByUserAndServer.mockResolvedValue([verificationEvent]);
     (client.guilds.fetch as jest.Mock).mockResolvedValue({
       bans: { fetch: jest.fn().mockRejectedValue({ code: 10026 }) },
@@ -1807,6 +1816,10 @@ describe('InteractionHandler (unit)', () => {
     } as User);
     grantInteractionPermissions(interaction);
 
+    Object.assign(interaction, {
+      message: { id: verificationEvent.notification_message_id },
+      channelId: 'admin-text-channel',
+    });
     await handler.handleButtonInteraction(interaction);
 
     const reply = (interaction.reply as jest.Mock).mock.calls[0][0];
@@ -1827,6 +1840,7 @@ describe('InteractionHandler (unit)', () => {
       metadata: { membership_state: 'left_or_removed' },
     };
     verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    verificationEventRepository.findById.mockResolvedValue(verificationEvent);
     verificationEventRepository.findByUserAndServer.mockResolvedValue([verificationEvent]);
     (client.guilds.fetch as jest.Mock).mockResolvedValue({
       bans: { fetch: jest.fn().mockRejectedValue({ code: 10026 }) },
@@ -1852,6 +1866,10 @@ describe('InteractionHandler (unit)', () => {
     } as User);
     grantInteractionPermissions(interaction);
 
+    Object.assign(interaction, {
+      message: { id: verificationEvent.notification_message_id },
+      channelId: 'admin-text-channel',
+    });
     await handler.handleButtonInteraction(interaction);
 
     const reply = (interaction.reply as jest.Mock).mock.calls[0][0];
@@ -1870,6 +1888,7 @@ describe('InteractionHandler (unit)', () => {
       containment_status: CaseContainmentStatus.CONTAINED,
     };
     verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    verificationEventRepository.findById.mockResolvedValue(verificationEvent);
     verificationEventRepository.findByUserAndServer.mockResolvedValue([verificationEvent]);
     const handler = buildHandler(
       client,
@@ -1887,6 +1906,10 @@ describe('InteractionHandler (unit)', () => {
     } as User);
     grantOnlyModerationPermission(interaction);
 
+    Object.assign(interaction, {
+      message: { id: verificationEvent.notification_message_id },
+      channelId: 'admin-text-channel',
+    });
     await handler.handleButtonInteraction(interaction);
 
     const reply = (interaction.reply as jest.Mock).mock.calls[0][0];
@@ -1905,6 +1928,7 @@ describe('InteractionHandler (unit)', () => {
       containment_status: CaseContainmentStatus.INCOMPLETE,
     };
     verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    verificationEventRepository.findById.mockResolvedValue(verificationEvent);
     verificationEventRepository.findByUserAndServer.mockResolvedValue([verificationEvent]);
     const handler = buildHandler(
       client,
@@ -1922,6 +1946,10 @@ describe('InteractionHandler (unit)', () => {
     } as User);
     grantOnlyModerationPermission(interaction);
 
+    Object.assign(interaction, {
+      message: { id: verificationEvent.notification_message_id },
+      channelId: 'admin-text-channel',
+    });
     await handler.handleButtonInteraction(interaction);
 
     const reply = (interaction.reply as jest.Mock).mock.calls[0][0];
@@ -2166,6 +2194,148 @@ describe('InteractionHandler (unit)', () => {
     expect(interaction.showModal).toHaveBeenCalledTimes(1);
     expect(userModerationService.banUser).not.toHaveBeenCalled();
   });
+
+  it.each(['verify', 'ban'] as const)(
+    'binds legacy notification to its original case before the ephemeral %s menu click',
+    async (action) => {
+      enableModeratorBanActions();
+      Object.assign(await client.guilds.fetch('guild-1'), {
+        bans: { fetch: jest.fn(async () => null) },
+      });
+      const original = buildVerificationEvent('ver-original', 'user-1');
+      const newer = buildVerificationEvent('ver-new', 'user-1');
+      verificationEventRepository.findByUserAndServer.mockResolvedValue([newer, original]);
+      verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(newer);
+      verificationEventRepository.findById.mockImplementation(async (id) =>
+        id === original.id ? original : newer
+      );
+      const handler = buildHandler(
+        client,
+        notificationManager,
+        userModerationService,
+        securityActionService,
+        configService,
+        verificationEventRepository,
+        threadManager,
+        adminActionRepository
+      );
+      const notification = buildInteraction(
+        buildAdminActionCustomId('menu', 'case', 'user-1'),
+        'guild-1',
+        { id: 'admin-1' } as User
+      );
+      Object.assign(notification, {
+        message: { id: original.notification_message_id },
+        channelId: 'admin-text-channel',
+      });
+      grantInteractionPermissions(notification);
+      await handler.handleButtonInteraction(notification);
+      const menu = (notification.reply as jest.Mock).mock.calls.at(-1)?.[0];
+      const button = menu.components
+        .flatMap((row: ActionRowBuilder<ButtonBuilder>) => row.components)
+        .map((component: ButtonBuilder) => component.toJSON())
+        .find(
+          (component: { custom_id?: string }) =>
+            component.custom_id && parseAdminActionCustomId(component.custom_id)?.action === action
+        );
+      expect(button?.custom_id).toBeDefined();
+      expect(parseAdminActionCustomId(button.custom_id)?.verificationEventId).toBe(original.id);
+      const ephemeral = buildInteraction(button.custom_id, 'guild-1', notification.user);
+      Object.assign(ephemeral, {
+        message: { id: 'distinct-ephemeral-menu' },
+        channelId: 'admin-text-channel',
+      });
+      grantInteractionPermissions(ephemeral);
+      await handler.handleButtonInteraction(ephemeral);
+      if (action === 'verify') {
+        expect(ephemeral.update).toHaveBeenCalledTimes(1);
+        const confirmation = (
+          ephemeral.update as jest.Mock
+        ).mock.calls[0][0].components[0].components[0].toJSON();
+        expect(parseAdminActionCustomId(confirmation.custom_id)?.verificationEventId).toBe(
+          original.id
+        );
+      } else {
+        expect(ephemeral.showModal).toHaveBeenCalledTimes(1);
+        const submission = {
+          id: 'modal-submit',
+          customId: 'verification:ban_modal:user-1',
+          guildId: 'guild-1',
+          user: notification.user,
+          fields: { getTextInputValue: jest.fn(() => 'review') },
+          deferReply: jest.fn(),
+          editReply: jest.fn(),
+          reply: jest.fn(),
+        } as unknown as ModalSubmitInteraction;
+        grantInteractionPermissions(submission);
+        await handler.handleModalSubmit(submission);
+        expect(userModerationService.banUser).not.toHaveBeenCalled();
+      }
+    }
+  );
+
+  it.each([
+    ['ban', true],
+    ['kick', true],
+    ['ban', false],
+    ['kick', false],
+  ] as const)(
+    'checks fresh required-reason policy for blank %s modal, fresh required=%s',
+    async (action, freshRequired) => {
+      configService.getServerConfig.mockImplementation(
+        async (guildId, options) =>
+          ({
+            guild_id: guildId,
+            settings: {
+              moderator_ban_action_enabled: true,
+              moderator_kick_action_enabled: true,
+              moderator_ban_action_requires_reason:
+                action === 'ban' && Boolean(options?.forceRefresh) && freshRequired,
+              moderator_kick_action_requires_reason:
+                action === 'kick' && Boolean(options?.forceRefresh) && freshRequired,
+            },
+          }) as any
+      );
+      const handler = buildHandler(
+        client,
+        notificationManager,
+        userModerationService,
+        securityActionService,
+        configService,
+        verificationEventRepository,
+        threadManager,
+        adminActionRepository
+      );
+      const submission = {
+        id: 'modal-submit',
+        customId: `verification:${action}_modal:user-1`,
+        guildId: 'guild-1',
+        user: { id: 'admin-1' },
+        fields: { getTextInputValue: jest.fn(() => '  ') },
+        deferReply: jest.fn(),
+        editReply: jest.fn(),
+        reply: jest.fn(),
+      } as unknown as ModalSubmitInteraction;
+      grantInteractionPermissions(submission);
+      await issueCaseModal(handler, submission);
+      await handler.handleModalSubmit(submission);
+      const effect =
+        action === 'ban' ? userModerationService.banUser : userModerationService.kickUser;
+      if (freshRequired) expect(effect).not.toHaveBeenCalled();
+      else
+        expect(effect).toHaveBeenCalledWith(
+          expect.objectContaining({ id: 'user-1' }),
+          action === 'ban'
+            ? 'Banned by moderator during verification'
+            : 'Kicked by moderator during verification',
+          submission.user
+        );
+      expect(configService.getServerConfig).toHaveBeenCalledWith('guild-1', {
+        forceRefresh: true,
+        failOnReadError: true,
+      });
+    }
+  );
 
   it('does not rebind an unexpired case modal to a newer case', async () => {
     enableModeratorBanActions();

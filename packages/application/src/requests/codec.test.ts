@@ -49,6 +49,7 @@ const caseCommands = [
   command,
   {
     kind: 'open_admin_case',
+    intent: 'dashboard_case_open',
     targetUserId: 'user-1',
     reason: 'Review',
     detectionEventId: 'det-1',
@@ -111,4 +112,32 @@ it('decodes shipped repair rows without inventing administrator intent', () => {
   expect(() =>
     queuedCommandSchema.parse({ ...decoded.command, intent: 'administrator_repair' })
   ).toThrow();
+});
+it('decodes old dashboard openings with explicit intent without changing their storage shape', () => {
+  const row = {
+    id: 'request-1',
+    server_id: 'guild-1',
+    action_type: 'open_admin_case',
+    actor_id: 'moderator-1',
+    actor_surface: 'web',
+    target_user_id: 'user-1',
+    detection_event_id: null,
+    metadata: { reason: null, requested_surface: 'web', web_action: 'open_admin_case' },
+  };
+  const decoded = decodeQueuedAction(row);
+  expect(decoded.command).toEqual({
+    kind: 'open_admin_case',
+    intent: 'dashboard_case_open',
+    targetUserId: 'user-1',
+    detectionEventId: null,
+    reason: null,
+    selectedMessage: null,
+  });
+  expect(encodeQueuedAction(decoded.context, decoded.command).metadata).toEqual(row.metadata);
+  expect(() =>
+    queuedCommandSchema.parse({ ...decoded.command, intent: 'native_case_open' })
+  ).toThrow();
+  expect(decodeQueuedAction({ ...row, actor_surface: 'discord_interaction' }).command).toEqual(
+    decoded.command
+  );
 });

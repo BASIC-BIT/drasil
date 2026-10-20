@@ -17,6 +17,7 @@ export const caseCommandSchema = z.discriminatedUnion('kind', [
   z
     .object({
       kind: z.literal('open_admin_case'),
+      intent: z.enum(['native_case_open', 'dashboard_case_open']),
       ...target,
       reason,
       detectionEventId: id.nullable(),

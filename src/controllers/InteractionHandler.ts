@@ -115,7 +115,6 @@ const OBSERVED_BAN_DEFAULT_REASON = 'Banned from observed suspicious notificatio
 const OBSERVED_KICK_DEFAULT_REASON = 'Kicked from observed suspicious notification';
 const VERIFICATION_BAN_MODAL_PREFIX = 'verification:ban_modal';
 const VERIFICATION_BAN_NOTES_FIELD_ID = 'verification_ban_notes';
-const VERIFICATION_BAN_DEFAULT_REASON = 'Banned by moderator during verification';
 const ACCOUNT_QUARANTINE_MODAL_PREFIX = 'verification:qa';
 const ACCOUNT_QUARANTINE_REASON_FIELD_ID = 'account_quarantine_reason';
 const ACCOUNT_QUARANTINE_CONFIRMATION_FINGERPRINT_LENGTH = 20;
@@ -648,19 +647,20 @@ export class InteractionHandler implements IInteractionHandler {
       return;
     }
 
-    const [activeCase, selectedCase] = await Promise.all([
-      this.verificationEventRepository.findActiveByUserAndServer(parsed.userId, guildId),
-      parsed.verificationEventId
-        ? this.verificationEventRepository.findById(parsed.verificationEventId)
-        : Promise.resolve(null),
-    ]);
-    const captchaCase = parsed.verificationEventId
-      ? selectedCase?.server_id === guildId &&
-        selectedCase.user_id === parsed.userId &&
-        selectedCase.status === VerificationStatus.PENDING
-        ? selectedCase
-        : null
-      : activeCase;
+    const selectedCaseId =
+      parsed.verificationEventId ??
+      (await this.resolveCaseControlBinding(interaction, guildId, parsed.userId));
+    parsed = { ...parsed, verificationEventId: selectedCaseId };
+    const selectedCase = await this.verificationEventRepository.findById(selectedCaseId);
+    if (
+      !selectedCase ||
+      selectedCase.server_id !== guildId ||
+      selectedCase.user_id !== parsed.userId
+    ) {
+      throw new Error('The case menu is no longer bound to a stored case.');
+    }
+    const activeCase = selectedCase.status === VerificationStatus.PENDING ? selectedCase : null;
+    const captchaCase = activeCase;
     const serverConfig = await this.configService.getServerConfig(guildId);
     const accountQuarantineEnabled = getAccountQuarantineSettings(serverConfig.settings).enabled;
     const captchaSettings = getCaptchaSettings(serverConfig.settings);
@@ -669,8 +669,6 @@ export class InteractionHandler implements IInteractionHandler {
       guildId
     );
     const pendingCases = history.filter((event) => event.status === VerificationStatus.PENDING);
-    const latestHistoryCase = history.length > 0 ? history[0] : null;
-    const latestCase = activeCase ?? latestHistoryCase;
     const alreadyBanned =
       activeCase?.status === VerificationStatus.PENDING && hasBanMembersPermission
         ? await this.isUserBanned(guildId, parsed.userId)
@@ -827,14 +825,14 @@ export class InteractionHandler implements IInteractionHandler {
           this.adminActionButton(parsed, 'ban', 'Ban User...', ButtonStyle.Danger)
         );
       }
-    } else if (latestCase && hasModerationPermission) {
+    } else if (hasModerationPermission) {
       actionButtons.push(
         this.adminActionButton(parsed, 'reopen', 'Reopen Verification', ButtonStyle.Primary)
       );
     }
 
     const buttons = [...actionButtons];
-    const webCaseUrl = latestCase ? buildAdminCaseDetailUrl(guildId, latestCase.id) : null;
+    const webCaseUrl = buildAdminCaseDetailUrl(guildId, selectedCase.id);
     if (webCaseUrl) {
       buttons.push(this.webLinkButton('Web Case', webCaseUrl));
     }
@@ -849,9 +847,7 @@ export class InteractionHandler implements IInteractionHandler {
           : 'Case role: applied while this case is open.'
       );
     }
-    const latestCaseLinks = latestCase
-      ? this.formatVerificationCaseLinks(guildId, latestCase, adminChannelId)
-      : [];
+    const latestCaseLinks = this.formatVerificationCaseLinks(guildId, selectedCase, adminChannelId);
     if (latestCaseLinks.length > 0) {
       details.push(`Links: ${latestCaseLinks.join(' | ')}`);
     }
@@ -1075,6 +1071,7 @@ export class InteractionHandler implements IInteractionHandler {
       action: 'menu',
       surface: 'case',
       userId: selectedCase.user_id,
+      verificationEventId: selectedCase.id,
     });
   }
 
@@ -2075,7 +2072,7 @@ export class InteractionHandler implements IInteractionHandler {
   }
 
   private async resolveCaseControlBinding(
-    interaction: ButtonInteraction | ModalSubmitInteraction,
+    interaction: ButtonInteraction | ModalSubmitInteraction | StringSelectMenuInteraction,
     guildId: string,
     userId: string
   ): Promise<string> {
@@ -2962,6 +2959,7 @@ export class InteractionHandler implements IInteractionHandler {
 
       const outcome = await this.executeConfirmedCaseAction(interaction, {
         kind: 'open_admin_case',
+        intent: 'native_case_open',
         targetUserId,
         reason: reason ?? null,
         detectionEventId: null,
@@ -3042,7 +3040,6 @@ export class InteractionHandler implements IInteractionHandler {
       });
       return;
     }
-    const banReason = finalNotes || VERIFICATION_BAN_DEFAULT_REASON;
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
@@ -3055,7 +3052,7 @@ export class InteractionHandler implements IInteractionHandler {
         kind: member ? 'ban_case_user' : 'ban_case_user_by_id',
         caseId,
         targetUserId: userId,
-        reason: banReason,
+        reason: finalNotes || null,
         detectionEventId: null,
       });
 
@@ -3287,7 +3284,6 @@ export class InteractionHandler implements IInteractionHandler {
       return;
     }
 
-    const reason = providedReason || VERIFICATION_KICK_DEFAULT_REASON;
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     try {
@@ -3301,7 +3297,7 @@ export class InteractionHandler implements IInteractionHandler {
         kind: 'kick_case_user',
         caseId: this.consumeCaseModalBinding(interaction, userId),
         targetUserId: userId,
-        reason,
+        reason: providedReason || null,
         detectionEventId: null,
       });
 

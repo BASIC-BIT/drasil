@@ -143,11 +143,7 @@ async function arrange() {
     caseId: state.id,
     targetUserId: target.id,
   };
-  const execute = async (delivery: 'direct' | 'worker', input: CaseCommand = command) => {
-    if (delivery === 'direct') {
-      proof.recordVerified(context, input);
-      return actions.execute(context, input);
-    }
+  const prepareQueued = (input: CaseCommand) => {
     const encoded = encodeQueuedAction(
       { ...context, source: 'web' },
       queuedCommandSchema.parse(input)
@@ -165,9 +161,18 @@ async function arrange() {
       metadata: encoded.metadata,
     });
     proof.recordVerified(decoded.context, decoded.command);
-    return dispatchQueuedAction(application, decoded);
+    return decoded;
+  };
+  const execute = async (delivery: 'direct' | 'worker', input: CaseCommand = command) => {
+    if (delivery === 'direct') {
+      proof.recordVerified(context, input);
+      return actions.execute(context, input);
+    }
+    return dispatchQueuedAction(application, prepareQueued(input));
   };
   return {
+    application,
+    prepareQueued,
     cases,
     state,
     actions,
@@ -176,11 +181,31 @@ async function arrange() {
     execute,
     configService,
     roleManager,
+    setPermissions: (value: bigint) => {
+      permissions = value;
+    },
     revoke: () => {
       permissions = 0n;
     },
   };
 }
+
+test('queued_dashboard_open_rechecks_Manage_Guild_instead_of_accepting_Moderate_Members', async () => {
+  const fixture = await arrange();
+  fixture.setPermissions(1n << 5n);
+  const queued = fixture.prepareQueued({
+    kind: 'open_admin_case',
+    intent: 'dashboard_case_open',
+    targetUserId: 'target-1',
+    detectionEventId: null,
+    reason: 'review',
+    selectedMessage: null,
+  });
+  fixture.setPermissions(1n << 40n);
+  await expect(dispatchQueuedAction(fixture.application, queued)).rejects.toThrow(
+    'permission_denied'
+  );
+});
 
 describe.each(['direct', 'worker'] as const)(
   '%s case execution with real verification workflow',
@@ -227,6 +252,7 @@ describe.each(['direct', 'worker'] as const)(
       const fixture = await arrange();
       await fixture.execute(delivery, {
         kind: 'open_admin_case',
+        intent: 'dashboard_case_open',
         targetUserId: 'target-1',
         detectionEventId: null,
         reason: 'Review selected message',

@@ -1,3 +1,4 @@
+import type { AuthorityPort } from '@drasil/application';
 import { buildCaseApplication } from './caseApplicationTestHarness';
 import { CommandHandler } from '../../controllers/CommandHandler';
 
@@ -42,6 +43,7 @@ export type HandlerOverrides = Partial<{
   moderationQueueService: any;
   integrityAuditService: any;
   client: any;
+  caseAuthority: AuthorityPort;
 }>;
 
 export const buildHandler = (overrides: HandlerOverrides = {}) => {
@@ -204,27 +206,30 @@ export const buildHandler = (overrides: HandlerOverrides = {}) => {
       status: 'pending',
     })),
   } as any;
-  const application = buildCaseApplication({
-    client: {
-      guilds: {
-        fetch: jest.fn(async () => ({
-          id: 'guild-1',
-          members: { fetch: jest.fn(async (id: string) => ({ id })) },
-        })),
-      },
-      users: {
-        fetch: jest.fn(async (id: string) =>
-          id.startsWith('user-') ? { id, tag: 'target#0001' } : { id }
-        ),
-      },
-    } as any,
-    configService,
-    verificationEventRepository: caseRepository,
-    detectionEventsRepository: { findById: jest.fn() } as any,
-    securityActionService,
-    userModerationService,
-    roleGateService: null,
-  });
+  const application = buildCaseApplication(
+    {
+      client: {
+        guilds: {
+          fetch: jest.fn(async () => ({
+            id: 'guild-1',
+            members: { fetch: jest.fn(async (id: string) => ({ id })) },
+          })),
+        },
+        users: {
+          fetch: jest.fn(async (id: string) =>
+            id.startsWith('user-') ? { id, tag: 'target#0001' } : { id }
+          ),
+        },
+      } as any,
+      configService,
+      verificationEventRepository: caseRepository,
+      detectionEventsRepository: { findById: jest.fn() } as any,
+      securityActionService,
+      userModerationService,
+      roleGateService: null,
+    },
+    overrides.caseAuthority
+  );
 
   return {
     handler: new CommandHandler(

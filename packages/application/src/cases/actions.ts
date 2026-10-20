@@ -60,13 +60,17 @@ export function createCaseActions(deps: CaseDependencies): CaseActions {
         command.kind === 'refresh_case_notification' ||
         command.kind === 'manual_flag_user'
           ? 0n
-          : command.kind === 'kick_case_user'
-            ? 1n << 1n
-            : command.kind === 'ban_case_user' ||
-                command.kind === 'ban_case_user_by_id' ||
-                command.kind === 'sync_existing_ban'
-              ? 1n << 2n
-              : (1n << 5n) | (1n << 40n);
+          : command.kind === 'open_admin_case'
+            ? command.intent === 'native_case_open'
+              ? 1n << 40n
+              : 1n << 5n
+            : command.kind === 'kick_case_user'
+              ? 1n << 1n
+              : command.kind === 'ban_case_user' ||
+                  command.kind === 'ban_case_user_by_id' ||
+                  command.kind === 'sync_existing_ban'
+                ? 1n << 2n
+                : (1n << 5n) | (1n << 40n);
       if (!admin && (bits & required) === 0n) return { kind: 'denied', code: 'permission_denied' };
 
       if ('caseId' in command) {

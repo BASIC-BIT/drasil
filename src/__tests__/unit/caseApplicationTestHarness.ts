@@ -1,4 +1,4 @@
-import { createCaseActions } from '@drasil/application';
+import { createCaseActions, type AuthorityPort } from '@drasil/application';
 import type { BotApplication } from '../../application/createBotApplication';
 import {
   createBotCaseDependencies,
@@ -10,7 +10,8 @@ import {
 // These runtime facts are explicit; execution-time revocation is covered with the
 // actual Discord authority adapter in CaseActions.unit.test.ts.
 export function buildCaseApplication(
-  deps: Omit<BotCaseDependencies, 'confirmations'>
+  deps: Omit<BotCaseDependencies, 'confirmations'>,
+  authority?: AuthorityPort
 ): BotApplication {
   const caseConfirmations = createCaseConfirmationStore();
   const ports = createBotCaseDependencies({
@@ -20,7 +21,7 @@ export function buildCaseApplication(
   return {
     cases: createCaseActions({
       ...ports,
-      authority: {
+      authority: authority ?? {
         async loadFresh(guildId, userId) {
           return { guildId, userId, present: true, owner: false, permissions: '8', roleIds: [] };
         },

@@ -30,6 +30,7 @@ export async function queueMemberOpenCaseActionRequest(input: {
       },
       {
         kind: 'open_admin_case',
+        intent: 'dashboard_case_open',
         targetUserId: input.targetUserId,
         reason: input.reason ?? null,
         detectionEventId: input.sourceDetectionEventId ?? null,

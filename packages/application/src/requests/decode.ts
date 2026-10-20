@@ -35,6 +35,7 @@ export function decodeQueuedAction(row: unknown): DecodedQueuedAction {
     case 'open_admin_case':
       command = queuedCommandSchema.parse({
         ...target,
+        intent: 'dashboard_case_open',
         reason,
         detectionEventId: parsed.detection_event_id ?? null,
         selectedMessage:

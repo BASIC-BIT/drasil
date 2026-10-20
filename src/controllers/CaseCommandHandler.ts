@@ -344,6 +344,7 @@ export class CaseCommandHandler {
           });
           const command = {
             kind: 'open_admin_case',
+            intent: 'native_case_open',
             targetUserId: targetUser.id,
             reason: reason ?? null,
             detectionEventId: null,
