@@ -1,3 +1,6 @@
+import type { McpAuditPort } from '../delegation/operations';
+import { parseQueuedRow } from '../requests/decode';
+import { consumeMcpLimit } from './operations';
 import type { ActorApprovalStore } from '../delegation/approvals';
 import { acceptCleanupJob, hasCommittedContainment } from './containment';
 import { validateReportCaseTerminal } from '../reports/terminal';
@@ -114,7 +117,10 @@ async function replaceSelection(
   }
 }
 
-export function createDelegationStore(database: DelegationDatabase): DelegationStore {
+export function createDelegationStore(
+  database: DelegationDatabase,
+  operations: { enabled?: () => boolean; audit?: McpAuditPort } = {}
+): DelegationStore {
   async function mutate(
     principal: DelegatedPrincipal,
     expectedVersion: number,
@@ -153,7 +159,7 @@ export function createDelegationStore(database: DelegationDatabase): DelegationS
 
   return {
     ...createIntentStore(database),
-    ...createExecutionStore(database),
+    ...createExecutionStore(database, operations),
     createConnection(input: CreateConnectionInput): Promise<ConnectionGrant> {
       return database.transaction(async (client) => {
         const inserted = await client.query<{ id: string }>(
@@ -396,6 +402,13 @@ function createIntentStore(database: DelegationDatabase): IntentStore {
         );
         if (count.rows[0].connection_count >= 128 || count.rows[0].actor_count >= 1024)
           throw new IntentError('capacity');
+        const budget = await consumeMcpLimit(
+          client,
+          { ...principal, guildId: intent.guildId },
+          'new_intent'
+        );
+        if (budget.kind === 'limited')
+          throw new IntentError('rate_limited', budget.retryAfterSeconds);
         const inserted = await client.query<{ confirmation_id: string }>(
           `insert into mcp_intents
           (confirmation_id, connection_id, user_id, client_id, grant_version, idempotency_key, invocation_digest, input, resolved, created_at, expires_at)
@@ -610,16 +623,31 @@ async function loadOwnedExecution(
     ? { ...execution, outcome: { kind: 'delegated_terminal', result: native } }
     : execution;
 }
-function createExecutionStore(database: DelegationDatabase): ExecutionStore {
+function createExecutionStore(
+  database: DelegationDatabase,
+  operations: { enabled?: () => boolean; audit?: McpAuditPort }
+): ExecutionStore {
   async function finish(
     client: DelegationQueryClient,
     id: string,
     result: ActionCompletion
   ): Promise<void> {
-    await client.query(
-      `update mcp_executions set completed_at=clock_timestamp(),outcome=$2::jsonb where id=$1::uuid and (outcome is null or outcome->'result'->>'state' in ('uncertain','partial'))`,
+    const updated = await client.query(
+      `update mcp_executions set completed_at=clock_timestamp(),outcome=$2::jsonb where id=$1::uuid and (outcome is null or outcome->'result'->>'state' in ('uncertain','partial')) returning id`,
       [id, JSON.stringify({ kind: 'delegated_terminal', result })]
     );
+    if (operations.audit && updated.rows.length) {
+      const execution = await readExecution(client, id);
+      if (execution)
+        await operations
+          .audit({
+            event: 'execution',
+            ...execution,
+            requestId: execution.queueRequestId ?? undefined,
+            outcome: result.state,
+          })
+          .catch(() => undefined);
+    }
   }
   async function admit(
     executionId: string,
@@ -675,13 +703,9 @@ function createExecutionStore(database: DelegationDatabase): ExecutionStore {
           queue.action.context.actor.userId !== execution.userId
         )
           return { kind: 'denied', code: 'binding_mismatch' };
-        // A stale native owner cannot admit new work after its queue lease expires.
+        // A stale owner cannot admit new work after its queue lease expires.
         // Already-admitted executions remain read-only observations, including after revocation.
-        if (
-          (execution.command.kind === 'ban_user' || execution.command.kind === 'kick_user') &&
-          !execution.startedAt &&
-          !execution.completedAt
-        ) {
+        if (!execution.startedAt && !execution.completedAt) {
           // Check the clock after acquiring the lock, including time spent waiting for it.
           const claim = await client.query<{ live: boolean }>(
             `select status='processing' and updated_at >= clock_timestamp()-interval '15 minutes' as live
@@ -689,7 +713,11 @@ function createExecutionStore(database: DelegationDatabase): ExecutionStore {
             [queue.request.id]
           );
           if (!claim.rows[0]?.live)
-            return { kind: 'denied', code: 'execution_interrupted_before_send' };
+            return {
+              kind: 'denied',
+              code: 'execution_interrupted_before_send',
+              persistence: 'observe_only',
+            };
         }
         if (await hasCommittedContainment(client, execution, queue.request))
           return { kind: 'committed_containment', execution };
@@ -739,7 +767,24 @@ function createExecutionStore(database: DelegationDatabase): ExecutionStore {
       }
       if (!denial) {
         const decision = await authorize(principal, execution);
+        if (decision.kind === 'denied' && decision.reason === 'unavailable')
+          throw new Error('Delegated authority temporarily unavailable.');
         if (decision.kind === 'denied') denial = decision.reason;
+      }
+      if (!denial && operations.enabled && !operations.enabled()) denial = 'mcp_disabled';
+      if (queue && !denial) {
+        const {
+          rows: [claim],
+        } = await client.query<{ live: boolean }>(
+          "select status='processing' and updated_at >= clock_timestamp()-interval '15 minutes' as live from moderation_action_requests where id=$1::uuid",
+          [queue.request.id]
+        );
+        if (!claim?.live)
+          return {
+            kind: 'denied',
+            code: 'execution_interrupted_before_send',
+            persistence: 'observe_only',
+          };
       }
       if (denial) {
         await finish(client, executionId, { state: 'denied', code: denial });
@@ -749,7 +794,19 @@ function createExecutionStore(database: DelegationDatabase): ExecutionStore {
         'update mcp_executions set started_at=clock_timestamp() where id=$1::uuid',
         [executionId]
       );
-      return { kind: 'new_execution', execution: (await readExecution(client, executionId))! };
+      const started = (await readExecution(client, executionId))!;
+      await operations
+        .audit?.({
+          event: 'execution',
+          ...started,
+          requestId: started.queueRequestId ?? undefined,
+          workflowId: started.workflowId,
+          confirmationMethod: started.confirmationMethod,
+          outcome: 'running',
+          queueDelayMs: Math.max(0, started.startedAt!.getTime() - started.createdAt.getTime()),
+        })
+        .catch(() => undefined);
+      return { kind: 'new_execution', execution: started };
     });
   }
   return {
@@ -882,4 +939,67 @@ export function createActorApprovalStore(database: DelegationDatabase): ActorApp
       });
     },
   };
+}
+
+/** Shared MCP interruption lifecycle. No command gets a generic effect replay after admission.
+ * Locked execution -> queue order matches admission and the native provider-send fence. */
+export async function settleMcpQueue(
+  database: DelegationDatabase,
+  audit?: McpAuditPort
+): Promise<Record<string, unknown> | null> {
+  // Keep protected reconciliation rows outside the bounded scan so they cannot starve other work.
+  const candidates = await database.query<{ id: string; execution_id: string }>(
+    `select q.id,e.id as execution_id from moderation_action_requests q join mcp_executions e on e.queue_request_id=q.id where q.actor_surface='mcp' and not (q.action_type='ban_observed_detection' and (coalesce(q.metadata->>'report_ban_phase','') <> '' or coalesce(q.result->'observed_ban_result'->>'status','') in ('banned','banned_updates_pending','ban_outcome_unknown'))) and ((q.status='processing' and q.updated_at < clock_timestamp()-interval '15 minutes') or (q.status='failed' and e.started_at is not null and e.completed_at is null and q.action_type in ('request_captcha_challenge','retry_captcha_challenge','bypass_captcha_challenge','quarantine_compromised_account','execute_case_message_deletion','ban_case_user_with_message_cleanup'))) order by q.updated_at limit 50`
+  );
+  for (const candidate of candidates.rows) {
+    const recovered = await database.transaction(async (client) => {
+      const locked = await client.query(
+        'select id from mcp_executions where id=$1::uuid for update skip locked',
+        [candidate.execution_id]
+      );
+      if (!locked.rows.length) return null;
+      const rows = await client.query(
+        `select *,status='processing' and updated_at < clock_timestamp()-interval '15 minutes' as stale from moderation_action_requests where id=$1::uuid for update skip locked`,
+        [candidate.id]
+      );
+      const raw = rows.rows[0];
+      if (!raw || (!raw.stale && raw.status !== 'failed')) return null;
+      const execution = await readExecution(client, candidate.execution_id);
+      if (!execution) return null;
+      const request = parseQueuedRow(raw);
+      if (!matchesQueue(execution, request)) throw new Error('MCP settlement binding mismatch.');
+      if (
+        request.action_type === 'ban_observed_detection' &&
+        (request.metadata?.report_ban_phase ||
+          ['banned', 'banned_updates_pending', 'ban_outcome_unknown'].includes(
+            String(
+              (raw.result as { observed_ban_result?: { status?: string } } | null)
+                ?.observed_ban_result?.status
+            )
+          ))
+      )
+        return null;
+      if (await hasCommittedContainment(client, execution, request)) {
+        const claimed = await client.query(
+          `update moderation_action_requests set status='processing',attempts=attempts+1,updated_at=clock_timestamp() where id=$1::uuid returning *`,
+          [request.id]
+        );
+        return claimed.rows[0];
+      }
+      // Do not write an inferred execution outcome: an actual owner may still commit late.
+      await client.query(
+        `update moderation_action_requests set status='failed',failed_at=coalesce(failed_at,clock_timestamp()),updated_at=clock_timestamp(),last_error='Worker interrupted before this action completed.' where id=$1::uuid and status in ('processing','failed')`,
+        [request.id]
+      );
+      await audit?.({
+        event: 'execution',
+        ...execution,
+        requestId: execution.queueRequestId ?? undefined,
+        outcome: execution.startedAt ? 'uncertain' : 'failed',
+      }).catch(() => undefined);
+      return null;
+    });
+    if (recovered) return recovered;
+  }
+  return null;
 }

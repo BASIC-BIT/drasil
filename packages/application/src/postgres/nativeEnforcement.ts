@@ -1,3 +1,4 @@
+import { ActionDeniedError } from '../results';
 import { randomUUID } from 'node:crypto';
 import { projectHumanOutcome } from '../delegation/execution';
 import { canonicalDigest } from '../delegation/intents';
@@ -25,7 +26,10 @@ export async function nativeCompletion(
       : { state: 'uncertain', code: 'native_outcome_unknown' }
     : null;
 }
-export function createNativeEnforcementStore(database: DelegationDatabase): NativeEnforcementStore {
+export function createNativeEnforcementStore(
+  database: DelegationDatabase,
+  enabled: () => boolean = () => true
+): NativeEnforcementStore {
   return {
     async start(execution): Promise<string> {
       if (execution.command.kind !== 'ban_user' && execution.command.kind !== 'kick_user')
@@ -41,6 +45,7 @@ export function createNativeEnforcementStore(database: DelegationDatabase): Nati
           'select id from moderation_action_requests where id=$1::uuid for update',
           [execution.queueRequestId]
         );
+        if (!enabled()) throw new ActionDeniedError('mcp_disabled');
         const token = randomUUID();
         const inserted = await client.query<{ token: string }>(
           `insert into mcp_native_enforcements (execution_id,token)

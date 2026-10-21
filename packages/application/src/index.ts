@@ -84,3 +84,5 @@ export * from './delegation/approvals';
 export * from './delegation/caseResolution';
 export * from './delegation/resolution';
 export * from './delegation/direct';
+
+export * from './delegation/operations';

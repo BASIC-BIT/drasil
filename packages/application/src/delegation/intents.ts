@@ -23,7 +23,10 @@ import type {
 } from './types';
 
 export class IntentError extends Error {
-  constructor(readonly code: string) {
+  constructor(
+    readonly code: string,
+    readonly retryAfterSeconds?: number
+  ) {
     super(code);
     this.name = 'IntentError';
   }

@@ -1,4 +1,6 @@
 import {
+  createMcpAudit,
+  isMcpEnabled,
   createAlternativeApprovals,
   createDelegatedActionService,
   createHumanIntentResolver,
@@ -23,6 +25,7 @@ import {
   type SetupSelectionResources,
 } from '@drasil/application';
 import {
+  createMcpOperationalStore,
   createDelegationStore,
   createActorApprovalStore,
   createCaseResolutionResources,
@@ -48,7 +51,10 @@ export function createBotMcpApprovals(
   }
 ): AlternativeApprovals {
   const database = createBotDelegationDatabase(deps.prisma);
-  const store = createDelegationStore(database);
+  const store = createDelegationStore(database, {
+    enabled: isMcpEnabled,
+    audit: createMcpAudit((line) => console.info(line)),
+  });
   const access = createBotDelegatedAccess(deps, store);
   const authority = createBotAuthority(deps.client);
   const staffRoles = {
@@ -188,10 +194,26 @@ export function createBotMcpApprovals(
     containment: createContainmentIntentResolver(createContainmentResources(database)),
   });
   const service = createDelegatedActionService({
+    operations: {
+      ...createMcpOperationalStore(database),
+      recordMcpAudit: createMcpAudit((line) => console.info(line)),
+      enabled: isMcpEnabled,
+    },
     store,
     access,
     resolver,
     direct: createBotDirectActionExecutor({ ...deps, reportReview }),
   });
-  return createAlternativeApprovals({ store: createActorApprovalStore(database), access, service });
+  return createAlternativeApprovals({
+    store: createActorApprovalStore(database),
+    access,
+    service,
+    checkRead: async (principal, guildId) => {
+      const decision = await createMcpOperationalStore(database).checkMcpLimit(
+        { ...principal, guildId },
+        'read'
+      );
+      return decision.kind === 'allowed';
+    },
+  });
 }

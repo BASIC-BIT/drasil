@@ -78,7 +78,10 @@ export interface AccessDenial {
     | 'binding_mismatch'
     | 'permission_denied'
     | 'unavailable'
-    | 'invalid_page';
+    | 'invalid_page'
+    | 'mcp_disabled'
+    | 'rate_limited';
+  readonly retryAfterSeconds?: number;
 }
 export type AccessDecision = AccessBinding | AccessDenial;
 export interface GuildPageRequest {

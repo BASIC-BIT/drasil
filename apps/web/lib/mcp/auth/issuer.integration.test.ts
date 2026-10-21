@@ -6,11 +6,13 @@ import type { ClientRequest, IncomingMessage } from 'node:http';
 import { syncBuiltinESMExports } from 'node:module';
 import { Readable } from 'node:stream';
 import { EventEmitter } from 'node:events';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, generateKeyPairSync, sign, randomUUID } from 'node:crypto';
 import { createMcpIssuer } from './issuer';
 import { createPrincipalVerifier, createBearerVerifier } from './principal';
 import { fetchClientMetadataResource } from '@drasil/mcp-runtime/cimd-node';
 
+vi.stubEnv('VERCEL', '1');
+vi.stubEnv('DRASIL_MCP_INGRESS', 'vercel-direct');
 const origin = 'http://localhost:3456';
 const issuer = `${origin}/api/mcp-auth`;
 const resource = `${origin}/api/mcp`;
@@ -23,6 +25,7 @@ const auth = createMcpIssuer({
     issuer,
     resource,
     authSecret: 'integration-only-secret-'.repeat(3),
+    ipHashSecret: 'integration-ip-hash-'.repeat(3),
     cursorSecret: 'integration-cursor-'.repeat(3),
   },
   discord: { clientId: 'controlled-client', clientSecret: 'controlled-secret' },
@@ -72,6 +75,7 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   await pool.end();
 });
 async function call(
@@ -108,7 +112,7 @@ async function call(
 }
 beforeEach(async () => {
   await pool.query(
-    'TRUNCATE mcp_auth_user, mcp_auth_verification, mcp_auth_oauth_client, mcp_auth_rate_limit, mcp_authorization_flows, mcp_connections CASCADE'
+    'TRUNCATE mcp_rate_buckets,mcp_metadata_permits,mcp_auth_user, mcp_auth_verification, mcp_auth_oauth_client, mcp_auth_rate_limit, mcp_authorization_flows, mcp_connections CASCADE'
   );
   cookie = '';
   const login = await call('/sign-in/social', {
@@ -695,11 +699,23 @@ it('rejects a nonce appended outside the provider signed parameters', async () =
 
 it('uses the maintained CIMD discovery with public DNS pinning and no redirect following', async () => {
   const metadataUrl = 'https://client.example/metadata.json';
+  const keys = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const jwks = {
+    keys: [
+      {
+        ...keys.publicKey.export({ format: 'jwk' }),
+        kid: 'controlled-key',
+        alg: 'RS256',
+        use: 'sig',
+      },
+    ],
+  };
   const metadata = {
     client_id: metadataUrl,
     client_name: 'Controlled CIMD client',
     redirect_uris: ['https://client.example/callback'],
-    token_endpoint_auth_method: 'none',
+    token_endpoint_auth_method: 'private_key_jwt',
+    jwks_uri: 'https://client.example/jwks.json',
     grant_types: ['authorization_code', 'refresh_token'],
     response_types: ['code'],
     scope: 'drasil:read offline_access',
@@ -747,7 +763,9 @@ it('uses the maintained CIMD discovery with public DNS pinning and no redirect f
       });
       const request = new EventEmitter() as ClientRequest;
       request.end = (() => {
-        const response = Readable.from([Buffer.from(JSON.stringify(metadata))]) as IncomingMessage;
+        const response = Readable.from([
+          Buffer.from(JSON.stringify(url.pathname === '/jwks.json' ? jwks : metadata)),
+        ]) as IncomingMessage;
         response.statusCode = status;
         response.headers = {
           'content-type': 'application/json',
@@ -763,19 +781,46 @@ it('uses the maintained CIMD discovery with public DNS pinning and no redirect f
   try {
     const a = await start({ client_id: metadataUrl, redirect_uris: metadata.redirect_uris });
     const grant = await select(a, '111111111111111111');
-    const tokens = await exchange(a, await consent(a));
+    const now = Math.floor(Date.now() / 1000);
+    const unsigned = [
+      { alg: 'RS256', kid: 'controlled-key', typ: 'JWT' },
+      {
+        iss: metadataUrl,
+        sub: metadataUrl,
+        aud: issuer + '/oauth2/token',
+        iat: now,
+        exp: now + 60,
+        jti: randomUUID(),
+      },
+    ]
+      .map((value) => Buffer.from(JSON.stringify(value)).toString('base64url'))
+      .join('.');
+    const assertion =
+      unsigned + '.' + sign('sha256', Buffer.from(unsigned), keys.privateKey).toString('base64url');
+    const tokens = await exchange(a, await consent(a), {
+      client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+      client_assertion: assertion,
+    });
     expect((await admission(tokens)).connectionId).toBe(grant.id);
-    expect(lookups).toBe(1);
-    expect(requests).toBe(1);
+    expect(lookups).toBe(2);
+    expect(requests).toBe(2);
+    expect(
+      (
+        await pool.query(
+          "select cardinality(starts) as count from mcp_rate_buckets where category='metadata' and subject='global'"
+        )
+      ).rows[0].count
+    ).toBe(2);
+    expect((await pool.query('select * from mcp_metadata_permits')).rowCount).toBe(0);
     status = 302;
     const response = await fetchClientMetadataResource('https://client.example/redirect', {});
     expect(response.status).toBe(302);
-    expect(requests).toBe(2);
+    expect(requests).toBe(3);
     mixed = true;
     await expect(fetchClientMetadataResource('https://client.example/mixed', {})).rejects.toThrow(
       'public-routable'
     );
-    expect(requests).toBe(2);
+    expect(requests).toBe(3);
   } finally {
     dnsSpy.mockRestore();
     httpsSpy.mockRestore();
@@ -921,4 +966,142 @@ it('serves SDK reads using real issued bearer identity and rejects expired, wron
   } finally {
     await sdk.close();
   }
+});
+it('rejects unsupported or ambiguous registration ingress before allocating a client', async () => {
+  const before = Number(
+    (await pool.query('select count(*) from mcp_auth_oauth_client')).rows[0].count
+  );
+  for (const ip of ['', '127.0.0.1,', '1.2.3.4, 5.6.7.8']) {
+    const response = await auth.handler(
+      new Request(issuer + '/oauth2/register', {
+        method: 'POST',
+        headers: { 'x-forwarded-for': ip, 'content-type': 'application/json' },
+        body: JSON.stringify({ redirect_uris: ['https://client.example/callback'] }),
+      })
+    );
+    expect(response.status).toBe(503);
+  }
+  expect(
+    Number((await pool.query('select count(*) from mcp_auth_oauth_client')).rows[0].count)
+  ).toBe(before);
+});
+it('enforces the shared global registration budget across actual issuer instances before allocation', async () => {
+  const other = createMcpIssuer({
+    pool,
+    config: {
+      origin,
+      issuer,
+      resource,
+      authSecret: 'integration-only-secret-'.repeat(3),
+      cursorSecret: 'integration-cursor-'.repeat(3),
+      ipHashSecret: 'integration-ip-hash-'.repeat(3),
+    },
+    discord: { clientId: 'controlled-client', clientSecret: 'controlled-secret' },
+  });
+  for (let i = 0; i < 101; i++) {
+    const response = await (i % 2 ? other : auth).handler(
+      new Request(issuer + '/oauth2/register', {
+        method: 'POST',
+        headers: { 'x-forwarded-for': `192.0.2.${i + 1}`, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          redirect_uris: ['https://client.example/callback'],
+          token_endpoint_auth_method: 'none',
+          grant_types: ['authorization_code'],
+          response_types: ['code'],
+        }),
+      })
+    );
+    expect(response.status).toBe(i === 100 ? 429 : 201);
+    if (i === 100) expect(Number(response.headers.get('Retry-After'))).toBeGreaterThan(0);
+  }
+  expect(
+    Number((await pool.query('select count(*) from mcp_auth_oauth_client')).rows[0].count)
+  ).toBe(100);
+});
+it('uses the safe logger in the real maintained issuer context', async () => {
+  const lines: string[] = [];
+  const log = vi.spyOn(console, 'info').mockImplementation((line: unknown) => {
+    lines.push(String(line));
+  });
+  try {
+    const context = await auth.auth.$context;
+    context.logger.error(
+      'Bearer AUDIT_SENTINEL',
+      { refresh_token: 'REFRESH_SENTINEL' },
+      new Error('PRIVATE_SENTINEL')
+    );
+    expect(lines).toContain(JSON.stringify({ event: 'provider', level: 'error' }));
+    expect(lines.join('')).not.toMatch(/SENTINEL|Bearer|refresh_token/);
+  } finally {
+    log.mockRestore();
+  }
+});
+it('blocks alternate provider registration path spellings without client allocation', async () => {
+  for (const path of ['/oauth2/register/', '//oauth2/register', '/oauth2/%72egister']) {
+    const response = await auth.handler(
+      new Request(issuer + path, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ redirect_uris: ['https://client.example/callback'] }),
+      })
+    );
+    expect(response.status).toBe(404);
+  }
+  expect(
+    Number((await pool.query('select count(*) from mcp_auth_oauth_client')).rows[0].count)
+  ).toBe(0);
+});
+it('keeps issuer secret ownership explicit despite ambient global rings', async () => {
+  vi.stubEnv(
+    'BETTER_AUTH_SECRETS',
+    '[{"version":90,"value":"ambient-should-not-control-this-issuer-000000000"}]'
+  );
+  try {
+    const isolated = createMcpIssuer({
+      pool,
+      config: {
+        origin,
+        issuer,
+        resource,
+        authSecret: 'legacy-only-key-'.repeat(3),
+        cursorSecret: 'cursor-key-'.repeat(4),
+        authSecrets: [
+          { version: 2, value: 'current-mcp-key-'.repeat(3) },
+          { version: 1, value: 'old-mcp-key-'.repeat(4) },
+        ],
+      },
+      discord: { clientId: 'controlled-client', clientSecret: 'controlled-secret' },
+    });
+    expect((await isolated.auth.$context).secret).toBe('current-mcp-key-'.repeat(3));
+  } finally {
+    vi.stubEnv('BETTER_AUTH_SECRETS', undefined);
+  }
+});
+it('keeps the hourly IP gate after native short-window counters reset', async () => {
+  for (let i = 0; i < 11; i++) {
+    await pool.query('delete from mcp_auth_rate_limit');
+    const response = await auth.handler(
+      new Request(issuer + '/oauth2/register', {
+        method: 'POST',
+        headers: { 'x-forwarded-for': '192.0.2.200', 'content-type': 'application/json' },
+        body: JSON.stringify({
+          redirect_uris: ['https://client.example/callback'],
+          token_endpoint_auth_method: 'none',
+          grant_types: ['authorization_code'],
+          response_types: ['code'],
+        }),
+      })
+    );
+    expect(response.status).toBe(i === 10 ? 429 : 201);
+  }
+  expect(
+    Number((await pool.query('select count(*) from mcp_auth_oauth_client')).rows[0].count)
+  ).toBe(10);
+  const buckets = (
+    await pool.query(
+      "select subject from mcp_rate_buckets where category='registration' and subject<>'global'"
+    )
+  ).rows;
+  expect(buckets).toHaveLength(1);
+  expect(buckets[0].subject).toMatch(/^ip:[a-f0-9]{64}$/);
 });

@@ -279,6 +279,21 @@ integration.each(['pg', 'prisma'] as const)('MCP containment via %s', (driver) =
       expect(effects).not.toHaveBeenCalled();
     }
   );
+  async function claimPending(id: string | null): Promise<void> {
+    if (!id) throw new Error('Missing queued request');
+    const repository = new ModerationActionRequestRepository(getPrismaClient());
+    if ((await repository.findById(id))?.status === 'queued')
+      expect((await repository.claimNext())?.id).toBe(id);
+  }
+  async function expireAndReclaim(id: string | null) {
+    await pool.query(
+      "update moderation_action_requests set updated_at=clock_timestamp()-interval '16 minutes' where id=$1",
+      [id]
+    );
+    const claimed = await new ModerationActionRequestRepository(getPrismaClient()).claimNext();
+    expect(claimed?.id).toBe(id);
+    return claimed!;
+  }
   it('reserves without writes then atomically creates exactly one job, execution and queue on concurrent acceptance', async () => {
     const saved = await prepareCleanup();
     expect(
@@ -555,6 +570,7 @@ integration.each(['pg', 'prisma'] as const)('MCP containment via %s', (driver) =
       saved.confirmationId,
       'client_confirmation'
     );
+    await claimPending(execution.queueRequestId);
     let request = (
       await pool.query('select * from moderation_action_requests where id=$1', [
         execution.queueRequestId,
@@ -675,6 +691,7 @@ integration.each(['pg', 'prisma'] as const)('MCP containment via %s', (driver) =
       await pool.query("update moderation_action_requests set status='processing' where id=$1", [
         execution.queueRequestId,
       ]);
+      await claimPending(execution.queueRequestId);
       const request = (
         await pool.query('select * from moderation_action_requests where id=$1', [
           execution.queueRequestId,
@@ -739,6 +756,7 @@ integration.each(['pg', 'prisma'] as const)('MCP containment via %s', (driver) =
       'client_confirmation'
     );
     await pool.query('update verification_events set case_revision=1 where id=$1', [caseId]);
+    await claimPending(execution.queueRequestId);
     const request = (
       await pool.query('select * from moderation_action_requests where id=$1', [
         execution.queueRequestId,
@@ -770,6 +788,7 @@ integration.each(['pg', 'prisma'] as const)('MCP containment via %s', (driver) =
     await pool.query("update moderation_action_requests set status='processing' where id=$1", [
       execution.queueRequestId,
     ]);
+    await claimPending(execution.queueRequestId);
     let request = (
       await pool.query('select * from moderation_action_requests where id=$1', [
         execution.queueRequestId,
@@ -797,6 +816,7 @@ integration.each(['pg', 'prisma'] as const)('MCP containment via %s', (driver) =
         execution.queueRequestId,
       ])
     ).rows[0];
+    request = await expireAndReclaim(execution.queueRequestId);
     const create = jest.spyOn(repository, 'create');
     const prepared = await prepareQueuedRequest({
       request,
@@ -845,6 +865,7 @@ integration.each(['pg', 'prisma'] as const)('MCP containment via %s', (driver) =
       await pool.query("update moderation_action_requests set status='processing' where id=$1", [
         execution.queueRequestId,
       ]);
+      await claimPending(execution.queueRequestId);
       const request = (
         await pool.query('select * from moderation_action_requests where id=$1', [
           execution.queueRequestId,
@@ -854,6 +875,20 @@ integration.each(['pg', 'prisma'] as const)('MCP containment via %s', (driver) =
         { request, action: decodeQueuedAction(request), recovery: false },
         (p, e) => access.authorizeWorkflow(p, e.guildId, e.command)
       );
+      // An incomplete job cannot be resumed merely because its generic execution started.
+      await pool.query(
+        "update moderation_action_requests set updated_at=clock_timestamp()-interval '16 minutes' where id=$1",
+        [request.id]
+      );
+      expect(await new ModerationActionRequestRepository(getPrismaClient()).claimNext()).toBeNull();
+      expect(
+        (await new ModerationActionRequestRepository(getPrismaClient()).findById(request.id))
+          ?.status
+      ).toBe('failed');
+      expect(
+        projectExecution((await store.loadExecution(principal, execution.executionId))!).state
+      ).toBe('uncertain');
+      // Only a subsequently committed exact completed job may become completion-only work.
       await pool.query(
         `update message_deletion_jobs set status='completed',ban_status=$2::message_deletion_ban_status,case_finalization_status=$3::message_deletion_case_finalization_status,metadata=$4::jsonb where id=$1`,
         [
@@ -892,7 +927,7 @@ integration.each(['pg', 'prisma'] as const)('MCP containment via %s', (driver) =
         messageCleanupService: cleanup,
       });
       const prepared = await prepareQueuedRequest({
-        request,
+        request: await expireAndReclaim(execution.queueRequestId),
         runtime: {
           messageCleanupRuntime: runtime,
           caseConfirmations: { recordVerified: jest.fn() },
@@ -934,6 +969,7 @@ integration.each(['pg', 'prisma'] as const)('MCP containment via %s', (driver) =
       saved.confirmationId,
       'client_confirmation'
     );
+    await claimPending(execution.queueRequestId);
     const request = (
       await pool.query('select * from moderation_action_requests where id=$1', [
         execution.queueRequestId,
@@ -999,6 +1035,7 @@ integration.each(['pg', 'prisma'] as const)('MCP containment via %s', (driver) =
         saved.confirmationId,
         'client_confirmation'
       );
+      await claimPending(execution.queueRequestId);
       const request = (
         await pool.query('select * from moderation_action_requests where id=$1', [
           execution.queueRequestId,
@@ -1033,7 +1070,7 @@ integration.each(['pg', 'prisma'] as const)('MCP containment via %s', (driver) =
         accountQuarantineService: deps.accountQuarantineService,
       });
       const prepared = await prepareQueuedRequest({
-        request,
+        request: await expireAndReclaim(execution.queueRequestId),
         runtime: {
           quarantineRuntime: runtime,
           caseConfirmations: { recordVerified: jest.fn() },

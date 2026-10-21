@@ -1,3 +1,6 @@
+import { checkMcpLimit } from './limits';
+import { recordMcpAudit } from './audit';
+import { isMcpEnabled } from '@drasil/application';
 import { createApprovedSetupExecutor } from './adapters/setup';
 import {
   createDelegatedActionService,
@@ -45,7 +48,11 @@ export function createMcpActionDelivery(
   options: { setup?: ApprovedSetupExecutor; clock?: McpDeadlineClock } = {}
 ) {
   return createDelegatedActionService({
-    store: createDelegationStore(createWebDelegationDatabase()),
+    operations: { checkMcpLimit, recordMcpAudit, enabled: isMcpEnabled },
+    store: createDelegationStore(createWebDelegationDatabase(), {
+      enabled: isMcpEnabled,
+      audit: recordMcpAudit,
+    }),
     access: createWebDelegatedAccess(),
     resolver,
     direct: createDelegatedDirectExecutor(

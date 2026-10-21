@@ -38,6 +38,7 @@ export function createAlternativeApprovals(deps: {
   store: ActorApprovalStore;
   access: Pick<DelegatedAccess, 'authorizeWorkflow'>;
   service: Pick<DelegatedActionService, 'confirm' | 'cancel'>;
+  checkRead?: (principal: DelegatedPrincipal, guildId?: string) => Promise<boolean>;
 }): AlternativeApprovals {
   async function owned(
     actorId: string,
@@ -58,6 +59,14 @@ export function createAlternativeApprovals(deps: {
         saved.intent.guildId,
         saved.intent.command
       );
+      if (
+        deps.checkRead &&
+        !(await deps.checkRead(
+          saved.principal,
+          decision.kind === 'allowed' ? saved.intent.guildId : undefined
+        ))
+      )
+        throw new IntentError('rate_limited');
       if (decision.kind === 'denied') throw new IntentError(decision.reason);
       const { intent } = saved;
       assertIntentSummary(intent.summary);

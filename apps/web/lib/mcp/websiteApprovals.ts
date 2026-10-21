@@ -1,3 +1,4 @@
+import { checkMcpLimit } from './limits';
 import { createAlternativeApprovals } from '@drasil/application';
 import { createActorApprovalStore } from '@drasil/application/postgres';
 import { createWebDelegationDatabase } from './adapters/database';
@@ -11,6 +12,8 @@ function runtime() {
   return {
     context,
     approvals: createAlternativeApprovals({
+      checkRead: async (principal, guildId) =>
+        (await checkMcpLimit({ ...principal, guildId }, 'read')).kind === 'allowed',
       store: createActorApprovalStore(createWebDelegationDatabase()),
       access: createWebDelegatedAccess(),
       service: createWebMcpActionService(),

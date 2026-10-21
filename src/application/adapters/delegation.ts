@@ -1,39 +1,22 @@
 import { readDelegatedMessage } from './delegatedCases';
 
 import { observeNativeEnforcement } from './nativeObservation';
-import type { Prisma, PrismaClient } from '../../db/prisma';
+import type { PrismaClient } from '../../db/prisma';
 import {
+  createMcpOperationalStore,
   createReportResources,
   createReportReviewReferenceStore,
   createDelegationStore,
   createNativeEnforcementStore,
   type NativeEnforcementStore,
-  type DelegationDatabase,
-  type DelegationQueryClient,
-  type DelegationSqlValue,
 } from '@drasil/application/postgres';
 
-function queryClient(client: Prisma.TransactionClient): DelegationQueryClient {
-  return {
-    async query<Row extends Record<string, unknown>>(
-      text: string,
-      values: readonly DelegationSqlValue[] = []
-    ): Promise<{ rows: Row[] }> {
-      // SQL text comes only from the shared store; all input values stay bound parameters.
-      const rows = await client.$queryRawUnsafe<Row[]>(text, ...values);
-      return { rows };
-    },
-  };
-}
-
-export function createBotDelegationDatabase(prisma: PrismaClient): DelegationDatabase {
-  return {
-    ...queryClient(prisma),
-    transaction: (operation) => prisma.$transaction((client) => operation(queryClient(client))),
-  };
-}
+export { createBotDelegationDatabase } from './delegationDatabase';
+import { createBotDelegationDatabase } from './delegationDatabase';
 
 import {
+  isMcpEnabled,
+  createMcpAudit,
   canonicalDigest,
   prepareIntakeChoice,
   prepareSubmittedReportCaseOpen,
@@ -56,8 +39,10 @@ import type { BotCaseDependencies } from './cases';
 import { createBotAuthority } from './authority';
 import { getCaseResponderSettings } from '../../utils/caseResponderSettings';
 
+const audit = createMcpAudit((line) => console.info(line));
 export interface DelegatedWorkerRuntime {
   readonly reviews?: ReportReviewReferenceStore;
+  pruneExpiredMcpData?(): Promise<number>;
   validateReportResources?(execution: ExecutionRecord): Promise<void>;
   readonly native?: NativeEnforcementStore;
   reconcileNativeEnforcement?(executionId: string): Promise<PublicActionResult>;
@@ -72,6 +57,7 @@ export function createDelegatedWorkerAdmission(deps: {
   store: DelegationStore;
   access: DelegatedAccess;
   native?: NativeEnforcementStore;
+  enabled?: () => boolean;
 }): DelegatedWorkerRuntime {
   return {
     native: deps.native,
@@ -80,6 +66,7 @@ export function createDelegatedWorkerAdmission(deps: {
       deps.store.admitQueuedExecution(
         { request: parseQueuedRow(request), action, recovery },
         async (principal, execution) => {
+          if (deps.enabled && !deps.enabled()) return { kind: 'denied', reason: 'mcp_disabled' };
           const authority = await deps.access.authorizeWorkflow(
             principal,
             execution.guildId,
@@ -104,19 +91,25 @@ export function createDelegatedWorkerAdmission(deps: {
           return authority;
         }
       ),
-    complete: (execution, outcome) =>
-      deps.store.completeExecution(
-        execution.executionId,
-        projectHumanOutcome(execution.command, outcome)
-      ),
+    complete: async (execution, outcome): Promise<void> => {
+      const result = projectHumanOutcome(execution.command, outcome);
+      await deps.store.completeExecution(execution.executionId, result);
+      await audit({
+        event: 'execution',
+        ...execution,
+        requestId: execution.queueRequestId ?? undefined,
+        outcome: result.state,
+      });
+    },
   };
 }
 export function createBotDelegatedRuntime(
   deps: Pick<BotCaseDependencies, 'client' | 'configService'> & { prisma: PrismaClient }
 ): DelegatedWorkerRuntime {
-  const store = createDelegationStore(createBotDelegationDatabase(deps.prisma));
+  const database = createBotDelegationDatabase(deps.prisma);
+  const store = createDelegationStore(database, { enabled: isMcpEnabled, audit });
   const access = createBotDelegatedAccess(deps, store);
-  const native = createNativeEnforcementStore(createBotDelegationDatabase(deps.prisma));
+  const native = createNativeEnforcementStore(database, isMcpEnabled);
   const resources = createReportResources(createBotDelegationDatabase(deps.prisma));
   const authority = createBotAuthority(deps.client);
   const staffRoles = {
@@ -132,6 +125,8 @@ export function createBotDelegatedRuntime(
   };
 
   return {
+    pruneExpiredMcpData: () =>
+      createMcpOperationalStore(database).pruneExpiredMcpData(new Date(), 500),
     reviews: createReportReviewReferenceStore(createBotDelegationDatabase(deps.prisma)),
     async validateReportResources(execution): Promise<void> {
       const p = execution.preconditions;
@@ -185,7 +180,7 @@ export function createBotDelegatedRuntime(
           throw new ActionDeniedError('stale_state');
       }
     },
-    ...createDelegatedWorkerAdmission({ store, access, native }),
+    ...createDelegatedWorkerAdmission({ store, access, native, enabled: isMcpEnabled }),
     reconcileNativeEnforcement: async (id) =>
       observeNativeEnforcement(deps.client, await native.reconcileNativeEnforcement(id)),
   };

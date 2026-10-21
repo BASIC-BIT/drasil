@@ -49,3 +49,29 @@ it('imports disabled issuer routes without auth secrets', async () => {
     ).status
   ).toBe(404);
 });
+it('validates an explicit MCP-owned rotation ring and separate operational keys', () => {
+  vi.stubEnv('DRASIL_MCP_ENABLED', 'true');
+  vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://drasil.example');
+  vi.stubEnv('DRASIL_MCP_AUTH_SECRET', 'a'.repeat(40));
+  vi.stubEnv('DRASIL_MCP_CURSOR_SECRET', 'b'.repeat(40));
+  vi.stubEnv('DRASIL_MCP_IP_HASH_SECRET', 'c'.repeat(40));
+  vi.stubEnv(
+    'DRASIL_MCP_AUTH_SECRETS',
+    JSON.stringify([
+      { version: 2, value: 'd'.repeat(40) },
+      { version: 1, value: 'a'.repeat(40) },
+    ])
+  );
+  expect(getMcpConfig()?.authSecrets?.map((e) => e.version)).toEqual([2, 1]);
+  vi.stubEnv(
+    'DRASIL_MCP_AUTH_SECRETS',
+    JSON.stringify([
+      { version: 2, value: 'd'.repeat(40) },
+      { version: 2, value: 'a'.repeat(40) },
+    ])
+  );
+  expect(() => getMcpConfig()).toThrow('Duplicate');
+  vi.stubEnv('DRASIL_MCP_AUTH_SECRETS', '');
+  vi.stubEnv('DRASIL_MCP_IP_HASH_SECRET', 'b'.repeat(40));
+  expect(() => getMcpConfig()).toThrow('distinct');
+});

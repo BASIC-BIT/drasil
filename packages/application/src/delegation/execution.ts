@@ -1,3 +1,4 @@
+import type { McpOperationalPort } from './operations';
 import { ActionDeniedError } from '../results';
 import {
   setupFailureDefinitions,
@@ -8,7 +9,7 @@ import type { ActionContext } from '../context';
 import { workflowDefinitions, type HumanCommand } from './commands';
 import { confirmationRequirement } from './confirmationPolicy';
 import { createIntentService, IntentError } from './intents';
-import type { DelegatedAccess } from './access';
+import type { DelegatedAccess, AccessDecision } from './access';
 import type {
   ActionCompletion,
   ConfirmationMethod,
@@ -331,24 +332,32 @@ export interface DelegatedActionService {
   status(principal: DelegatedPrincipal, executionId: string): Promise<PublicActionResult>;
   cancel(principal: DelegatedPrincipal, confirmationId: string): Promise<PublicActionResult>;
 }
-export function createDelegatedActionService(deps: {
+interface DelegatedActionServiceDependencies {
   readonly store: DelegationStore;
   readonly access: DelegatedAccess;
   readonly resolver: IntentResolver;
   readonly direct: DirectActionExecutor;
   readonly now?: () => number;
+  readonly operations?: McpOperationalPort;
   readonly waitForExecution?: (
     work: Promise<PublicActionResult>,
     pending: () => PublicActionResult
   ) => Promise<PublicActionResult>;
-}): DelegatedActionService {
+}
+function createCoreActionService(deps: DelegatedActionServiceDependencies): DelegatedActionService {
   const intents = createIntentService(deps);
   async function safe(work: () => Promise<PublicActionResult>): Promise<PublicActionResult> {
     try {
       return await work();
     } catch (error) {
       if (error instanceof IntentError || error instanceof ActionDeniedError)
-        return { state: 'denied', code: error.code };
+        return {
+          state: 'denied',
+          code: error.code,
+          ...(error instanceof IntentError && error.retryAfterSeconds
+            ? { retryAfterMs: error.retryAfterSeconds * 1000 }
+            : {}),
+        };
       throw error;
     }
   }
@@ -386,7 +395,9 @@ export function createDelegatedActionService(deps: {
     }
     if (execution.startedAt || execution.completedAt) return projectExecution(execution);
     const admitted = await deps.store.startDirectExecution(execution.executionId, () =>
-      deps.access.authorizeWorkflow(principal, execution.guildId, execution.command)
+      deps.operations && !deps.operations.enabled()
+        ? Promise.resolve({ kind: 'denied' as const, reason: 'mcp_disabled' })
+        : deps.access.authorizeWorkflow(principal, execution.guildId, execution.command)
     );
     if (admitted.kind === 'denied') return { state: 'denied', code: admitted.code };
     if (admitted.kind !== 'new_execution')
@@ -429,7 +440,7 @@ export function createDelegatedActionService(deps: {
       ? deps.waitForExecution(work, () => projectExecution(admitted.execution))
       : work;
   }
-  return {
+  const service: DelegatedActionService = {
     submit: (principal, invocation) =>
       safe(async () => {
         const intent = await intents.prepareIntent(principal, invocation);
@@ -467,5 +478,158 @@ export function createDelegatedActionService(deps: {
         const intent = await intents.cancelIntent(principal, id);
         return { state: 'denied', code: intent?.state ?? 'not_found' };
       }),
+  };
+  return service;
+}
+/** Availability rejection is never a definitive intent denial. */
+class OperationalAdmissionError extends Error {
+  constructor(readonly result: PublicActionResult) {
+    super('MCP operational admission unavailable.');
+  }
+}
+export function createDelegatedActionService(
+  deps: DelegatedActionServiceDependencies
+): DelegatedActionService {
+  if (!deps.operations) return createCoreActionService(deps);
+  const operations = deps.operations;
+  async function invoke(
+    principal: DelegatedPrincipal,
+    category: 'read' | 'submission',
+    guildId: string | undefined,
+    work: (
+      service: DelegatedActionService,
+      access: DelegatedAccess,
+      chargeCaller: () => Promise<void>
+    ) => Promise<PublicActionResult>,
+    binding: Partial<IntentRecord> = {}
+  ): Promise<PublicActionResult> {
+    let charged = false;
+    async function charge(decision?: AccessDecision): Promise<void> {
+      if (charged) return;
+      charged = true;
+      if (decision?.kind === 'allowed' && guildId && decision.guildId !== guildId)
+        throw new OperationalAdmissionError({ state: 'denied', code: 'binding_mismatch' });
+      const accountingGuild = decision?.kind === 'allowed' ? decision.guildId : undefined;
+      const budget = await operations.checkMcpLimit(
+        { ...principal, guildId: accountingGuild },
+        category
+      );
+      if (budget.kind === 'limited')
+        throw new OperationalAdmissionError({
+          state: 'denied',
+          code: 'rate_limited',
+          retryAfterMs: budget.retryAfterSeconds * 1000,
+        });
+    }
+    async function authorize(pending: Promise<AccessDecision>): Promise<AccessDecision> {
+      const decision = await pending;
+      // Charge from the exact decision returned to core, before private resolution or effects.
+      await charge(decision);
+      return decision;
+    }
+    const access: DelegatedAccess = {
+      ...deps.access,
+      authorizeWorkflowId: (...args): Promise<AccessDecision> =>
+        authorize(deps.access.authorizeWorkflowId(...args)),
+      authorizeWorkflow: (...args): Promise<AccessDecision> =>
+        authorize(deps.access.authorizeWorkflow(...args)),
+      authorizeRead: (...args): Promise<AccessDecision> =>
+        authorize(deps.access.authorizeRead(...args)),
+    };
+    let result: PublicActionResult;
+    if (!operations.enabled()) result = { state: 'denied', code: 'mcp_disabled' };
+    else {
+      try {
+        try {
+          result = await work(createCoreActionService({ ...deps, access }), access, () => charge());
+        } finally {
+          await charge();
+        } // Invalid/missing owned resources still count caller attempts.
+      } catch (error) {
+        if (!(error instanceof OperationalAdmissionError)) throw error;
+        result = error.result;
+      }
+    }
+    await operations
+      .recordMcpAudit({
+        event: category === 'read' ? 'observation' : 'admission',
+        ...principal,
+        guildId: result.guildId ?? guildId,
+        workflowId: result.operation ?? binding.workflowId,
+        confirmationMethod: binding.confirmationMethod ?? undefined,
+        executionId: result.executionId,
+        requestId: result.requestId,
+        outcome:
+          result.code === 'rate_limited'
+            ? 'limited'
+            : result.code === 'expired'
+              ? 'expired'
+              : result.code === 'cancelled'
+                ? 'cancelled'
+                : result.state,
+      })
+      .catch(() => undefined);
+    return result;
+  }
+  async function saved(principal: DelegatedPrincipal, id: string): Promise<IntentRecord | null> {
+    // Optional accounting context, never an authorization shortcut before confirm's durable denial.
+    try {
+      return await deps.store.loadIntent(principal, id);
+    } catch {
+      return null;
+    }
+  }
+  return {
+    submit: (principal, invocation) =>
+      invoke(
+        principal,
+        [
+          'preview_account_quarantine',
+          'preview_case_message_deletion',
+          'prepare_report_ban_review',
+          'audit_integrity',
+          'audit_case_role_lockdown',
+        ].includes(invocation.workflowId) || record(invocation.input).mode === 'preview'
+          ? 'read'
+          : 'submission',
+        invocation.guildId,
+        (service) => service.submit(principal, invocation),
+        { workflowId: invocation.workflowId }
+      ),
+    async confirm(principal, id, method): Promise<PublicActionResult> {
+      const intent = await saved(principal, id);
+      return invoke(
+        principal,
+        'submission',
+        intent?.guildId,
+        (service) => service.confirm(principal, id, method),
+        { ...intent, confirmationMethod: method }
+      );
+    },
+    async cancel(principal, id): Promise<PublicActionResult> {
+      const intent = await saved(principal, id);
+      return invoke(
+        principal,
+        'submission',
+        intent?.guildId,
+        async (service, access, chargeCaller) => {
+          // Cancellation remains ownership-only; this decision supplies accounting context alone.
+          if (intent) await access.authorizeWorkflow(principal, intent.guildId, intent.command);
+          else await chargeCaller();
+          return service.cancel(principal, id);
+        },
+        intent ?? {}
+      );
+    },
+    async status(principal, id): Promise<PublicActionResult> {
+      const execution = await deps.store.loadExecution(principal, id);
+      return invoke(
+        principal,
+        'read',
+        execution?.guildId,
+        (service) => service.status(principal, id),
+        execution ?? {}
+      );
+    },
   };
 }

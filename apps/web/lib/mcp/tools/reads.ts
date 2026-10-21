@@ -1,3 +1,6 @@
+import { checkMcpLimit } from '../limits';
+import { recordMcpAudit } from '../audit';
+import type { LimitSubject, LimitCategory, LimitDecision, AccessDenial } from '@drasil/application';
 import { createWebReportResolution } from '../adapters/reports';
 import { ActionDeniedError } from '@drasil/application';
 import { z } from 'zod';
@@ -45,7 +48,8 @@ export interface McpReadToolDefinition extends McpPublicToolDefinition<QueryResu
   readonly resultContract: 'query';
 }
 export function createMcpReadTools(
-  queries: Pick<ReturnType<typeof createMcpQueries>, 'execute'>
+  queries: Pick<ReturnType<typeof createMcpQueries>, 'execute'>,
+  limit?: (subject: LimitSubject, category: LimitCategory) => Promise<LimitDecision>
 ): readonly McpReadToolDefinition[] {
   return querySchema.options.map((option) => {
     const kind = option.shape.kind.value;
@@ -69,7 +73,27 @@ export function createMcpReadTools(
       async handler(principal, input) {
         const parsed = inputSchema.safeParse(input);
         if (!parsed.success) return { kind: 'denied', reason: 'invalid_page' };
-        return queries.execute(principal, { ...parsed.data, kind });
+        const query = { ...parsed.data, kind };
+        let charged = false;
+        async function admit(guildId?: string): Promise<AccessDenial | undefined> {
+          charged = true;
+          if (guildId && (!('guildId' in query) || query.guildId !== guildId))
+            return { kind: 'denied', reason: 'binding_mismatch' };
+          const decision = await limit!({ ...principal, guildId }, 'read');
+          return decision.kind === 'limited'
+            ? {
+                kind: 'denied',
+                reason: 'rate_limited',
+                retryAfterSeconds: decision.retryAfterSeconds,
+              }
+            : undefined;
+        }
+        const result = await queries.execute(principal, query, limit ? admit : undefined);
+        if (limit && !charged) {
+          const denied = await admit();
+          if (denied) return denied;
+        }
+        return result;
       },
     };
   });
@@ -98,6 +122,16 @@ export function createWebMcpReadTools(cursorSecret: string): readonly McpReadToo
         if (guild.id !== guildId) throw new Error('Guild label binding mismatch');
         return guild.name ?? guildId;
       },
-    })
+    }),
+    async (subject, category) => {
+      const decision = await checkMcpLimit(subject, category);
+      if ('userId' in subject)
+        await recordMcpAudit({
+          event: 'observation',
+          ...subject,
+          outcome: decision.kind === 'limited' ? 'limited' : undefined,
+        });
+      return decision;
+    }
   );
 }

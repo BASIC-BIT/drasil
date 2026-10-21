@@ -1,3 +1,7 @@
+import { createMcpLimits } from '../limits';
+import { boundMetadataTransport } from '../metadata';
+import { registrationIdentity } from '../ingress';
+import { createProviderLogger } from '../audit';
 import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import { betterAuth, APIError } from '@drasil/mcp-runtime/auth';
@@ -100,7 +104,10 @@ export function createMcpIssuer({ pool, config, discord }: McpIssuerDependencies
       delegation_grant_version: reference.frozen_grant_version,
     };
   }
+  const limits = createMcpLimits(createWebDelegationDatabase(pool));
   const auth = betterAuth({
+    logger: createProviderLogger(),
+    secrets: config.authSecrets ?? [{ version: 1, value: config.authSecret }],
     baseURL: config.origin,
     basePath: '/api/mcp-auth',
     secret: config.authSecret,
@@ -179,13 +186,29 @@ export function createMcpIssuer({ pool, config, discord }: McpIssuerDependencies
         },
         extensions: [{ claims: { accessToken: accessClaims } }],
       }),
-      cimd({ fetchClientMetadataResource, metadataProfile: 'mcp-2026-07-28' }),
+      cimd({
+        fetchClientMetadataResource: boundMetadataTransport(
+          limits.acquireMetadata,
+          fetchClientMetadataResource
+        ),
+        metadataProfile: 'mcp-2026-07-28',
+        metadataFetchPolicy: {
+          minimumFetchInterval: 1000,
+          maximumConcurrentFetches: 16,
+          maximumConcurrentFetchesPerOrigin: 4,
+          maximumFetchesPerMinute: 120,
+          maximumFetchesPerOriginPerMinute: 30,
+        },
+      }),
     ],
   });
   /** Only the maintained provider handles protocol state, signatures, codes and tokens. */
   async function handler(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname.slice('/api/mcp-auth'.length);
+    // Reject alternate spellings before the provider router can normalize them around admission.
+    if (path.includes('%') || path.includes('//') || path.endsWith('/'))
+      return new Response(null, { status: 404 });
     // Client/resource management belongs to operators, not issuer browser sessions or DCR callers.
     if (
       path.startsWith('/admin/') ||
@@ -194,6 +217,22 @@ export function createMcpIssuer({ pool, config, discord }: McpIssuerDependencies
       )
     )
       return new Response(null, { status: 404 });
+    if (path === '/oauth2/register') {
+      const identity = registrationIdentity(request, config.ipHashSecret);
+      if (!identity) return Response.json({ error: 'registration_unavailable' }, { status: 503 });
+      const budget = await limits.checkMcpLimit(
+        { registrationIpHash: identity.hash },
+        'registration'
+      );
+      if (budget.kind === 'limited')
+        return Response.json(
+          { error: 'rate_limited' },
+          { status: 429, headers: { 'Retry-After': String(budget.retryAfterSeconds) } }
+        );
+      const headers = new Headers(request.headers);
+      headers.set('x-forwarded-for', identity.ip);
+      request = new Request(request, { headers });
+    }
     if (path === '/oauth2/authorize') {
       if (request.method !== 'GET')
         return new Response(null, { status: 405, headers: { Allow: 'GET' } });

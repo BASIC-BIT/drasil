@@ -15,6 +15,8 @@ export interface McpConfig {
   resource: string;
   authSecret: string;
   cursorSecret: string;
+  ipHashSecret?: string;
+  authSecrets?: { version: number; value: string }[];
 }
 /** Lazy: disabled deployments and build-time imports require no MCP secrets. */
 export function getMcpConfig(): McpConfig | null {
@@ -38,11 +40,48 @@ export function getMcpConfig(): McpConfig | null {
   if (authSecret.length < 32 || cursorSecret.length < 32 || authSecret === cursorSecret) {
     throw new Error('MCP requires distinct auth and cursor secrets of at least 32 characters.');
   }
+  const ipHashSecret = readOptionalEnv('DRASIL_MCP_IP_HASH_SECRET');
+  const authSecrets = readAuthSecrets(authSecret);
+  if (
+    (ipHashSecret &&
+      (ipHashSecret.length < 32 || ipHashSecret === authSecret || ipHashSecret === cursorSecret)) ||
+    authSecrets.some((entry) => entry.value === cursorSecret || entry.value === ipHashSecret)
+  )
+    throw new Error('MCP operational keys must be distinct.');
   return {
     origin,
     issuer: `${origin}/api/mcp-auth`,
     resource: `${origin}/api/mcp`,
     authSecret,
     cursorSecret,
+    ipHashSecret: ipHashSecret ?? undefined,
+    authSecrets,
   };
+}
+
+/** Explicit MCP ownership prevents ambient BETTER_AUTH_SECRETS from replacing this issuer's key. */
+function readAuthSecrets(legacy: string): { version: number; value: string }[] {
+  const raw = readOptionalEnv('DRASIL_MCP_AUTH_SECRETS');
+  if (!raw) return [{ version: 1, value: legacy }];
+  const value: unknown = JSON.parse(raw);
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.some(
+      (e: unknown) =>
+        typeof e !== 'object' ||
+        e === null ||
+        !('version' in e) ||
+        !Number.isSafeInteger(e.version) ||
+        Number(e.version) < 1 ||
+        !('value' in e) ||
+        typeof e.value !== 'string' ||
+        e.value.length < 32
+    )
+  )
+    throw new Error('Invalid MCP issuer secret versions.');
+  const entries = value as { version: number; value: string }[];
+  if (new Set(entries.map((e) => e.version)).size !== entries.length)
+    throw new Error('Duplicate MCP issuer secret version.');
+  return entries;
 }

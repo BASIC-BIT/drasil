@@ -9,6 +9,7 @@ import { getPrismaClient } from '../testDb';
 import { ModerationActionRequestRepository } from '../../repositories/ModerationActionRequestRepository';
 import { ModerationActionRequestService } from '../../services/ModerationActionRequestService';
 import {
+  decodeQueuedAction,
   createDelegatedAccess,
   resolveCasePreconditions,
   readCasePolicy,
@@ -706,5 +707,25 @@ integration('MCP native enforcement', () => {
       "select 1 from pg_class c, lateral aclexplode(coalesce(c.relacl,acldefault('r',c.relowner))) a where c.oid='public.mcp_native_enforcements'::regclass and a.grantee=0"
     );
     expect(publicPrivileges.rows).toHaveLength(0);
+  });
+  it('checks the enable flag at the actual native send fence after generic admission', async () => {
+    const f = await fixture();
+    const admission = await f.delegation.authorizeDelegatedRequest(
+      f.request,
+      false,
+      decodeQueuedAction(f.request)
+    );
+    if (admission.kind !== 'new_execution') throw new Error('Expected admission');
+    let enabled = false;
+    const native = createNativeEnforcementStore(f.database, () => enabled);
+    await expect(native.start(admission.execution)).rejects.toThrow('mcp_disabled');
+    expect((await pool.query('select * from mcp_native_enforcements')).rowCount).toBe(0);
+    enabled = true;
+    const token = await native.start(admission.execution);
+    enabled = false;
+    await native.acknowledge(admission.execution.executionId, token);
+    expect((await native.reconcileNativeEnforcement(admission.execution.executionId)).state).toBe(
+      'partial'
+    );
   });
 });

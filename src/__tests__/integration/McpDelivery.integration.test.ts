@@ -127,6 +127,7 @@ integration.each(['pg', 'prisma'] as const)('MCP durable delivery via %s', (driv
     const receipt = await accept();
     const repeated = await service().submit(principal, invocation);
     expect(repeated.executionId).toBe(receipt.executionId);
+    await new ModerationActionRequestRepository(getPrismaClient()).claimNext();
     const request = (await pool.query('select * from moderation_action_requests')).rows[0];
     const worker = createDelegatedWorkerAdmission({ store, access });
     expect(
@@ -398,6 +399,7 @@ integration.each(['pg', 'prisma'] as const)('MCP durable delivery via %s', (driv
     });
     const receipt = await action.confirm(principal, pending.confirmationId!, 'client_confirmation');
     const worker = createDelegatedWorkerAdmission({ store, access });
+    await new ModerationActionRequestRepository(getPrismaClient()).claimNext();
     let request = (
       await pool.query('select * from moderation_action_requests where id=$1', [receipt.requestId])
     ).rows[0];

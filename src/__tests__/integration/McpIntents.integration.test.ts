@@ -235,13 +235,13 @@ integration.each(['pg', 'prisma'] as const)('MCP intents via %s', (driver) => {
   });
   it('bounds pending intents per connection without counting expired entries', async () => {
     const original = await service().prepareIntent(principal, invocation);
-    for (let index = 1; index < 128; index++) {
-      await store.saveIntent(principal, {
-        ...original,
-        confirmationId: `capacity-${index}`,
-        idempotencyKey: `capacity-${index}`,
-      });
-    }
+    // Historical live intents fill capacity independently of this minute's insertion budget.
+    await pool.query(
+      `insert into mcp_intents (confirmation_id,connection_id,user_id,client_id,grant_version,idempotency_key,invocation_digest,input,resolved,created_at,expires_at)
+      select 'capacity-'||n,connection_id,user_id,client_id,grant_version,'capacity-'||n,invocation_digest,input,resolved,created_at,expires_at
+      from mcp_intents cross join generate_series(1,127)n where confirmation_id=$1`,
+      [original.confirmationId]
+    );
     await expect(
       service().prepareIntent(principal, { ...invocation, idempotencyKey: 'overflow' })
     ).rejects.toThrow('capacity');

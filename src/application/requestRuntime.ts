@@ -55,6 +55,7 @@ export async function prepareQueuedRequest(input: {
       : { kind: 'ordinary' as const };
   if (admission.kind === 'denied')
     return {
+      ...(admission.persistence ? { persistence: admission.persistence } : {}),
       execute: async () => ({
         action_type: 'delegated_admission',
         state: 'denied',
@@ -63,16 +64,7 @@ export async function prepareQueuedRequest(input: {
     };
   if (admission.kind === 'already_bound')
     return {
-      ...(decoded.command.kind === 'ban_user' ||
-      decoded.command.kind === 'kick_user' ||
-      decoded.command.kind === 'prepare_report_ban_review' ||
-      decoded.command.kind === 'review_uncertain_report_ban' ||
-      decoded.command.kind === 'confirm_intake_candidate' ||
-      ['cleanup', 'captcha', 'quarantine'].includes(
-        workflowDefinitions.find((e) => e.id === admission.execution.workflowId)?.family ?? ''
-      )
-        ? { persistence: 'observe_only' as const }
-        : {}),
+      persistence: 'observe_only',
       execute: async (): Promise<DelegatedWorkerOutcome> => {
         const native =
           decoded.command.kind === 'ban_user' || decoded.command.kind === 'kick_user'

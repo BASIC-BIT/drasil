@@ -52,9 +52,12 @@ export async function withAuthorizedRead<T>(
   access: DelegatedAccess,
   principal: DelegatedPrincipal,
   query: DelegatedReadQuery,
-  read: (binding: AccessBinding) => Promise<T>
+  read: (binding: AccessBinding) => Promise<T>,
+  admit?: (guildId?: string) => Promise<AccessDenial | undefined>
 ): Promise<AccessDenial | { readonly kind: 'allowed'; readonly value: T }> {
   const binding = await access.authorizeRead(principal, query);
+  const denied = await admit?.(binding.kind === 'allowed' ? binding.guildId : undefined);
+  if (denied) return denied;
   if (binding.kind === 'denied') return binding;
   return { kind: 'allowed', value: await read(binding) };
 }

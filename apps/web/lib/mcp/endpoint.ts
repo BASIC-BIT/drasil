@@ -1,3 +1,4 @@
+import { wrapMcpBody } from './body';
 import { createDelegationStore } from '@drasil/application/postgres';
 import { createMcpHandler, createMcpToolCatalog } from './server';
 import { createWebMcpReadTools } from './tools/reads';
@@ -14,6 +15,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
     const store = createDelegationStore(createWebDelegationDatabase());
     handler = createMcpHandler({
       config,
+      wrapBody: wrapMcpBody,
       service,
       tools: createMcpToolCatalog({ service, reads: createWebMcpReadTools(config.cursorSecret) }),
       loadIntent: store.loadIntent,

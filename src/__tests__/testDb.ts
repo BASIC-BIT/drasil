@@ -61,6 +61,8 @@ export async function truncateAllTables(): Promise<void> {
   const prisma = getPrismaClient();
   await prisma.$executeRawUnsafe(`
     TRUNCATE TABLE
+      mcp_rate_buckets,
+      mcp_metadata_permits,
       mcp_connection_guilds,
       mcp_connections,
       admin_actions,

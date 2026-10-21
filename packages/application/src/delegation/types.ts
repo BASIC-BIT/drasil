@@ -288,7 +288,7 @@ export type WorkerAdmission =
       readonly execution: ExecutionRecord;
     }
   | { readonly kind: 'already_bound'; readonly execution: ExecutionRecord }
-  | { readonly kind: 'denied'; readonly code: string };
+  | { readonly kind: 'denied'; readonly code: string; readonly persistence?: 'observe_only' };
 export interface DelegatedQueueAdmission {
   readonly request: QueuedRow;
   readonly action: DecodedQueuedAction;

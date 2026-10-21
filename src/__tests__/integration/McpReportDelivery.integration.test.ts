@@ -427,6 +427,9 @@ integration('MCP report durable choices', () => {
         intent.confirmationId,
         'client_confirmation'
       );
+      expect((await new ModerationActionRequestRepository(getPrismaClient()).claimNext())?.id).toBe(
+        accepted.queueRequestId
+      );
       if (stale)
         await pool.query(
           "update report_intakes set metadata=jsonb_build_object('report_ban_operation_id','claimed') where id=$1",

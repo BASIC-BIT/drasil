@@ -401,12 +401,16 @@ function paginate(
   return { ...result, items, nextCursor, truncated };
 }
 export function createMcpQueries(deps: McpQueryDependencies): {
-  execute(principal: DelegatedPrincipal, input: unknown): Promise<QueryResult>;
+  execute(
+    principal: DelegatedPrincipal,
+    input: unknown,
+    admit?: (guildId?: string) => Promise<AccessDenial | undefined>
+  ): Promise<QueryResult>;
 } {
   if (deps.cursorSecret.trim().length < 32)
     throw new Error('MCP cursor secret must have at least 32 characters.');
   return {
-    async execute(principal, input) {
+    async execute(principal, input, admit) {
       const parsed = querySchema.safeParse(input);
       if (!parsed.success) return { kind: 'denied', reason: 'invalid_page' };
       const query = parsed.data;
@@ -425,6 +429,10 @@ export function createMcpQueries(deps: McpQueryDependencies): {
       try {
         if (query.kind === 'get_capabilities') {
           const decision = await deps.access.getCapabilities(principal, query.guildId);
+          const denied = await admit?.(
+            decision.kind === 'allowed' ? decision.capabilities.guildId : undefined
+          );
+          if (denied) return denied;
           if (decision.kind === 'denied') return decision;
           const capabilities = decision.capabilities;
           return paginate(
@@ -445,6 +453,8 @@ export function createMcpQueries(deps: McpQueryDependencies): {
           );
         }
         if (query.kind === 'list_guilds') {
+          const denied = await admit?.();
+          if (denied) return denied;
           const page = await deps.access.listEligibleGuilds(principal, {
             limit: query.limit,
             cursor: after?.id ?? null,
@@ -512,7 +522,8 @@ export function createMcpQueries(deps: McpQueryDependencies): {
                 };
             }
             return paginate(projected, 'limit' in query ? query.limit : 1, sign);
-          }
+          },
+          admit
         );
         return authorized.kind === 'denied' ? authorized : authorized.value;
       } catch {

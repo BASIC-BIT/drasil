@@ -319,7 +319,8 @@ it('discovers the complete fixed catalog and preserves query envelopes over real
   ).toBe(MCP_RESULT_METADATA_BYTES);
   expect(h.queries.execute).toHaveBeenCalledWith(
     h.actor,
-    expect.objectContaining({ kind: 'list_guilds' })
+    expect.objectContaining({ kind: 'list_guilds' }),
+    undefined
   );
 });
 it('returns a saved confirmation before any mutation', async () => {
