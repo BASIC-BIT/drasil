@@ -177,3 +177,83 @@ it('rejects revoked authority at execution', async () => {
   expect(f.authority.loadFresh).toHaveBeenCalledWith('guild', 'moderator-1');
   expect(f.captcha.requestChallenge).not.toHaveBeenCalled();
 });
+
+it('denies delegated selected-message case opening when the fresh case adapter is absent', async () => {
+  const envelope = {
+    ...request(),
+    actor_surface: 'mcp',
+    action_type: ModerationActionRequestType.OPEN_ADMIN_CASE,
+    metadata: {
+      intent: 'native_case_open',
+      source_channel_id: 'channel',
+      source_message_id: 'message',
+    },
+  };
+  const cases = {
+    execute: jest.fn(async () => ({
+      kind: 'outcome',
+      outcome: {
+        kind: 'open_admin_case',
+        result: { opened: true, caseRoleActive: true, caseRoleAttempted: true },
+      },
+    })),
+  };
+  const runtime = {
+    cases,
+    casesForExecution: undefined,
+    caseConfirmations: { recordVerified: jest.fn() },
+    delegation: {
+      authorizeDelegatedRequest: async () => ({
+        kind: 'new_execution',
+        execution: { workflowId: 'open_admin_case_moderator' },
+      }),
+      complete: jest.fn(),
+    },
+  };
+  const prepared = await prepareQueuedRequest({
+    runtime: runtime as never,
+    request: envelope,
+    analytics: {} as never,
+  });
+  expect(await prepared.execute()).toMatchObject({
+    state: 'denied',
+    code: 'case_runtime_unavailable',
+  });
+  expect(cases.execute).not.toHaveBeenCalled();
+});
+
+it.each([false, true])(
+  'native replay observation cannot overwrite a receipt, even when unavailable=%s',
+  async (unavailable) => {
+    const { ModerationActionRequestService } =
+      await import('../../services/ModerationActionRequestService');
+    const repository =
+      mock<
+        import('../../repositories/ModerationActionRequestRepository').IModerationActionRequestRepository
+      >();
+    const envelope = {
+      ...request(),
+      actor_surface: 'mcp',
+      action_type: ModerationActionRequestType.BAN_USER,
+      metadata: {},
+    };
+    repository.claimReportBanReconciliation.mockResolvedValue(null);
+    repository.claimNext.mockResolvedValueOnce(envelope).mockResolvedValue(null);
+    const runtime = {
+      delegation: {
+        authorizeDelegatedRequest: async () => ({
+          kind: 'already_bound',
+          execution: { executionId: 'execution' },
+        }),
+        reconcileNativeEnforcement: async () => {
+          if (unavailable) throw new Error('read unavailable');
+          return { state: 'uncertain', code: 'native_outcome_unknown' };
+        },
+      },
+    };
+    const service = new ModerationActionRequestService(repository, runtime as never, {} as never);
+    await service.processPendingRequests(1);
+    expect(repository.complete).not.toHaveBeenCalled();
+    expect(repository.fail).not.toHaveBeenCalled();
+  }
+);

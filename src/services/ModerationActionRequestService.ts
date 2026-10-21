@@ -133,6 +133,16 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       analytics: this.productAnalyticsService,
       recovery,
     });
+    if (execution.persistence === 'observe_only') {
+      // A replay is not the execution owner; neither success nor read failure may
+      // overwrite a winner's durable queue outcome.
+      try {
+        await execution.execute();
+      } catch {
+        console.warn('Native enforcement observation unavailable.');
+      }
+      return;
+    }
     const outcome = await execution.execute();
     if (
       recovery &&

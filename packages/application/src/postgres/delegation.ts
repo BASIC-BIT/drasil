@@ -1,3 +1,4 @@
+import { nativeCompletion } from './nativeEnforcement';
 import { projectHumanOutcome } from '../delegation/execution';
 import { encodeQueuedAction } from '../requests/encode';
 import { delegatedDeliveryBindingSchema, type QueuedRow } from '../requests/decode';
@@ -663,6 +664,12 @@ function createExecutionStore(database: DelegationDatabase): ExecutionStore {
         execution.connectionId !== principal.connectionId
       )
         return null;
+      const native =
+        execution.command.kind === 'ban_user' || execution.command.kind === 'kick_user'
+          ? await nativeCompletion(database, execution.executionId)
+          : null;
+      if (native?.state === 'uncertain')
+        return { ...execution, outcome: { kind: 'delegated_terminal', result: native } };
       if (execution.queueRequestId) {
         const result = await database.query<{ status: string; result: unknown }>(
           'select status,result from moderation_action_requests where id=$1::uuid',
@@ -682,11 +689,13 @@ function createExecutionStore(database: DelegationDatabase): ExecutionStore {
             ...execution,
             outcome: {
               kind: 'delegated_terminal',
-              result: { state: execution.startedAt ? 'uncertain' : 'failed' },
+              result: native ?? { state: execution.startedAt ? 'uncertain' : 'failed' },
             },
           };
       }
-      return execution;
+      return native && (!execution.outcome || execution.outcome.result.state === 'uncertain')
+        ? { ...execution, outcome: { kind: 'delegated_terminal', result: native } }
+        : execution;
     },
     startDirectExecution: (id, authorize) => admit(id, authorize),
     async admitQueuedExecution(input, authorize): Promise<WorkerAdmission> {

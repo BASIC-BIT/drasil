@@ -111,7 +111,7 @@ it('decodes shipped repair rows without inventing administrator intent', () => {
   });
   expect(() =>
     queuedCommandSchema.parse({ ...decoded.command, intent: 'administrator_repair' })
-  ).toThrow();
+  ).not.toThrow();
 });
 it('decodes old dashboard openings with explicit intent without changing their storage shape', () => {
   const row = {
@@ -136,7 +136,7 @@ it('decodes old dashboard openings with explicit intent without changing their s
   expect(encodeQueuedAction(decoded.context, decoded.command).metadata).toEqual(row.metadata);
   expect(() =>
     queuedCommandSchema.parse({ ...decoded.command, intent: 'native_case_open' })
-  ).toThrow();
+  ).not.toThrow();
   expect(decodeQueuedAction({ ...row, actor_surface: 'discord_interaction' }).command).toEqual(
     decoded.command
   );
@@ -236,4 +236,87 @@ it('preserves the distinct observed-alert codec origin, key and exact metadata',
     idempotencyKey: 'web:observed-action:open_case:guild-1:det-1',
     metadata: { inbox_action: 'open_case', reason: null, requested_surface: 'web' },
   });
+});
+
+it.each([
+  {
+    kind: 'ban_user',
+    targetUserId: 'target',
+    reason: null,
+    intent: 'slash_command',
+    selectedMessage: null,
+  },
+  {
+    kind: 'ban_user',
+    targetUserId: 'target',
+    reason: null,
+    intent: 'native_action',
+    selectedMessage: { channelId: '123456789012345678', messageId: '234567890123456789' },
+  },
+  { kind: 'kick_user', targetUserId: 'target', reason: null, selectedMessage: null },
+  {
+    kind: 'open_admin_case',
+    targetUserId: 'target',
+    reason: null,
+    intent: 'native_case_open',
+    selectedMessage: null,
+    detectionEventId: null,
+  },
+  {
+    kind: 'repair_active_case',
+    targetUserId: 'target',
+    caseId: 'case',
+    intent: 'administrator_repair',
+    mode: 'repair_thread',
+  },
+])('preserves new native semantic delivery $kind $intent', (input) => {
+  const command = queuedCommandSchema.parse(input);
+  const encoded = encodeQueuedAction(context, command);
+  expect(
+    decodeQueuedAction({
+      id: context.requestId,
+      server_id: encoded.serverId,
+      actor_id: encoded.actorId,
+      actor_surface: encoded.actorSurface,
+      action_type: encoded.actionType,
+      target_user_id: encoded.targetUserId,
+      verification_event_id: encoded.verificationEventId,
+      detection_event_id: encoded.detectionEventId,
+      metadata: encoded.metadata,
+    }).command
+  ).toEqual(command);
+});
+it('rejects numeric selected-message snowflakes', () => {
+  expect(
+    queuedCommandSchema.safeParse({
+      kind: 'ban_user',
+      targetUserId: 'target',
+      reason: null,
+      selectedMessage: { channelId: Number('123456789012345678'), messageId: '234567890123456789' },
+    }).success
+  ).toBe(false);
+});
+
+it('retains an explicit empty optional case reason across delegated command digests', () => {
+  const command = queuedCommandSchema.parse({
+    kind: 'ban_case_user',
+    targetUserId: 'target',
+    caseId: 'case',
+    detectionEventId: null,
+    reason: '',
+  });
+  const encoded = encodeQueuedAction(context, command);
+  expect(
+    decodeQueuedAction({
+      id: context.requestId,
+      server_id: encoded.serverId,
+      actor_id: encoded.actorId,
+      actor_surface: encoded.actorSurface,
+      action_type: encoded.actionType,
+      target_user_id: encoded.targetUserId,
+      verification_event_id: encoded.verificationEventId,
+      detection_event_id: encoded.detectionEventId,
+      metadata: encoded.metadata,
+    }).command
+  ).toEqual(command);
 });

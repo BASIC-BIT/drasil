@@ -47,6 +47,23 @@ function encodeAction(context: ActionContext, input: QueuedCommand): EnqueueInpu
     targetUserId: command.targetUserId,
   };
   switch (command.kind) {
+    case 'ban_user':
+    case 'kick_user':
+      return {
+        ...base,
+        idempotencyKey: `${context.source}:native:${command.kind}:${context.guildId}:${context.requestId}`,
+        metadata: {
+          reason: command.reason,
+          requested_surface: context.source,
+          ...('intent' in command ? { intent: command.intent } : {}),
+          ...(command.selectedMessage
+            ? {
+                source_channel_id: command.selectedMessage.channelId,
+                source_message_id: command.selectedMessage.messageId,
+              }
+            : {}),
+        },
+      };
     case 'preview_case_message_deletion':
     case 'execute_case_message_deletion':
     case 'ban_case_user_with_message_cleanup':
@@ -111,6 +128,7 @@ function encodeAction(context: ActionContext, input: QueuedCommand): EnqueueInpu
                 source_message_id: command.selectedMessage.messageId,
               }
             : {}),
+          ...(command.intent === 'native_case_open' ? { intent: command.intent } : {}),
           web_action: command.kind,
         },
       };
@@ -131,9 +149,12 @@ function encodeAction(context: ActionContext, input: QueuedCommand): EnqueueInpu
         ...('detectionEventId' in command ? { detectionEventId: command.detectionEventId } : {}),
         idempotencyKey: `${context.source}:case-action:${command.kind === 'repair_active_case' ? command.mode : caseAction[command.kind]}:${context.guildId}:${command.caseId}`,
         metadata: {
+          ...(command.kind === 'repair_active_case' && command.intent === 'administrator_repair'
+            ? { intent: command.intent }
+            : {}),
           case_action:
             command.kind === 'repair_active_case' ? command.mode : caseAction[command.kind],
-          ...('reason' in command && command.reason ? { reason: command.reason } : {}),
+          ...('reason' in command && command.reason !== null ? { reason: command.reason } : {}),
           requested_surface: context.source,
         },
       };

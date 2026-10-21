@@ -1,6 +1,9 @@
+import { observeNativeEnforcement } from './nativeObservation';
 import type { Prisma, PrismaClient } from '../../db/prisma';
 import {
   createDelegationStore,
+  createNativeEnforcementStore,
+  type NativeEnforcementStore,
   type DelegationDatabase,
   type DelegationQueryClient,
   type DelegationSqlValue,
@@ -28,6 +31,8 @@ export function createBotDelegationDatabase(prisma: PrismaClient): DelegationDat
 
 import {
   createDelegatedAccess,
+  memberContextFor,
+  workflowDefinitions,
   parseQueuedRow,
   projectHumanOutcome,
   type DelegationStore,
@@ -35,6 +40,7 @@ import {
   type WorkerAdmission,
   type DecodedQueuedAction,
   type ExecutionRecord,
+  type PublicActionResult,
 } from '@drasil/application';
 import type { ModerationActionRequest } from '../../repositories/types';
 import type { BotCaseDependencies } from './cases';
@@ -42,6 +48,8 @@ import { createBotAuthority } from './authority';
 import { getCaseResponderSettings } from '../../utils/caseResponderSettings';
 
 export interface DelegatedWorkerRuntime {
+  readonly native?: NativeEnforcementStore;
+  reconcileNativeEnforcement?(executionId: string): Promise<PublicActionResult>;
   authorizeDelegatedRequest(
     request: ModerationActionRequest,
     recovery: boolean,
@@ -52,13 +60,35 @@ export interface DelegatedWorkerRuntime {
 export function createDelegatedWorkerAdmission(deps: {
   store: DelegationStore;
   access: DelegatedAccess;
+  native?: NativeEnforcementStore;
 }): DelegatedWorkerRuntime {
   return {
+    native: deps.native,
+    reconcileNativeEnforcement: deps.native?.reconcileNativeEnforcement,
     authorizeDelegatedRequest: (request, recovery, action) =>
       deps.store.admitQueuedExecution(
         { request: parseQueuedRow(request), action, recovery },
-        (principal, execution) =>
-          deps.access.authorizeWorkflow(principal, execution.guildId, execution.command)
+        async (principal, execution) => {
+          const authority = await deps.access.authorizeWorkflow(
+            principal,
+            execution.guildId,
+            execution.command
+          );
+          if (authority.kind === 'denied') return authority;
+          if ('selectedMessage' in execution.command && execution.command.selectedMessage) {
+            const definition = workflowDefinitions.find(
+              (entry) => entry.id === execution.workflowId
+            );
+            const context = definition && memberContextFor(definition);
+            if (!context) return { kind: 'denied', reason: 'permission_denied' };
+            return deps.access.authorizeRead(principal, {
+              kind: 'member_context',
+              guildId: execution.guildId,
+              ...context,
+            });
+          }
+          return authority;
+        }
       ),
     complete: (execution, outcome) =>
       deps.store.completeExecution(
@@ -108,5 +138,10 @@ export function createBotDelegatedRuntime(
       },
     },
   });
-  return createDelegatedWorkerAdmission({ store, access });
+  const native = createNativeEnforcementStore(createBotDelegationDatabase(deps.prisma));
+  return {
+    ...createDelegatedWorkerAdmission({ store, access, native }),
+    reconcileNativeEnforcement: async (id) =>
+      observeNativeEnforcement(deps.client, await native.reconcileNativeEnforcement(id)),
+  };
 }

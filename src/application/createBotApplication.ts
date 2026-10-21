@@ -1,3 +1,4 @@
+import { createDelegatedCaseActions } from './adapters/delegatedCases';
 import type { DelegatedWorkerRuntime } from './adapters/delegation';
 import {
   createBotSetupRuntime,
@@ -36,6 +37,7 @@ import {
   createAttentionActions,
   type AttentionActions,
   type CaseActions,
+  type ExecutionRecord,
 } from '@drasil/application';
 import type { Client } from 'discord.js';
 import type { IModerationQueueRepository } from '../repositories/ModerationQueueRepository';
@@ -59,6 +61,7 @@ export interface BotApplication {
   readonly detectionRuntime: BotDetectionRuntime;
   readonly attention: AttentionActions;
   readonly cases: CaseActions;
+  readonly casesForExecution?: (execution: ExecutionRecord) => CaseActions;
   readonly caseConfirmations: ReturnType<typeof createCaseConfirmationStore>;
   readonly caseRepository: BotCaseDependencies['verificationEventRepository'];
 }
@@ -110,6 +113,12 @@ export function createBotApplication(
     quarantineRuntime,
     detections: detectionRuntime.actions,
     detectionRuntime,
+    casesForExecution: (execution) =>
+      createDelegatedCaseActions(
+        { ...deps, confirmations: caseConfirmations.confirmations },
+        execution,
+        deps.delegation?.native
+      ),
     cases: createBotCaseActions({ ...deps, confirmations: caseConfirmations.confirmations }),
     caseConfirmations,
     caseRepository: deps.verificationEventRepository,

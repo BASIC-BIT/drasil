@@ -304,15 +304,16 @@ const fixtures = {
     metadata: { channel_id: 'channel' },
     outcome: { result: { action: 'updated', messageId: 'message' } },
   },
-} satisfies Record<QueuedCommand['kind'], Fixture>;
+} satisfies Record<Exclude<QueuedCommand['kind'], 'ban_user' | 'kick_user'>, Fixture>;
 
-const kinds = Object.keys(fixtures) as QueuedCommand['kind'][];
+const kinds = Object.keys(fixtures) as (keyof typeof fixtures)[];
 it('has exact schema, handler and shipped database enum coverage', () => {
   const expected = Object.values(ModerationActionRequestType).sort();
-  expect(expected).toHaveLength(40);
+  expect(expected).toHaveLength(42);
+  expect(kinds).toHaveLength(40);
   expect(Object.keys(queuedCommandSchemas).sort()).toEqual(expected);
   expect(Object.keys(queuedActionHandlers).sort()).toEqual(expected);
-  expect(kinds.slice().sort()).toEqual(expected);
+  expect([...kinds, 'ban_user', 'kick_user'].sort()).toEqual(expected);
 });
 it.each(kinds)('decodes and dispatches the shipped %s row with its receipt', async (kind) => {
   jest.useFakeTimers().setSystemTime(new Date('2026-10-20T00:00:00.000Z'));

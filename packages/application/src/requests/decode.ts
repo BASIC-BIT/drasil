@@ -54,6 +54,20 @@ export function decodeQueuedAction(row: unknown): DecodedQueuedAction {
     command = detectionCommand;
   } else {
     switch (parsed.action_type) {
+      case 'ban_user':
+      case 'kick_user':
+        command = queuedCommandSchema.parse({
+          ...target,
+          reason,
+          ...(parsed.action_type === 'ban_user'
+            ? { intent: metadata.intent ?? 'native_action' }
+            : {}),
+          selectedMessage:
+            metadata.source_channel_id || metadata.source_message_id
+              ? { channelId: metadata.source_channel_id, messageId: metadata.source_message_id }
+              : null,
+        });
+        break;
       case 'open_case_from_observed_detection':
         command = queuedCommandSchema.parse({
           ...target,
@@ -67,7 +81,7 @@ export function decodeQueuedAction(row: unknown): DecodedQueuedAction {
       case 'open_admin_case':
         command = queuedCommandSchema.parse({
           ...target,
-          intent: 'dashboard_case_open',
+          intent: metadata.intent ?? 'dashboard_case_open',
           reason,
           detectionEventId: parsed.detection_event_id ?? null,
           selectedMessage:
@@ -80,6 +94,7 @@ export function decodeQueuedAction(row: unknown): DecodedQueuedAction {
         command = queuedCommandSchema.parse({
           ...target,
           caseId: parsed.verification_event_id,
+          intent: metadata.intent ?? 'moderator_repair',
           mode: metadata.case_action === 'create_thread' ? 'create_thread' : 'repair_thread',
         });
         break;

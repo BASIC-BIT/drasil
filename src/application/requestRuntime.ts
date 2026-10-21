@@ -1,5 +1,6 @@
 import {
   decodeQueuedAction,
+  workflowDefinitions,
   ActionDeniedError,
   isQueuedOperationCommand,
   isQueuedReportCommand,
@@ -8,6 +9,7 @@ import {
   operationConfirmationCommand,
   operationNeedsConfirmation,
   type DecodedQueuedAction,
+  type ActionCompletion,
 } from '@drasil/application';
 import {
   prepareQueuedAction,
@@ -19,10 +21,13 @@ import type { IProductAnalyticsService } from '../services/ProductAnalyticsServi
 
 export type DelegatedWorkerOutcome = {
   readonly action_type: 'delegated_admission';
-  readonly state: 'denied' | 'uncertain';
+  readonly state: ActionCompletion['state'];
+  readonly outcome?: { readonly succeeded: boolean };
   readonly code?: string;
 };
 export interface PreparedQueuedRequest {
+  /** A validated replay observes the original execution without becoming its writer. */
+  readonly persistence?: 'observe_only';
   execute(): Promise<QueuedActionOutcome | DelegatedWorkerOutcome>;
   onComplete?: (outcome: unknown) => Promise<void>;
   afterComplete?: () => Promise<void>;
@@ -54,11 +59,29 @@ export async function prepareQueuedRequest(input: {
     };
   if (admission.kind === 'already_bound')
     return {
-      execute: async () => ({
-        action_type: 'delegated_admission',
-        state: 'uncertain',
-        code: 'already_started',
-      }),
+      ...(decoded.command.kind === 'ban_user' || decoded.command.kind === 'kick_user'
+        ? { persistence: 'observe_only' as const }
+        : {}),
+      execute: async (): Promise<DelegatedWorkerOutcome> => {
+        const native =
+          decoded.command.kind === 'ban_user' || decoded.command.kind === 'kick_user'
+            ? await delegation?.reconcileNativeEnforcement?.(admission.execution.executionId)
+            : null;
+        return {
+          action_type: 'delegated_admission',
+          state:
+            native?.state === 'completed' ||
+            native?.state === 'denied' ||
+            native?.state === 'partial' ||
+            native?.state === 'failed'
+              ? native.state
+              : 'uncertain',
+          code: native?.code ?? 'already_started',
+          ...(typeof native?.outcome?.succeeded === 'boolean'
+            ? { outcome: { succeeded: native.outcome.succeeded } }
+            : {}),
+        };
+      },
     };
   const onComplete: PreparedQueuedRequest['onComplete'] =
     delegation &&
@@ -97,7 +120,30 @@ export async function prepareQueuedRequest(input: {
         : command
     );
   }
-  const dispatch = prepareQueuedAction({ runtime, action, request });
+  const caseRuntime =
+    admission.kind === 'new_execution' &&
+    runtime.casesForExecution &&
+    workflowDefinitions.some(
+      (entry) => entry.id === admission.execution.workflowId && entry.family === 'cases'
+    )
+      ? { ...runtime, cases: runtime.casesForExecution(admission.execution) }
+      : runtime;
+  if (
+    admission.kind === 'new_execution' &&
+    workflowDefinitions.some(
+      (entry) => entry.id === admission.execution.workflowId && entry.family === 'cases'
+    ) &&
+    !runtime.casesForExecution
+  )
+    return {
+      execute: async () => ({
+        action_type: 'delegated_admission',
+        state: 'denied',
+        code: 'case_runtime_unavailable',
+      }),
+      onComplete,
+    };
+  const dispatch = prepareQueuedAction({ runtime: caseRuntime, action, request });
   const execute: PreparedQueuedRequest['execute'] =
     admission.kind === 'ordinary'
       ? dispatch
@@ -105,6 +151,21 @@ export async function prepareQueuedRequest(input: {
           try {
             return await dispatch();
           } catch (error) {
+            if (command.kind === 'ban_user' || command.kind === 'kick_user') {
+              const receipt = await delegation?.reconcileNativeEnforcement?.(
+                admission.execution.executionId
+              );
+              if (
+                error instanceof ActionDeniedError &&
+                receipt?.code === 'execution_interrupted_before_send'
+              )
+                return { action_type: 'delegated_admission', state: 'denied', code: error.code };
+              return {
+                action_type: 'delegated_admission',
+                state: receipt?.state === 'partial' ? 'partial' : 'uncertain',
+                code: receipt?.code ?? 'native_outcome_unknown',
+              };
+            }
             if (error instanceof ActionDeniedError)
               return { action_type: 'delegated_admission', state: 'denied', code: error.code };
             throw error;

@@ -21,7 +21,10 @@ import type { IConfigService } from '../../config/ConfigService';
 import type { IVerificationEventRepository } from '../../repositories/VerificationEventRepository';
 import type { IDetectionEventsRepository } from '../../repositories/DetectionEventsRepository';
 import type { ISecurityActionService } from '../../services/SecurityActionService';
-import type { IUserModerationService } from '../../services/UserModerationService';
+import type {
+  IUserModerationService,
+  NativeEnforcementLifecycle,
+} from '../../services/UserModerationService';
 import { createBotAuthority } from './authority';
 
 export interface BotCaseDependencies {
@@ -32,6 +35,7 @@ export interface BotCaseDependencies {
   readonly detectionEventsRepository: IDetectionEventsRepository;
   readonly securityActionService: ISecurityActionService;
   readonly userModerationService: IUserModerationService;
+  readonly nativeLifecycle?: NativeEnforcementLifecycle;
   readonly confirmations: CaseDependencies['confirmations'];
 }
 export function createBotCaseActions(deps: BotCaseDependencies): CaseActions {
@@ -50,7 +54,10 @@ export function createBotCaseDependencies(deps: BotCaseDependencies): CaseDepend
     const target = await guild(guildId);
     const bot = await target.members.fetchMe({ force: true });
     if (!bot.permissions.has(permission))
-      throw new Error(`Drasil is missing ${label} permission in this guild.`);
+      throw new ActionDeniedError(
+        'bot_permission_denied',
+        `Drasil is missing ${label} permission in this guild.`
+      );
   };
   const fetchMessage = async (
     channelId: string,
@@ -181,6 +188,14 @@ export function createBotCaseDependencies(deps: BotCaseDependencies): CaseDepend
           ? await member(input.guildId, input.targetUserId)
           : await member(input.guildId, input.targetUserId).catch(() => null);
         if (!target) return false;
+        if (deps.nativeLifecycle)
+          return deps.userModerationService.kickUser(
+            target,
+            input.reason,
+            await moderator(input.actorId),
+            input.detectionEventId,
+            deps.nativeLifecycle
+          );
         return deps.userModerationService.kickUser(
           target,
           input.reason,
@@ -196,6 +211,15 @@ export function createBotCaseDependencies(deps: BotCaseDependencies): CaseDepend
           ? await member(input.guildId, input.targetUserId)
           : await member(input.guildId, input.targetUserId).catch(() => null);
         if (!target) {
+          if (deps.nativeLifecycle)
+            return deps.userModerationService.banUserById(
+              await guild(input.guildId),
+              input.targetUserId,
+              input.reason,
+              await moderator(input.actorId),
+              input.detectionEventId,
+              deps.nativeLifecycle
+            );
           return deps.userModerationService.banUserById(
             await guild(input.guildId),
             input.targetUserId,
@@ -203,6 +227,14 @@ export function createBotCaseDependencies(deps: BotCaseDependencies): CaseDepend
             await moderator(input.actorId)
           );
         }
+        if (deps.nativeLifecycle)
+          return deps.userModerationService.banUser(
+            target,
+            input.reason,
+            await moderator(input.actorId),
+            input.detectionEventId,
+            deps.nativeLifecycle
+          );
         return deps.userModerationService.banUser(
           target,
           input.reason,

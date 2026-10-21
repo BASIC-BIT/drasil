@@ -22,6 +22,11 @@ import { requireCaseOutcome } from './adapters/cases';
 
 type CaseReceipt = { readonly target_user_id: string; readonly verification_event_id: string };
 export type QueuedActionOutcome =
+  | {
+      readonly action_type: 'ban_user' | 'kick_user';
+      readonly target_user_id: string;
+      readonly succeeded: boolean;
+    }
   | QueuedSetupOutcome
   | QueuedReportOutcome
   | QueuedOperationsOutcome
@@ -80,6 +85,7 @@ export type QueuedActionOutcome =
 export type QueuedRequestRuntime = Pick<
   BotApplication,
   | 'delegation'
+  | 'casesForExecution'
   | 'cases'
   | 'reports'
   | 'operations'
@@ -115,6 +121,8 @@ function handler<K extends QueuedCommand['kind'], Actions>(
   };
 }
 export const queuedActionHandlers = {
+  ban_user: handler('ban_user', (runtime) => runtime.cases, dispatchCaseAction),
+  kick_user: handler('kick_user', (runtime) => runtime.cases, dispatchCaseAction),
   open_case_from_observed_detection: handler(
     'open_case_from_observed_detection',
     (runtime) => runtime.cases,
@@ -330,7 +338,7 @@ async function dispatchCaseAction(
       return { ...target, action_type: outcome.kind, flagged: outcome.succeeded };
     case 'ban_user':
     case 'kick_user':
-      throw new Error('Ordinary staff actions execute directly.');
+      return { ...target, action_type: outcome.kind, succeeded: outcome.succeeded };
     default: {
       return projectBoundReceipt(command, outcome);
     }

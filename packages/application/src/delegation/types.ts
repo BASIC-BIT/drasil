@@ -46,6 +46,7 @@ export type ConfirmationMethod =
   | 'discord'
   | 'not_required';
 export type IntentPreconditions =
+  | import('../cases/delegation').CasePreconditions
   | { readonly kind: 'none' }
   | {
       readonly kind: 'resource_revision';

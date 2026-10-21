@@ -291,6 +291,8 @@ export enum ModerationQueueItemType {
 }
 
 export enum ModerationActionRequestType {
+  BAN_USER = 'ban_user',
+  KICK_USER = 'kick_user',
   OPEN_CASE_FROM_OBSERVED_DETECTION = 'open_case_from_observed_detection',
   OPEN_ADMIN_CASE = 'open_admin_case',
   MANUAL_FLAG_USER = 'manual_flag_user',

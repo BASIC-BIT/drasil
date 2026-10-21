@@ -634,6 +634,8 @@ enum moderation_queue_item_type {
 }
 
 enum moderation_action_request_type {
+  ban_user
+  kick_user
   open_case_from_observed_detection
   open_admin_case
   manual_flag_user
@@ -1199,6 +1201,7 @@ model mcp_intents {
 
 /// Public execution UUIDs are separate from private worker fencing tokens.
 model mcp_executions {
+  native_enforcement         mcp_native_enforcements?
   id                         String                      @id @db.Uuid
   confirmation_id            String                      @unique
   connection_id              String                      @db.Uuid
@@ -1217,4 +1220,12 @@ model mcp_executions {
   moderation_action_requests moderation_action_requests? @relation(fields: [queue_request_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
   @@index([connection_id], map: "mcp_executions_connection_idx")
+}
+
+model mcp_native_enforcements {
+  execution_id    String         @id @db.Uuid
+  token           String         @db.Uuid
+  started_at      DateTime       @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  acknowledged_at DateTime?      @db.Timestamptz(6)
+  execution       mcp_executions @relation(fields: [execution_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 }

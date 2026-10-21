@@ -1,5 +1,9 @@
 import { it, expect } from 'vitest';
-import { createDiscordContentAuthorizer, type VisibilityApi } from './visibility';
+import {
+  createDiscordContentAuthorizer,
+  createWorkflowContentAuthorizer,
+  type VisibilityApi,
+} from './visibility';
 import { DISCORD_PERMISSIONS as P } from '../../discordPermissions';
 import { accessFixture, guildId, principal } from '../queryTestFixtures';
 import type { DiscordChannel } from '../../discordApi';
@@ -7,7 +11,7 @@ const channelId = '200000000000000001';
 const parentId = '200000000000000002';
 const botId = '200000000000000003';
 function harness() {
-  const { access } = accessFixture();
+  const { access, state: authorityState, grant } = accessFixture();
   const state = {
     permissions: P.ViewChannel | P.ReadMessageHistory,
     botPermissions: P.ViewChannel | P.ReadMessageHistory,
@@ -58,7 +62,15 @@ function harness() {
       return { id, user_id: userId };
     },
   };
-  return { state, api, read: createDiscordContentAuthorizer(access, api) };
+  return {
+    state,
+    api,
+    authorityState,
+    grant,
+    access,
+    workflow: createWorkflowContentAuthorizer(access, api),
+    read: createDiscordContentAuthorizer(access, api),
+  };
 }
 it('refreshes effective overwrites on every request, including role and member precedence', async () => {
   const h = harness();
@@ -149,4 +161,60 @@ it('does not trust mismatched membership lookup results', async () => {
   h.state.channel = { ...h.state.channel, type: 12, parent_id: parentId };
   h.api.threadMember = async (id) => ({ id, user_id: 'other' });
   expect(await h.read(principal, guildId, channelId)).toMatchObject({ kind: 'denied' });
+});
+
+it.each([
+  ['ban_user', P.BanMembers],
+  ['kick_user', P.KickMembers],
+] as const)(
+  'allows exact %s message context without granting case reads',
+  async (workflowId, permission) => {
+    const h = harness();
+    h.authorityState.permissions = String(permission);
+    h.authorityState.owner = false;
+    h.grant.scopes = ['drasil:read', 'drasil:moderate'];
+    const actor = { ...principal, scopes: h.grant.scopes };
+    expect(await h.workflow(actor, guildId, channelId, workflowId)).toMatchObject({
+      kind: 'allowed',
+    });
+    expect(await h.read(principal, guildId, channelId)).toMatchObject({ kind: 'denied' });
+    h.state.botPermissions = P.ViewChannel;
+    expect(await h.workflow(actor, guildId, channelId, workflowId)).toMatchObject({
+      kind: 'denied',
+    });
+  }
+);
+
+it('refreshes workflow scope, role, actor overwrites and private-thread membership', async () => {
+  const h = harness();
+  h.grant.scopes = ['drasil:read', 'drasil:moderate'];
+  h.authorityState.owner = false;
+  h.authorityState.permissions = String(P.BanMembers);
+  const actor = { ...principal, scopes: h.grant.scopes };
+  const read = () => h.workflow(actor, guildId, channelId, 'ban_user');
+  expect(await read()).toMatchObject({ kind: 'allowed' });
+  expect(await h.workflow(principal, guildId, channelId, 'ban_user')).toMatchObject({
+    kind: 'denied',
+  });
+  h.authorityState.permissions = String(P.KickMembers);
+  expect(await read()).toMatchObject({ kind: 'denied' });
+  h.authorityState.permissions = String(P.BanMembers);
+  h.state.channel = { ...h.state.channel, type: 12, parent_id: parentId };
+  expect(await read()).toMatchObject({ kind: 'allowed' });
+  h.state.members.delete(principal.userId);
+  expect(await read()).toMatchObject({ kind: 'denied' });
+  h.state.members.add(principal.userId);
+  h.state.members.delete(botId);
+  expect(await read()).toMatchObject({ kind: 'denied' });
+  h.state.members.add(botId);
+  h.state.parent = {
+    ...h.state.parent,
+    permission_overwrites: [
+      { id: principal.userId, type: 1, allow: '0', deny: String(P.ViewChannel) },
+    ],
+  };
+  expect(await read()).toMatchObject({ kind: 'denied' });
+  h.state.parent = { ...h.state.parent, permission_overwrites: [] };
+  h.grant.scopes = ['drasil:moderate'];
+  expect(await read()).toMatchObject({ kind: 'denied' });
 });

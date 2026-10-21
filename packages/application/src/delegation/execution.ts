@@ -38,9 +38,19 @@ export function projectHumanOutcome(command: HumanCommand, value: unknown): Acti
   const nested = record(raw.result);
   if (
     raw.action_type === 'delegated_admission' &&
-    (raw.state === 'denied' || raw.state === 'uncertain')
+    (raw.state === 'denied' ||
+      raw.state === 'uncertain' ||
+      raw.state === 'partial' ||
+      ((command.kind === 'ban_user' || command.kind === 'kick_user') &&
+        (raw.state === 'completed' || raw.state === 'failed')))
   )
-    return { state: raw.state, ...(typeof raw.code === 'string' ? { code: raw.code } : {}) };
+    return {
+      state: raw.state as ActionCompletion['state'],
+      ...(typeof raw.code === 'string' ? { code: raw.code } : {}),
+      ...(typeof record(raw.outcome).succeeded === 'boolean'
+        ? { outcome: { succeeded: record(raw.outcome).succeeded as boolean } }
+        : {}),
+    };
   if (raw.kind === 'attention_batch') {
     const items: PublicItemOutcome[] = Array.isArray(raw.items)
       ? raw.items.map((value) => {
