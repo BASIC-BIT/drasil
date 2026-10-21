@@ -90,3 +90,28 @@ export interface DelegatedDeliveryBinding {
   readonly grantVersion: number;
   readonly commandDigest: string;
 }
+
+export type CreateConnectionInput = Pick<
+  ConnectionGrant,
+  'userId' | 'clientId' | 'selection' | 'scopes'
+>;
+export type ConnectionMutationResult =
+  | { readonly kind: 'updated'; readonly grant: ConnectionGrant }
+  | { readonly kind: 'conflict' }
+  | {
+      readonly kind: 'denied';
+      readonly reason: 'not_found' | 'identity_mismatch' | 'revoked';
+    };
+export interface DelegationStore {
+  createConnection(input: CreateConnectionInput): Promise<ConnectionGrant>;
+  findConnection(id: string): Promise<ConnectionGrant | null>;
+  updateSelection(
+    principal: DelegatedPrincipal,
+    selection: GuildSelection,
+    expectedVersion: number
+  ): Promise<ConnectionMutationResult>;
+  revokeConnection(
+    principal: DelegatedPrincipal,
+    expectedVersion: number
+  ): Promise<ConnectionMutationResult>;
+}
