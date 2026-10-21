@@ -22,7 +22,9 @@
     "prebuild": "npm --prefix ../.. run application:build",
     "pretest": "npm --prefix ../.. run application:build",
     "pretest:coverage": "npm --prefix ../.. run application:build",
-    "pretypecheck": "npm --prefix ../.. run application:build"
+    "pretypecheck": "npm --prefix ../.. run application:build",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "pretest:integration": "npm --prefix ../.. run application:build"
   },
   "dependencies": {
     "@drasil/contracts": "file:../../packages/contracts",

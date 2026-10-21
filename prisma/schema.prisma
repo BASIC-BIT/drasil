@@ -848,15 +848,16 @@ enum verification_status {
 
 /// Private MCP grants shared by the web issuer and bot worker. RLS is enabled by migration.
 model mcp_connections {
-  id             String                  @id @default(dbgenerated("extensions.uuid_generate_v4()")) @db.Uuid
+  id             String                         @id @default(dbgenerated("extensions.uuid_generate_v4()")) @db.Uuid
   user_id        String
   client_id      String
   selection_mode String
   scopes         String[]
-  version        Int                     @default(1)
-  created_at     DateTime                @default(now()) @db.Timestamptz(6)
-  revoked_at     DateTime?               @db.Timestamptz(6)
+  version        Int                            @default(1)
+  created_at     DateTime                       @default(now()) @db.Timestamptz(6)
+  revoked_at     DateTime?                      @db.Timestamptz(6)
   guilds         mcp_connection_guilds[]
+  authorizations mcp_authorization_references[]
 
   @@index([user_id, client_id], map: "idx_mcp_connections_user_client")
 }
@@ -869,4 +870,304 @@ model mcp_connection_guilds {
 
   @@id([connection_id, guild_id])
   @@index([guild_id], map: "idx_mcp_connection_guilds_guild")
+}
+
+/// Private issuer persistence; RLS and ACLs are installed by the MCP OAuth migration.
+model mcp_auth_account {
+  id                    String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  accountId             String
+  providerId            String
+  userId                String        @db.Uuid
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?     @db.Timestamptz(6)
+  refreshTokenExpiresAt DateTime?     @db.Timestamptz(6)
+  scope                 String?
+  password              String?
+  createdAt             DateTime      @default(now()) @db.Timestamptz(6)
+  updatedAt             DateTime      @db.Timestamptz(6)
+  mcp_auth_user         mcp_auth_user @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([userId])
+}
+
+/// Private issuer persistence; RLS and ACLs are installed by the MCP OAuth migration.
+model mcp_auth_jwks {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  publicKey  String
+  privateKey String
+  createdAt  DateTime  @db.Timestamptz(6)
+  expiresAt  DateTime? @db.Timestamptz(6)
+  alg        String?
+  crv        String?
+}
+
+/// Private issuer persistence; RLS and ACLs are installed by the MCP OAuth migration.
+model mcp_auth_oauth_access_token {
+  id                           String                        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  token                        String                        @unique
+  clientId                     String
+  sessionId                    String?                       @db.Uuid
+  userId                       String?                       @db.Uuid
+  referenceId                  String?
+  authorizationCodeId          String?
+  resources                    Json?
+  requestedUserInfoClaims      Json?
+  refreshId                    String?                       @db.Uuid
+  expiresAt                    DateTime                      @db.Timestamptz(6)
+  createdAt                    DateTime                      @db.Timestamptz(6)
+  revoked                      DateTime?                     @db.Timestamptz(6)
+  confirmation                 Json?
+  scopes                       Json
+  mcp_auth_oauth_client        mcp_auth_oauth_client         @relation(fields: [clientId], references: [clientId], onDelete: Cascade, onUpdate: NoAction)
+  mcp_auth_oauth_refresh_token mcp_auth_oauth_refresh_token? @relation(fields: [refreshId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  mcp_auth_session             mcp_auth_session?             @relation(fields: [sessionId], references: [id], onUpdate: NoAction)
+  mcp_auth_user                mcp_auth_user?                @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([authorizationCodeId])
+  @@index([clientId])
+  @@index([refreshId])
+  @@index([sessionId])
+  @@index([userId])
+}
+
+/// Private issuer persistence; RLS and ACLs are installed by the MCP OAuth migration.
+model mcp_auth_oauth_client {
+  id                               String                           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clientId                         String                           @unique
+  clientSecret                     String?
+  clientDiscoveryId                String?
+  disabled                         Boolean?
+  skipConsent                      Boolean?
+  enableEndSession                 Boolean?
+  subjectType                      String?
+  scopes                           Json?
+  clientCredentialsScopes          Json?
+  userId                           String?                          @db.Uuid
+  createdAt                        DateTime?                        @db.Timestamptz(6)
+  updatedAt                        DateTime?                        @db.Timestamptz(6)
+  name                             String?
+  uri                              String?
+  icon                             String?
+  contacts                         Json?
+  tos                              String?
+  policy                           String?
+  softwareId                       String?
+  softwareVersion                  String?
+  softwareStatement                String?
+  redirectUris                     Json
+  postLogoutRedirectUris           Json?
+  backchannelLogoutUri             String?
+  backchannelLogoutSessionRequired Boolean?
+  tokenEndpointAuthMethod          String?
+  applicationType                  String?
+  jwks                             String?
+  jwksUri                          String?
+  grantTypes                       Json?
+  responseTypes                    Json?
+  requirePKCE                      Boolean?
+  dpopBoundAccessTokens            Boolean?
+  referenceId                      String?
+  metadata                         Json?
+  mcp_auth_oauth_access_token      mcp_auth_oauth_access_token[]
+  mcp_auth_user                    mcp_auth_user?                   @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  mcp_auth_oauth_client_resource   mcp_auth_oauth_client_resource[]
+  mcp_auth_oauth_consent           mcp_auth_oauth_consent[]
+  mcp_auth_oauth_refresh_token     mcp_auth_oauth_refresh_token[]
+  mcp_authorization_flows          mcp_authorization_flows[]
+  mcp_authorization_references     mcp_authorization_references[]
+
+  @@index([userId])
+}
+
+/// Private issuer persistence; RLS and ACLs are installed by the MCP OAuth migration.
+model mcp_auth_oauth_client_assertion {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  expiresAt DateTime @db.Timestamptz(6)
+}
+
+/// Private issuer persistence; RLS and ACLs are installed by the MCP OAuth migration.
+model mcp_auth_oauth_client_resource {
+  id                      String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clientId                String
+  resourceId              String
+  metadata                Json?
+  createdAt               DateTime?               @db.Timestamptz(6)
+  mcp_auth_oauth_client   mcp_auth_oauth_client   @relation(fields: [clientId], references: [clientId], onDelete: Cascade, onUpdate: NoAction)
+  mcp_auth_oauth_resource mcp_auth_oauth_resource @relation(fields: [resourceId], references: [identifier], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([clientId, resourceId], map: "mcp_auth_oauth_client_resource_clientId_resourceId_uidx")
+  @@index([clientId])
+  @@index([resourceId])
+}
+
+/// Private issuer persistence; RLS and ACLs are installed by the MCP OAuth migration.
+model mcp_auth_oauth_consent {
+  id                      String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clientId                String
+  userId                  String?               @db.Uuid
+  referenceId             String?
+  resources               Json?
+  requestedUserInfoClaims Json?
+  scopes                  Json
+  createdAt               DateTime              @db.Timestamptz(6)
+  updatedAt               DateTime              @db.Timestamptz(6)
+  mcp_auth_oauth_client   mcp_auth_oauth_client @relation(fields: [clientId], references: [clientId], onDelete: Cascade, onUpdate: NoAction)
+  mcp_auth_user           mcp_auth_user?        @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([clientId])
+  @@index([userId])
+}
+
+/// Private issuer persistence; RLS and ACLs are installed by the MCP OAuth migration.
+model mcp_auth_oauth_refresh_token {
+  id                          String                        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  token                       String                        @unique
+  clientId                    String
+  sessionId                   String?                       @db.Uuid
+  userId                      String                        @db.Uuid
+  referenceId                 String?
+  authorizationCodeId         String?
+  resources                   Json?
+  requestedUserInfoClaims     Json?
+  expiresAt                   DateTime                      @db.Timestamptz(6)
+  createdAt                   DateTime                      @db.Timestamptz(6)
+  revoked                     DateTime?                     @db.Timestamptz(6)
+  rotatedAt                   DateTime?                     @db.Timestamptz(6)
+  rotationReplayResponse      String?
+  rotationReplayExpiresAt     DateTime?                     @db.Timestamptz(6)
+  authTime                    DateTime?                     @db.Timestamptz(6)
+  confirmation                Json?
+  scopes                      Json
+  mcp_auth_oauth_access_token mcp_auth_oauth_access_token[]
+  mcp_auth_oauth_client       mcp_auth_oauth_client         @relation(fields: [clientId], references: [clientId], onDelete: Cascade, onUpdate: NoAction)
+  mcp_auth_session            mcp_auth_session?             @relation(fields: [sessionId], references: [id], onUpdate: NoAction)
+  mcp_auth_user               mcp_auth_user                 @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([authorizationCodeId])
+  @@index([clientId])
+  @@index([sessionId])
+  @@index([userId])
+}
+
+/// Private issuer persistence; RLS and ACLs are installed by the MCP OAuth migration.
+model mcp_auth_oauth_resource {
+  id                             String                           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  identifier                     String                           @unique
+  name                           String
+  accessTokenTtl                 Int?
+  refreshTokenTtl                Int?
+  signingAlgorithm               String?
+  signingKeyId                   String?
+  allowedScopes                  Json?
+  customClaims                   Json?
+  dpopBoundAccessTokensRequired  Boolean?
+  disabled                       Boolean?
+  createdAt                      DateTime?                        @db.Timestamptz(6)
+  updatedAt                      DateTime?                        @db.Timestamptz(6)
+  policyVersion                  Int?
+  metadata                       Json?
+  mcp_auth_oauth_client_resource mcp_auth_oauth_client_resource[]
+}
+
+/// Private issuer persistence; RLS and ACLs are installed by the MCP OAuth migration.
+model mcp_auth_rate_limit {
+  id          String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  key         String @unique
+  count       Int
+  lastRequest BigInt
+}
+
+/// Private issuer persistence; RLS and ACLs are installed by the MCP OAuth migration.
+model mcp_auth_session {
+  id                           String                         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  expiresAt                    DateTime                       @db.Timestamptz(6)
+  token                        String                         @unique
+  createdAt                    DateTime                       @default(now()) @db.Timestamptz(6)
+  updatedAt                    DateTime                       @db.Timestamptz(6)
+  ipAddress                    String?
+  userAgent                    String?
+  userId                       String                         @db.Uuid
+  mcp_auth_oauth_access_token  mcp_auth_oauth_access_token[]
+  mcp_auth_oauth_refresh_token mcp_auth_oauth_refresh_token[]
+  mcp_auth_user                mcp_auth_user                  @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  mcp_authorization_flows      mcp_authorization_flows[]
+
+  @@index([userId])
+}
+
+/// Private issuer persistence; RLS and ACLs are installed by the MCP OAuth migration.
+model mcp_auth_user {
+  id                           String                         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                         String
+  email                        String                         @unique
+  emailVerified                Boolean
+  image                        String?
+  createdAt                    DateTime                       @default(now()) @db.Timestamptz(6)
+  updatedAt                    DateTime                       @default(now()) @db.Timestamptz(6)
+  mcp_auth_account             mcp_auth_account[]
+  mcp_auth_oauth_access_token  mcp_auth_oauth_access_token[]
+  mcp_auth_oauth_client        mcp_auth_oauth_client[]
+  mcp_auth_oauth_consent       mcp_auth_oauth_consent[]
+  mcp_auth_oauth_refresh_token mcp_auth_oauth_refresh_token[]
+  mcp_auth_session             mcp_auth_session[]
+  mcp_authorization_flows      mcp_authorization_flows[]
+  mcp_authorization_references mcp_authorization_references[]
+}
+
+/// Private issuer persistence; RLS and ACLs are installed by the MCP OAuth migration.
+model mcp_auth_verification {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  identifier String
+  value      String
+  expiresAt  DateTime @db.Timestamptz(6)
+  createdAt  DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt  DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([identifier])
+}
+
+/// Private issuer persistence; RLS and ACLs are installed by the MCP OAuth migration.
+model mcp_authorization_flows {
+  id                           String                        @id @db.Uuid
+  issuer_user_id               String                        @db.Uuid
+  issuer_session_id            String                        @db.Uuid
+  actor_discord_id             String
+  client_id                    String
+  binding                      Json
+  requested_scopes             String[]
+  expires_at                   DateTime                      @db.Timestamptz(6)
+  cancelled_at                 DateTime?                     @db.Timestamptz(6)
+  reference_id                 String?                       @unique @db.Uuid
+  approved_scopes              String[]
+  created_at                   DateTime                      @default(now()) @db.Timestamptz(6)
+  mcp_auth_oauth_client        mcp_auth_oauth_client         @relation(fields: [client_id], references: [clientId], onDelete: Cascade, onUpdate: NoAction)
+  mcp_auth_session             mcp_auth_session              @relation(fields: [issuer_session_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  mcp_auth_user                mcp_auth_user                 @relation(fields: [issuer_user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  mcp_authorization_references mcp_authorization_references?
+
+  @@index([expires_at], map: "mcp_authorization_flows_expiry_idx")
+  @@index([issuer_session_id], map: "mcp_authorization_flows_session_idx")
+}
+
+/// Private issuer persistence; RLS and ACLs are installed by the MCP OAuth migration.
+model mcp_authorization_references {
+  id                      String                  @id @db.Uuid
+  connection_id           String                  @db.Uuid
+  frozen_grant_version    Int
+  actor_discord_id        String
+  issuer_user_id          String                  @db.Uuid
+  issuer_session_id       String                  @db.Uuid
+  client_id               String
+  scopes                  String[]
+  resource                String
+  flow_id                 String                  @unique @db.Uuid
+  created_at              DateTime                @default(now()) @db.Timestamptz(6)
+  mcp_auth_oauth_client   mcp_auth_oauth_client   @relation(fields: [client_id], references: [clientId], onDelete: Cascade, onUpdate: NoAction)
+  mcp_connections         mcp_connections         @relation(fields: [connection_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  mcp_authorization_flows mcp_authorization_flows @relation(fields: [flow_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  mcp_auth_user           mcp_auth_user           @relation(fields: [issuer_user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([connection_id], map: "mcp_authorization_references_connection_idx")
 }

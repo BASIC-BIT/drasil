@@ -73,7 +73,8 @@
     "pretest:integration": "npm run application:build",
     "prebuild": "npm run application:build",
     "prebuild:watch": "npm run application:build",
-    "action:boundary": "node --test scripts/check-action-boundary.test.mjs && node scripts/check-action-boundary.mjs"
+    "action:boundary": "node --test scripts/check-action-boundary.test.mjs && node scripts/check-action-boundary.mjs",
+    "web:test:integration": "npm --workspace apps/web run test:integration --"
   },
   "keywords": [
     "discord",
