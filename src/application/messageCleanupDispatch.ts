@@ -10,6 +10,7 @@ export type QueuedMessageCleanupOutcome = CleanupReceiptBinding &
     | {
         readonly action_type: 'preview_case_message_deletion';
         readonly candidate_count: number;
+        readonly preview_generation: string | null;
         readonly coverage: string | null;
         readonly scope: string;
         readonly status: string;
@@ -48,6 +49,7 @@ export async function dispatchMessageCleanupAction(
       ...binding,
       action_type: outcome.kind,
       candidate_count: outcome.job.candidateCount,
+      preview_generation: outcome.job.generation,
       coverage: outcome.job.coverage,
       scope: outcome.job.scope,
       status: outcome.job.status,

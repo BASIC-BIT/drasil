@@ -71,3 +71,10 @@ export * from './setup/resolution';
 export * from './setup/selection';
 export * from './setup/resources';
 export * from './setup/outcomes';
+
+export { createContainmentIntentResolver } from './containment/resolution';
+export type {
+  ContainmentCase,
+  ContainmentResolutionResources,
+  ResolvedPreview,
+} from './containment/resolution';

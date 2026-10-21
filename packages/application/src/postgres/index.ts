@@ -6,3 +6,5 @@ export type { NativeEnforcementStore } from './nativeEnforcement';
 export { createReportReviewReferenceStore } from './reportReview';
 export { createReportResources } from './reports';
 export { persistSetupChange } from './setup';
+
+export { createContainmentResources } from './containment';

@@ -40,6 +40,7 @@ const cleanupJob = {
   mode: 'delete_only',
   scope: 'last_hour',
   status: 'preview_ready',
+  generation: '2026-10-20T00:00:00.000Z',
   candidateCount: 3,
   coverage: 'complete',
   targetUserId: 'target',

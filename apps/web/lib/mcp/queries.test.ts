@@ -24,6 +24,36 @@ function harness(rows: QueryRow[] = []) {
   return { service, read, state, grant, messages, visibility };
 }
 describe('authorized queries', () => {
+  it('exposes CAPTCHA comparison fields and cleanup detection binding without browser credentials', async () => {
+    const h = harness([
+      {
+        key: { id: id(1), timestamp: null },
+        value: {
+          id: id(1),
+          detectionEventId: id(2),
+          captchaChallengeId: id(3),
+          captchaGeneration: 4,
+          captchaStatus: 'pending',
+          captchaExpiresAt: '2026-10-22T00:00:00.000Z',
+          link_token_hash: 'private-token',
+          captcha_mutation_receipt: { private: 'secret' },
+        },
+      },
+    ]);
+    const result = await h.service.execute(principal, { kind: 'get_case', guildId, caseId: id(1) });
+    expect(result).toMatchObject({
+      kind: 'allowed',
+      items: [
+        {
+          detectionEventId: id(2),
+          captchaChallengeId: id(3),
+          captchaGeneration: 4,
+          captchaStatus: 'pending',
+        },
+      ],
+    });
+    expect(JSON.stringify(result)).not.toMatch(/private-token|captcha_mutation_receipt|secret/);
+  });
   it('strictly validates kinds, identity, workflow context and page limits', () => {
     const queryWithoutLimit = querySchema.parse(validListQuery);
     expect('limit' in queryWithoutLimit && queryWithoutLimit.limit).toBe(25);

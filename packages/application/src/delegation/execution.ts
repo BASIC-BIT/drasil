@@ -284,7 +284,24 @@ export function projectExecution(execution: ExecutionRecord): PublicActionResult
       ? { targetUserId: execution.command.targetUserId }
       : {}),
   };
-  if (execution.outcome) return { ...base, ...execution.outcome.result };
+  if (execution.outcome)
+    return {
+      ...base,
+      ...execution.outcome.result,
+      ...(execution.outcome.result.state === 'completed' &&
+      execution.completedAt &&
+      ['preview_account_quarantine', 'preview_case_message_deletion'].includes(
+        execution.command.kind
+      )
+        ? {
+            previewReference: execution.executionId,
+            previewExpiresAt:
+              execution.command.kind === 'preview_account_quarantine'
+                ? new Date(execution.completedAt.getTime() + 10 * 60 * 1000).toISOString()
+                : null,
+          }
+        : {}),
+    };
   // A previous process may have died after dispatch. A receipt retry never repeats effects.
   const state = execution.startedAt
     ? execution.queueRequestId

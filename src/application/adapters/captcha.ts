@@ -3,6 +3,7 @@ import {
   createCaptchaActions,
   decodeQueuedAction,
   type AuthorityPort,
+  type ExecutionRecord,
   type ActionResult,
   type CaptchaActions,
   type CaptchaDependencies,
@@ -39,6 +40,7 @@ export interface BotCaptchaDependencies {
 }
 export interface BotCaptchaRuntime {
   readonly actions: CaptchaActions;
+  forExecution(execution: ExecutionRecord, committedOnly?: boolean): BotCaptchaRuntime;
   forRequest(request: ModerationActionRequest): CaptchaActions;
   decodeRequest(request: ModerationActionRequest): Promise<DecodedQueuedAction>;
 }
@@ -82,7 +84,11 @@ export function createBotCaptchaRuntime(
       };
     },
   };
-  const actions = (request: ModerationActionRequest | null): CaptchaActions => {
+  const actions = (
+    request: ModerationActionRequest | null,
+    expectedRevision?: number,
+    committedOnly = false
+  ): CaptchaActions => {
     const effects = (): CaptchaEffects =>
       new CaptchaEffects(
         deps.actionRequests,
@@ -93,7 +99,7 @@ export function createBotCaptchaRuntime(
         deps.userModerationService,
         service()
       );
-    return createCaptchaActions({
+    const ports: CaptchaDependencies = {
       authority,
       confirmations: deps.confirmations,
       state,
@@ -141,7 +147,9 @@ export function createBotCaptchaRuntime(
           await (
             await deps.client.guilds.fetch(context.guildId)
           ).members.fetch({ user: command.targetUserId, force: true });
+          if (committedOnly) throw new ActionDeniedError('reconciliation_denied');
           const result = await service().requestChallenge({
+            expectedCaseRevision: expectedRevision,
             ...(request ? { actionRequestId: request.id } : {}),
             verificationEventId: command.caseId,
             requestSource: CaptchaChallengeRequestSource.MODERATOR,
@@ -165,7 +173,9 @@ export function createBotCaptchaRuntime(
         },
         async bypass(context, command) {
           if (context.actor.kind !== 'user') throw new Error('CAPTCHA moderation requires a user.');
+          if (committedOnly) throw new ActionDeniedError('reconciliation_denied');
           const challenge = await service().bypassChallenge({
+            expectedCaseRevision: expectedRevision,
             ...(request ? { actionRequestId: request.id } : {}),
             verificationEventId: command.caseId,
             moderatorId: context.actor.userId,
@@ -195,9 +205,41 @@ export function createBotCaptchaRuntime(
           return workflow.takeOutcome();
         },
       },
-    });
+    };
+    const shared = createCaptchaActions(ports);
+    return committedOnly
+      ? {
+          async execute(context, command): ReturnType<CaptchaActions['execute']> {
+            if (
+              command.kind === 'apply_captcha_pass' ||
+              command.kind === 'notify_captcha_attention'
+            )
+              return { kind: 'denied', code: 'binding_mismatch' };
+            const outcome = await ports.workflows.recoverCommitted(context, command);
+            return outcome ? { kind: 'outcome', outcome } : { kind: 'denied', code: 'stale_state' };
+          },
+        }
+      : shared;
   };
-  return {
+  const runtime: BotCaptchaRuntime = {
+    forExecution(execution, committedOnly = false) {
+      const p = execution.preconditions;
+      if (
+        p.kind !== 'resource_revision' ||
+        p.resource.kind !== 'case' ||
+        !('caseId' in execution.command) ||
+        p.resource.id !== execution.command.caseId
+      )
+        throw new ActionDeniedError('captcha_preconditions_required');
+      return {
+        ...runtime,
+        forRequest(request): CaptchaActions {
+          if (request.id !== execution.queueRequestId)
+            throw new ActionDeniedError('binding_mismatch');
+          return actions(request, p.revision, committedOnly);
+        },
+      };
+    },
     actions: actions(null),
     forRequest: actions,
     async decodeRequest(request): Promise<DecodedQueuedAction> {
@@ -232,6 +274,7 @@ export function createBotCaptchaRuntime(
       };
     },
   };
+  return runtime;
 }
 export function requireCaptchaOutcome<T>(result: ActionResult<T>): T {
   if (result.kind === 'outcome') return result.outcome;

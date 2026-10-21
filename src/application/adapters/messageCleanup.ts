@@ -1,6 +1,8 @@
 import { PermissionFlagsBits, type Client } from 'discord.js';
 import {
   ActionDeniedError,
+  checkMessageCleanupBinding,
+  canonicalDigest,
   createMessageCleanupActions,
   isQueuedMessageCleanupCommand,
   decodeQueuedAction,
@@ -38,6 +40,7 @@ export interface BotMessageCleanupDependencies {
 export interface BotMessageCleanupRuntime {
   decodeRequest(request: ModerationActionRequest): Promise<DecodedQueuedAction>;
   forRequest(request: ModerationActionRequest): MessageCleanupActions;
+  forCommittedRequest(request: ModerationActionRequest): MessageCleanupActions;
   afterComplete(request: ModerationActionRequest): Promise<void>;
 }
 export function projectMessageCleanupJob(job: MessageDeletionJob): MessageCleanupJob {
@@ -92,6 +95,56 @@ export function createBotMessageCleanupRuntime(
       throw new Error('Drasil is missing Manage Messages permission in this guild.');
   }
   const runtime: BotMessageCleanupRuntime = {
+    forCommittedRequest(request) {
+      return {
+        async execute(context, command): ReturnType<MessageCleanupActions['execute']> {
+          if (
+            !matchesRequest(request, context, command) ||
+            canonicalDigest((await runtime.decodeRequest(request)).command) !==
+              canonicalDigest(command)
+          )
+            return { kind: 'denied', code: 'binding_mismatch' };
+          const stored = await deps.messageDeletionJobs.findById(command.jobId);
+          const state = await deps.verificationEventRepository.findById(command.caseId);
+          if (!stored || !state || !state.server_id || stored.status !== 'completed')
+            return { kind: 'denied', code: 'stale_state' };
+          const job = projectMessageCleanupJob(stored);
+          const denied = checkMessageCleanupBinding(context, command, job, {
+            id: state.id,
+            guildId: state.server_id,
+            targetUserId: state.user_id,
+            status: state.status,
+            evidenceThreadId: state.private_evidence_thread_id,
+          });
+          if (denied) return { kind: 'denied', code: denied };
+          if (command.kind === 'ban_case_user_with_message_cleanup') {
+            const metadata = stored.metadata;
+            if (
+              stored.ban_status !== 'succeeded' ||
+              !metadata ||
+              typeof metadata !== 'object' ||
+              Array.isArray(metadata) ||
+              canonicalDigest(metadata.combined_operation ?? null) !==
+                canonicalDigest({
+                  requestId: request.id,
+                  actorId: request.actor_id,
+                  source: request.actor_surface,
+                })
+            )
+              return { kind: 'denied', code: 'binding_mismatch' };
+            return runtime.forRequest(request).execute(context, command);
+          }
+          if (command.kind !== 'execute_case_message_deletion')
+            return { kind: 'denied', code: 'stale_state' };
+          // The service's completed branch only reads frozen item outcomes.
+          const counts = await deps.messageCleanupService.executeJob(job.id);
+          return {
+            kind: 'outcome',
+            outcome: { kind: command.kind, job, ...counts, banned: false, caseFinalized: false },
+          };
+        },
+      };
+    },
     async decodeRequest(request) {
       const job = request.message_deletion_job_id
         ? await deps.messageDeletionJobs.findById(request.message_deletion_job_id)

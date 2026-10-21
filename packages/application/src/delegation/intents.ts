@@ -160,7 +160,8 @@ export function createIntentService(deps: {
   }
   async function resolve(
     principal: DelegatedPrincipal,
-    invocation: IntentInvocation
+    invocation: IntentInvocation,
+    previous?: ResolvedIntent
   ): Promise<ResolvedIntent> {
     const workflow = workflowDefinitions.find((item) => item.id === invocation.workflowId)!;
     const workflowAccess = await deps.access.authorizeWorkflowId(
@@ -169,7 +170,11 @@ export function createIntentService(deps: {
       workflow.id
     );
     if (workflowAccess.kind === 'denied') throw new IntentError(workflowAccess.reason);
-    const resolution = await deps.resolver.resolve(principal, invocation);
+    const resolution = await deps.resolver.resolve(
+      principal,
+      invocation,
+      previous ? { kind: 'revalidate', previous } : undefined
+    );
     const command = workflow.parseCommand(invocation.input, resolution.bindings);
     const access = await deps.access.authorizeWorkflow(principal, invocation.guildId, command);
     if (access.kind === 'denied') throw new IntentError(access.reason);
@@ -266,7 +271,7 @@ export function createIntentService(deps: {
     if (intent.expiresAt.getTime() <= now()) throw new IntentError('expired');
     let current: ResolvedIntent;
     try {
-      current = await resolve(principal, intent);
+      current = await resolve(principal, intent, intent);
       if (
         current.commandDigest !== intent.commandDigest ||
         current.stateFingerprint !== intent.stateFingerprint ||

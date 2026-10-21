@@ -11,6 +11,8 @@ import {
   operationConfirmationCommand,
   operationNeedsConfirmation,
   type DecodedQueuedAction,
+  type QuarantineActions,
+  type MessageCleanupActions,
   type ActionCompletion,
 } from '@drasil/application';
 import {
@@ -65,7 +67,10 @@ export async function prepareQueuedRequest(input: {
       decoded.command.kind === 'kick_user' ||
       decoded.command.kind === 'prepare_report_ban_review' ||
       decoded.command.kind === 'review_uncertain_report_ban' ||
-      decoded.command.kind === 'confirm_intake_candidate'
+      decoded.command.kind === 'confirm_intake_candidate' ||
+      ['cleanup', 'captcha', 'quarantine'].includes(
+        workflowDefinitions.find((e) => e.id === admission.execution.workflowId)?.family ?? ''
+      )
         ? { persistence: 'observe_only' as const }
         : {}),
       execute: async (): Promise<DelegatedWorkerOutcome> => {
@@ -91,12 +96,14 @@ export async function prepareQueuedRequest(input: {
     };
   const onComplete: PreparedQueuedRequest['onComplete'] =
     delegation &&
-    (admission.kind === 'new_execution' || admission.kind === 'committed_reconciliation')
+    (admission.kind === 'new_execution' ||
+      admission.kind === 'committed_reconciliation' ||
+      admission.kind === 'committed_containment')
       ? (outcome): Promise<void> => delegation.complete(admission.execution, outcome)
       : undefined;
   const { command } = decoded;
   let action = decoded;
-  if (recovery) {
+  if (recovery && admission.kind !== 'committed_containment') {
     if (command.kind !== 'ban_observed_detection')
       throw new Error('Only report-ban operations can enter reconciliation.');
     action = {
@@ -150,10 +157,33 @@ export async function prepareQueuedRequest(input: {
       onComplete,
     };
   let scopedRuntime = caseRuntime;
-  if (admission.kind === 'new_execution') {
+  if (admission.kind === 'new_execution' || admission.kind === 'committed_containment') {
+    const committedOnly = admission.kind === 'committed_containment';
     const family = workflowDefinitions.find(
       (entry) => entry.id === admission.execution.workflowId
     )?.family;
+    if (family === 'captcha')
+      scopedRuntime = {
+        ...scopedRuntime,
+        captchaRuntime: runtime.captchaRuntime.forExecution(admission.execution, committedOnly),
+      };
+    if (committedOnly && family === 'quarantine')
+      scopedRuntime = {
+        ...scopedRuntime,
+        quarantineRuntime: {
+          ...runtime.quarantineRuntime,
+          forRequest: (r): QuarantineActions => runtime.quarantineRuntime.forCommittedRequest(r),
+        },
+      };
+    if (committedOnly && family === 'cleanup')
+      scopedRuntime = {
+        ...scopedRuntime,
+        messageCleanupRuntime: {
+          ...runtime.messageCleanupRuntime,
+          forRequest: (r): MessageCleanupActions =>
+            runtime.messageCleanupRuntime.forCommittedRequest(r),
+        },
+      };
     if (family === 'setup')
       scopedRuntime = {
         ...caseRuntime,

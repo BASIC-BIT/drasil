@@ -74,6 +74,33 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     await servers.updateSettings(serverId, { captcha_mode: 'manual' });
   }
 
+  it('allows pending standard challenge bypass with mode off and preserves generation CAS', async () => {
+    const { verification } = await createCase('guild-off-bypass', 'user-off-bypass');
+    const repository = new CaptchaChallengeRepository(prisma);
+    const challenge = await repository.create({
+      verificationEventId: verification.id,
+      serverId: verification.server_id!,
+      userId: verification.user_id!,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      caseRevision: verification.case_revision,
+      tokenHash: 'off-test-hash',
+      expiresAt: new Date(Date.now() + 60_000),
+      requestedBy: 'moderator',
+    });
+    // Isolate policy from the separate mode-off cancellation sweep.
+    await prisma.servers.update({
+      where: { guild_id: verification.server_id! },
+      data: { settings: { captcha_mode: 'off' } },
+    });
+    expect(
+      await repository.bypass(challenge.id, challenge.generation + 1, 'moderator', 'Reviewed')
+    ).toBeNull();
+    expect(
+      await repository.bypass(challenge.id, challenge.generation, 'moderator', 'Reviewed')
+    ).toMatchObject({ status: 'bypassed' });
+  });
+
   it('keeps a delivered generation recoverable until its presentation is recorded', async () => {
     const { verification } = await createCase(
       'guild-captcha-presentation-recovery',
@@ -516,7 +543,7 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     );
   });
 
-  it('rejects a bypass after the server disables CAPTCHA', async () => {
+  it('rejects a bypass after the mode-off sweep cancels its challenge', async () => {
     const { verification } = await createCase(
       'guild-captcha-bypass-disabled',
       'user-captcha-bypass-disabled'
@@ -536,13 +563,14 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       requestedBy: 'moderator-1',
     });
     await servers.updateSettings(verification.server_id, { captcha_mode: 'off' });
+    await challenges.cancelPendingForDisabledServers(10);
 
     await expect(
       challenges.bypass(challenge.id, challenge.generation, 'moderator-1', 'Reviewed manually')
     ).resolves.toBeNull();
     await expect(prisma.captcha_challenge_bypasses.count()).resolves.toBe(0);
     await expect(challenges.findById(challenge.id)).resolves.toEqual(
-      expect.objectContaining({ status: CaptchaChallengeStatus.PENDING })
+      expect.objectContaining({ status: CaptchaChallengeStatus.CANCELLED })
     );
   });
 

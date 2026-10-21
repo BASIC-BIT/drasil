@@ -900,6 +900,7 @@ exports[`decodes and dispatches the shipped preview_case_message_deletion row wi
   "coverage": "complete",
   "message_deletion_job_id": "job",
   "mode": "delete_only",
+  "preview_generation": "2026-10-20T00:00:00.000Z",
   "scope": "last_hour",
   "status": "preview_ready",
   "target_user_id": "target",

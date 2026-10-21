@@ -1,3 +1,4 @@
+import { acceptCleanupJob, hasCommittedContainment } from './containment';
 import { validateReportCaseTerminal } from '../reports/terminal';
 import { nativeCompletion } from './nativeEnforcement';
 import { projectHumanOutcome } from '../delegation/execution';
@@ -448,6 +449,7 @@ function createIntentStore(database: DelegationDatabase): IntentStore {
           [intent.expiresAt]
         );
         if (!valid.rows[0].valid) throw new IntentError('expired');
+        await acceptCleanupJob(client, intent);
         const executionId = randomUUID();
         let queueRequestId: string | null = null;
         if (!('kind' in delivery)) {
@@ -623,6 +625,8 @@ function createExecutionStore(database: DelegationDatabase): ExecutionStore {
           if (!claim.rows[0]?.live)
             return { kind: 'denied', code: 'execution_interrupted_before_send' };
         }
+        if (await hasCommittedContainment(client, execution, queue.request))
+          return { kind: 'committed_containment', execution };
         if (queue.recovery) {
           const metadata = persisted.metadata ?? {};
           const protectedPhase = [
@@ -700,14 +704,18 @@ function createExecutionStore(database: DelegationDatabase): ExecutionStore {
       if (native?.state === 'uncertain')
         return { ...execution, outcome: { kind: 'delegated_terminal', result: native } };
       if (execution.queueRequestId) {
-        const result = await database.query<{ status: string; result: unknown }>(
-          'select status,result from moderation_action_requests where id=$1::uuid',
-          [execution.queueRequestId]
-        );
+        const result = await database.query<{
+          status: string;
+          result: unknown;
+          completed_at: Date | null;
+        }>('select status,result,completed_at from moderation_action_requests where id=$1::uuid', [
+          execution.queueRequestId,
+        ]);
         const queue = result.rows[0];
         if (queue?.status === 'completed')
           return {
             ...execution,
+            completedAt: queue.completed_at,
             outcome: {
               kind: 'delegated_terminal',
               result: projectHumanOutcome(execution.command, queue.result),

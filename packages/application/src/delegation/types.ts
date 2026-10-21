@@ -49,6 +49,15 @@ export type IntentPreconditions =
   | import('../reports/review').ReportCasePrecondition
   | import('../reports/delegation').IntakePromptPrecondition
   | import('../cases/delegation').CasePreconditions
+  | {
+      readonly kind: 'cleanup_job_provision';
+      readonly jobId: string;
+      readonly caseId: string;
+      readonly targetUserId: string;
+      readonly revision: number;
+      readonly evidenceThreadId: string;
+      readonly detectionEventId: string | null;
+    }
   | { readonly kind: 'none' }
   | {
       readonly kind: 'resource_revision';
@@ -159,7 +168,11 @@ export interface IntentResolution {
   readonly previewExpiresAt: Date | null;
 }
 export interface IntentResolver {
-  resolve(principal: DelegatedPrincipal, invocation: IntentInvocation): Promise<IntentResolution>;
+  resolve(
+    principal: DelegatedPrincipal,
+    invocation: IntentInvocation,
+    context?: { readonly kind: 'revalidate'; readonly previous: ResolvedIntent }
+  ): Promise<IntentResolution>;
 }
 export interface ResolvedIntent {
   readonly workflowId: WorkflowId;
@@ -262,6 +275,8 @@ export interface PublicActionResult {
   readonly confirmationId?: string;
   readonly summary?: string;
   readonly expiresAt?: string;
+  readonly previewReference?: string;
+  readonly previewExpiresAt?: string | null;
   readonly retryAfterMs?: number;
   readonly code?: string;
   readonly outcome?: PublicFamilyOutcome;
@@ -269,7 +284,7 @@ export interface PublicActionResult {
 export type WorkerAdmission =
   | { readonly kind: 'ordinary' }
   | {
-      readonly kind: 'new_execution' | 'committed_reconciliation';
+      readonly kind: 'new_execution' | 'committed_reconciliation' | 'committed_containment';
       readonly execution: ExecutionRecord;
     }
   | { readonly kind: 'already_bound'; readonly execution: ExecutionRecord }

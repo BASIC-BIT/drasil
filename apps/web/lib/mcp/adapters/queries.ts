@@ -32,6 +32,11 @@ const caseFields = {
   attentionState: 've.attention_state',
   containmentStatus: 've.containment_status',
   revision: 've.case_revision',
+  detectionEventId: 've.detection_event_id',
+  captchaChallengeId: 'cc.id',
+  captchaGeneration: 'cc.generation',
+  captchaStatus: 'cc.status',
+  captchaExpiresAt: 'cc.expires_at',
   notes: 've.notes',
   createdAt: 've.created_at',
   updatedAt: 've.updated_at',
@@ -85,7 +90,14 @@ function sqlSource(
         if (query.userId) predicates.push(`ve.user_id=${bind(query.userId)}`);
         if (query.status) predicates.push(`ve.status=${bind(query.status)}::verification_status`);
       }
-      return select('verification_events', 've', 've.updated_at', caseFields, predicates);
+      return select(
+        'verification_events',
+        've',
+        've.updated_at',
+        caseFields,
+        predicates,
+        'left join captcha_challenges cc on cc.verification_event_id=ve.id and cc.server_id=ve.server_id and cc.user_id=ve.user_id'
+      );
     }
     case 'list_detections':
     case 'get_detection': {

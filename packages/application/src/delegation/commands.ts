@@ -83,6 +83,7 @@ export type WorkflowConfirmationRule = 'shared_policy' | 'exact_settings_diff' |
 
 /** These values come from connection-bound resource resolution, never public tool arguments. */
 export interface WorkflowCommandBindings {
+  readonly quarantine?: { readonly requestId: string };
   readonly intakePrompt?: {
     readonly threadId: string;
     readonly promptMessageId: string;
@@ -260,7 +261,10 @@ function define(
         return humanCommandSchema.parse({
           ...options,
           kind,
-          previewReference: { kind: 'persisted_preview', requestId: options.previewReference },
+          previewReference: {
+            kind: 'persisted_preview',
+            requestId: bindings.quarantine?.requestId ?? options.previewReference,
+          },
         });
       const resolved =
         family === 'cleanup'
