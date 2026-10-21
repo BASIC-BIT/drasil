@@ -300,6 +300,137 @@ it('publishes discovery and enforces access and refresh lifetimes', async () => 
   expect((rows[0].expiresAt - rows[0].createdAt) / 1000).toBe(2592000);
   expect(JSON.stringify(tokens)).not.toContain('controlled-discord');
 });
+it.each(['sign-out', 'expired-session cleanup'])(
+  'preserves the frozen offline authorization after %s',
+  async (ending) => {
+    const a = await start(await client(), 'drasil:read drasil:moderate offline_access');
+    const approvedScopes = ['drasil:read', 'offline_access'];
+    const grant = await select(a, '111111111111111111', approvedScopes);
+    const tokens = await exchange(a, await consent(a, approvedScopes));
+    const reference = (
+      await pool.query('select * from mcp_authorization_references where id=$1', [
+        grant.referenceId,
+      ])
+    ).rows[0];
+    const flow = (
+      await pool.query('select * from mcp_authorization_flows where id=$1', [a.flow.id])
+    ).rows[0];
+    if (ending === 'sign-out') {
+      await call('/sign-out', {});
+    } else {
+      await pool.query(
+        `update mcp_auth_session set "expiresAt"=now()-interval '1 second' where id=$1`,
+        [session.session.id]
+      );
+      expect((await call('/get-session')).json).toBeNull();
+    }
+    expect(
+      (await pool.query('select id from mcp_auth_session where id=$1', [session.session.id])).rows
+    ).toEqual([]);
+
+    const rotated = await refresh(a, tokens);
+    expect(payload(rotated)).toMatchObject({
+      delegation_grant_id: grant.id,
+      delegation_grant_version: 1,
+      scope: approvedScopes.join(' '),
+    });
+    expect(await admission(rotated)).toMatchObject({
+      userId: discordId,
+      clientId: a.client.client_id,
+      connectionId: grant.id,
+      grantVersion: 1,
+      scopes: ['drasil:read'],
+    });
+    expect((await pool.query('select * from mcp_authorization_references')).rows).toEqual([
+      reference,
+    ]);
+    expect((await pool.query('select * from mcp_authorization_flows')).rows).toEqual([flow]);
+    expect(reference).toMatchObject({
+      issuer_session_id: session.session.id,
+      connection_id: grant.id,
+      frozen_grant_version: 1,
+      scopes: approvedScopes,
+    });
+    const refreshRows = (await pool.query('select * from mcp_auth_oauth_refresh_token')).rows;
+    expect(refreshRows).toHaveLength(2);
+    for (const row of refreshRows) {
+      expect(row).toMatchObject({
+        referenceId: grant.referenceId,
+        sessionId: null,
+        scopes: approvedScopes,
+      });
+    }
+
+    await pool.query('update mcp_connections set revoked_at=now(),version=version+1 where id=$1', [
+      grant.id,
+    ]);
+    expect(await refresh(a, rotated, 400)).toMatchObject({ error: 'invalid_grant' });
+    await expect(admission(rotated)).rejects.toThrow();
+  }
+);
+it.each(['user', 'client', 'connection'])(
+  'still rejects offline refresh after deleting its %s',
+  async (owner) => {
+    const a = await start(await client());
+    const grant = await select(a, '111111111111111111');
+    const tokens = await exchange(a, await consent(a));
+    await call('/sign-out', {});
+    const rotated = await refresh(a, tokens);
+    if (owner === 'user') {
+      await pool.query('delete from mcp_auth_user where id=$1', [session.user.id]);
+    } else if (owner === 'client') {
+      await pool.query('delete from mcp_auth_oauth_client where "clientId"=$1', [
+        a.client.client_id,
+      ]);
+    } else {
+      await pool.query('delete from mcp_connections where id=$1', [grant.id]);
+    }
+    expect((await pool.query('select id from mcp_authorization_references')).rows).toEqual([]);
+    await refresh(a, rotated, 400);
+    await expect(admission(rotated)).rejects.toThrow();
+  }
+);
+it('rejects an actually expired refresh token', async () => {
+  const a = await start(await client());
+  const grant = await select(a, '111111111111111111');
+  const tokens = await exchange(a, await consent(a));
+  await pool.query(
+    `update mcp_auth_oauth_refresh_token set "expiresAt"=now()-interval '1 second' where "referenceId"=$1`,
+    [grant.referenceId]
+  );
+  expect(await refresh(a, tokens, 400)).toMatchObject({ error: 'invalid_grant' });
+});
+it.each(['deleted', 'expired'])(
+  'rejects pending browser operations when the issuer session is %s',
+  async (ending) => {
+    const c = await client();
+    const pending = await start(c);
+    const selected = await start(c);
+    const grant = await select(selected, '111111111111111111');
+    if (ending === 'deleted') {
+      await call('/sign-out', {});
+    } else {
+      await pool.query(
+        `update mcp_auth_session set "expiresAt"=now()-interval '1 second' where id=$1`,
+        [session.session.id]
+      );
+    }
+    // A previously authenticated session object cannot authorize later browser work.
+    await expect(
+      auth.flows.createAuthorizationFlow(session, pending.signedQuery)
+    ).rejects.toThrow();
+    await expect(select(pending, '222222222222222222')).rejects.toThrow();
+    await expect(
+      auth.flows.cancelAuthorizationFlow(session, selected.signedQuery)
+    ).rejects.toThrow();
+    await expect(
+      auth.flows.resolveProviderFlow(session, selected.signedQuery, grant.scopes)
+    ).rejects.toThrow();
+    expect((await pool.query('select id,revoked_at,version from mcp_connections')).rows).toEqual([
+      { id: grant.id, revoked_at: null, version: 1 },
+    ]);
+  }
+);
 it('rejects stale versions and revoked grants at refresh and MCP admission', async () => {
   for (const change of ['version=version+1', 'revoked_at=now()']) {
     const a = await start(await client());

@@ -65,7 +65,8 @@ create unique index "mcp_auth_oauth_client_resource_clientId_resourceId_uidx" on
 CREATE TABLE mcp_authorization_flows (
   id UUID PRIMARY KEY,
   issuer_user_id UUID NOT NULL REFERENCES mcp_auth_user(id) ON DELETE CASCADE,
-  issuer_session_id UUID NOT NULL REFERENCES mcp_auth_session(id) ON DELETE CASCADE,
+  -- Historical binding: offline grants must survive issuer logout/session cleanup.
+  issuer_session_id UUID NOT NULL,
   actor_discord_id TEXT NOT NULL,
   client_id TEXT NOT NULL REFERENCES mcp_auth_oauth_client("clientId") ON DELETE CASCADE,
   binding JSONB NOT NULL,

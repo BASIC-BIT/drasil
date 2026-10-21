@@ -1092,7 +1092,6 @@ model mcp_auth_session {
   mcp_auth_oauth_access_token  mcp_auth_oauth_access_token[]
   mcp_auth_oauth_refresh_token mcp_auth_oauth_refresh_token[]
   mcp_auth_user                mcp_auth_user                  @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  mcp_authorization_flows      mcp_authorization_flows[]
 
   @@index([userId])
 }
@@ -1132,6 +1131,7 @@ model mcp_auth_verification {
 model mcp_authorization_flows {
   id                           String                        @id @db.Uuid
   issuer_user_id               String                        @db.Uuid
+  /// Historical binding retained after issuer logout/session cleanup.
   issuer_session_id            String                        @db.Uuid
   actor_discord_id             String
   client_id                    String
@@ -1143,7 +1143,6 @@ model mcp_authorization_flows {
   approved_scopes              String[]
   created_at                   DateTime                      @default(now()) @db.Timestamptz(6)
   mcp_auth_oauth_client        mcp_auth_oauth_client         @relation(fields: [client_id], references: [clientId], onDelete: Cascade, onUpdate: NoAction)
-  mcp_auth_session             mcp_auth_session              @relation(fields: [issuer_session_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   mcp_auth_user                mcp_auth_user                 @relation(fields: [issuer_user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   mcp_authorization_references mcp_authorization_references?
 

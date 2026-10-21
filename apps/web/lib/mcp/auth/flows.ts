@@ -107,6 +107,22 @@ function validateSession(row: FlowRow, session: IssuerSession): void {
     fail();
 }
 export function createAuthorizationFlowService(pool: Pool, config: McpConfig) {
+  async function requireLiveSession(
+    session: IssuerSession,
+    client: Pool | PoolClient = pool,
+    lock = false
+  ): Promise<void> {
+    if (session.session.userId !== session.user.id) fail();
+    // Flow session IDs are historical; browser work must still authenticate against live state.
+    // Selection/cancellation hold the session until commit so logout cannot race the mutation.
+    const currentSession = (
+      await client.query(
+        `select id from mcp_auth_session where id=$1 and "userId"=$2 and "expiresAt">now() ${lock ? 'for share' : ''}`,
+        [session.session.id, session.user.id]
+      )
+    ).rows[0];
+    if (!currentSession) fail();
+  }
   async function verifiedBinding(query: string): Promise<Record<string, string>> {
     if (!(await verifyOAuthQueryParams(query, config.authSecret))) fail();
     const params = new URLSearchParams(query);
@@ -141,6 +157,7 @@ export function createAuthorizationFlowService(pool: Pool, config: McpConfig) {
     lock = false
   ): Promise<FlowRow> {
     const value = await verifiedBinding(query);
+    await requireLiveSession(session, client, lock);
     const row = (
       await client.query<FlowRow>(
         `select * from mcp_authorization_flows where id=$1 ${lock ? 'for update' : ''}`,
@@ -156,13 +173,7 @@ export function createAuthorizationFlowService(pool: Pool, config: McpConfig) {
     providerRequest: string
   ): Promise<AuthorizationFlow> {
     const value = await verifiedBinding(providerRequest);
-    const currentSession = (
-      await pool.query(
-        'select id from mcp_auth_session where id=$1 and "userId"=$2 and "expiresAt">now()',
-        [session.session.id, session.user.id]
-      )
-    ).rows[0];
-    if (!currentSession || session.session.userId !== session.user.id) fail();
+    await requireLiveSession(session);
     const actor = await resolveDiscordActor(pool, session.user.id);
     await pool.query(
       `insert into mcp_authorization_flows (id,issuer_user_id,issuer_session_id,actor_discord_id,client_id,binding,requested_scopes,expires_at)
@@ -285,6 +296,7 @@ export function createAuthorizationFlowService(pool: Pool, config: McpConfig) {
     query: string,
     scopes: readonly string[]
   ): Promise<FlowRow | null> {
+    await requireLiveSession(session);
     const value = binding(query);
     if (!/^[0-9a-f-]{36}$/.test(value.drasil_flow)) return null;
     const row = (
