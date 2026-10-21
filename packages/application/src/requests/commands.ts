@@ -69,6 +69,12 @@ function schemaFor<K extends QueuedCommand['kind']>(
 }
 /** Exhaustive persisted command registry; direct-only operations are deliberately absent. */
 export const queuedCommandSchemas = {
+  submit_message_report: schemaFor('submit_message_report'),
+  confirm_intake_candidate: schemaFor('confirm_intake_candidate'),
+  reject_intake_candidates: schemaFor('reject_intake_candidates'),
+  prepare_report_ban_review: schemaFor('prepare_report_ban_review'),
+  review_uncertain_report_ban: schemaFor('review_uncertain_report_ban'),
+
   ban_user: schemaFor('ban_user'),
   kick_user: schemaFor('kick_user'),
   open_case_from_observed_detection: schemaFor('open_case_from_observed_detection'),

@@ -1,6 +1,10 @@
+import { readDelegatedMessage } from './delegatedCases';
+
 import { observeNativeEnforcement } from './nativeObservation';
 import type { Prisma, PrismaClient } from '../../db/prisma';
 import {
+  createReportResources,
+  createReportReviewReferenceStore,
   createDelegationStore,
   createNativeEnforcementStore,
   type NativeEnforcementStore,
@@ -30,6 +34,11 @@ export function createBotDelegationDatabase(prisma: PrismaClient): DelegationDat
 }
 
 import {
+  canonicalDigest,
+  prepareIntakeChoice,
+  prepareSubmittedReportCaseOpen,
+  ActionDeniedError,
+  type ReportReviewReferenceStore,
   createDelegatedAccess,
   memberContextFor,
   workflowDefinitions,
@@ -48,6 +57,8 @@ import { createBotAuthority } from './authority';
 import { getCaseResponderSettings } from '../../utils/caseResponderSettings';
 
 export interface DelegatedWorkerRuntime {
+  readonly reviews?: ReportReviewReferenceStore;
+  validateReportResources?(execution: ExecutionRecord): Promise<void>;
   readonly native?: NativeEnforcementStore;
   reconcileNativeEnforcement?(executionId: string): Promise<PublicActionResult>;
   authorizeDelegatedRequest(
@@ -75,7 +86,10 @@ export function createDelegatedWorkerAdmission(deps: {
             execution.command
           );
           if (authority.kind === 'denied') return authority;
-          if ('selectedMessage' in execution.command && execution.command.selectedMessage) {
+          if (
+            execution.command.kind === 'submit_message_report' ||
+            ('selectedMessage' in execution.command && execution.command.selectedMessage)
+          ) {
             const definition = workflowDefinitions.find(
               (entry) => entry.id === execution.workflowId
             );
@@ -139,7 +153,74 @@ export function createBotDelegatedRuntime(
     },
   });
   const native = createNativeEnforcementStore(createBotDelegationDatabase(deps.prisma));
+  const resources = createReportResources(createBotDelegationDatabase(deps.prisma));
+  const authority = createBotAuthority(deps.client);
+  const staffRoles = {
+    loadRoleIds: async (guildId: string): Promise<readonly string[]> =>
+      getCaseResponderSettings(
+        (
+          await deps.configService.getServerConfig(guildId, {
+            forceRefresh: true,
+            failOnReadError: true,
+          })
+        ).settings
+      ).roleIds,
+  };
+
   return {
+    reviews: createReportReviewReferenceStore(createBotDelegationDatabase(deps.prisma)),
+    async validateReportResources(execution): Promise<void> {
+      const p = execution.preconditions;
+      if (execution.command.kind === 'open_submitted_report_case') {
+        if (p.kind !== 'report_case_candidate' || execution.authorizedDelivery.kind !== 'queued')
+          throw new ActionDeniedError('report_preconditions_required');
+        const ready = await prepareSubmittedReportCaseOpen(
+          {
+            guildId: execution.guildId,
+            requestId: execution.executionId,
+            source: 'mcp',
+            actor: { kind: 'user', userId: execution.userId },
+          },
+          { reportId: execution.command.reportId },
+          { authority, openCaseRepository: resources.openCaseRepository }
+        );
+        if (
+          ready.kind !== 'ready' ||
+          canonicalDigest(ready.precondition) !== canonicalDigest(p) ||
+          canonicalDigest(ready.command) !== execution.authorizedDelivery.commandDigest
+        )
+          throw new ActionDeniedError('stale_state');
+      }
+      if (
+        execution.command.kind === 'confirm_intake_candidate' ||
+        execution.command.kind === 'reject_intake_candidates'
+      ) {
+        if (p.kind !== 'intake_prompt')
+          throw new ActionDeniedError('report_preconditions_required');
+        const current = await prepareIntakeChoice(
+          execution,
+          execution.guildId,
+          execution.command.intakeId,
+          { ...resources, authority, staffRoles }
+        );
+        if (canonicalDigest(current.precondition) !== canonicalDigest(p))
+          throw new ActionDeniedError('stale_state');
+      }
+      if (execution.command.kind === 'submit_message_report') {
+        if (p.kind !== 'report_message')
+          throw new ActionDeniedError('report_preconditions_required');
+        const current = await readDelegatedMessage(deps.client, execution, execution.command);
+        if (
+          !current ||
+          current.fingerprint !== p.fingerprint ||
+          current.guildId !== p.guildId ||
+          current.channelId !== p.channelId ||
+          current.messageId !== p.messageId ||
+          current.userId !== p.targetUserId
+        )
+          throw new ActionDeniedError('stale_state');
+      }
+    },
     ...createDelegatedWorkerAdmission({ store, access, native }),
     reconcileNativeEnforcement: async (id) =>
       observeNativeEnforcement(deps.client, await native.reconcileNativeEnforcement(id)),

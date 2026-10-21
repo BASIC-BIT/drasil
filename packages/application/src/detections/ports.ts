@@ -34,6 +34,7 @@ export interface DetectionInput {
   readonly detectionEventId: string;
 }
 export interface ReviewReference {
+  readonly expiresAt?: string;
   readonly operationId: string;
   readonly targetUserId: string;
   readonly reviewReference: string;

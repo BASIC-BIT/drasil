@@ -60,3 +60,8 @@ export * from './delegation/confirmationPolicy';
 export * from './delegation/intents';
 export * from './delegation/execution';
 export * from './cases/delegation';
+
+export * from './reports/delegation';
+export * from './reports/terminal';
+export * from './reports/reviewReference';
+export * from './reports/resolution';

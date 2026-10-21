@@ -59,7 +59,11 @@ export async function prepareQueuedRequest(input: {
     };
   if (admission.kind === 'already_bound')
     return {
-      ...(decoded.command.kind === 'ban_user' || decoded.command.kind === 'kick_user'
+      ...(decoded.command.kind === 'ban_user' ||
+      decoded.command.kind === 'kick_user' ||
+      decoded.command.kind === 'prepare_report_ban_review' ||
+      decoded.command.kind === 'review_uncertain_report_ban' ||
+      decoded.command.kind === 'confirm_intake_candidate'
         ? { persistence: 'observe_only' as const }
         : {}),
       execute: async (): Promise<DelegatedWorkerOutcome> => {
@@ -149,6 +153,19 @@ export async function prepareQueuedRequest(input: {
       ? dispatch
       : async (): Promise<QueuedActionOutcome | DelegatedWorkerOutcome> => {
           try {
+            if (
+              admission.kind === 'new_execution' &&
+              [
+                'open_submitted_report_case',
+                'confirm_intake_candidate',
+                'reject_intake_candidates',
+                'submit_message_report',
+              ].includes(admission.execution.workflowId)
+            ) {
+              if (!delegation?.validateReportResources)
+                throw new ActionDeniedError('report_runtime_unavailable');
+              await delegation.validateReportResources(admission.execution);
+            }
             return await dispatch();
           } catch (error) {
             if (command.kind === 'ban_user' || command.kind === 'kick_user') {

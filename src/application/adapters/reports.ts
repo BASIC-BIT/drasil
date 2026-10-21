@@ -191,6 +191,15 @@ export function createBotReportActions(
           channel?.isTextBased() && 'messages' in channel
             ? await channel.messages.fetch(command.messageId).catch(() => null)
             : null;
+        if (
+          context.source === 'mcp' &&
+          (!message ||
+            message.guildId !== context.guildId ||
+            message.channelId !== command.channelId ||
+            message.id !== command.messageId ||
+            message.author.id !== command.targetUserId)
+        )
+          throw new ActionDeniedError('binding_mismatch');
         return submission.submitMessageReport(target, reporter, {
           messageId: command.messageId,
           channelId: command.channelId,

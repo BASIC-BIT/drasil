@@ -20,9 +20,6 @@ export const queuedDetectionCommandSchema = z.discriminatedUnion('kind', [
     .strict(),
   z.object({ kind: z.literal('ignore_detection_accounting'), ...target, reason }).strict(),
   z.object({ kind: z.literal('restore_detection_accounting'), ...target, reason }).strict(),
-]);
-export const detectionCommandSchema = z.union([
-  queuedDetectionCommandSchema,
   z.object({ kind: z.literal('prepare_report_ban_review'), operationId: id }).strict(),
   z
     .object({
@@ -34,5 +31,6 @@ export const detectionCommandSchema = z.union([
     })
     .strict(),
 ]);
+export const detectionCommandSchema = queuedDetectionCommandSchema;
 export type QueuedDetectionCommand = z.infer<typeof queuedDetectionCommandSchema>;
 export type DetectionCommand = z.infer<typeof detectionCommandSchema>;

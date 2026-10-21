@@ -133,6 +133,11 @@ export type QueryResult =
       readonly truncated: boolean;
     };
 export interface McpQueryDependencies {
+  readonly intakeChoices?: (
+    principal: DelegatedPrincipal,
+    guildId: string,
+    intakeId: string
+  ) => Promise<{ reference: string; candidateIds: readonly string[] } | null>;
   readonly access: DelegatedAccess;
   readonly repository: QueryRepository;
   readonly cursorSecret: string;
@@ -477,11 +482,27 @@ export function createMcpQueries(deps: McpQueryDependencies): {
               if (visibility.kind === 'denied') return visibility;
               rows = await deps.messages(query, after);
             } else rows = await deps.repository.read(binding, query, after);
-            return paginate(
-              rows.map((row) => ({ ...row, value: project(query, binding, row.value) })),
-              'limit' in query ? query.limit : 1,
-              sign
-            );
+            const projected = rows.map((row) => ({
+              ...row,
+              value: project(query, binding, row.value),
+            }));
+            if (query.kind === 'get_intake' && projected.length === 1 && deps.intakeChoices) {
+              const choice = await deps.intakeChoices(
+                principal,
+                query.guildId,
+                String(projected[0].value.id)
+              );
+              if (choice)
+                projected[0] = {
+                  ...projected[0],
+                  value: {
+                    ...projected[0].value,
+                    candidateIds: [...choice.candidateIds],
+                    intakePromptReference: choice.reference,
+                  },
+                };
+            }
+            return paginate(projected, 'limit' in query ? query.limit : 1, sign);
           }
         );
         return authorized.kind === 'denied' ? authorized : authorized.value;

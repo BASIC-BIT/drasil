@@ -90,6 +90,7 @@ export function createBotApplication(
     confirmations: caseConfirmations.confirmations,
   });
   const detectionRuntime = createBotDetectionRuntime({
+    reviewReferences: deps.delegation?.reviews,
     ...deps,
     confirmations: caseConfirmations.confirmations,
   });

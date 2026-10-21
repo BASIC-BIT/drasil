@@ -1,7 +1,7 @@
 import { hasAuthority } from '../authorization';
 import type { ActionContext } from '../context';
 import type { ActionDenialCode, ActionResult } from '../results';
-import type { DetectionCommand, QueuedDetectionCommand } from './commands';
+import type { DetectionCommand } from './commands';
 import type {
   DetectionDependencies,
   DetectionInput,
@@ -120,7 +120,7 @@ function matchesOperation(
 async function continueBan(
   deps: DetectionDependencies,
   context: ActionContext,
-  command: QueuedDetectionCommand,
+  command: Extract<DetectionCommand, { detectionEventId: string }>,
   operation: DetectionOperation
 ): Promise<ActionResult<DetectionOutcome>> {
   const denial = await checkDetection(deps, context, command);
@@ -167,7 +167,7 @@ export function detectionRequiredPermissions(command: Pick<DetectionCommand, 'ki
 async function checkDetection(
   deps: DetectionDependencies,
   context: ActionContext,
-  command: QueuedDetectionCommand
+  command: Extract<DetectionCommand, { detectionEventId: string }>
 ): Promise<ActionDenialCode | null> {
   const detection = await deps.repository.findDetection(command.detectionEventId);
   if (!detection || detection.targetUserId !== command.targetUserId) return 'binding_mismatch';
@@ -189,7 +189,7 @@ async function checkDetection(
 async function checkPolicy(
   deps: DetectionDependencies,
   guildId: string,
-  command: QueuedDetectionCommand
+  command: Extract<DetectionCommand, { detectionEventId: string }>
 ): Promise<ActionDenialCode | null> {
   if (command.kind !== 'ban_observed_detection' && command.kind !== 'kick_observed_detection')
     return null;
@@ -202,7 +202,7 @@ async function checkPolicy(
 }
 async function executeFresh(
   deps: DetectionDependencies,
-  command: QueuedDetectionCommand,
+  command: Extract<DetectionCommand, { detectionEventId: string }>,
   input: DetectionInput
 ): Promise<DetectionOutcome> {
   switch (command.kind) {

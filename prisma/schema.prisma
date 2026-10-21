@@ -634,6 +634,11 @@ enum moderation_queue_item_type {
 }
 
 enum moderation_action_request_type {
+  submit_message_report
+  confirm_intake_candidate
+  reject_intake_candidates
+  prepare_report_ban_review
+  review_uncertain_report_ban
   ban_user
   kick_user
   open_case_from_observed_detection

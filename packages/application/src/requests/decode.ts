@@ -30,7 +30,8 @@ const queuedRowSchema = z
       row.target_user_id === null &&
       !isQueuedOperationKind(row.action_type) &&
       !isQueuedReportKind(row.action_type) &&
-      !isQueuedSetupKind(row.action_type)
+      !isQueuedSetupKind(row.action_type) &&
+      row.action_type !== 'prepare_report_ban_review'
     )
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

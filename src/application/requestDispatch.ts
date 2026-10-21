@@ -121,6 +121,32 @@ function handler<K extends QueuedCommand['kind'], Actions>(
   };
 }
 export const queuedActionHandlers = {
+  submit_message_report: handler(
+    'submit_message_report',
+    (runtime) => runtime.reports,
+    dispatchReportAction
+  ),
+  confirm_intake_candidate: handler(
+    'confirm_intake_candidate',
+    (runtime) => runtime.reports,
+    dispatchReportAction
+  ),
+  reject_intake_candidates: handler(
+    'reject_intake_candidates',
+    (runtime) => runtime.reports,
+    dispatchReportAction
+  ),
+  prepare_report_ban_review: handler(
+    'prepare_report_ban_review',
+    (runtime, request) => runtime.detectionRuntime.forRequest(request),
+    dispatchDetectionAction
+  ),
+  review_uncertain_report_ban: handler(
+    'review_uncertain_report_ban',
+    (runtime, request) => runtime.detectionRuntime.forRequest(request),
+    dispatchDetectionAction
+  ),
+
   ban_user: handler('ban_user', (runtime) => runtime.cases, dispatchCaseAction),
   kick_user: handler('kick_user', (runtime) => runtime.cases, dispatchCaseAction),
   open_case_from_observed_detection: handler(

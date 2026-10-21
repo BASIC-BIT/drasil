@@ -39,6 +39,11 @@ function encodeAction(context: ActionContext, input: QueuedCommand): EnqueueInpu
   if (isQueuedOperationCommand(command)) return encodeOperationAction(context, command);
   if (isQueuedCaptchaCommand(command)) return encodeCaptchaAction(context, command);
   if (context.actor.kind !== 'user') throw new Error('Case submission requires a user actor.');
+  if (
+    command.kind === 'prepare_report_ban_review' ||
+    command.kind === 'review_uncertain_report_ban'
+  )
+    return encodeDetectionAction(context, command);
   const base = {
     actionType: command.kind,
     actorId: context.actor.userId,

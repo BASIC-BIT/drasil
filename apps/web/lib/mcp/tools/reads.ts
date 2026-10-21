@@ -1,3 +1,5 @@
+import { createWebReportResolution } from '../adapters/reports';
+import { ActionDeniedError } from '@drasil/application';
 import { z } from 'zod';
 import { createMcpQueries, querySchema, type McpQuery, type QueryResult } from '../queries';
 import { toMcpSchema } from '../schemas';
@@ -75,9 +77,18 @@ export function createMcpReadTools(
 /** Lazy composition: the transport owns enablement and config loading. */
 export function createWebMcpReadTools(cursorSecret: string): readonly McpReadToolDefinition[] {
   const access = createWebDelegatedAccess();
+  const { choices } = createWebReportResolution(cursorSecret, access);
   return createMcpReadTools(
     createMcpQueries({
       access,
+      intakeChoices: async (principal, guildId, intakeId) => {
+        try {
+          return await choices.issue(principal, guildId, intakeId);
+        } catch (error) {
+          if (error instanceof ActionDeniedError) return null;
+          throw error;
+        }
+      },
       repository: createPostgresQueryRepository(),
       cursorSecret,
       authorizeDiscordContent: createDiscordContentAuthorizer(access),

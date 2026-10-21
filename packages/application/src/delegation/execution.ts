@@ -109,6 +109,7 @@ export function projectHumanOutcome(command: HumanCommand, value: unknown): Acti
     ],
     detections: ['dismissed', 'kicked', 'undone_action', 'ignored', 'restored', 'ban_by_id'],
     reports: [
+      'statusRecorded',
       'submitted',
       'closed',
       'created',
@@ -196,8 +197,22 @@ export function projectHumanOutcome(command: HumanCommand, value: unknown): Acti
     const candidate = raw[key] ?? nested[key];
     if (candidate !== undefined && scalar(candidate)) details[key] = candidate;
   }
+  if (command.kind === 'prepare_report_ban_review') {
+    if (
+      typeof raw.reviewReference === 'string' &&
+      /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(raw.reviewReference)
+    )
+      details.reviewReference = raw.reviewReference;
+    if (
+      typeof raw.expiresAt === 'string' &&
+      /^\d{4}-\d{2}-\d{2}T/.test(raw.expiresAt) &&
+      Number.isFinite(Date.parse(raw.expiresAt))
+    )
+      details.expiresAt = raw.expiresAt;
+  }
   if (Object.keys(details).length) outcome.details = details;
   const partial =
+    (family === 'reports' && raw.status === 'submitted' && raw.statusRecorded === false) ||
     [
       'delete_failed_count',
       'evidence_failed_count',
@@ -222,7 +237,7 @@ export function projectHumanOutcome(command: HumanCommand, value: unknown): Acti
           outcome.queueCleanupStatus === 'failed' ||
           partial
         ? 'partial'
-        : status === 'failed'
+        : status === 'failed' || status === 'create_failed' || status === 'activation_failed'
           ? 'failed'
           : status === 'denied'
             ? 'denied'
@@ -316,6 +331,8 @@ export function createDelegatedActionService(deps: {
       execution.command
     );
     if (access.kind === 'denied') return { state: 'denied', code: access.reason };
+    if (execution.authorizedDelivery.kind === 'report_case_terminal')
+      return projectExecution(execution);
     if (execution.authorizedDelivery.kind === 'queued') {
       const current = await deps.store.loadExecution(principal, execution.executionId);
       return current ? projectExecution(current) : { state: 'denied', code: 'not_found' };
@@ -363,7 +380,11 @@ export function createDelegatedActionService(deps: {
           const execution = await deps.store.loadExecution(principal, intent.executionId);
           return execution ? run(principal, execution) : { state: 'denied', code: 'not_found' };
         }
-        if (intent.state !== 'pending' || confirmationRequirement(intent.command) !== 'none')
+        if (
+          intent.state !== 'pending' ||
+          (intent.authorizedDelivery.kind !== 'report_case_terminal' &&
+            confirmationRequirement(intent.command) !== 'none')
+        )
           return projectIntent(intent);
         return run(principal, await acceptSaved(principal, intent.confirmationId, 'not_required'));
       }),

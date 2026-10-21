@@ -1,3 +1,5 @@
+import { createReportResources } from '@drasil/application/postgres';
+import { createWebDelegationDatabase } from '../../mcp/adapters/database';
 import type {
   ActionContext,
   QueueAttentionItemRecord,
@@ -62,29 +64,9 @@ export class PostgresReportOpenCaseRepository implements ReportOpenCaseRepositor
     reportId: string;
     serverId: string;
   }): Promise<ReportOpenCaseCandidate | null> {
-    const result = await getPostgresPool().query<ReportOpenCaseCandidate>(
-      `select
-         ri.id,
-         ri.server_id,
-         ri.status,
-         ri.confirmed_target_user_id,
-         coalesce(ri.metadata->>'report_ban_operation_id', '') <> '' as busy,
-         de.id as latest_detection_id,
-         de.latest_verification_event_id as latest_case_id
-       from report_intakes ri
-       left join lateral (
-         select id, latest_verification_event_id
-         from detection_events
-         where server_id = ri.server_id
-           and metadata ->> 'reportIntakeId' = ri.id::text
-         order by detected_at desc nulls last
-         limit 1
-       ) de on true
-       where ri.id = $1 and ri.server_id = $2 and ri.status = 'submitted'
-       limit 1`,
-      [input.reportId, input.serverId]
-    );
-    return result.rows[0] ?? null;
+    return createReportResources(
+      createWebDelegationDatabase()
+    ).openCaseRepository.findSubmittedReportCaseCandidate(input);
   }
 }
 

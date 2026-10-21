@@ -10,12 +10,11 @@ import type { QuarantinePreviewData, QuarantineExecutionResult } from '../contai
 import type { CloseSubmittedReportResult, OpenSubmittedReportCaseResult } from '../reports/review';
 import type { AttentionOutcome } from '../operations/attention';
 import type { SetupServerRecord } from '../setup/settings';
-import type { WorkflowId, WorkflowCommandBindings } from './commands';
+import { type WorkflowId, type WorkflowCommandBindings, type HumanCommand } from './commands';
 import type { QueuedCommand } from '../requests/commands';
 import type { EnqueueInput } from '../requests/receipt';
 import type { DecodedQueuedAction, QueuedRow } from '../requests/decode';
 import type { AccessDecision } from './access';
-import type { HumanCommand } from './commands';
 
 export type DelegatedScope = 'drasil:read' | 'drasil:moderate' | 'drasil:configure';
 export type GuildSelection =
@@ -46,6 +45,9 @@ export type ConfirmationMethod =
   | 'discord'
   | 'not_required';
 export type IntentPreconditions =
+  | import('../reports/resolution').ReportMessagePrecondition
+  | import('../reports/review').ReportCasePrecondition
+  | import('../reports/delegation').IntakePromptPrecondition
   | import('../cases/delegation').CasePreconditions
   | { readonly kind: 'none' }
   | {
@@ -130,6 +132,7 @@ export interface DelegationStore extends IntentStore, ExecutionStore {
 }
 
 export type AuthorizedDelivery =
+  | import('../reports/terminal').ReportCaseTerminalDelivery
   | { readonly kind: 'direct' }
   | { readonly kind: 'queued'; readonly command: QueuedCommand; readonly commandDigest: string };
 export interface IntentInvocation {
@@ -143,6 +146,7 @@ export interface IntentInvocation {
 export interface IntentResolution {
   readonly bindings?: WorkflowCommandBindings;
   readonly delivery:
+    | import('../reports/terminal').ReportCaseTerminalDelivery
     | { readonly kind: 'direct' }
     | { readonly kind: 'queued'; readonly command: QueuedCommand };
   readonly preconditions: IntentPreconditions;
@@ -196,7 +200,10 @@ export interface ExecutionRecord extends ResolvedIntent {
     readonly result: ActionCompletion;
   } | null;
 }
-export type IntentDelivery = { readonly kind: 'direct' } | EnqueueInput;
+export type IntentDelivery =
+  | { readonly kind: 'direct' }
+  | { readonly kind: 'report_case_terminal' }
+  | EnqueueInput;
 /** Trusted persistence interface. The runtime resolves/revalidates before acceptance;
  * this store atomically binds only the frozen, canonical delivery. */
 export interface IntentStore {

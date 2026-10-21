@@ -35,78 +35,10 @@ export function createDelegatedCaseActions(
       : undefined,
   });
   const resources = createBotCaseDependencies(deps);
-  const selectedMessage: CaseResolutionDependencies['selectedMessage'] = async (command) => {
-    if (!('selectedMessage' in command) || !command.selectedMessage) return null;
-    try {
-      const { channelId, messageId } = command.selectedMessage;
-      if (
-        ![execution.guildId, execution.userId, channelId, messageId].every((id) =>
-          /^\d{17,20}$/.test(id)
-        )
-      )
-        return null;
-      const guild = await deps.client.guilds.fetch({ guild: execution.guildId, force: true });
-      await guild.roles.fetch();
-      const channel = await guild.channels.fetch(channelId, { force: true });
-      if (
-        !channel ||
-        channel.guildId !== execution.guildId ||
-        !channel.isTextBased() ||
-        !('messages' in channel)
-      )
-        return null;
-      if (channel.isThread()) {
-        if (!channel.parentId) return null;
-        // Thread permissions use their parent; refresh it instead of trusting the cache.
-        const parent = await guild.channels.fetch(channel.parentId, { force: true });
-        if (
-          !parent ||
-          parent.id !== channel.parentId ||
-          parent.guildId !== execution.guildId ||
-          parent.isThread()
-        )
-          return null;
-      }
-      const actor = await guild.members.fetch({ user: execution.userId, force: true });
-      const bot = await guild.members.fetchMe({ force: true });
-      for (const member of [actor, bot]) {
-        const permissions = channel.permissionsFor(member);
-        if (!permissions.has(P.ViewChannel | P.ReadMessageHistory)) return null;
-        if (
-          channel.isThread() &&
-          channel.type === 12 &&
-          guild.ownerId !== member.id &&
-          !permissions.has(P.ManageThreads)
-        ) {
-          const membership = await channel.members.fetch({ member: member.id, force: true });
-          if (membership.id !== member.id) return null;
-        }
-      }
-      const message = await channel.messages.fetch({ message: messageId, force: true });
-      if (!message.guildId) return null;
-      const binding = {
-        guildId: message.guildId,
-        channelId: message.channelId,
-        messageId: message.id,
-        userId: message.author.id,
-      };
-      return {
-        ...binding,
-        fingerprint: selectedMessageFingerprint({
-          ...binding,
-          content: message.content,
-          attachments: [...message.attachments.values()].map((a) => ({
-            id: a.id,
-            name: a.name,
-            url: a.url,
-            size: a.size,
-          })),
-        }),
-      };
-    } catch {
-      return null;
-    }
-  };
+  const selectedMessage: CaseResolutionDependencies['selectedMessage'] = async (command) =>
+    'selectedMessage' in command && command.selectedMessage
+      ? readDelegatedMessage(deps.client, execution, command.selectedMessage)
+      : null;
   return {
     async execute(context, command): ReturnType<CaseActions['execute']> {
       if (
@@ -124,4 +56,80 @@ export function createDelegatedCaseActions(
       return actions.execute(context, command);
     },
   };
+}
+
+export async function readDelegatedMessage(
+  client: BotCaseDependencies['client'],
+  execution: Pick<ExecutionRecord, 'guildId' | 'userId'>,
+  selected: { channelId: string; messageId: string }
+): ReturnType<NonNullable<CaseResolutionDependencies['selectedMessage']>> {
+  try {
+    const { channelId, messageId } = selected;
+    if (
+      ![execution.guildId, execution.userId, channelId, messageId].every((id) =>
+        /^\d{17,20}$/.test(id)
+      )
+    )
+      return null;
+    const guild = await client.guilds.fetch({ guild: execution.guildId, force: true });
+    await guild.roles.fetch();
+    const channel = await guild.channels.fetch(channelId, { force: true });
+    if (
+      !channel ||
+      channel.guildId !== execution.guildId ||
+      !channel.isTextBased() ||
+      !('messages' in channel)
+    )
+      return null;
+    if (channel.isThread()) {
+      if (!channel.parentId) return null;
+      // Thread permissions use their parent; refresh it instead of trusting the cache.
+      const parent = await guild.channels.fetch(channel.parentId, { force: true });
+      if (
+        !parent ||
+        parent.id !== channel.parentId ||
+        parent.guildId !== execution.guildId ||
+        parent.isThread()
+      )
+        return null;
+    }
+    const actor = await guild.members.fetch({ user: execution.userId, force: true });
+    const bot = await guild.members.fetchMe({ force: true });
+    for (const member of [actor, bot]) {
+      const permissions = channel.permissionsFor(member);
+      if (!permissions.has(P.ViewChannel | P.ReadMessageHistory)) return null;
+      if (
+        channel.isThread() &&
+        channel.type === 12 &&
+        guild.ownerId !== member.id &&
+        !permissions.has(P.ManageThreads)
+      ) {
+        const membership = await channel.members.fetch({ member: member.id, force: true });
+        if (membership.id !== member.id) return null;
+      }
+    }
+    const message = await channel.messages.fetch({ message: messageId, force: true });
+    if (!message.guildId) return null;
+    const binding = {
+      guildId: message.guildId,
+      channelId: message.channelId,
+      messageId: message.id,
+      userId: message.author.id,
+    };
+    return {
+      ...binding,
+      fingerprint: selectedMessageFingerprint({
+        ...binding,
+        content: message.content,
+        attachments: [...message.attachments.values()].map((a) => ({
+          id: a.id,
+          name: a.name,
+          url: a.url,
+          size: a.size,
+        })),
+      }),
+    };
+  } catch {
+    return null;
+  }
 }

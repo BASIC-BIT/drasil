@@ -1,3 +1,4 @@
+import { validateReportCaseTerminal } from '../reports/terminal';
 import { createHash, randomBytes } from 'node:crypto';
 import { workflowDefinitions, type HumanCommand } from './commands';
 import { confirmationRequirement } from './confirmationPolicy';
@@ -76,6 +77,10 @@ export function assertIntentBinding(
     throw new IntentError('binding_mismatch');
 }
 export function encodeIntentDelivery(intent: IntentRecord): IntentDelivery {
+  if (intent.authorizedDelivery.kind === 'report_case_terminal') {
+    validateReportCaseTerminal(intent, intent.authorizedDelivery.outcome);
+    return { kind: 'report_case_terminal' };
+  }
   if (intent.authorizedDelivery.kind === 'direct') return { kind: 'direct' };
   return encodeQueuedAction(
     {
@@ -167,9 +172,18 @@ export function createIntentService(deps: {
     const command = workflow.parseCommand(invocation.input, resolution.bindings);
     const access = await deps.access.authorizeWorkflow(principal, invocation.guildId, command);
     if (access.kind === 'denied') throw new IntentError(access.reason);
-    if (resolution.delivery.kind !== workflow.delivery) throw new IntentError('delivery_mismatch');
+    if (resolution.delivery.kind === 'report_case_terminal')
+      validateReportCaseTerminal(
+        { workflowId: workflow.id, command, userId: principal.userId },
+        resolution.delivery.outcome
+      );
+    if (
+      resolution.delivery.kind !== 'report_case_terminal' &&
+      resolution.delivery.kind !== workflow.delivery
+    )
+      throw new IntentError('delivery_mismatch');
     const delivery =
-      resolution.delivery.kind === 'direct'
+      resolution.delivery.kind !== 'queued'
         ? resolution.delivery
         : ((): AuthorizedDelivery => {
             const command = queuedCommandSchema.parse(resolution.delivery.command);
@@ -232,7 +246,11 @@ export function createIntentService(deps: {
     const intent = await deps.store.loadIntent(principal, confirmationId);
     if (!intent) throw new IntentError('not_found');
     assertIntentBinding(principal, intent);
-    if (method === 'not_required' && confirmationRequirement(intent.command) !== 'none')
+    if (
+      method === 'not_required' &&
+      intent.authorizedDelivery.kind !== 'report_case_terminal' &&
+      confirmationRequirement(intent.command) !== 'none'
+    )
       throw new IntentError('confirmation_required');
     if (intent.state === 'consumed')
       return deps.store.acceptIntent(

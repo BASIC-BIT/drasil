@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { PermissionFlagsBits, type Guild, type User } from 'discord.js';
 import {
+  type ReportReviewReferenceStore,
+  type PrivateReportBanReview,
   ActionDeniedError,
   createDetectionActions,
   type AuthorityPort,
@@ -28,6 +30,7 @@ export interface BotDetectionDependencies extends Pick<
   | 'detectionEventsRepository'
   | 'confirmations'
 > {
+  readonly reviewReferences?: ReportReviewReferenceStore;
   readonly actionRequests: IModerationActionRequestRepository;
 }
 export interface BotDetectionRuntime {
@@ -82,6 +85,11 @@ export function createBotDetectionRuntime(
     };
   };
   const create = (envelope: ModerationActionRequest | null): DetectionActions => {
+    let claimedReview: PrivateReportBanReview | null = null;
+    const executionId =
+      typeof record(record(envelope?.metadata).delegation).executionId === 'string'
+        ? String(record(record(envelope?.metadata).delegation).executionId)
+        : null;
     const ownedRequest = async (id: string): Promise<ModerationActionRequest> => {
       const persisted = await deps.actionRequests.findById(id);
       if (
@@ -231,6 +239,12 @@ export function createBotDetectionRuntime(
             input.operationId,
             await actor(input.actorId)
           );
+          if (envelope?.actor_surface === 'mcp') {
+            if (!executionId || !deps.reviewReferences)
+              throw new ActionDeniedError('review_runtime_unavailable');
+            const portable = await deps.reviewReferences.save(executionId, reference);
+            return { ...portable, expiresAt: portable.expiresAt.toISOString() };
+          }
           const reviewReference = randomUUID();
           for (const [key, value] of reviews) if (value.expires <= Date.now()) reviews.delete(key);
           reviews.set(reviewReference, {
@@ -246,6 +260,23 @@ export function createBotDetectionRuntime(
           };
         },
         async review(input) {
+          if (envelope?.actor_surface === 'mcp') {
+            const reference = claimedReview;
+            claimedReview = null;
+            if (
+              !reference ||
+              reference.operationId !== input.reference.operationId ||
+              reference.targetUserId !== input.reference.targetUserId
+            )
+              throw new ActionDeniedError('stale_state');
+            await deps.securityActionService.reviewUncertainReportBan(
+              await guild(input.guildId),
+              reference,
+              await actor(input.actorId),
+              input.reason
+            );
+            return;
+          }
           const pending = reviews.get(input.reference.reviewReference);
           reviews.delete(input.reference.reviewReference);
           if (
@@ -266,7 +297,18 @@ export function createBotDetectionRuntime(
         },
       },
     };
-    return createDetectionActions(dependencies);
+    const actions = createDetectionActions(dependencies);
+    return {
+      async execute(context, command): ReturnType<DetectionActions['execute']> {
+        if (envelope?.actor_surface === 'mcp' && command.kind === 'review_uncertain_report_ban') {
+          if (!executionId || !deps.reviewReferences)
+            throw new ActionDeniedError('review_runtime_unavailable');
+          claimedReview = await deps.reviewReferences.claim(executionId, command.reviewReference);
+          if (!claimedReview) throw new ActionDeniedError('stale_state');
+        }
+        return actions.execute(context, command);
+      },
+    };
   };
   return { actions: create(null), forRequest: create, findDetection };
 }

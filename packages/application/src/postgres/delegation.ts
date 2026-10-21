@@ -1,13 +1,26 @@
+import { validateReportCaseTerminal } from '../reports/terminal';
 import { nativeCompletion } from './nativeEnforcement';
 import { projectHumanOutcome } from '../delegation/execution';
 import { encodeQueuedAction } from '../requests/encode';
 import { delegatedDeliveryBindingSchema, type QueuedRow } from '../requests/decode';
-import type {
-  ExecutionStore,
-  ExecutionAuthorization,
-  WorkerAdmission,
-  DelegatedQueueAdmission,
-  ActionCompletion,
+import {
+  type ExecutionStore,
+  type ExecutionAuthorization,
+  type WorkerAdmission,
+  type DelegatedQueueAdmission,
+  type ActionCompletion,
+  type IntentRecord,
+  type IntentStore,
+  type ResolvedIntent,
+  type ExecutionRecord,
+  type ConfirmationMethod,
+  type ConnectionGrant,
+  type ConnectionMutationResult,
+  type CreateConnectionInput,
+  type DelegatedPrincipal,
+  type DelegatedScope,
+  type DelegationStore,
+  type GuildSelection,
 } from '../delegation/types';
 import { randomUUID } from 'node:crypto';
 import {
@@ -19,22 +32,6 @@ import {
 import { confirmationRequirement } from '../delegation/confirmationPolicy';
 import { workflowDefinitions } from '../delegation/commands';
 import { buildEnqueueStatement } from './enqueue';
-import type {
-  IntentRecord,
-  IntentStore,
-  ResolvedIntent,
-  ExecutionRecord,
-  ConfirmationMethod,
-} from '../delegation/types';
-import type {
-  ConnectionGrant,
-  ConnectionMutationResult,
-  CreateConnectionInput,
-  DelegatedPrincipal,
-  DelegatedScope,
-  DelegationStore,
-  GuildSelection,
-} from '../delegation/types';
 
 export type DelegationSqlValue = string | number | boolean | Date | null | readonly string[];
 export interface DelegationQueryClient {
@@ -430,7 +427,9 @@ function createIntentStore(database: DelegationDatabase): IntentStore {
           !['elicitation', 'client_confirmation', 'website', 'discord', 'not_required'].includes(
             method
           ) ||
-          (method === 'not_required' && confirmationRequirement(intent.command) !== 'none')
+          (method === 'not_required' &&
+            intent.authorizedDelivery.kind !== 'report_case_terminal' &&
+            confirmationRequirement(intent.command) !== 'none')
         )
           throw new IntentError('confirmation_required');
         if (canonicalDigest(delivery) !== canonicalDigest(encodeIntentDelivery(intent)))
@@ -516,6 +515,20 @@ function createIntentStore(database: DelegationDatabase): IntentStore {
           "update mcp_intents set state = 'consumed', confirmation_method = $2 where confirmation_id = $1",
           [confirmationId, method]
         );
+        if (intent.authorizedDelivery.kind === 'report_case_terminal') {
+          const outcome = validateReportCaseTerminal(intent, intent.authorizedDelivery.outcome);
+          const terminal = await client.query<ExecutionRow>(
+            'update mcp_executions set started_at=clock_timestamp(),completed_at=clock_timestamp(),outcome=$2::jsonb where id=$1::uuid returning *',
+            [
+              executionId,
+              JSON.stringify({
+                kind: 'delegated_terminal',
+                result: projectHumanOutcome(intent.command, outcome),
+              }),
+            ]
+          );
+          return toExecution(terminal.rows[0]);
+        }
         return toExecution(result.rows[0]);
       });
     },

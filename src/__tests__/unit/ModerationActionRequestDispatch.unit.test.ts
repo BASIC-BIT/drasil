@@ -304,16 +304,39 @@ const fixtures = {
     metadata: { channel_id: 'channel' },
     outcome: { result: { action: 'updated', messageId: 'message' } },
   },
-} satisfies Record<Exclude<QueuedCommand['kind'], 'ban_user' | 'kick_user'>, Fixture>;
+} satisfies Record<
+  Exclude<
+    QueuedCommand['kind'],
+    | 'ban_user'
+    | 'kick_user'
+    | 'submit_message_report'
+    | 'confirm_intake_candidate'
+    | 'reject_intake_candidates'
+    | 'prepare_report_ban_review'
+    | 'review_uncertain_report_ban'
+  >,
+  Fixture
+>;
 
 const kinds = Object.keys(fixtures) as (keyof typeof fixtures)[];
 it('has exact schema, handler and shipped database enum coverage', () => {
   const expected = Object.values(ModerationActionRequestType).sort();
-  expect(expected).toHaveLength(42);
+  expect(expected).toHaveLength(47);
   expect(kinds).toHaveLength(40);
   expect(Object.keys(queuedCommandSchemas).sort()).toEqual(expected);
   expect(Object.keys(queuedActionHandlers).sort()).toEqual(expected);
-  expect([...kinds, 'ban_user', 'kick_user'].sort()).toEqual(expected);
+  expect(
+    [
+      ...kinds,
+      'ban_user',
+      'kick_user',
+      'submit_message_report',
+      'confirm_intake_candidate',
+      'reject_intake_candidates',
+      'prepare_report_ban_review',
+      'review_uncertain_report_ban',
+    ].sort()
+  ).toEqual(expected);
 });
 it.each(kinds)('decodes and dispatches the shipped %s row with its receipt', async (kind) => {
   jest.useFakeTimers().setSystemTime(new Date('2026-10-20T00:00:00.000Z'));
@@ -382,3 +405,65 @@ it.each(kinds)('decodes and dispatches the shipped %s row with its receipt', asy
     jest.useRealTimers();
   }
 });
+
+it.each([
+  {
+    kind: 'submit_message_report',
+    report_command: {
+      targetUserId: 'target',
+      channelId: 'channel',
+      messageId: 'message',
+      reason: null,
+    },
+    outcome: { status: 'submitted', result: { status: 'submitted' } },
+  },
+  {
+    kind: 'confirm_intake_candidate',
+    report_command: {
+      intakeId: 'report',
+      threadId: 'thread',
+      promptMessageId: 'prompt',
+      targetUserId: 'target',
+    },
+    outcome: { status: 'submitted', statusRecorded: false },
+  },
+  {
+    kind: 'reject_intake_candidates',
+    report_command: {
+      intakeId: 'report',
+      threadId: 'thread',
+      promptMessageId: 'prompt',
+      promptToken: 'token',
+    },
+    outcome: { status: 'not_rejected', result: { rejected: false, message: 'Changed' } },
+  },
+])(
+  'dispatches new report $kind preserving domain status',
+  async ({ kind, report_command, outcome }) => {
+    const request = mock<ModerationActionRequest>({
+      id: 'request',
+      server_id: 'guild',
+      actor_id: 'reporter',
+      actor_surface: 'mcp',
+      action_type: kind as ModerationActionRequestType,
+      target_user_id: 'target',
+      report_intake_id: 'report',
+      detection_event_id: null,
+      verification_event_id: null,
+      message_deletion_job_id: null,
+      metadata: { report_command: JSON.parse(JSON.stringify(report_command)) },
+    });
+    const action = decodeQueuedAction(request);
+    const execute = jest.fn().mockResolvedValue({ kind: 'outcome', outcome: { kind, ...outcome } });
+    const receipt = await prepareQueuedAction({
+      request,
+      action,
+      runtime: { reports: { execute } } as unknown as QueuedRequestRuntime,
+    })();
+    expect(receipt).toMatchObject({
+      action_type: kind,
+      status: outcome.status,
+      ...('statusRecorded' in outcome ? { statusRecorded: outcome.statusRecorded } : {}),
+    });
+  }
+);

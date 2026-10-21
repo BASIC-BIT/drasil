@@ -124,6 +124,10 @@ const closeSchema = z
 const openCaseSchema = z.object({ reportId: z.string().min(1) }).strict();
 
 export interface ReportReviewActions {
+  prepareSubmittedReportCaseOpen(
+    context: ActionContext,
+    input: { readonly reportId: string }
+  ): Promise<ReportCasePreparation>;
   close(
     context: ActionContext,
     input: { readonly reportId: string; readonly action: ReportClosureAction }
@@ -167,6 +171,8 @@ export function createReportReviewActions(deps: ReportReviewDependencies): Repor
     }
   }
   return {
+    prepareSubmittedReportCaseOpen: (context, input) =>
+      prepareSubmittedReportCaseOpen(context, input, deps),
     async close(context, command): Promise<ActionResult<CloseSubmittedReportResult>> {
       const input = closeSchema.parse(command);
       const denial = await authorize(context, 'report_review');
@@ -202,56 +208,24 @@ export function createReportReviewActions(deps: ReportReviewDependencies): Repor
       };
     },
     async openCase(context, command): Promise<ActionResult<OpenSubmittedReportCaseResult>> {
-      const input = openCaseSchema.parse(command);
-      const denial = await authorize(context, 'case_opening');
-      if (denial) return { kind: 'denied', code: denial };
-      if (context.actor.kind !== 'user') return { kind: 'denied', code: 'permission_denied' };
-      const base: OpenSubmittedReportCaseResult = {
-        actor: { id: context.actor.userId, surface: context.source },
-        action: 'open_case',
-        reportId: input.reportId,
-        caseId: null,
-        detectionEventId: null,
-        targetUserId: null,
-        status: 'opener_unavailable',
-        queueCleanupStatus: 'skipped',
-      };
-      function result(
-        overrides: Partial<OpenSubmittedReportCaseResult>
-      ): ActionResult<OpenSubmittedReportCaseResult> {
-        return { kind: 'outcome', outcome: { ...base, ...overrides } };
-      }
-      if (!deps.openCaseRepository || !deps.reportCaseOpener) return result({});
-      const candidate = await deps.openCaseRepository.findSubmittedReportCaseCandidate({
-        reportId: input.reportId,
-        serverId: context.guildId,
+      const prepared = await prepareSubmittedReportCaseOpen(context, command, {
+        authority: deps.authority,
+        openCaseRepository: deps.reportCaseOpener ? deps.openCaseRepository : null,
       });
-      if (!candidate) return result({ status: 'already_handled' });
-      if (candidate.id !== input.reportId || candidate.server_id !== context.guildId)
-        return { kind: 'denied', code: 'binding_mismatch' };
-      if (candidate.busy) return result({ status: 'busy' });
-      if (candidate.status !== 'submitted') return result({ status: 'already_handled' });
-      if (candidate.latest_case_id)
-        return result({
-          caseId: candidate.latest_case_id,
-          detectionEventId: candidate.latest_detection_id,
-          status: 'case_exists',
-          targetUserId: candidate.confirmed_target_user_id,
-        });
-      if (!candidate.confirmed_target_user_id)
-        return result({
-          status: 'missing_target',
-          detectionEventId: candidate.latest_detection_id,
-        });
-      if (!candidate.latest_detection_id)
-        return result({
-          status: 'missing_detection',
-          targetUserId: candidate.confirmed_target_user_id,
-        });
+      if (prepared.kind !== 'ready') return prepared;
+      const { candidate } = prepared.precondition;
+      const input = command;
+      const result = (
+        overrides: Partial<OpenSubmittedReportCaseResult>
+      ): ActionResult<OpenSubmittedReportCaseResult> => ({
+        kind: 'outcome',
+        outcome: { ...prepared.base, ...overrides },
+      });
+      if (!deps.reportCaseOpener) return result({});
       const opened = await deps.reportCaseOpener.openObservedDetectionCase(context, {
-        detectionEventId: candidate.latest_detection_id,
+        detectionEventId: prepared.command.detectionEventId,
         reportId: input.reportId,
-        userId: candidate.confirmed_target_user_id,
+        userId: prepared.command.targetUserId,
       });
       return result({
         caseId: opened.caseId ?? null,
@@ -263,5 +237,91 @@ export function createReportReviewActions(deps: ReportReviewDependencies): Repor
           opened.status === 'opened' ? await clearReportThreadAttention(input.reportId) : 'skipped',
       });
     },
+  };
+}
+
+export type ReportCasePreparation =
+  | { readonly kind: 'denied'; readonly code: ActionDenialCode }
+  | { readonly kind: 'outcome'; readonly outcome: OpenSubmittedReportCaseResult }
+  | {
+      readonly kind: 'ready';
+      readonly command: Extract<
+        import('../cases/commands').CaseCommand,
+        { kind: 'open_case_from_observed_detection' }
+      >;
+      readonly precondition: ReportCasePrecondition;
+      readonly base: OpenSubmittedReportCaseResult;
+    };
+export interface ReportCasePrecondition {
+  readonly kind: 'report_case_candidate';
+  readonly candidate: ReportOpenCaseCandidate;
+}
+
+export async function prepareSubmittedReportCaseOpen(
+  context: ActionContext,
+  command: { readonly reportId: string },
+  deps: Pick<ReportReviewDependencies, 'authority' | 'openCaseRepository'>
+): Promise<ReportCasePreparation> {
+  const input = openCaseSchema.parse(command);
+  if (context.actor.kind !== 'user') return { kind: 'denied', code: 'permission_denied' };
+  const facts = await deps.authority.loadFresh(context.guildId, context.actor.userId);
+  if (!facts?.present) return { kind: 'denied', code: 'actor_unavailable' };
+  if (facts.guildId !== context.guildId || facts.userId !== context.actor.userId)
+    return { kind: 'denied', code: 'binding_mismatch' };
+  if (!hasAuthority(facts, MODERATION_PERMISSIONS))
+    return { kind: 'denied', code: 'permission_denied' };
+  if (context.actor.kind !== 'user') return { kind: 'denied', code: 'permission_denied' };
+  const base: OpenSubmittedReportCaseResult = {
+    actor: { id: context.actor.userId, surface: context.source },
+    action: 'open_case',
+    reportId: input.reportId,
+    caseId: null,
+    detectionEventId: null,
+    targetUserId: null,
+    status: 'opener_unavailable',
+    queueCleanupStatus: 'skipped',
+  };
+  function result(
+    overrides: Partial<OpenSubmittedReportCaseResult>
+  ): ActionResult<OpenSubmittedReportCaseResult> {
+    return { kind: 'outcome', outcome: { ...base, ...overrides } };
+  }
+  if (!deps.openCaseRepository) return result({});
+  const candidate = await deps.openCaseRepository.findSubmittedReportCaseCandidate({
+    reportId: input.reportId,
+    serverId: context.guildId,
+  });
+  if (!candidate) return result({ status: 'already_handled' });
+  if (candidate.id !== input.reportId || candidate.server_id !== context.guildId)
+    return { kind: 'denied', code: 'binding_mismatch' };
+  if (candidate.busy) return result({ status: 'busy' });
+  if (candidate.status !== 'submitted') return result({ status: 'already_handled' });
+  if (candidate.latest_case_id)
+    return result({
+      caseId: candidate.latest_case_id,
+      detectionEventId: candidate.latest_detection_id,
+      status: 'case_exists',
+      targetUserId: candidate.confirmed_target_user_id,
+    });
+  if (!candidate.confirmed_target_user_id)
+    return result({
+      status: 'missing_target',
+      detectionEventId: candidate.latest_detection_id,
+    });
+  if (!candidate.latest_detection_id)
+    return result({
+      status: 'missing_detection',
+      targetUserId: candidate.confirmed_target_user_id,
+    });
+  return {
+    kind: 'ready',
+    command: {
+      kind: 'open_case_from_observed_detection',
+      detectionEventId: candidate.latest_detection_id,
+      reportId: input.reportId,
+      targetUserId: candidate.confirmed_target_user_id,
+    },
+    precondition: { kind: 'report_case_candidate', candidate },
+    base,
   };
 }
