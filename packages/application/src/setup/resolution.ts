@@ -114,11 +114,18 @@ function changeFor(
           is_active: true,
         },
         settings:
-          command.mode === 'provision' && command.detectionResponseMode
+          command.mode === 'provision'
             ? {
-                detection_response_mode: command.detectionResponseMode,
-                message_detection_response_mode: null,
-                join_detection_response_mode: null,
+                ...(command.detectionResponseMode
+                  ? {
+                      detection_response_mode: command.detectionResponseMode,
+                      message_detection_response_mode: null,
+                      join_detection_response_mode: null,
+                    }
+                  : {}),
+                ...(command.reportInstructionsChannelId || command.onboardingWizard
+                  ? { report_instructions_channel_id: command.reportInstructionsChannelId ?? null }
+                  : {}),
               }
             : {},
       };

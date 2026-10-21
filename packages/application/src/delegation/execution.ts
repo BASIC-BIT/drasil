@@ -1,4 +1,9 @@
 import { ActionDeniedError } from '../results';
+import {
+  setupFailureDefinitions,
+  setupPublicDiagnosticCodes,
+  type SetupFailureCode,
+} from '../setup/outcomes';
 import type { ActionContext } from '../context';
 import { workflowDefinitions, type HumanCommand } from './commands';
 import { confirmationRequirement } from './confirmationPolicy';
@@ -93,6 +98,14 @@ export function projectHumanOutcome(command: HumanCommand, value: unknown): Acti
   if (typeof raw.succeeded === 'boolean') outcome.succeeded = raw.succeeded;
   if (typeof raw.count === 'number') outcome.count = raw.count;
   const family = workflowDefinitions.find((item) => item.commandKind === command.kind)?.family;
+  const setupFailureCode =
+    command.kind === 'complete_setup_verification' &&
+    raw.action_type === command.kind &&
+    typeof raw.code === 'string' &&
+    Object.prototype.hasOwnProperty.call(setupFailureDefinitions, raw.code)
+      ? (raw.code as SetupFailureCode)
+      : undefined;
+  const setupFailure = setupFailureCode ? setupFailureDefinitions[setupFailureCode] : undefined;
   const keys: Record<string, readonly string[]> = {
     cases: [
       'opened',
@@ -187,6 +200,19 @@ export function projectHumanOutcome(command: HumanCommand, value: unknown): Acti
     ],
   };
   const details: Record<string, PublicScalar> = {};
+  if (setupFailure) {
+    details.detail = setupFailure.detail;
+    for (const key of ['error_count', 'warning_count']) {
+      const count = raw[key];
+      if (typeof count === 'number' && Number.isSafeInteger(count) && count >= 0)
+        details[key] = count;
+    }
+    if (
+      typeof raw.diagnostic_code === 'string' &&
+      setupPublicDiagnosticCodes.has(raw.diagnostic_code)
+    )
+      details.diagnostic_code = raw.diagnostic_code;
+  }
   const allowedKeys =
     command.kind === 'ban_user'
       ? ['banned']
@@ -242,7 +268,11 @@ export function projectHumanOutcome(command: HumanCommand, value: unknown): Acti
           : status === 'denied'
             ? 'denied'
             : 'completed';
-  return { state, outcome };
+  return {
+    state: setupFailure?.state ?? state,
+    ...(setupFailureCode ? { code: setupFailureCode } : {}),
+    outcome,
+  };
 }
 export function projectExecution(execution: ExecutionRecord): PublicActionResult {
   const base = {

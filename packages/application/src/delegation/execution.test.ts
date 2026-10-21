@@ -1,5 +1,29 @@
 import { projectExecution, projectHumanOutcome } from './execution';
 import type { ExecutionRecord } from './types';
+it.each([
+  ['ambiguous_case_role', 'denied'],
+  ['ambiguous_verification_channel', 'denied'],
+  ['invalid_selection', 'denied'],
+  ['candidate_validation_failed', 'failed'],
+  ['verification_channel_failed', 'uncertain'],
+  ['final_validation_failed', 'uncertain'],
+  ['config_save_failed', 'uncertain'],
+] as const)('projects only safe setup %s diagnostics', (code, state) => {
+  const result = projectHumanOutcome({ kind: 'complete_setup_verification' } as never, {
+    action_type: 'complete_setup_verification',
+    code,
+    status: state,
+    error_count: 2,
+    warning_count: -1,
+    diagnostic_code: 'private unknown diagnostic',
+    setupFailureDetail: 'private rollback prose',
+    error: 'private raw error',
+  });
+  expect(result).toMatchObject({ state, code, outcome: { details: { error_count: 2 } } });
+  expect(result.outcome?.details).not.toHaveProperty('warning_count');
+  expect(result.outcome?.details).not.toHaveProperty('diagnostic_code');
+  expect(JSON.stringify(result)).not.toContain('private');
+});
 it('projects a started direct execution as uncertain without disclosing private bindings', () => {
   const execution = {
     executionId: 'execution',

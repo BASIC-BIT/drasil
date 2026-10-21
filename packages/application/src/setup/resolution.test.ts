@@ -285,6 +285,57 @@ test('binds both setup modes and detects create-versus-reuse changes in the save
     command: { mode: 'verification_modal', caseRoleId: 'case' },
   });
 });
+test.each([
+  {
+    mode: 'provision',
+    reportInstructionsChannelId: 'new-report',
+    onboardingWizard: false,
+    expected: '"new-report"',
+  },
+  { mode: 'provision', onboardingWizard: true, expected: 'null' },
+  { mode: 'provision', onboardingWizard: false, expected: null },
+  { mode: 'verification_modal', onboardingWizard: true, expected: null },
+] as const)('provisioning panel diff matches completion choices: %j', async (choice) => {
+  const current = {
+    ...state,
+    case_role_id: 'case',
+    admin_channel_id: 'admin',
+    verification_channel_id: 'verification',
+    settings: { report_instructions_channel_id: 'old-report' },
+  };
+  const { expected, mode, ...input } = choice;
+  const result = await resolver(
+    true,
+    true,
+    current,
+    [{ id: 'case', name: 'Case' }],
+    [
+      { id: 'admin', name: 'admin', type: 0 },
+      { id: 'verification', name: 'verification', type: 0 },
+      { id: 'new-report', name: 'reports', type: 0 },
+    ]
+  ).resolve(principal, {
+    workflowId:
+      mode === 'provision'
+        ? 'complete_setup_verification_provision'
+        : 'complete_setup_verification_verification_modal',
+    guildId: 'guild',
+    idempotencyKey: 'panel-diff',
+    input: {
+      adminChannelId: 'admin',
+      caseRoleId: 'case',
+      verificationChannelId: 'verification',
+      ...input,
+    },
+  });
+  if (expected === null) {
+    expect(result.summary).not.toContain('report_instructions_channel_id:');
+    expect(result.summary).toContain('No editable settings change.');
+  } else {
+    expect(result.summary).toContain(`report_instructions_channel_id: "old-report" -> ${expected}`);
+    expect(result.summary).not.toContain('No editable settings change.');
+  }
+});
 test.each(['repair', 'repost'] as const)(
   'binds %s panel publication provenance and current channel',
   async (action) => {

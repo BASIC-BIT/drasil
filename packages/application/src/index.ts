@@ -70,3 +70,4 @@ export * from './setup/defaults';
 export * from './setup/resolution';
 export * from './setup/selection';
 export * from './setup/resources';
+export * from './setup/outcomes';
