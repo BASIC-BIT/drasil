@@ -1,6 +1,12 @@
 import { checkMcpLimit } from '../limits';
 import { recordMcpAudit } from '../audit';
-import type { LimitSubject, LimitCategory, LimitDecision, AccessDenial } from '@drasil/application';
+import type {
+  LimitSubject,
+  LimitCategory,
+  LimitDecision,
+  AccessDenial,
+  McpAuditPort,
+} from '@drasil/application';
 import { createWebReportResolution } from '../adapters/reports';
 import { ActionDeniedError } from '@drasil/application';
 import { z } from 'zod';
@@ -49,7 +55,8 @@ export interface McpReadToolDefinition extends McpPublicToolDefinition<QueryResu
 }
 export function createMcpReadTools(
   queries: Pick<ReturnType<typeof createMcpQueries>, 'execute'>,
-  limit?: (subject: LimitSubject, category: LimitCategory) => Promise<LimitDecision>
+  limit?: (subject: LimitSubject, category: LimitCategory) => Promise<LimitDecision>,
+  audit?: McpAuditPort
 ): readonly McpReadToolDefinition[] {
   return querySchema.options.map((option) => {
     const kind = option.shape.kind.value;
@@ -72,7 +79,21 @@ export function createMcpReadTools(
       },
       async handler(principal, input) {
         const parsed = inputSchema.safeParse(input);
-        if (!parsed.success) return { kind: 'denied', reason: 'invalid_page' };
+        async function observed(result: QueryResult): Promise<QueryResult> {
+          await audit?.({
+            event: 'observation',
+            ...principal,
+            guildId: parsed.success && 'guildId' in parsed.data ? parsed.data.guildId : undefined,
+            outcome:
+              result.kind === 'allowed'
+                ? 'completed'
+                : result.reason === 'rate_limited'
+                  ? 'limited'
+                  : 'denied',
+          }).catch(() => undefined);
+          return result;
+        }
+        if (!parsed.success) return observed({ kind: 'denied', reason: 'invalid_page' });
         const query = { ...parsed.data, kind };
         let charged = false;
         async function admit(guildId?: string): Promise<AccessDenial | undefined> {
@@ -91,9 +112,9 @@ export function createMcpReadTools(
         const result = await queries.execute(principal, query, limit ? admit : undefined);
         if (limit && !charged) {
           const denied = await admit();
-          if (denied) return denied;
+          if (denied) return observed(denied);
         }
-        return result;
+        return observed(result);
       },
     };
   });
@@ -123,15 +144,7 @@ export function createWebMcpReadTools(cursorSecret: string): readonly McpReadToo
         return guild.name ?? guildId;
       },
     }),
-    async (subject, category) => {
-      const decision = await checkMcpLimit(subject, category);
-      if ('userId' in subject)
-        await recordMcpAudit({
-          event: 'observation',
-          ...subject,
-          outcome: decision.kind === 'limited' ? 'limited' : undefined,
-        });
-      return decision;
-    }
+    checkMcpLimit,
+    recordMcpAudit
   );
 }

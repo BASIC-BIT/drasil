@@ -14,4 +14,4 @@ export { createReportClosureResources } from './reportClosure';
 
 export { createMcpOperationalStore } from './operations';
 
-export { settleMcpQueue } from './delegation';
+export { settleMcpQueue, recordMcpQueueObservation } from './delegation';

@@ -1,5 +1,9 @@
 import { createBotDelegationDatabase } from '../application/adapters/delegationDatabase';
-import { settleMcpQueue, buildEnqueueStatement } from '@drasil/application/postgres';
+import {
+  settleMcpQueue,
+  buildEnqueueStatement,
+  recordMcpQueueObservation,
+} from '@drasil/application/postgres';
 import { createMcpAudit, type EnqueueInput } from '@drasil/application';
 import { REPORT_BAN_TERMINAL_ATTEMPT_PREFIX } from '../utils/caseRoleRelease';
 import { inject, injectable } from 'inversify';
@@ -687,7 +691,10 @@ export class ModerationActionRequestRepository implements IModerationActionReque
           AND NOT (action_type = 'ban_observed_detection' AND (metadata->>'report_ban_phase' IS NOT NULL OR coalesce(result->'observed_ban_result'->>'status', '') IN ('banned', 'banned_updates_pending', 'ban_outcome_unknown')))
         returning *
       `;
-      return rows[0] ?? (await this.findById(id));
+      const request = rows.length ? rows[0] : await this.findById(id);
+      if (request?.actor_surface === 'mcp')
+        await recordMcpQueueObservation(createBotDelegationDatabase(this.prisma), id, mcpAudit);
+      return request;
     } catch (error) {
       this.handleError(error, 'failModerationActionRequest');
     }

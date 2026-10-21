@@ -699,6 +699,136 @@ integration.each(['pg', 'prisma'] as const)('MCP operational queue lifecycle via
     expect(event.queueDelayMs).toBeGreaterThanOrEqual(2000);
     expect(lines[0]).not.toMatch(/commandDigest|preconditions|summary|token|headers/);
   });
+  it.each(['update', 'readback', 'observation'] as const)(
+    'never fabricates failure audit when the %s database operation fails',
+    async (stage) => {
+      const receipt = await accept();
+      const prisma = getPrismaClient();
+      const repository = new ModerationActionRequestRepository(prisma);
+      const lines: string[] = [];
+      const log = jest
+        .spyOn(console, 'info')
+        .mockImplementation((line) => lines.push(String(line)));
+      let restore: (() => void) | undefined;
+      const execute = jest.fn(async () => {
+        if (stage === 'readback') {
+          await repository.complete(receipt.requestId!, {
+            action_type: 'clear_moderation_queue',
+            server_id: 'guild',
+            removed_count: 3,
+          });
+          const readback = jest
+            .spyOn(repository, 'findById')
+            .mockRejectedValueOnce(new Error('PRIVATE_READBACK_FAILURE'));
+          restore = () => readback.mockRestore();
+        } else {
+          const query =
+            stage === 'update'
+              ? jest
+                  .spyOn(prisma, '$queryRaw')
+                  .mockRejectedValueOnce(new Error('PRIVATE_UPDATE_FAILURE'))
+              : jest
+                  .spyOn(prisma, '$queryRawUnsafe')
+                  .mockRejectedValueOnce(new Error('PRIVATE_AUDIT_FAILURE'));
+          restore = () => query.mockRestore();
+        }
+        throw new Error('PRIVATE_DISPATCH_ERROR');
+      });
+      try {
+        const worker = new ModerationActionRequestService(
+          repository,
+          {
+            delegation: createDelegatedWorkerAdmission({ store, access }),
+            operationsRuntime: { forExecution: () => ({ execute }) },
+            caseConfirmations: { recordVerified: jest.fn() },
+          } as never,
+          {} as never
+        );
+        if (stage !== 'observation')
+          await expect(worker.processPendingRequests(1)).rejects.toThrow();
+        else await expect(worker.processPendingRequests(1)).resolves.toBe(1);
+        restore?.();
+        expect(execute).toHaveBeenCalledTimes(1);
+        expect((await repository.findById(receipt.requestId!))?.status).toBe(
+          stage === 'update' ? 'processing' : stage === 'readback' ? 'completed' : 'failed'
+        );
+        expect(lines).toEqual([]);
+        expect(
+          (
+            await pool.query('select outcome from mcp_executions where id=$1', [
+              receipt.executionId,
+            ])
+          ).rows[0].outcome
+        ).toBeNull();
+      } finally {
+        restore?.();
+        log.mockRestore();
+      }
+    }
+  );
+  it.each([false, true])(
+    'audits a generic dispatch exception without polling, preserving completed winner=%s',
+    async (completed) => {
+      const receipt = await accept();
+      const repository = new ModerationActionRequestRepository(getPrismaClient());
+      const winner = {
+        action_type: 'clear_moderation_queue',
+        server_id: 'guild',
+        removed_count: 3,
+      };
+      const execute = jest.fn(async () => {
+        if (completed) await repository.complete(receipt.requestId!, winner);
+        throw new Error('PRIVATE_DISPATCH_ERROR Bearer SECRET');
+      });
+      const lines: string[] = [];
+      const log = jest
+        .spyOn(console, 'info')
+        .mockImplementation((line) => lines.push(String(line)));
+      try {
+        const worker = new ModerationActionRequestService(
+          repository,
+          {
+            delegation: createDelegatedWorkerAdmission({ store, access }),
+            operationsRuntime: { forExecution: () => ({ execute }) },
+            caseConfirmations: { recordVerified: jest.fn() },
+          } as never,
+          {} as never
+        );
+        await worker.processPendingRequests(1);
+        expect(execute).toHaveBeenCalledTimes(1);
+        const queue = await repository.findById(receipt.requestId!);
+        expect(queue?.status).toBe(completed ? 'completed' : 'failed');
+        if (completed) expect(queue?.result).toEqual(winner);
+        const execution = (
+          await pool.query(
+            'select started_at,completed_at,outcome from mcp_executions where id=$1',
+            [receipt.executionId]
+          )
+        ).rows[0];
+        expect(execution.started_at).not.toBeNull();
+        expect(execution.completed_at).toBeNull();
+        expect(execution.outcome).toBeNull();
+        expect(lines.map((line) => JSON.parse(line))).toContainEqual(
+          expect.objectContaining({
+            event: 'observation',
+            outcome: completed ? 'completed' : 'uncertain',
+            userId: principal.userId,
+            clientId: principal.clientId,
+            connectionId: principal.connectionId,
+            grantVersion: principal.grantVersion,
+            guildId: 'guild',
+            workflowId: invocation.workflowId,
+            confirmationMethod: 'client_confirmation',
+            executionId: receipt.executionId,
+            requestId: receipt.requestId,
+          })
+        );
+        expect(lines.join('')).not.toMatch(/PRIVATE_DISPATCH_ERROR|Bearer|SECRET|last_error/);
+      } finally {
+        log.mockRestore();
+      }
+    }
+  );
   it('settles past a full batch of protected report-ban claims without changing their receipts', async () => {
     await pool.query("insert into users(discord_id) values('target')");
     const repository = new ModerationActionRequestRepository(getPrismaClient());

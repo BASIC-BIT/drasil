@@ -563,7 +563,7 @@ async function readExecution(
 }
 async function loadOwnedExecution(
   database: DelegationQueryClient,
-  principal: DelegatedPrincipal,
+  principal: Pick<DelegatedPrincipal, 'userId' | 'clientId' | 'connectionId'>,
   id: string
 ): Promise<ExecutionRecord | null> {
   if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id)) return null;
@@ -622,6 +622,38 @@ async function loadOwnedExecution(
   return native && (!execution.outcome || execution.outcome.result.state === 'uncertain')
     ? { ...execution, outcome: { kind: 'delegated_terminal', result: native } }
     : execution;
+}
+/** Observe a guarded queue write using persisted provenance and the same public receipt projection.
+ * This never writes an execution outcome or treats the failed attempt as a terminal transition. */
+export async function recordMcpQueueObservation(
+  database: DelegationDatabase,
+  requestId: string,
+  audit: McpAuditPort
+): Promise<void> {
+  try {
+    const {
+      rows: [raw],
+    } = await database.query('select * from moderation_action_requests where id=$1::uuid', [
+      requestId,
+    ]);
+    if (!raw || raw.actor_surface !== 'mcp') return;
+    const request = parseQueuedRow(raw);
+    const binding = delegatedDeliveryBindingSchema.safeParse(request.metadata?.delegation);
+    if (!binding.success) return;
+    const execution = await readExecution(database, binding.data.executionId);
+    if (!execution || execution.queueRequestId !== requestId || !matchesQueue(execution, request))
+      return;
+    const current = await loadOwnedExecution(database, execution, execution.executionId);
+    if (!current) return;
+    await audit({
+      event: 'observation',
+      ...execution,
+      requestId,
+      outcome: projectExecution(current).state,
+    });
+  } catch {
+    // Read/telemetry failure supplies no evidence of a final outcome and cannot change the write.
+  }
 }
 function createExecutionStore(
   database: DelegationDatabase,
