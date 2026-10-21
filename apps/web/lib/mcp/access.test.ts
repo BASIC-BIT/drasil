@@ -142,3 +142,45 @@ it('passes the authorized guild and reporter binding to a resource query', async
   );
   expect(result).toEqual({ kind: 'allowed', value: { guildId: 'guild', reporterId: 'user' } });
 });
+
+it('binds member projections to an authorized workflow and prevents unauthorized variants reaching queries', async () => {
+  const access = createWebDelegatedAccess({
+    store: { findConnection: async () => grant },
+    authority: {
+      loadFresh: async (guildId) => ({
+        userId: principal.userId,
+        guildId,
+        present: true,
+        owner: false,
+        permissions: '32',
+        roleIds: [],
+      }),
+    },
+    staffRoles: { loadRoleIds: async () => [] },
+    guilds: {
+      isActive: async () => true,
+      listActive: async () => ({ guildIds: [], nextCursor: null }),
+    },
+  });
+  const read = vi.fn(async (binding) => binding);
+  const denied = {
+    kind: 'member_context' as const,
+    guildId: 'guild',
+    purpose: 'case' as const,
+    workflowId: 'open_admin_case_moderator' as const,
+  };
+  expect(await withAuthorizedRead(access, principal, denied, read)).toMatchObject({
+    kind: 'denied',
+  });
+  expect(read).not.toHaveBeenCalled();
+  const allowed = { ...denied, workflowId: 'open_admin_case_administrator' as const };
+  expect(await withAuthorizedRead(access, principal, allowed, read)).toMatchObject({
+    kind: 'allowed',
+    value: {
+      guildId: 'guild',
+      scope: 'drasil:read',
+      memberContext: { purpose: 'case', workflowId: allowed.workflowId },
+    },
+  });
+  expect(read).toHaveBeenCalledTimes(1);
+});

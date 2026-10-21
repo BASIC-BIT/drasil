@@ -1,7 +1,12 @@
-import { createDelegatedAccess, type DelegatedAccess } from './access';
+import {
+  createDelegatedAccess,
+  type DelegatedAccess,
+  type MemberContextPurpose,
+  type DelegatedReadQuery,
+} from './access';
 import type { AuthorityFacts } from '../authorization';
 import type { ConnectionGrant, DelegatedPrincipal } from './types';
-import { humanCommandSchema, workflowDefinitions } from './commands';
+import { humanCommandSchema, workflowDefinitions, type WorkflowId } from './commands';
 
 const guildId = 'guild';
 const principal: DelegatedPrincipal = {
@@ -132,6 +137,7 @@ describe('delegated access', () => {
           kind: 'member_context',
           guildId,
           purpose: permissions === '4' ? 'ban' : 'kick',
+          workflowId: permissions === '4' ? 'ban_user' : 'kick_user',
         })
       ).toMatchObject({ kind: 'allowed' });
       expect(
@@ -139,6 +145,7 @@ describe('delegated access', () => {
           kind: 'member_context',
           guildId,
           purpose: 'case',
+          workflowId: 'open_admin_case_moderator',
         })
       ).toMatchObject({ kind: 'denied' });
     }
@@ -228,7 +235,12 @@ describe('delegated access', () => {
       guildId,
       userId: principal.userId,
       connectionId: principal.connectionId,
-      resource: { kind: 'member_context' as const, guildId, purpose: 'ban' as const },
+      resource: {
+        kind: 'member_context' as const,
+        guildId,
+        purpose: 'ban' as const,
+        workflowId: 'ban_user' as const,
+      },
     };
     expect(await f.access.authorizeRead(principal, query)).toMatchObject({ kind: 'allowed' });
     expect(
@@ -345,10 +357,125 @@ it('reports workflow capabilities from fresh family authority rather than eligib
   });
 });
 
-it('allows minimal case context for existing Manage Server case workflows', async () => {
+it.each<[string, WorkflowId, 'allowed' | 'denied']>([
+  ['32', 'open_admin_case_administrator', 'allowed'],
+  ['32', 'open_case_from_observed_detection', 'allowed'],
+  ['32', 'open_admin_case_moderator', 'denied'],
+  ['32', 'repair_active_case_administrator', 'denied'],
+  ['32', 'manual_flag_user', 'denied'],
+  [(1n << 40n).toString(), 'open_admin_case_moderator', 'allowed'],
+  [(1n << 40n).toString(), 'open_admin_case_administrator', 'denied'],
+])(
+  'binds case context with permissions %s to workflow %s',
+  async (permissions, workflowId, expected) => {
+    const f = fixture();
+    f.setFacts({ permissions });
+    const result = await f.access.authorizeRead(principal, {
+      kind: 'member_context',
+      guildId,
+      purpose: 'case',
+      workflowId,
+    });
+    expect(result).toMatchObject({ kind: expected });
+    if (expected === 'allowed')
+      expect(result).toMatchObject({ memberContext: { purpose: 'case', workflowId } });
+  }
+);
+it.each<[MemberContextPurpose, WorkflowId]>([
+  ['case', 'ban_user'],
+  ['ban', 'kick_user'],
+  ['report', 'open_admin_case_moderator'],
+  ['configure', 'manual_flag_user'],
+  ['kick', 'update_setup'],
+  ['case', 'acknowledge_attention'],
+])(
+  'rejects purpose %s mismatched with workflow %s even for owners',
+  async (purpose, workflowId) => {
+    const f = fixture();
+    f.setFacts({ owner: true });
+    expect(
+      await f.access.authorizeRead(principal, {
+        kind: 'member_context',
+        guildId,
+        purpose,
+        workflowId,
+      })
+    ).toMatchObject({ kind: 'denied' });
+  }
+);
+it('requires a known workflow and ignores caller-provided authority descriptors', async () => {
   const f = fixture();
   f.setFacts({ permissions: '32' });
+  for (const workflowId of [undefined, 'unknown_workflow', 'apply_captcha_pass']) {
+    const query = {
+      kind: 'member_context',
+      guildId,
+      purpose: 'case',
+      workflowId,
+    } as unknown as DelegatedReadQuery;
+    expect(await f.access.authorizeRead(principal, query)).toMatchObject({ kind: 'denied' });
+  }
+  const query = {
+    kind: 'member_context' as const,
+    guildId,
+    purpose: 'case' as const,
+    workflowId: 'open_admin_case_moderator' as const,
+    authorityCommand: { kind: 'open_admin_case', intent: 'dashboard_case_open' },
+  };
+  expect(await f.access.authorizeRead(principal, query)).toMatchObject({ kind: 'denied' });
+});
+it('keeps exact workflow context on read consent and advertises only matching context bindings', async () => {
+  const f = fixture();
+  f.setFacts({ permissions: '32' });
+  f.setGrant({ scopes: ['drasil:read'] });
+  const readOnly = { ...principal, scopes: ['drasil:read'] as const };
+  const workflowId = 'open_admin_case_administrator' as const;
   expect(
-    await f.access.authorizeRead(principal, { kind: 'member_context', guildId, purpose: 'case' })
-  ).toMatchObject({ kind: 'allowed' });
+    await f.access.authorizeRead(readOnly, {
+      kind: 'member_context',
+      guildId,
+      purpose: 'case',
+      workflowId,
+    })
+  ).toMatchObject({
+    kind: 'allowed',
+    scope: 'drasil:read',
+    memberContext: { purpose: 'case', workflowId },
+  });
+  const command = humanCommandSchema.parse({
+    kind: 'open_admin_case',
+    intent: 'dashboard_case_open',
+    targetUserId: 'target',
+    reason: null,
+    detectionEventId: null,
+    selectedMessage: null,
+  });
+  expect(await f.access.authorizeWorkflow(readOnly, guildId, command)).toMatchObject({
+    kind: 'denied',
+    reason: 'scope_denied',
+  });
+  const page = await f.access.listEligibleGuilds(readOnly, {});
+  expect(page).toMatchObject({
+    guilds: [
+      { workflows: [], memberContext: expect.arrayContaining([{ purpose: 'case', workflowId }]) },
+    ],
+  });
+  for (const workflowId of [
+    'open_admin_case_moderator',
+    'repair_active_case_administrator',
+    'manual_flag_user',
+  ]) {
+    expect(page).toMatchObject({
+      guilds: [{ memberContext: expect.not.arrayContaining([{ purpose: 'case', workflowId }]) }],
+    });
+  }
+  f.setFacts({ permissions: (1n << 40n).toString() });
+  expect(
+    await f.access.authorizeRead(readOnly, {
+      kind: 'member_context',
+      guildId,
+      purpose: 'case',
+      workflowId,
+    })
+  ).toMatchObject({ kind: 'denied' });
 });

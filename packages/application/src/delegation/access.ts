@@ -18,12 +18,17 @@ import {
   humanCommandSchema,
   workflowDefinitions,
   type WorkflowAuthorityCommand,
+  type WorkflowDefinition,
   type WorkflowId,
 } from './commands';
 import type { HumanCommand } from './commands';
 import type { ConnectionGrant, DelegatedPrincipal, DelegatedScope, DelegationStore } from './types';
 
 export type MemberContextPurpose = 'report' | 'case' | 'ban' | 'kick' | 'configure';
+export interface MemberContextBinding {
+  readonly purpose: MemberContextPurpose;
+  readonly workflowId: WorkflowId;
+}
 export type ResourceReadQuery =
   | {
       readonly kind: 'cases' | 'detections' | 'attention' | 'setup' | 'diagnostics';
@@ -38,6 +43,7 @@ export type ResourceReadQuery =
       readonly kind: 'member_context';
       readonly guildId: string;
       readonly purpose: MemberContextPurpose;
+      readonly workflowId: WorkflowId;
     };
 /** Status ownership and resource policy come from persisted provenance, never public arguments. */
 export type DelegatedReadQuery =
@@ -59,6 +65,8 @@ export interface AccessBinding {
   readonly staffRoleIds: readonly string[];
   /** When present, adapters must bind reporter ownership in the repository query. */
   readonly reporterId?: string;
+  /** Projection must remain limited to this authorized workflow and purpose. */
+  readonly memberContext?: MemberContextBinding;
 }
 export interface AccessDenial {
   readonly kind: 'denied';
@@ -80,7 +88,7 @@ export interface GuildPageRequest {
 export interface GuildCapabilities {
   readonly guildId: string;
   readonly reads: readonly Exclude<ReadKind, 'own_execution' | 'member_context'>[];
-  readonly memberContext: readonly MemberContextPurpose[];
+  readonly memberContext: readonly MemberContextBinding[];
   /** Token and persisted grant scope ceiling, independent of current guild authority. */
   readonly scopes: readonly DelegatedScope[];
   readonly workflows: readonly WorkflowId[];
@@ -137,22 +145,60 @@ function grantMatches(
     grant.version === principal.grantVersion
   );
 }
-function permitsPurpose(binding: AccessBinding, purpose: MemberContextPurpose): boolean {
-  switch (purpose) {
-    case 'report':
-      return hasStaffAuthority(binding.facts, binding.staffRoleIds);
-    case 'case':
-      return hasAuthority(
-        binding.facts,
-        caseRequiredPermissions({ kind: 'open_case_from_observed_detection' })
-      );
-    case 'ban':
-      return hasAuthority(binding.facts, BAN_MEMBERS);
-    case 'kick':
-      return hasAuthority(binding.facts, KICK_MEMBERS);
-    case 'configure':
-      return hasAuthority(binding.facts, 0n);
+/** This classification binds projection purpose; permissions still come only from the workflow. */
+function memberContextFor(workflow: WorkflowDefinition): MemberContextBinding | null {
+  let purpose: MemberContextPurpose;
+  switch (workflow.commandKind) {
+    case 'ban_user':
+    case 'ban_case_user':
+    case 'ban_case_user_by_id':
+    case 'sync_existing_ban':
+    case 'ban_observed_detection':
+    case 'prepare_report_ban_review':
+    case 'review_uncertain_report_ban':
+    case 'ban_case_user_with_message_cleanup':
+      purpose = 'ban';
+      break;
+    case 'kick_user':
+    case 'kick_case_user':
+    case 'kick_observed_detection':
+      purpose = 'kick';
+      break;
+    case 'open_submitted_report_case':
+      purpose = 'case';
+      break;
+    default:
+      switch (workflow.family) {
+        case 'cases':
+        case 'cleanup':
+        case 'captcha':
+        case 'quarantine':
+          purpose = 'case';
+          break;
+        case 'reports':
+        case 'reportReview':
+        case 'detections':
+          purpose = 'report';
+          break;
+        case 'setup':
+          purpose = 'configure';
+          break;
+        default:
+          return null;
+      }
   }
+  return { purpose, workflowId: workflow.id };
+}
+function authorizedMemberContext(
+  binding: AccessBinding,
+  query: MemberContextBinding
+): MemberContextBinding | null {
+  const workflow = workflowDefinitions.find((definition) => definition.id === query.workflowId);
+  if (!workflow) return null;
+  const context = memberContextFor(workflow);
+  return context?.purpose === query.purpose && permitsWorkflow(binding, workflow.authorityCommand)
+    ? context
+    : null;
 }
 function permitsRead(binding: AccessBinding, query: ResourceReadQuery): boolean {
   switch (query.kind) {
@@ -171,7 +217,7 @@ function permitsRead(binding: AccessBinding, query: ResourceReadQuery): boolean 
     case 'diagnostics':
       return hasAuthority(binding.facts, MANAGE_GUILD);
     case 'member_context':
-      return permitsPurpose(binding, query.purpose);
+      return authorizedMemberContext(binding, query) !== null;
   }
 }
 /** Admission checks authority only. Execution must still enforce resource binding, state and domain policy. */
@@ -243,7 +289,6 @@ function capabilities(binding: AccessBinding, principal: DelegatedPrincipal): Gu
     'setup',
     'diagnostics',
   ] as const;
-  const purposes = ['report', 'case', 'ban', 'kick', 'configure'] as const;
   return {
     guildId: binding.guildId,
     scopes,
@@ -257,7 +302,10 @@ function capabilities(binding: AccessBinding, principal: DelegatedPrincipal): Gu
       ? kinds.filter((kind) => permitsRead(binding, { kind, guildId: binding.guildId }))
       : [],
     memberContext: scopes.includes('drasil:read')
-      ? purposes.filter((purpose) => permitsPurpose(binding, purpose))
+      ? workflowDefinitions.flatMap((definition) => {
+          const context = memberContextFor(definition);
+          return context && permitsWorkflow(binding, definition.authorityCommand) ? [context] : [];
+        })
       : [],
   };
 }
@@ -310,6 +358,10 @@ export function createDelegatedAccess(deps: DelegatedAccessDependencies): Delega
     )
       return denied('binding_mismatch');
     const resource = query.kind === 'own_execution' ? query.resource : query;
+    if (resource.kind === 'member_context') {
+      const memberContext = authorizedMemberContext(binding, resource);
+      return memberContext ? { ...binding, memberContext } : denied('permission_denied');
+    }
     if (!permitsRead(binding, resource)) return denied('permission_denied');
     return (resource.kind === 'reports' || resource.kind === 'intakes') &&
       resource.audience === 'reporter'
