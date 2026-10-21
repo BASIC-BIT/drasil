@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   workflowDefinitions,
   type DelegatedPrincipal,
+  type DelegatedScope,
   type WorkflowDefinition,
 } from '@drasil/application';
 import type { StandardSchemaWithJSON, ToolAnnotations } from '@drasil/mcp-runtime/server';
@@ -42,4 +43,15 @@ export function bindMcpTool<Result>(
   handler: McpToolDefinition<Result>['handler']
 ): McpToolDefinition<Result> {
   return { ...definition, handler };
+}
+
+/** Common transport input; workflow entries retain their complete canonical metadata. */
+export interface McpPublicToolDefinition<Result = unknown> {
+  readonly toolName: string;
+  readonly scope: DelegatedScope;
+  readonly description?: string;
+  readonly schema: StandardSchemaWithJSON;
+  readonly annotations: ToolAnnotations;
+  readonly resultContract: string;
+  readonly handler: (principal: DelegatedPrincipal, input: unknown) => Promise<Result>;
 }

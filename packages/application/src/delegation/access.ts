@@ -115,6 +115,10 @@ export interface DelegatedAccessDependencies {
   readonly now?: () => number;
 }
 export interface DelegatedAccess {
+  getCapabilities(
+    principal: DelegatedPrincipal,
+    guildId: string
+  ): Promise<AccessDenial | { readonly kind: 'allowed'; readonly capabilities: GuildCapabilities }>;
   authorizeGuild(
     principal: DelegatedPrincipal,
     guildId: string,
@@ -386,6 +390,17 @@ export function createDelegatedAccess(deps: DelegatedAccessDependencies): Delega
   return {
     authorizeGuild,
     authorizeRead,
+    async getCapabilities(
+      principal,
+      guildId
+    ): Promise<
+      AccessDenial | { readonly kind: 'allowed'; readonly capabilities: GuildCapabilities }
+    > {
+      const binding = await authorizeGuild(principal, guildId, 'drasil:read');
+      return binding.kind === 'denied'
+        ? binding
+        : { kind: 'allowed', capabilities: capabilities(binding, principal) };
+    },
     async authorizeWorkflow(principal, guildId, command): Promise<AccessDecision> {
       const parsed = humanCommandSchema.safeParse(command);
       if (!parsed.success) return denied('permission_denied');

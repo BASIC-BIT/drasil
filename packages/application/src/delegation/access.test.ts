@@ -479,3 +479,32 @@ it('keeps exact workflow context on read consent and advertises only matching co
     })
   ).toMatchObject({ kind: 'denied' });
 });
+
+it('refreshes capabilities and enforces read consent and selected guilds', async () => {
+  const h = fixture();
+  h.setFacts({ owner: true });
+  expect(await h.access.getCapabilities(principal, guildId)).toMatchObject({
+    kind: 'allowed',
+    capabilities: {
+      guildId,
+      reads: expect.arrayContaining(['cases']),
+      memberContext: expect.any(Array),
+    },
+  });
+  h.setFacts({ owner: false, permissions: String(1n << 2n) });
+  const changed = await h.access.getCapabilities(principal, guildId);
+  expect(changed).toMatchObject({ kind: 'allowed' });
+  if (changed.kind === 'allowed') expect(changed.capabilities.reads).not.toContain('cases');
+  expect(
+    await h.access.getCapabilities({ ...principal, scopes: ['drasil:moderate'] }, guildId)
+  ).toMatchObject({ kind: 'denied', reason: 'scope_denied' });
+  expect(await h.access.getCapabilities(principal, 'other')).toMatchObject({
+    kind: 'denied',
+    reason: 'guild_denied',
+  });
+  h.setGrant({ version: 2 });
+  expect(await h.access.getCapabilities(principal, guildId)).toMatchObject({
+    kind: 'denied',
+    reason: 'invalid_grant',
+  });
+});
