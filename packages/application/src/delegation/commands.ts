@@ -180,7 +180,8 @@ function define(
   if (family === 'cleanup')
     inputSchema = inputSchema
       .omit({ previewReference: true })
-      .extend({ cleanupReference: id })
+      // Initial preview admission creates the job; later actions resolve its opaque reference.
+      .extend(kind === 'preview_case_message_deletion' ? {} : { cleanupReference: id })
       .strict();
   if (kind === 'quarantine_compromised_account')
     inputSchema = inputSchema.extend({ previewReference: id }).strict();
@@ -193,12 +194,7 @@ function define(
   const delivery =
     family === 'attention' ||
     family === 'reportReview' ||
-    (family === 'setup' &&
-      ![
-        'complete_setup_verification',
-        'upsert_report_instructions',
-        'clear_report_instructions',
-      ].includes(kind))
+    (family === 'setup' && kind === 'update_setup')
       ? 'direct'
       : 'queued';
   return {

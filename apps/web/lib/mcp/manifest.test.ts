@@ -139,7 +139,6 @@ it('rejects nested authority, raw prompt tokens and runtime-created cleanup jobs
         scope: 'source_message',
         reason: '',
         detectionEventId: null,
-        cleanupReference: 'ref',
         jobId: 'forged',
       },
     },
@@ -166,4 +165,61 @@ it('requires bounded idempotency keys and string guild IDs', async () => {
   expect(await tool?.schema['~standard'].validate({ ...valid, guildId: 123 })).toHaveProperty(
     'issues'
   );
+});
+
+it('publishes the supported direct setup write and queued settings workflows', () => {
+  const expected = [
+    ['update_setup', 'direct'],
+    ['update_settings', 'queued'],
+    ['update_heuristics', 'queued'],
+    ['reset_heuristics', 'queued'],
+    ['lockdown_allow_add', 'queued'],
+    ['lockdown_allow_remove', 'queued'],
+    ['disable_lockdown', 'queued'],
+  ];
+  for (const [id, delivery] of expected)
+    expect(mcpWorkflowManifest.find((entry) => entry.id === id)?.delivery).toBe(delivery);
+});
+
+it('advertises an initial cleanup preview without a prior reference', async () => {
+  const tool = mcpWorkflowManifest.find((entry) => entry.id === 'preview_case_message_deletion');
+  const input = {
+    guildId: 'guild',
+    idempotencyKey: 'first-preview',
+    caseId: 'case',
+    targetUserId: '123',
+    mode: 'delete_only',
+    scope: 'source_message',
+    reason: 'Remove case spam',
+    detectionEventId: null,
+  };
+  expect(await tool?.schema['~standard'].validate(input)).toEqual({ value: input });
+  const advertised = z
+    .object({ properties: z.record(z.string(), z.unknown()), required: z.array(z.string()) })
+    .parse(tool?.schema['~standard'].jsonSchema.input({ target: 'draft-07' }));
+  expect(advertised.properties).not.toHaveProperty('cleanupReference');
+  expect(advertised.required).not.toContain('cleanupReference');
+});
+
+it.each([
+  ['execute_case_message_deletion', 'delete_only'],
+  ['ban_case_user_with_message_cleanup', 'ban_with_cleanup'],
+] as const)('keeps a preview reference required for public %s input', async (workflowId, mode) => {
+  const tool = mcpWorkflowManifest.find((entry) => entry.id === workflowId);
+  const input = {
+    guildId: 'guild',
+    idempotencyKey: 'execute',
+    caseId: 'case',
+    targetUserId: '123',
+    mode,
+    scope: 'source_message',
+    reason: 'Remove case spam',
+    detectionEventId: null,
+  };
+  expect(await tool?.schema['~standard'].validate(input)).toHaveProperty('issues');
+  const referenced = { ...input, cleanupReference: 'opaque-preview' };
+  expect(await tool?.schema['~standard'].validate(referenced)).toEqual({ value: referenced });
+  expect(tool?.schema['~standard'].jsonSchema.input({ target: 'draft-07' })).toMatchObject({
+    required: expect.arrayContaining(['cleanupReference']),
+  });
 });

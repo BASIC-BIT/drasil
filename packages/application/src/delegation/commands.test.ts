@@ -262,7 +262,6 @@ it('resolves opaque references into canonical prompt, cleanup and panel bindings
         scope: 'source_message',
         reason: '',
         detectionEventId: null,
-        cleanupReference: 'opaque-cleanup',
       },
       { cleanup: { jobId: 'job', generation: null } }
     )
@@ -318,3 +317,74 @@ it('requires settings diffs for configuration and retains shared setup workflow 
       ?.confirmationRule
   ).toBe('shared_policy');
 });
+
+it.each([
+  ['update_setup', 'direct'],
+  ['update_settings', 'queued'],
+  ['update_heuristics', 'queued'],
+  ['reset_heuristics', 'queued'],
+  ['lockdown_allow_add', 'queued'],
+  ['lockdown_allow_remove', 'queued'],
+  ['disable_lockdown', 'queued'],
+] as const)('delivers %s through the supported %s application path', (workflowId, expected) => {
+  expect(workflowDefinitions.find((entry) => entry.id === workflowId)?.delivery).toBe(expected);
+});
+
+it('accepts the first cleanup preview without a reference and binds its newly admitted job', () => {
+  const workflow = workflowDefinitions.find(
+    (entry) => entry.id === 'preview_case_message_deletion'
+  );
+  const input = {
+    caseId: 'case',
+    targetUserId: '123',
+    mode: 'delete_only',
+    scope: 'source_message',
+    reason: 'Remove case spam',
+    detectionEventId: null,
+  };
+  expect(workflow?.inputSchema.parse(input)).toEqual(input);
+  expect(() => workflow?.parseCommand(input)).toThrow();
+  expect(
+    workflow?.parseCommand(input, { cleanup: { jobId: 'newly-admitted-job', generation: null } })
+  ).toEqual({
+    ...input,
+    kind: 'preview_case_message_deletion',
+    jobId: 'newly-admitted-job',
+    previewReference: { jobId: 'newly-admitted-job', generation: null },
+  });
+  expect(
+    workflow?.inputSchema.safeParse({ ...input, cleanupReference: 'invented-reference' }).success
+  ).toBe(false);
+});
+
+it.each([
+  ['execute_case_message_deletion', 'delete_only'],
+  ['ban_case_user_with_message_cleanup', 'ban_with_cleanup'],
+] as const)(
+  'requires an opaque reference and resolved preview binding for %s',
+  (workflowId, mode) => {
+    const workflow = workflowDefinitions.find((entry) => entry.id === workflowId);
+    const input = {
+      caseId: 'case',
+      targetUserId: '123',
+      mode,
+      scope: 'source_message',
+      reason: 'Remove case spam',
+      detectionEventId: null,
+    };
+    expect(workflow?.inputSchema.safeParse(input).success).toBe(false);
+    const referenced = { ...input, cleanupReference: 'opaque-preview' };
+    expect(workflow?.inputSchema.parse(referenced)).toEqual(referenced);
+    expect(() => workflow?.parseCommand(referenced)).toThrow();
+    expect(
+      workflow?.parseCommand(referenced, {
+        cleanup: { jobId: 'previewed-job', generation: 'preview-generation' },
+      })
+    ).toEqual({
+      ...input,
+      kind: workflowId,
+      jobId: 'previewed-job',
+      previewReference: { jobId: 'previewed-job', generation: 'preview-generation' },
+    });
+  }
+);
