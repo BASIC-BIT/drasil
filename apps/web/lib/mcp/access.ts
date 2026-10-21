@@ -14,7 +14,7 @@ import { createWebAuthority } from '../application/adapters/authority';
 import { createWebStaffRoles } from '../application/adapters/staffRoles';
 import { getPostgresPool } from '../setupDataAdapter';
 
-function createWebGuildDirectory(): DelegatedGuildDirectory {
+export function createWebGuildDirectory(): DelegatedGuildDirectory {
   const pool = getPostgresPool();
   return {
     async isActive(guildId) {

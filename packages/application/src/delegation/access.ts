@@ -309,6 +309,25 @@ function capabilities(binding: AccessBinding, principal: DelegatedPrincipal): Gu
       : [],
   };
 }
+function isEligibleGuildAuthority(facts: AuthorityFacts, staffRoleIds: readonly string[]): boolean {
+  return (
+    hasAuthority(facts, MODERATION_PERMISSIONS | BAN_MEMBERS | KICK_MEMBERS) ||
+    hasStaffAuthority(facts, staffRoleIds)
+  );
+}
+/** Shared pre-grant eligibility. The caller supplies only a verified Discord actor. */
+export async function loadEligibleGuildFacts(
+  deps: Pick<DelegatedAccessDependencies, 'authority' | 'staffRoles' | 'guilds'>,
+  userId: string,
+  guildId: string
+): Promise<{ facts: AuthorityFacts; staffRoleIds: readonly string[] } | null> {
+  if (!(await deps.guilds.isActive(guildId))) return null;
+  const facts = await deps.authority.loadFresh(guildId, userId);
+  if (!facts?.present || facts.userId !== userId || facts.guildId !== guildId) return null;
+  const staffRoleIds = await deps.staffRoles.loadRoleIds(guildId);
+  if (!isEligibleGuildAuthority(facts, staffRoleIds)) return null;
+  return { facts, staffRoleIds };
+}
 export function createDelegatedAccess(deps: DelegatedAccessDependencies): DelegatedAccess {
   const now = deps.now ?? Date.now;
   // Only bounded directory pages are cached. No grant, role or permission decisions are cached.
@@ -334,11 +353,7 @@ export function createDelegatedAccess(deps: DelegatedAccessDependencies): Delega
       if (facts.userId !== principal.userId || facts.guildId !== guildId)
         return denied('binding_mismatch');
       const staffRoleIds = await deps.staffRoles.loadRoleIds(guildId);
-      if (
-        !hasAuthority(facts, MODERATION_PERMISSIONS | BAN_MEMBERS | KICK_MEMBERS) &&
-        !hasStaffAuthority(facts, staffRoleIds)
-      )
-        return denied('permission_denied');
+      if (!isEligibleGuildAuthority(facts, staffRoleIds)) return denied('permission_denied');
       return { kind: 'allowed', grant, facts, guildId, scope, staffRoleIds };
     } catch {
       return denied('unavailable');

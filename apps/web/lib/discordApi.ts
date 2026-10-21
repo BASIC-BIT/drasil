@@ -271,7 +271,7 @@ export async function fetchBotChannelMessages(
 
 export async function fetchDiscordGuild(
   guildId: string
-): Promise<{ readonly id: string; readonly owner_id: string }> {
+): Promise<{ readonly id: string; readonly owner_id: string; readonly name?: string }> {
   return fetchBotJson(`/guilds/${guildId}`);
 }
 export async function fetchDiscordGuildMember(
