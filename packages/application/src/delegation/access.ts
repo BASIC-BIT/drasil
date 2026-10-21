@@ -45,7 +45,7 @@ export type ResourceReadQuery =
       readonly purpose: MemberContextPurpose;
       readonly workflowId: WorkflowId;
     };
-/** Status ownership and resource policy come from persisted provenance, never public arguments. */
+/** Status ownership and exact workflow come from persisted provenance, never public arguments. */
 export type DelegatedReadQuery =
   | ResourceReadQuery
   | {
@@ -53,7 +53,7 @@ export type DelegatedReadQuery =
       readonly guildId: string;
       readonly userId: string;
       readonly connectionId: string;
-      readonly resource: ResourceReadQuery;
+      readonly workflowId: WorkflowId;
     };
 export type ReadKind = DelegatedReadQuery['kind'];
 export interface AccessBinding {
@@ -375,14 +375,15 @@ export function createDelegatedAccess(deps: DelegatedAccessDependencies): Delega
   ): Promise<AccessDecision> {
     const binding = await authorizeGuild(principal, query.guildId, 'drasil:read');
     if (binding.kind === 'denied') return binding;
-    if (
-      query.kind === 'own_execution' &&
-      (query.userId !== principal.userId ||
-        query.connectionId !== principal.connectionId ||
-        query.resource.guildId !== query.guildId)
-    )
-      return denied('binding_mismatch');
-    const resource = query.kind === 'own_execution' ? query.resource : query;
+    if (query.kind === 'own_execution') {
+      if (query.userId !== principal.userId || query.connectionId !== principal.connectionId)
+        return denied('binding_mismatch');
+      const workflow = workflowDefinitions.find((definition) => definition.id === query.workflowId);
+      return workflow && permitsWorkflow(binding, workflow.authorityCommand)
+        ? binding
+        : denied('permission_denied');
+    }
+    const resource = query;
     if (resource.kind === 'member_context') {
       const memberContext = authorizedMemberContext(binding, resource);
       return memberContext ? { ...binding, memberContext } : denied('permission_denied');

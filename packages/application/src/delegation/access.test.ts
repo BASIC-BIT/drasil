@@ -224,7 +224,7 @@ describe('delegated access', () => {
       guilds: [],
     });
   });
-  it('binds reporter reads and own status to the actor, connection and underlying resource', async () => {
+  it('binds reporter reads and own status to the actor, connection and exact workflow', async () => {
     const f = fixture();
     f.setFacts({ permissions: '4' });
     expect(
@@ -235,19 +235,14 @@ describe('delegated access', () => {
       guildId,
       userId: principal.userId,
       connectionId: principal.connectionId,
-      resource: {
-        kind: 'member_context' as const,
-        guildId,
-        purpose: 'ban' as const,
-        workflowId: 'ban_user' as const,
-      },
+      workflowId: 'ban_user' as const,
     };
     expect(await f.access.authorizeRead(principal, query)).toMatchObject({ kind: 'allowed' });
     expect(
       await f.access.authorizeRead(principal, { ...query, connectionId: 'other' })
     ).toMatchObject({ kind: 'denied' });
     expect(
-      await f.access.authorizeRead(principal, { ...query, resource: caseQuery })
+      await f.access.authorizeRead(principal, { ...query, workflowId: 'clear_moderation_queue' })
     ).toMatchObject({ kind: 'denied' });
   });
   it('keeps setup and diagnostics on their family authority', async () => {
@@ -569,3 +564,36 @@ it('preflights current token scope, persisted scope, guild selection and grant v
     reason: 'invalid_grant',
   });
 });
+
+it.each([
+  ['clear_moderation_queue', 'denied'],
+  ['sync_moderation_queue', 'denied'],
+  ['audit_case_role_lockdown', 'denied'],
+  ['apply_case_role_lockdown', 'denied'],
+  ['intake_role_members', 'denied'],
+  ['close_resolved_case_threads_administrator', 'denied'],
+  ['close_resolved_case_threads_guild_audit', 'allowed'],
+  ['audit_integrity', 'allowed'],
+] as const)(
+  'checks own %s receipt authority under real read scope: %s',
+  async (workflowId, kind) => {
+    const f = fixture();
+    const readOnly = { ...principal, scopes: ['drasil:read' as const] };
+    const query = {
+      kind: 'own_execution' as const,
+      guildId,
+      userId: principal.userId,
+      connectionId: principal.connectionId,
+      workflowId,
+    };
+    f.setFacts({ permissions: '8' });
+    expect(await f.access.authorizeRead(readOnly, query)).toMatchObject({ kind: 'allowed' });
+    f.setFacts({ permissions: '32' });
+    expect(await f.access.authorizeRead(readOnly, query)).toMatchObject({ kind });
+    f.setGrant({ revokedAt: new Date() });
+    expect(await f.access.authorizeRead(readOnly, query)).toEqual({
+      kind: 'denied',
+      reason: 'invalid_grant',
+    });
+  }
+);

@@ -10,6 +10,7 @@ import {
   setupServerRecordSchema,
   type DelegatedPrincipal,
   type IntentResolver,
+  type AuthorityFacts,
 } from '@drasil/application';
 import { createDelegationStore, buildEnqueueStatement } from '@drasil/application/postgres';
 import { createWebDelegationDatabase } from '../../../apps/web/lib/mcp/adapters/database';
@@ -29,6 +30,7 @@ integration.each(['pg', 'prisma'] as const)('MCP durable delivery via %s', (driv
   let store: ReturnType<typeof createDelegationStore>;
   let principal: DelegatedPrincipal;
   let access: ReturnType<typeof createDelegatedAccess>;
+  let authorityFacts: AuthorityFacts;
   const resolver: IntentResolver = {
     resolve: async () => ({
       delivery: { kind: 'queued', command: { kind: 'clear_moderation_queue' } },
@@ -62,17 +64,18 @@ integration.each(['pg', 'prisma'] as const)('MCP durable delivery via %s', (driv
       grantVersion: grant.version,
       scopes: grant.scopes,
     };
+    authorityFacts = {
+      guildId: 'guild',
+      userId: 'actor',
+      present: true,
+      owner: false,
+      permissions: '8',
+      roleIds: [],
+    };
     access = createDelegatedAccess({
       store,
       authority: {
-        loadFresh: async () => ({
-          guildId: 'guild',
-          userId: 'actor',
-          present: true,
-          owner: true,
-          permissions: '8',
-          roleIds: [],
-        }),
+        loadFresh: async () => authorityFacts,
       },
       staffRoles: { loadRoleIds: async () => [] },
       guilds: {
@@ -627,9 +630,37 @@ integration.each(['pg', 'prisma'] as const)('MCP durable delivery via %s', (driv
     });
   });
 
+  it('denies completed administrator-operation polling after demotion to Manage Guild', async () => {
+    const receipt = await accept();
+    await store.completeExecution(receipt.executionId!, { state: 'completed' });
+    const readOnly = { ...principal, scopes: ['drasil:read' as const] };
+    expect((await service().status(readOnly, receipt.executionId!)).state).toBe('completed');
+    authorityFacts = { ...authorityFacts, permissions: '32' };
+    expect(await service().status(readOnly, receipt.executionId!)).toEqual({
+      state: 'denied',
+      code: 'permission_denied',
+    });
+    expect(await service().submit(principal, invocation)).toEqual({
+      state: 'denied',
+      code: 'permission_denied',
+    });
+  });
+
   it('uses action scope for mutation receipts and read scope for polling', async () => {
     const receipt = await accept();
     const saved = await store.findIntentByKey(principal, invocation.idempotencyKey);
+    const readOnly = { ...principal, scopes: ['drasil:read' as const] };
+    expect((await service().status(readOnly, receipt.executionId!)).state).toBe('queued');
+    expect(await service().submit(readOnly, invocation)).toEqual({
+      state: 'denied',
+      code: 'scope_denied',
+    });
+    expect(await service().confirm(readOnly, saved!.confirmationId, 'client_confirmation')).toEqual(
+      {
+        state: 'denied',
+        code: 'scope_denied',
+      }
+    );
     const mutationOnly = { ...principal, scopes: ['drasil:moderate' as const] };
     expect(
       (await service().confirm(mutationOnly, saved!.confirmationId, 'client_confirmation')).state

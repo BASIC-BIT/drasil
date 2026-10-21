@@ -3,7 +3,7 @@ import type { ActionContext } from '../context';
 import { workflowDefinitions, type HumanCommand } from './commands';
 import { confirmationRequirement } from './confirmationPolicy';
 import { createIntentService, IntentError } from './intents';
-import { memberContextFor, type DelegatedAccess, type ResourceReadQuery } from './access';
+import type { DelegatedAccess } from './access';
 import type {
   ActionCompletion,
   ConfirmationMethod,
@@ -363,20 +363,12 @@ export function createDelegatedActionService(deps: {
       safe(async () => {
         const execution = await deps.store.loadExecution(principal, id);
         if (!execution) return { state: 'denied', code: 'not_found' };
-        const workflow = workflowDefinitions.find((item) => item.id === execution.workflowId)!;
-        const memberContext = memberContextFor(workflow);
-        const resource: ResourceReadQuery = memberContext
-          ? { kind: 'member_context', guildId: execution.guildId, ...memberContext }
-          : {
-              kind: workflow.family === 'attention' ? 'attention' : 'diagnostics',
-              guildId: execution.guildId,
-            };
         const decision = await deps.access.authorizeRead(principal, {
           kind: 'own_execution',
           guildId: execution.guildId,
           userId: execution.userId,
           connectionId: execution.connectionId,
-          resource,
+          workflowId: execution.workflowId,
         });
         return decision.kind === 'allowed'
           ? projectExecution(execution)
