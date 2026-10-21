@@ -497,6 +497,7 @@ integration.each(['pg', 'prisma'] as const)('MCP durable delivery via %s', (driv
     };
     const runtime = {
       operations,
+      operationsRuntime: { forExecution: jest.fn(() => operations) },
       caseConfirmations: { recordVerified: jest.fn() },
       delegation: createDelegatedWorkerAdmission({ store, access }),
     };

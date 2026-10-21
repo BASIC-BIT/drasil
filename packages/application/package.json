@@ -20,6 +20,11 @@
       "types": "./dist/setup/settings.d.ts",
       "require": "./dist/setup/settings.js",
       "import": "./dist/browser/settings.mjs"
+    },
+    "./approval-presentation": {
+      "types": "./dist/delegation/approvalPresentation.d.ts",
+      "require": "./dist/delegation/approvalPresentation.js",
+      "import": "./dist/browser/approvalPresentation.mjs"
     }
   },
   "scripts": {
@@ -39,6 +44,9 @@
       ],
       "postgres": [
         "dist/postgres/index.d.ts"
+      ],
+      "approval-presentation": [
+        "dist/delegation/approvalPresentation.d.ts"
       ]
     }
   }

@@ -2,7 +2,7 @@ import type { ActorApprovalStore } from '../delegation/approvals';
 import { acceptCleanupJob, hasCommittedContainment } from './containment';
 import { validateReportCaseTerminal } from '../reports/terminal';
 import { nativeCompletion } from './nativeEnforcement';
-import { projectHumanOutcome } from '../delegation/execution';
+import { projectExecution, projectHumanOutcome } from '../delegation/execution';
 import { encodeQueuedAction } from '../requests/encode';
 import { delegatedDeliveryBindingSchema, type QueuedRow } from '../requests/decode';
 import {
@@ -538,14 +538,79 @@ function createIntentStore(database: DelegationDatabase): IntentStore {
   };
 }
 
-function createExecutionStore(database: DelegationDatabase): ExecutionStore {
-  async function read(client: DelegationQueryClient, id: string): Promise<ExecutionRecord | null> {
-    const result = await client.query<ExecutionRow>(
-      'select * from mcp_executions where id=$1::uuid',
-      [id]
-    );
-    return result.rows[0] ? toExecution(result.rows[0]) : null;
+async function readExecution(
+  client: DelegationQueryClient,
+  id: string
+): Promise<ExecutionRecord | null> {
+  const result = await client.query<ExecutionRow>(
+    'select * from mcp_executions where id=$1::uuid',
+    [id]
+  );
+  return result.rows[0] ? toExecution(result.rows[0]) : null;
+}
+async function loadOwnedExecution(
+  database: DelegationQueryClient,
+  principal: DelegatedPrincipal,
+  id: string
+): Promise<ExecutionRecord | null> {
+  if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id)) return null;
+  const execution = await readExecution(database, id);
+  if (
+    !execution ||
+    execution.userId !== principal.userId ||
+    execution.clientId !== principal.clientId ||
+    execution.connectionId !== principal.connectionId
+  )
+    return null;
+  const native =
+    execution.command.kind === 'ban_user' || execution.command.kind === 'kick_user'
+      ? await nativeCompletion(database, execution.executionId)
+      : null;
+  if (native?.state === 'uncertain')
+    return { ...execution, outcome: { kind: 'delegated_terminal', result: native } };
+  if (execution.queueRequestId) {
+    const result = await database.query<{
+      status: string;
+      result: unknown;
+      completed_at: Date | null;
+    }>('select status,result,completed_at from moderation_action_requests where id=$1::uuid', [
+      execution.queueRequestId,
+    ]);
+    const queue = result.rows[0];
+    if (queue?.status === 'completed')
+      return {
+        ...execution,
+        completedAt: queue.completed_at,
+        outcome: {
+          kind: 'delegated_terminal',
+          result: projectHumanOutcome(execution.command, queue.result),
+        },
+      };
+    if (queue?.status === 'failed' && !execution.outcome) {
+      // The earlier absent fence may predate a send. After failed is observed,
+      // the queue gate prevents a new fence, so this fresh read can establish no send.
+      const failedNative =
+        execution.command.kind === 'ban_user' || execution.command.kind === 'kick_user'
+          ? await nativeCompletion(database, execution.executionId)
+          : null;
+      return {
+        ...execution,
+        outcome: {
+          kind: 'delegated_terminal',
+          result:
+            failedNative ??
+            (execution.command.kind === 'ban_user' || execution.command.kind === 'kick_user'
+              ? { state: 'failed', code: 'execution_interrupted_before_send' }
+              : { state: execution.startedAt ? 'uncertain' : 'failed' }),
+        },
+      };
+    }
   }
+  return native && (!execution.outcome || execution.outcome.result.state === 'uncertain')
+    ? { ...execution, outcome: { kind: 'delegated_terminal', result: native } }
+    : execution;
+}
+function createExecutionStore(database: DelegationDatabase): ExecutionStore {
   async function finish(
     client: DelegationQueryClient,
     id: string,
@@ -562,7 +627,7 @@ function createExecutionStore(database: DelegationDatabase): ExecutionStore {
     queue?: DelegatedQueueAdmission
   ): Promise<WorkerAdmission> {
     return database.transaction(async (client) => {
-      const first = await read(client, executionId);
+      const first = await readExecution(client, executionId);
       if (!first) return { kind: 'denied', code: 'binding_mismatch' };
       // Revocation and selection edits use this same first lock.
       await client.query('select id from mcp_connections where id=$1::uuid for update', [
@@ -571,7 +636,7 @@ function createExecutionStore(database: DelegationDatabase): ExecutionStore {
       await client.query('select id from mcp_executions where id=$1::uuid for update', [
         executionId,
       ]);
-      const execution = (await read(client, executionId))!;
+      const execution = (await readExecution(client, executionId))!;
       const intent = await client.query<IntentRow>(
         `select * from mcp_intents where confirmation_id=$1 and state='consumed'`,
         [execution.confirmationId]
@@ -684,68 +749,11 @@ function createExecutionStore(database: DelegationDatabase): ExecutionStore {
         'update mcp_executions set started_at=clock_timestamp() where id=$1::uuid',
         [executionId]
       );
-      return { kind: 'new_execution', execution: (await read(client, executionId))! };
+      return { kind: 'new_execution', execution: (await readExecution(client, executionId))! };
     });
   }
   return {
-    async loadExecution(principal, id): Promise<ExecutionRecord | null> {
-      if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id)) return null;
-      const execution = await read(database, id);
-      if (
-        !execution ||
-        execution.userId !== principal.userId ||
-        execution.clientId !== principal.clientId ||
-        execution.connectionId !== principal.connectionId
-      )
-        return null;
-      const native =
-        execution.command.kind === 'ban_user' || execution.command.kind === 'kick_user'
-          ? await nativeCompletion(database, execution.executionId)
-          : null;
-      if (native?.state === 'uncertain')
-        return { ...execution, outcome: { kind: 'delegated_terminal', result: native } };
-      if (execution.queueRequestId) {
-        const result = await database.query<{
-          status: string;
-          result: unknown;
-          completed_at: Date | null;
-        }>('select status,result,completed_at from moderation_action_requests where id=$1::uuid', [
-          execution.queueRequestId,
-        ]);
-        const queue = result.rows[0];
-        if (queue?.status === 'completed')
-          return {
-            ...execution,
-            completedAt: queue.completed_at,
-            outcome: {
-              kind: 'delegated_terminal',
-              result: projectHumanOutcome(execution.command, queue.result),
-            },
-          };
-        if (queue?.status === 'failed' && !execution.outcome) {
-          // The earlier absent fence may predate a send. After failed is observed,
-          // the queue gate prevents a new fence, so this fresh read can establish no send.
-          const failedNative =
-            execution.command.kind === 'ban_user' || execution.command.kind === 'kick_user'
-              ? await nativeCompletion(database, execution.executionId)
-              : null;
-          return {
-            ...execution,
-            outcome: {
-              kind: 'delegated_terminal',
-              result:
-                failedNative ??
-                (execution.command.kind === 'ban_user' || execution.command.kind === 'kick_user'
-                  ? { state: 'failed', code: 'execution_interrupted_before_send' }
-                  : { state: execution.startedAt ? 'uncertain' : 'failed' }),
-            },
-          };
-        }
-      }
-      return native && (!execution.outcome || execution.outcome.result.state === 'uncertain')
-        ? { ...execution, outcome: { kind: 'delegated_terminal', result: native } }
-        : execution;
-    },
+    loadExecution: (principal, id) => loadOwnedExecution(database, principal, id),
     startDirectExecution: (id, authorize) => admit(id, authorize),
     async admitQueuedExecution(input, authorize): Promise<WorkerAdmission> {
       const found = await database.query<{ id: string }>(
@@ -848,9 +856,24 @@ export function createActorApprovalStore(database: DelegationDatabase): ActorApp
         const current = await readIntent(client, principal, 'confirmation_id', confirmationId);
         if (!current) return null;
         checkIntentGrant(grant, principal, current);
+        const execution = current.executionId
+          ? await loadOwnedExecution(client, principal, current.executionId)
+          : null;
+        // A corrupt/foreign link must never disclose another action's receipt.
+        if (
+          current.executionId &&
+          (!execution ||
+            execution.confirmationId !== current.confirmationId ||
+            execution.guildId !== current.guildId ||
+            execution.workflowId !== current.workflowId ||
+            execution.commandDigest !== current.commandDigest ||
+            execution.grantVersion !== current.grantVersion)
+        )
+          throw new IntentError('binding_mismatch');
         // Read-only presentation. Acceptance performs durable expiration under its own lock.
         return {
           principal,
+          ...(execution ? { receipt: projectExecution(execution) } : {}),
           intent:
             current.state === 'pending' && current.expiresAt.getTime() <= Date.now()
               ? { ...current, state: 'expired' as const }

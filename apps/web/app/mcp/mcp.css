@@ -98,3 +98,8 @@
   margin-block: 1.5rem;
   line-height: 1.6;
 }
+
+.mcp-approval-context dd {
+  margin: 0 0 0.75rem;
+  overflow-wrap: anywhere;
+}

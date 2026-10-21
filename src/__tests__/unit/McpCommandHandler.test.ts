@@ -1,4 +1,6 @@
 import { MessageFlags } from 'discord.js';
+import type { PublicActionResult } from '@drasil/application';
+import { presentApprovalResult } from '@drasil/application/approval-presentation';
 import { McpCommandHandler, discordSummaryPages } from '../../controllers/McpCommandHandler';
 
 describe('McpCommandHandler', () => {
@@ -67,10 +69,76 @@ describe('McpCommandHandler', () => {
     expect(approvals.cancel).toHaveBeenCalledWith('actor', id, 'guild');
     expect(approvals.approve).not.toHaveBeenCalled();
   });
+  it.each([
+    [{ state: 'completed', outcome: { status: 'busy' } }, 'Busy: no action was taken'],
+    [
+      { state: 'completed', outcome: { status: 'already_handled' } },
+      'Already handled: no new action was taken',
+    ],
+    [
+      { state: 'partial', outcome: { status: 'closed', queueCleanupStatus: 'failed' } },
+      'Queue cleanup failed',
+    ],
+    [
+      { state: 'uncertain', code: 'completion_recording_failed' },
+      'completion\\_recording\\_failed',
+    ],
+  ])('shows the actual safe receipt %j', async (result, expected) => {
+    approvals.approve.mockResolvedValue(result);
+    const button = interaction(`mcp:approve:${id}`);
+    await new McpCommandHandler(approvals).handleButtonInteraction(button as never);
+    expect(button.editReply.mock.calls[0][0].content).toContain(expected);
+  });
+  it('paginates every hostile result item by read-only authorized receipt loads', async () => {
+    const result: PublicActionResult = {
+      state: 'partial',
+      executionId: 'receipt',
+      outcome: {
+        items: Array.from({ length: 100 }, (_, i) => ({
+          itemId: `${i} @everyone **😀**`,
+          state: i % 2 ? 'uncertain' : 'completed',
+          status: i % 2 ? undefined : 'already_handled',
+        })),
+      },
+    };
+    approvals.approve.mockResolvedValue(result);
+    approvals.load.mockResolvedValue({
+      confirmationId: id,
+      summary,
+      state: 'consumed',
+      receipt: result,
+    });
+    const handler = new McpCommandHandler(approvals);
+    const first = interaction(`mcp:approve:${id}`);
+    await handler.handleButtonInteraction(first as never);
+    const outputs = [first.editReply.mock.calls[0][0]];
+    for (let index = 1; index < 100; index++) {
+      if (!JSON.stringify(outputs.at(-1).components).includes('Next')) break;
+      const next = interaction(`mcp:result:${index}:${id}`);
+      await handler.handleButtonInteraction(next as never);
+      outputs.push(next.editReply.mock.calls[0][0]);
+    }
+    expect(outputs.length).toBeGreaterThan(1);
+    for (const output of outputs) {
+      expect(output.content.length).toBeLessThanOrEqual(2000);
+      expect(output.allowedMentions).toEqual({ parse: [] });
+      expect(JSON.stringify(output.components)).not.toContain('Approve');
+    }
+    const text = outputs
+      .map((output) => output.content.replace(/^Action result — page \d+\/\d+\n/, ''))
+      .join('');
+    for (let i = 0; i < 100; i++) expect(text).toContain(`Item ${i} @\u200beveryone`);
+    expect(text).toContain('Already handled: no new action was taken');
+    expect(text).toBe(discordSummaryPages(presentApprovalResult(result).join('\n')).join(''));
+    expect(approvals.approve).toHaveBeenCalledTimes(1);
+    expect(approvals.cancel).not.toHaveBeenCalled();
+    expect(approvals.load).toHaveBeenCalledWith('actor', id, 'guild');
+  });
   it('refuses DMs and invalid page indices without accepting', async () => {
     const handler = new McpCommandHandler(approvals);
     await handler.handleSlashCommand({ ...interaction(), guildId: null } as never);
     await handler.handleButtonInteraction(interaction(`mcp:page:999:${id}`) as never);
+    await handler.handleButtonInteraction(interaction(`mcp:result:999:${id}`) as never);
     expect(approvals.approve).not.toHaveBeenCalled();
   });
 });

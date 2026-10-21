@@ -11,11 +11,16 @@ export interface ActorApprovalStore {
   ): Promise<{
     principal: DelegatedPrincipal;
     intent: IntentRecord;
+    receipt?: PublicActionResult;
   } | null>;
 }
 export interface ApprovalSummary {
   readonly confirmationId: string;
   readonly summary: string;
+  readonly guildId: string;
+  readonly clientId: string;
+  readonly connectionId: string;
+  readonly receipt?: PublicActionResult;
   readonly state: IntentRecord['state'];
   readonly expiresAt: string;
 }
@@ -59,6 +64,10 @@ export function createAlternativeApprovals(deps: {
       return {
         confirmationId: intent.confirmationId,
         summary: intent.summary,
+        guildId: intent.guildId,
+        clientId: intent.clientId,
+        connectionId: intent.connectionId,
+        ...(saved.receipt ? { receipt: saved.receipt } : {}),
         state: intent.state,
         expiresAt: intent.expiresAt.toISOString(),
       };

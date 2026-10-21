@@ -6,6 +6,7 @@ import {
   type ButtonInteraction,
   type ChatInputCommandInteraction,
 } from 'discord.js';
+import { presentApprovalResult } from '@drasil/application/approval-presentation';
 import type { AlternativeApprovals, PublicActionResult } from '@drasil/application';
 
 /** Escape each complete Unicode codepoint before budgeting. No surrogate or escape is split. */
@@ -79,8 +80,31 @@ export class McpCommandHandler {
         row.addComponents(button(`mcp:approve:${id}`, 'Approve', ButtonStyle.Success));
       row.addComponents(button(`mcp:cancel:${id}`, 'Cancel'));
     }
+    if (saved.receipt) row.addComponents(button(`mcp:result:0:${id}`, 'View result'));
     return {
       content: `Saved action — page ${index + 1}/${pages.length}\n${pages[index]}\nStatus: ${saved.state}`,
+      components: row.components.length ? [row] : [],
+    };
+  }
+  private resultPage(result: PublicActionResult, id: string, index: number): ApprovalResponse {
+    const pages = discordSummaryPages(presentApprovalResult(result).join('\n'));
+    if (!Number.isSafeInteger(index) || index < 0 || index >= pages.length)
+      throw new Error('Invalid result page.');
+    const row = new ActionRowBuilder<ButtonBuilder>();
+    for (const [page, label] of [
+      [index - 1, 'Previous'],
+      [index + 1, 'Next'],
+    ] as const) {
+      if (page >= 0 && page < pages.length)
+        row.addComponents(
+          new ButtonBuilder()
+            .setCustomId(`mcp:result:${page}:${id}`)
+            .setLabel(label)
+            .setStyle(ButtonStyle.Secondary)
+        );
+    }
+    return {
+      content: `Action result — page ${index + 1}/${pages.length}\n${pages[index]}`,
       components: row.components.length ? [row] : [],
     };
   }
@@ -89,36 +113,30 @@ export class McpCommandHandler {
       const id = interaction.options.getString('confirmation-id', true);
       if (interaction.options.getSubcommand() === 'cancel') {
         const result = await approvals.cancel(interaction.user.id, id, guildId);
-        return {
-          content:
-            result.code === 'cancelled'
-              ? 'Confirmation cancelled.'
-              : 'Confirmation is no longer pending.',
-        };
+        return this.resultPage(result, id, 0);
       }
       return this.page(approvals, interaction.user.id, guildId, id, 0);
     });
   }
   async handleButtonInteraction(interaction: ButtonInteraction): Promise<void> {
     await this.respond(interaction, async (approvals, guildId) => {
-      const match = /^mcp:(?:(page):(\d{1,3})|(approve|cancel)):([A-Za-z0-9_-]{43})$/.exec(
+      const match = /^mcp:(?:(page|result):(\d{1,3})|(approve|cancel)):([A-Za-z0-9_-]{43})$/.exec(
         interaction.customId
       );
       if (!match) throw new Error('Invalid confirmation.');
       const id = match[4];
-      if (match[1]) return this.page(approvals, interaction.user.id, guildId, id, Number(match[2]));
+      if (match[1] === 'page')
+        return this.page(approvals, interaction.user.id, guildId, id, Number(match[2]));
+      if (match[1] === 'result') {
+        const saved = await approvals.load(interaction.user.id, id, guildId);
+        if (!saved.receipt) throw new Error('Result unavailable.');
+        return this.resultPage(saved.receipt, id, Number(match[2]));
+      }
       const result =
         match[3] === 'approve'
           ? await approveMcpIntentFromDiscord(approvals, interaction, id)
           : await approvals.cancel(interaction.user.id, id, guildId);
-      // Only closed shared projection fields, never raw domain errors/labels/reasons.
-      return {
-        content:
-          result.code === 'cancelled'
-            ? 'Confirmation cancelled.'
-            : `Action ${result.state}.${result.executionId ? ` Execution: ${result.executionId}` : ''}`,
-        components: [],
-      };
+      return this.resultPage(result, id, 0);
     });
   }
 }

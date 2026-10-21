@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { mcpBrowserFixtures, guildA, actorId } from './mcpFixtures';
+import { mcpBrowserFixtures, guildA, guildB, actorId } from './mcpFixtures';
 import {
   createIntentService,
   createDelegatedAccess,
@@ -22,6 +22,11 @@ test('GET shows the full saved summary and only explicit POST approves', async (
   context,
   page,
 }) => {
+  const browserErrors: string[] = [];
+  page.on('pageerror', (error) => browserErrors.push(error.message));
+  page.on('console', (message) => {
+    if (message.type() === 'error') browserErrors.push(message.text());
+  });
   await fixtures.reset(context);
   await pool.query(
     "insert into users(discord_id) values ('999999999999999999') on conflict do nothing"
@@ -30,7 +35,7 @@ test('GET shows the full saved summary and only explicit POST approves', async (
   const grant = await store.createConnection({
     userId: actorId,
     clientId: 'fixture',
-    selection: { mode: 'selected', guildIds: [guildA] },
+    selection: { mode: 'selected', guildIds: [guildA, guildB] },
     scopes: ['drasil:moderate'],
   });
   const principal = { ...grant, grantVersion: grant.version };
@@ -38,8 +43,8 @@ test('GET shows the full saved summary and only explicit POST approves', async (
   const access = createDelegatedAccess({
     store,
     authority: {
-      loadFresh: async () => ({
-        guildId: guildA,
+      loadFresh: async (guildId) => ({
+        guildId,
         userId: actorId,
         owner: true,
         present: true,
@@ -74,10 +79,27 @@ test('GET shows the full saved summary and only explicit POST approves', async (
   await expect(page.getByRole('region', { name: 'Saved action summary' })).toHaveText(
     intent.summary
   );
+  await expect(page.getByText(guildA, { exact: true })).toBeVisible();
+  await expect(page.getByText('fixture', { exact: true })).toBeVisible();
+  await expect(page.getByText(principal.connectionId, { exact: true })).toBeVisible();
+  const secondGuild = await service.prepareIntent(principal, {
+    ...invocation,
+    guildId: guildB,
+    idempotencyKey: 'second-guild',
+  });
+  await page.goto(`/mcp/confirm/${secondGuild.confirmationId}`);
+  await expect(page.getByText(guildB, { exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Saved action summary' })).toHaveText(
+    intent.summary
+  );
+  expect((await pool.query('select * from mcp_executions')).rows).toHaveLength(0);
+  await page.goto(`/mcp/confirm/${intent.confirmationId}`);
   expect((await store.loadIntent(principal, intent.confirmationId))?.state).toBe('pending');
   await page.screenshot({
     path: '../../.superpowers/sdd/drasil-mcp/task-14-confirmation.png',
     fullPage: true,
+    // Playwright's default caret hiding can mutate hidden inputs during React hydration.
+    caret: 'initial',
   });
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(page.getByText('Confirmation cancelled', { exact: true })).toBeVisible();
@@ -99,7 +121,9 @@ test('GET shows the full saved summary and only explicit POST approves', async (
     grant_version: principal.grantVersion,
   });
   await page.reload();
+  await expect(page.getByText('Action queued', { exact: true })).toBeVisible();
   expect((await pool.query('select * from mcp_executions')).rows).toHaveLength(1);
+  expect(browserErrors).toEqual([]);
 });
 
 test('sign-in returns to the same confirmation without approving', async ({ context, page }) => {

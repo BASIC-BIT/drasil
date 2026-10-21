@@ -1,13 +1,14 @@
 'use client';
 import { useState } from 'react';
+import { presentApprovalResult } from '@drasil/application/approval-presentation';
 import type { ApprovalSummary, PublicActionResult } from '@drasil/application';
 export function ConfirmationView(
-  props: Pick<ApprovalSummary, 'confirmationId' | 'summary' | 'state'> & {
+  props: Omit<ApprovalSummary, 'expiresAt'> & {
     approve: (form: FormData) => Promise<PublicActionResult>;
     cancel: (form: FormData) => Promise<PublicActionResult>;
   }
 ) {
-  const [result, setResult] = useState<PublicActionResult | null>(null);
+  const [result, setResult] = useState<PublicActionResult | null>(props.receipt ?? null);
   const [error, setError] = useState(false);
   async function submit(form: FormData, action: typeof props.approve) {
     setError(false);
@@ -28,24 +29,22 @@ export function ConfirmationView(
     <main className="mcp-shell">
       <h1>Confirm action</h1>
       <p>Review the saved action before approving it for the original connection.</p>
+      <dl aria-label="Action context" className="mcp-approval-context">
+        <dt>Server ID</dt>
+        <dd>{props.guildId}</dd>
+        <dt>Originating client</dt>
+        <dd>{props.clientId}</dd>
+        <dt>Connection ID</dt>
+        <dd>{props.connectionId}</dd>
+      </dl>
       <section aria-label="Saved action summary" className="mcp-approval-summary">
         {props.summary}
       </section>
       {result ? (
         <div role="status">
-          <p>{result.code === 'cancelled' ? 'Confirmation cancelled' : `Action ${result.state}`}</p>
-          {result.executionId && (
-            <p>
-              Execution: <code>{result.executionId}</code>
-            </p>
-          )}
-          {result.state === 'uncertain' && (
-            <p>
-              The outcome is uncertain. Keep this execution reference and check its status before
-              starting another action.
-            </p>
-          )}
-          {result.code && result.code !== 'cancelled' && <p>{result.code}</p>}
+          {presentApprovalResult(result).map((line, index) => (
+            <p key={index}>{line}</p>
+          ))}
         </div>
       ) : (
         <p>{stateLabels[props.state]}</p>
