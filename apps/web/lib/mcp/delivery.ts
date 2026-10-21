@@ -141,7 +141,13 @@ export async function waitForMcpReceipt(
   initial: PublicActionResult,
   budgetMs = 5000
 ): Promise<PublicActionResult> {
-  if (!initial.executionId || !['queued', 'running'].includes(initial.state) || budgetMs <= 0)
+  // Observation is optional; a read-scope denial must not replace an accepted mutation.
+  if (
+    !principal.scopes.includes('drasil:read') ||
+    !initial.executionId ||
+    !['queued', 'running'].includes(initial.state) ||
+    budgetMs <= 0
+  )
     return initial;
   let latest = initial;
   let stopped = false;

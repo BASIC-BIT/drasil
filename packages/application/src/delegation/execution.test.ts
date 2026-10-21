@@ -1,5 +1,7 @@
-import { projectExecution, projectHumanOutcome } from './execution';
-import type { ExecutionRecord } from './types';
+import { createDelegatedActionService, projectExecution, projectHumanOutcome } from './execution';
+import { ActionDeniedError } from '../results';
+import type { DelegatedAccess } from './access';
+import type { DelegatedPrincipal, DelegationStore, ExecutionRecord, IntentRecord } from './types';
 it.each([
   ['ambiguous_case_role', 'denied'],
   ['ambiguous_verification_channel', 'denied'],
@@ -115,3 +117,120 @@ it('preserves a report-open child outcome in its parent receipt', () => {
     )
   ).toEqual({ state: 'completed', outcome: { details: { opened: false } } });
 });
+
+it.each(['before_write', 'after_write', 'denied_effect'] as const)(
+  'returns an owned uncertain receipt on completion failure %s without replaying the effect',
+  async (failure) => {
+    const principal: DelegatedPrincipal = {
+      userId: 'actor',
+      clientId: 'client',
+      connectionId: 'connection',
+      grantVersion: 1,
+      scopes: ['drasil:read', 'drasil:moderate'],
+    };
+    let intent: IntentRecord | null = null;
+    let execution: ExecutionRecord | null = null;
+    const store: Pick<
+      DelegationStore,
+      | 'saveIntent'
+      | 'findIntentByKey'
+      | 'loadIntent'
+      | 'acceptIntent'
+      | 'loadExecution'
+      | 'startDirectExecution'
+      | 'completeExecution'
+    > = {
+      saveIntent: async (_p, value) => (intent = value),
+      findIntentByKey: async () => intent,
+      loadIntent: async () => intent,
+      acceptIntent: async (_p, _id, method) => {
+        if (execution) return execution;
+        execution = {
+          ...intent!,
+          executionId: 'durable-execution',
+          confirmationMethod: method,
+          queueRequestId: null,
+          startedAt: null,
+          completedAt: null,
+          outcome: null,
+        };
+        intent = { ...intent!, state: 'consumed', executionId: execution.executionId };
+        return execution;
+      },
+      loadExecution: async (p, id) =>
+        p.connectionId === principal.connectionId && execution?.executionId === id
+          ? execution
+          : null,
+      startDirectExecution: jest.fn(async () => {
+        execution = { ...execution!, startedAt: new Date() };
+        return { kind: 'new_execution' as const, execution };
+      }),
+      completeExecution: jest.fn(async (_id, result) => {
+        if (failure === 'after_write')
+          execution = {
+            ...execution!,
+            completedAt: new Date(),
+            outcome: { kind: 'delegated_terminal', result },
+          };
+        // Even a typed denial at this persistence boundary cannot prove no effect committed.
+        throw new ActionDeniedError('permission_denied', 'private persistence detail');
+      }),
+    };
+    const execute = jest.fn(async () => {
+      if (failure === 'denied_effect')
+        throw new ActionDeniedError('permission_denied', 'private effect detail');
+      return {
+        kind: 'attention_batch' as const,
+        items: [{ itemId: 'one', state: 'completed' as const }],
+      };
+    });
+    const service = createDelegatedActionService({
+      store: store as DelegationStore,
+      access: {
+        authorizeWorkflowId: async () => ({ kind: 'allowed' }),
+        authorizeWorkflow: async () => ({ kind: 'allowed' }),
+        authorizeRead: async () => ({ kind: 'allowed' }),
+      } as unknown as DelegatedAccess,
+      resolver: {
+        resolve: async () => ({
+          delivery: { kind: 'direct' },
+          preconditions: { kind: 'none' },
+          relevantState: {},
+          summary: 'Acknowledge item one',
+          previewExpiresAt: null,
+        }),
+      },
+      direct: { execute },
+    });
+    const invocation = {
+      workflowId: 'acknowledge_attention' as const,
+      guildId: 'guild',
+      idempotencyKey: 'once',
+      input: { itemIds: ['one'] },
+    };
+    const result = await service.submit(principal, invocation);
+    const binding = {
+      executionId: 'durable-execution',
+      operation: 'acknowledge_attention',
+      guildId: 'guild',
+    };
+    expect(result).toMatchObject({
+      ...binding,
+      state: 'uncertain',
+      code: 'completion_recording_failed',
+    });
+    expect(JSON.stringify(result)).not.toContain('private');
+    const recovered = { ...binding, state: failure === 'after_write' ? 'completed' : 'uncertain' };
+    expect(await service.status(principal, 'durable-execution')).toMatchObject(recovered);
+    expect(
+      await service.status({ ...principal, connectionId: 'other' }, 'durable-execution')
+    ).toEqual({ state: 'denied', code: 'not_found' });
+    expect(await service.submit(principal, invocation)).toMatchObject(recovered);
+    expect(
+      await service.confirm(principal, intent!.confirmationId, 'client_confirmation')
+    ).toMatchObject(recovered);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(store.startDirectExecution).toHaveBeenCalledTimes(1);
+    expect(store.completeExecution).toHaveBeenCalledTimes(1);
+  }
+);

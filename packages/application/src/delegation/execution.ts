@@ -412,7 +412,17 @@ export function createDelegatedActionService(deps: {
             ? { state: 'denied', code: error.code }
             : { state: 'uncertain', code: 'execution_interrupted' };
       }
-      await deps.store.completeExecution(execution.executionId, result);
+      try {
+        await deps.store.completeExecution(execution.executionId, result);
+      } catch {
+        // The effect or completion write may have committed. Preserve the owned handle
+        // for observation; neither a typed persistence denial nor a retry can undo it.
+        return {
+          ...projectExecution(admitted.execution),
+          state: 'uncertain',
+          code: 'completion_recording_failed',
+        };
+      }
       return { ...projectExecution(admitted.execution), ...result, retryAfterMs: undefined };
     })();
     return deps.waitForExecution

@@ -125,3 +125,27 @@ it('returns a completed own receipt early and bounds an unavailable status read'
     vi.useRealTimers();
   }
 });
+
+it.each(['drasil:moderate', 'drasil:configure'] as const)(
+  'preserves the accepted receipt immediately without optional polling for %s-only connections',
+  async (scope) => {
+    const { waitForMcpReceipt } = await import('./delivery');
+    const actor = {
+      userId: 'actor',
+      clientId: 'client',
+      connectionId: 'connection',
+      grantVersion: 1,
+      scopes: [scope],
+    };
+    const queued = {
+      state: 'queued' as const,
+      executionId: 'execution',
+      operation: 'ban_user' as const,
+      guildId: 'guild',
+      retryAfterMs: 2000,
+    };
+    const status = vi.fn(async () => ({ state: 'denied' as const, code: 'scope_denied' }));
+    expect(await waitForMcpReceipt({ status }, actor, queued)).toBe(queued);
+    expect(status).not.toHaveBeenCalled();
+  }
+);

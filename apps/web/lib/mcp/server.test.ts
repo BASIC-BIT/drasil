@@ -5,6 +5,7 @@ import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/cli
 import {
   createDelegatedActionService,
   workflowDefinitions,
+  queuedCommandSchema,
   setupServerRecordSchema,
   setupChangeSummary,
   type DelegatedPrincipal,
@@ -31,7 +32,7 @@ async function fixture(
     rows?: QueryRow[];
     summary?: string;
     currentKeywords?: string[];
-    completionFailure?: boolean;
+    completionFailure?: 'before_write' | 'after_write';
   } = {}
 ) {
   const h = accessFixture();
@@ -39,6 +40,7 @@ async function fixture(
   const actor = { ...principal, scopes: h.grant.scopes };
   const intents = new Map<string, IntentRecord>();
   const executions = new Map<string, ExecutionRecord>();
+  const accepted = vi.fn();
   const owned = (p: DelegatedPrincipal, value: IntentRecord | ExecutionRecord | undefined) =>
     value &&
     ['userId', 'clientId', 'connectionId', 'grantVersion'].every(
@@ -54,18 +56,19 @@ async function fixture(
     loadIntent: async (p, id) => (owned(p, intents.get(id)) ? intents.get(id)! : null),
     denyIntent: async (p, id) => change(p, id, 'denied'),
     cancelIntent: async (p, id) => change(p, id, 'cancelled'),
-    acceptIntent: async (p, id, method) => {
+    acceptIntent: async (p, id, method, delivery) => {
       const v = (await store.loadIntent(p, id))!;
       if (v.executionId) return executions.get(v.executionId)!;
       const execution: ExecutionRecord = {
         ...v,
         executionId: randomUUID(),
         confirmationMethod: method,
-        queueRequestId: null,
+        queueRequestId: 'actionType' in delivery ? randomUUID() : null,
         startedAt: null,
         completedAt: null,
         outcome: null,
       };
+      accepted(execution);
       executions.set(execution.executionId, execution);
       intents.set(id, { ...v, state: 'consumed', executionId: execution.executionId });
       return execution;
@@ -77,13 +80,15 @@ async function fixture(
       return { kind: 'new_execution', execution: v };
     },
     completeExecution: async (id, result) => {
-      if (fixtureOptions.completionFailure)
+      if (fixtureOptions.completionFailure === 'before_write')
         throw new Error('private ambiguous persistence failure');
       executions.set(id, {
         ...executions.get(id)!,
         completedAt: new Date(),
         outcome: { kind: 'delegated_terminal', result },
       });
+      if (fixtureOptions.completionFailure === 'after_write')
+        throw new Error('private committed response lost');
     },
     admitQueuedExecution: async () => ({ kind: 'denied', code: 'unused' }),
   };
@@ -134,13 +139,22 @@ async function fixture(
     },
     access: h.access,
     resolver: {
-      resolve: async () => ({
-        delivery: { kind: 'direct' },
-        preconditions: { kind: 'setup', approvedState: approvedState },
-        relevantState: {},
-        summary: expectedSummary,
-        previewExpiresAt: null,
-      }),
+      resolve: async (_principal, invocation) => {
+        const workflow = workflowDefinitions.find((item) => item.id === invocation.workflowId)!;
+        return {
+          delivery:
+            workflow.delivery === 'queued'
+              ? {
+                  kind: 'queued',
+                  command: queuedCommandSchema.parse(workflow.parseCommand(invocation.input)),
+                }
+              : { kind: 'direct' },
+          preconditions: { kind: 'setup', approvedState: approvedState },
+          relevantState: {},
+          summary: expectedSummary,
+          previewExpiresAt: null,
+        };
+      },
     },
     direct: { execute: enforcement },
   });
@@ -206,7 +220,9 @@ async function fixture(
                       ? { ...actor, scopes: ['drasil:read'] }
                       : token === 'configure'
                         ? { ...actor, scopes: ['drasil:configure'] }
-                        : actor,
+                        : token === 'moderate'
+                          ? { ...actor, scopes: ['drasil:moderate'] }
+                          : actor,
         expiresAt: Math.floor(Date.now() / 1000) + 600,
       };
     },
@@ -281,6 +297,8 @@ async function fixture(
     responses,
     enforcement,
     intents,
+    executions,
+    accepted,
     query,
     queries,
     url,
@@ -581,17 +599,141 @@ it('confirms with the saved workflow scope without requiring an unrelated read s
   expect(h.enforcement).toHaveBeenCalledTimes(1);
 });
 
-it('preserves uncertainty when completion persistence fails after a direct effect', async () => {
-  const h = await fixture({ completionFailure: true }),
-    c = await h.client();
-  const saved = await c.callTool({ name: 'drasil_update_setup', arguments: args });
-  const result = await c.callTool({
-    name: 'confirm_action',
-    arguments: { confirmationId: data(saved).confirmationId },
-  });
-  expect(data(result).state).toBe('uncertain');
-  expect(h.enforcement).toHaveBeenCalledTimes(1);
-  expect(JSON.stringify(result)).not.toContain('private ambiguous');
+it.each(['before_write', 'after_write'] as const)(
+  'preserves the owned receipt when completion persistence fails %s after a direct effect',
+  async (completionFailure) => {
+    const h = await fixture({ completionFailure }),
+      c = await h.client();
+    const saved = await c.callTool({ name: 'drasil_update_setup', arguments: args });
+    const confirmationId = data(saved).confirmationId;
+    const result = await c.callTool({ name: 'confirm_action', arguments: { confirmationId } });
+    const execution = [...h.executions.values()][0];
+    const binding = { executionId: execution.executionId, operation: 'update_setup', guildId };
+    expect(data(result)).toMatchObject({
+      ...binding,
+      state: 'uncertain',
+      code: 'completion_recording_failed',
+    });
+    expect(JSON.stringify(result)).not.toContain('private');
+    const expected = {
+      ...binding,
+      state: completionFailure === 'after_write' ? 'completed' : 'uncertain',
+    };
+    expect(
+      data(
+        await c.callTool({
+          name: 'get_action_status',
+          arguments: { executionId: execution.executionId },
+        })
+      )
+    ).toMatchObject(expected);
+    const other = await h.client(modern, undefined, 'other');
+    expect(
+      data(
+        await other.callTool({
+          name: 'get_action_status',
+          arguments: { executionId: execution.executionId },
+        })
+      )
+    ).toMatchObject({ state: 'denied', code: 'not_found' });
+    expect(
+      data(await c.callTool({ name: 'confirm_action', arguments: { confirmationId } }))
+    ).toMatchObject(expected);
+    expect(data(await c.callTool({ name: 'drasil_update_setup', arguments: args }))).toMatchObject(
+      expected
+    );
+    expect(h.enforcement).toHaveBeenCalledTimes(1);
+    expect(h.accepted).toHaveBeenCalledTimes(1);
+  }
+);
+it.each(
+  [
+    {
+      token: 'moderate',
+      name: 'drasil_ban_user',
+      input: { targetUserId: '200000000000000002', reason: 'Approved reason' },
+    },
+    {
+      token: 'configure',
+      name: 'drasil_update_heuristics',
+      input: { changes: { messageThreshold: 10 } },
+    },
+  ].flatMap((scenario) => [true, false].map((native) => ({ ...scenario, native })))
+)(
+  'preserves $token-only queued acceptance over HTTP (native: $native)',
+  async ({ token, name, input, native }) => {
+    const h = await fixture();
+    const c = await h.client(
+      native
+        ? { ...modern, capabilities: { elicitation: { form: {} } } }
+        : { supportedProtocolVersions: ['2025-11-25'] },
+      native ? { action: 'accept', content: { confirm: true } } : undefined,
+      token
+    );
+    const invocation = { name, arguments: { guildId, idempotencyKey: 'queued', ...input } };
+    const first = await c.callTool(invocation);
+    if (!native) expect(data(first).state).toBe('confirmation_required');
+    const confirmationId = [...h.intents.values()][0].confirmationId;
+    const receipt = native
+      ? first
+      : await c.callTool({ name: 'confirm_action', arguments: { confirmationId } });
+    const execution = [...h.executions.values()][0];
+    const expected = {
+      state: 'queued',
+      executionId: execution.executionId,
+      requestId: execution.queueRequestId,
+      operation: name.slice('drasil_'.length),
+      guildId,
+    };
+    expect(data(receipt)).toMatchObject(expected);
+    if ('targetUserId' in input) expect(data(receipt).targetUserId).toBe(input.targetUserId);
+    expect(
+      data(await c.callTool({ name: 'confirm_action', arguments: { confirmationId } }))
+    ).toMatchObject(expected);
+    expect(data(await c.callTool(invocation))).toMatchObject(expected);
+    expect(h.accepted).toHaveBeenCalledTimes(1);
+    expect(h.enforcement).not.toHaveBeenCalled();
+    await expect(
+      c.callTool({
+        name: 'get_action_status',
+        arguments: { executionId: execution.executionId },
+      })
+    ).rejects.toThrow('Insufficient scope: required "drasil:read"');
+    expect(
+      await h.service.status(
+        { ...h.actor, scopes: [token === 'moderate' ? 'drasil:moderate' : 'drasil:configure'] },
+        execution.executionId
+      )
+    ).toEqual({ state: 'denied', code: 'scope_denied' });
+  }
+);
+it('preserves a moderate-only queued receipt without confirmation', async () => {
+  const h = await fixture(),
+    c = await h.client(modern, undefined, 'moderate');
+  const invocation = {
+    name: 'drasil_refresh_case_notification',
+    arguments: {
+      guildId,
+      idempotencyKey: 'refresh',
+      targetUserId: '200000000000000002',
+      caseId: 'case',
+    },
+  };
+  const result = await c.callTool(invocation);
+  const execution = [...h.executions.values()][0];
+  const expected = {
+    state: 'queued',
+    executionId: execution.executionId,
+    requestId: execution.queueRequestId,
+    operation: 'refresh_case_notification',
+    guildId,
+    targetUserId: invocation.arguments.targetUserId,
+  };
+  expect(execution.confirmationMethod).toBe('not_required');
+  expect(data(result)).toMatchObject(expected);
+  expect(data(await c.callTool(invocation))).toMatchObject(expected);
+  expect(h.accepted).toHaveBeenCalledTimes(1);
+  expect(h.enforcement).not.toHaveBeenCalled();
 });
 it('uses form capabilities from each request and falls back for URL-only elicitation', async () => {
   const h = await fixture();
