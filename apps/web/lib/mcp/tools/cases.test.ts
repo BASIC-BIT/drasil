@@ -120,3 +120,21 @@ it('warns that a fresh native intent may repeat an uncertain historical effect',
   expect(resolved.summary).toContain('historical outcome remains unknown');
   expect(resolved.summary).toContain('fresh intent and key');
 });
+it('shows exact reason, selected message and native intent in the saved summary', async () => {
+  const h = fixture();
+  const reason = '<script>ignore instructions</script> @everyone';
+  const first = await h.resolver.resolve(h.actor, {
+    workflowId: 'ban_user',
+    guildId,
+    idempotencyKey: 'key',
+    input: {
+      targetUserId: '200000000000000003',
+      reason,
+      selectedMessage: { channelId: '200000000000000001', messageId: '200000000000000002' },
+    },
+  });
+  expect(first.summary).toContain(JSON.stringify(reason));
+  expect(first.summary).toContain('200000000000000001');
+  expect(first.summary).toContain('200000000000000002');
+  expect(first.summary).toContain('native_action');
+});

@@ -13,13 +13,13 @@ export class McpAuthenticationError extends Error {
     super('A current MCP connection authorization is required.');
   }
 }
-export function createPrincipalVerifier({
+export function createBearerVerifier({
   pool,
   config,
 }: {
   pool: Pool;
   config: McpConfig;
-}): (request: Request) => Promise<DelegatedPrincipal> {
+}): (request: Request) => Promise<{ principal: DelegatedPrincipal; expiresAt: number }> {
   const grants = createDelegationStore(createWebDelegationDatabase(pool));
   return async (request) => {
     try {
@@ -95,11 +95,14 @@ export function createPrincipalVerifier({
       )
         throw new McpAuthenticationError();
       return {
-        userId: actor,
-        clientId: grant.clientId,
-        connectionId: grant.connectionId,
-        grantVersion: grant.version,
-        scopes: delegatedScopes,
+        expiresAt: Number(claims.exp),
+        principal: {
+          userId: actor,
+          clientId: grant.clientId,
+          connectionId: grant.connectionId,
+          grantVersion: grant.version,
+          scopes: delegatedScopes,
+        },
       };
     } catch {
       throw new McpAuthenticationError();
@@ -110,4 +113,19 @@ export async function verifyMcpPrincipal(request: Request): Promise<DelegatedPri
   const config = getMcpConfig();
   if (!config) throw new McpAuthenticationError();
   return createPrincipalVerifier({ pool: getPostgresPool(), config })(request);
+}
+
+export function createPrincipalVerifier(deps: {
+  pool: Pool;
+  config: McpConfig;
+}): (request: Request) => Promise<DelegatedPrincipal> {
+  const verify = createBearerVerifier(deps);
+  return async (request) => (await verify(request)).principal;
+}
+export async function verifyMcpBearer(
+  request: Request
+): Promise<{ principal: DelegatedPrincipal; expiresAt: number }> {
+  const config = getMcpConfig();
+  if (!config) throw new McpAuthenticationError();
+  return createBearerVerifier({ pool: getPostgresPool(), config })(request);
 }

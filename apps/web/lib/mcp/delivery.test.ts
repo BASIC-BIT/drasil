@@ -78,3 +78,50 @@ describe('MCP direct delivery', () => {
     expect(clock.after.mock.calls[0][0]).toBe(5000);
   });
 });
+it('returns an owned queued receipt within five seconds and stops polling after the deadline', async () => {
+  const { waitForMcpReceipt } = await import('./delivery');
+  vi.useFakeTimers();
+  try {
+    const actor = {
+      userId: 'actor',
+      clientId: 'client',
+      connectionId: 'connection',
+      grantVersion: 1,
+      scopes: ['drasil:read'] as const,
+    };
+    const queued = { state: 'queued' as const, executionId: 'execution', retryAfterMs: 2000 };
+    const status = vi.fn(async () => queued);
+    const pending = waitForMcpReceipt({ status }, actor, queued);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(await pending).toEqual(queued);
+    expect(status).toHaveBeenCalledWith(actor, 'execution');
+    const count = status.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(status).toHaveBeenCalledTimes(count);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+it('returns a completed own receipt early and bounds an unavailable status read', async () => {
+  const { waitForMcpReceipt } = await import('./delivery');
+  vi.useFakeTimers();
+  try {
+    const actor = {
+      userId: 'actor',
+      clientId: 'client',
+      connectionId: 'connection',
+      grantVersion: 1,
+      scopes: ['drasil:read'] as const,
+    };
+    const queued = { state: 'queued' as const, executionId: 'execution' };
+    const done = { state: 'partial' as const, executionId: 'execution' };
+    const work = waitForMcpReceipt({ status: async () => done }, actor, queued);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(await work).toEqual(done);
+    const stalled = waitForMcpReceipt({ status: async () => new Promise(() => {}) }, actor, queued);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(await stalled).toEqual(queued);
+  } finally {
+    vi.useRealTimers();
+  }
+});

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createMcpIntentHandlers } from './intents';
+import { createApprovalTools } from './tools/approvals';
 
 describe('MCP exact approval boundary', () => {
   it('accepts only the saved confirmation ID and chooses the method internally', async () => {
@@ -8,7 +8,7 @@ describe('MCP exact approval boundary', () => {
       cancel: vi.fn(),
       prepareIntent: vi.fn(),
     };
-    const handlers = createMcpIntentHandlers(service as never);
+    const tools = createApprovalTools(service as never);
     const principal = {
       userId: 'actor',
       clientId: 'client',
@@ -16,27 +16,39 @@ describe('MCP exact approval boundary', () => {
       grantVersion: 1,
       scopes: [],
     };
-    expect(await handlers.confirmAction(principal, { confirmationId: 'saved' })).toEqual({
+    expect(
+      await tools
+        .find((tool) => tool.toolName === 'confirm_action')!
+        .handler(principal, { confirmationId: 'saved' })
+    ).toEqual({
       state: 'queued',
       executionId: 'execution',
     });
     expect(service.confirm).toHaveBeenCalledWith(principal, 'saved', 'client_confirmation');
     for (const key of ['approved', 'method', 'command', 'actor', 'grantVersion']) {
       await expect(
-        handlers.confirmAction(principal, { confirmationId: 'saved', [key]: true })
+        tools
+          .find((tool) => tool.toolName === 'confirm_action')!
+          .handler(principal, { confirmationId: 'saved', [key]: true })
       ).rejects.toThrow();
     }
     expect(service.confirm).toHaveBeenCalledTimes(1);
   });
   it('cancels only a saved intent ID', async () => {
     const service = { cancel: vi.fn(async () => ({ state: 'denied', code: 'cancelled' })) };
-    const handlers = createMcpIntentHandlers(service as never);
-    expect(await handlers.cancelAction({} as never, { confirmationId: 'saved' })).toEqual({
+    const tools = createApprovalTools(service as never);
+    expect(
+      await tools
+        .find((tool) => tool.toolName === 'cancel_action')!
+        .handler({} as never, { confirmationId: 'saved' })
+    ).toEqual({
       state: 'denied',
       code: 'cancelled',
     });
     await expect(
-      handlers.cancelAction({} as never, { confirmationId: 'saved', method: 'not_required' })
+      tools
+        .find((tool) => tool.toolName === 'cancel_action')!
+        .handler({} as never, { confirmationId: 'saved', method: 'not_required' })
     ).rejects.toThrow();
   });
 });

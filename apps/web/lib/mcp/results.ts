@@ -1,4 +1,6 @@
+import { MCP_RESULT_METADATA_BYTES } from './protocol';
 import type { QueryResult } from './queries';
+import { assertIntentSummary, type PublicActionResult } from '@drasil/application';
 
 export const MCP_RESULT_BYTES = 65_536;
 export type JsonValue =
@@ -57,10 +59,47 @@ export function boundValue(
 }
 
 /** Action service results have already passed their family-specific projection. */
-export function toMcpActionResult(result: import('@drasil/application').PublicActionResult) {
+function actionEnvelope(result: PublicActionResult) {
   return {
     content: [{ type: 'text' as const, text: JSON.stringify(result) }],
     structuredContent: result,
     isError: result.state === 'denied' || result.state === 'failed',
   };
+}
+
+/** Exact summaries are never clipped into actionable approvals. */
+export function toMcpActionResult(result: PublicActionResult) {
+  if (result.state === 'confirmation_required') {
+    try {
+      assertIntentSummary(result.summary ?? '');
+    } catch {
+      return summaryTooLarge();
+    }
+  }
+  if (result.code === 'summary_too_large') return summaryTooLarge();
+  const envelope = actionEnvelope(result);
+  if (
+    Buffer.byteLength(JSON.stringify(envelope), 'utf8') + MCP_RESULT_METADATA_BYTES <=
+    MCP_RESULT_BYTES
+  )
+    return envelope;
+  if (result.state === 'confirmation_required') return summaryTooLarge();
+  // Keep state and an owned receipt handle; large diagnostics cannot change execution meaning.
+  return actionEnvelope({
+    state: result.state,
+    executionId: result.executionId,
+    code: 'result_too_large',
+  });
+}
+function summaryTooLarge() {
+  return actionEnvelope({
+    state: 'denied',
+    code: 'summary_too_large',
+    outcome: {
+      details: {
+        guidance:
+          'The exact approval summary is too large. Split configuration changes into smaller attempts.',
+      },
+    },
+  });
 }

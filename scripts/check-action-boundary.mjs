@@ -6,6 +6,10 @@ import ts from 'typescript';
 // Mixed files retain read/presentation dependencies. Only these mutation bodies
 // (and their same-file helpers) are checked for calls to owned domain workflows.
 export const mutationMethods = {
+  'apps/web/lib/mcp/server.ts': ['createMcpHandler'],
+  'apps/web/lib/mcp/tools/bindings.ts': ['createWorkflowTools'],
+  'apps/web/lib/mcp/tools/approvals.ts': ['createApprovalTools'],
+  'apps/web/lib/mcp/endpoint.ts': ['handleMcpRequest'],
   'src/controllers/InteractionHandler.ts': [
     'handleQueueAcknowledgeButtonInteraction',
     'executeCaptchaAction',
@@ -153,7 +157,8 @@ function filesBelow(directory) {
 function isActionUi(file) {
   return (
     /^apps\/web\/app\/.*(?:[Aa]ctions|actions)\.tsx?$/.test(file) ||
-    /^apps\/web\/components\//.test(file)
+    /^apps\/web\/components\//.test(file) ||
+    /^apps\/web\/(?:lib\/mcp\/(?:server|tools\/[^/]+)\.ts|app\/api\/mcp\/route\.ts)$/.test(file)
   );
 }
 function inspectDependencies(root, errors) {

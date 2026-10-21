@@ -78,3 +78,5 @@ export type {
   ContainmentResolutionResources,
   ResolvedPreview,
 } from './containment/resolution';
+
+export * from './cases/summary';

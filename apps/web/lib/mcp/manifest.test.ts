@@ -184,7 +184,7 @@ it('publishes the supported direct setup write and queued settings workflows', (
 it('advertises an initial cleanup preview without a prior reference', async () => {
   const tool = mcpWorkflowManifest.find((entry) => entry.id === 'preview_case_message_deletion');
   const input = {
-    guildId: 'guild',
+    guildId: '100000000000000001',
     idempotencyKey: 'first-preview',
     caseId: 'case',
     targetUserId: '123',
@@ -207,7 +207,7 @@ it.each([
 ] as const)('keeps a preview reference required for public %s input', async (workflowId, mode) => {
   const tool = mcpWorkflowManifest.find((entry) => entry.id === workflowId);
   const input = {
-    guildId: 'guild',
+    guildId: '100000000000000001',
     idempotencyKey: 'execute',
     caseId: 'case',
     targetUserId: '123',

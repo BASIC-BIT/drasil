@@ -122,9 +122,10 @@ export function submitMcpAction(
 export function confirmMcpAction(
   service: ReturnType<typeof createMcpActionDelivery>,
   principal: DelegatedPrincipal,
-  id: string
+  id: string,
+  method: 'client_confirmation' | 'elicitation' = 'client_confirmation'
 ): Promise<PublicActionResult> {
-  return service.confirm(principal, id, 'client_confirmation');
+  return service.confirm(principal, id, method);
 }
 export function getMcpActionStatus(
   service: ReturnType<typeof createMcpActionDelivery>,
@@ -132,4 +133,46 @@ export function getMcpActionStatus(
   id: string
 ): Promise<PublicActionResult> {
   return service.status(principal, id);
+}
+/** Observe only this connection's receipt. Polling and a stalled status read share one deadline. */
+export async function waitForMcpReceipt(
+  service: Pick<import('@drasil/application').DelegatedActionService, 'status'>,
+  principal: DelegatedPrincipal,
+  initial: PublicActionResult,
+  budgetMs = 5000
+): Promise<PublicActionResult> {
+  if (!initial.executionId || !['queued', 'running'].includes(initial.state) || budgetMs <= 0)
+    return initial;
+  let latest = initial;
+  let stopped = false;
+  let cancelDelay = (): void => {};
+  let cancelDeadline = (): void => {};
+  const deadline = new Promise<PublicActionResult>((resolve) => {
+    cancelDeadline = clock.after(Math.min(budgetMs, 5000), () => {
+      stopped = true;
+      cancelDelay();
+      resolve(latest);
+    });
+  });
+  const observe = async (): Promise<PublicActionResult> => {
+    while (!stopped && ['queued', 'running'].includes(latest.state)) {
+      await new Promise<void>((resolve) => {
+        const cancel = clock.after(250, resolve);
+        cancelDelay = () => {
+          cancel();
+          resolve();
+        };
+      });
+      if (stopped) break;
+      latest = await service.status(principal, initial.executionId!).catch(() => latest);
+    }
+    return latest;
+  };
+  try {
+    return await Promise.race([observe(), deadline]);
+  } finally {
+    stopped = true;
+    cancelDeadline();
+    cancelDelay();
+  }
 }

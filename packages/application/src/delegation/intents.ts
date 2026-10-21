@@ -28,6 +28,13 @@ export class IntentError extends Error {
     this.name = 'IntentError';
   }
 }
+/** Admission budget for exact human-visible summaries shared by every approval surface. */
+export const INTENT_SUMMARY_BYTES = 16_384;
+export function assertIntentSummary(summary: string): void {
+  if (!summary.trim()) throw new IntentError('summary_required');
+  if (Buffer.byteLength(JSON.stringify(summary), 'utf8') > INTENT_SUMMARY_BYTES)
+    throw new IntentError('summary_too_large');
+}
 function canonical(value: unknown): string {
   if (value === null) return 'null';
   if (value instanceof Date) return JSON.stringify(value.toISOString());
@@ -230,7 +237,7 @@ export function createIntentService(deps: {
             approvedState: setupFingerprintState(resolution.preconditions.approvedState),
           }
         : resolution.preconditions;
-    if (!resolution.summary.trim()) throw new IntentError('summary_required');
+    assertIntentSummary(resolution.summary);
     return {
       workflowId: invocation.workflowId,
       guildId: invocation.guildId,
@@ -272,6 +279,7 @@ export function createIntentService(deps: {
     if (intent.expiresAt.getTime() <= now()) throw new IntentError('expired');
     let current: ResolvedIntent;
     try {
+      assertIntentSummary(intent.summary);
       current = await resolve(principal, intent, intent);
       if (
         current.commandDigest !== intent.commandDigest ||
@@ -301,6 +309,14 @@ export function createIntentService(deps: {
       const previous = await deps.store.findIntentByKey(principal, invocation.idempotencyKey);
       if (previous) {
         assertIntentBinding(principal, previous);
+        if (previous.state === 'pending') {
+          try {
+            assertIntentSummary(previous.summary);
+          } catch (error) {
+            await deps.store.denyIntent(principal, previous.confirmationId);
+            throw error;
+          }
+        }
         if (previous.invocationDigest !== invocationDigest)
           throw new IntentError('idempotency_conflict');
         const access = await deps.access.authorizeWorkflow(

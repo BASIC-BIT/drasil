@@ -1,3 +1,4 @@
+import { MCP_RESULT_METADATA_BYTES } from './protocol';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import {
@@ -366,7 +367,10 @@ function paginate(
       nextCursor: cursor,
       truncated: truncated || bounded.truncated,
     };
-    if (queryResultBytes(candidate) > MCP_RESULT_BYTES && items.length > 0) {
+    if (
+      queryResultBytes(candidate) > MCP_RESULT_BYTES - MCP_RESULT_METADATA_BYTES &&
+      items.length > 0
+    ) {
       truncated = true;
       break;
     }
@@ -375,7 +379,7 @@ function paginate(
     for (
       let budget = 2000;
       queryResultBytes({ ...candidate, items: [...items, item], truncated: true }) >
-      MCP_RESULT_BYTES;
+      MCP_RESULT_BYTES - MCP_RESULT_METADATA_BYTES;
       budget = Math.floor(budget / 2)
     ) {
       if (budget < 1) throw new Error('Unbounded query record');

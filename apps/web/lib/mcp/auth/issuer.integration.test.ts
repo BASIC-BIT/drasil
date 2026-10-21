@@ -8,7 +8,7 @@ import { Readable } from 'node:stream';
 import { EventEmitter } from 'node:events';
 import { createHash, randomBytes } from 'node:crypto';
 import { createMcpIssuer } from './issuer';
-import { createPrincipalVerifier } from './principal';
+import { createPrincipalVerifier, createBearerVerifier } from './principal';
 import { fetchClientMetadataResource } from '@drasil/mcp-runtime/cimd-node';
 
 const origin = 'http://localhost:3456';
@@ -43,7 +43,9 @@ interface Tokens {
   expires_in: number;
 }
 const originalFetch = globalThis.fetch;
-beforeAll(() => {
+beforeAll(async () => {
+  // Other disposable issuer fixtures use different encryption secrets.
+  await pool.query('TRUNCATE mcp_auth_jwks');
   vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     if (url === 'https://discord.com/api/oauth2/token')
@@ -828,4 +830,95 @@ it('commits only one selection when the same flow is submitted concurrently', as
   expect(selected.filter((result) => result.status === 'rejected')).toHaveLength(1);
   expect((await pool.query('select id from mcp_connections')).rows).toHaveLength(1);
   expect((await pool.query('select id from mcp_authorization_references')).rows).toHaveLength(1);
+});
+
+it('serves SDK reads using real issued bearer identity and rejects expired, wrong-audience and revoked grants at HTTP admission', async () => {
+  const { createMcpHandler } = await import('../server');
+  const { createMcpReadTools } = await import('../tools/reads');
+  const { Client: SdkClient, StreamableHTTPClientTransport } =
+    await import('@modelcontextprotocol/client');
+  const a = await start(await client());
+  const grant = await select(a, '111111111111111111');
+  const tokens = await exchange(a, await consent(a));
+  const config = {
+    origin,
+    issuer,
+    resource,
+    authSecret: 'integration-continuation-'.repeat(3),
+    cursorSecret: 'integration-cursor-'.repeat(3),
+  };
+  const execute = vi.fn(async () => ({
+    kind: 'allowed' as const,
+    items: [],
+    nextCursor: null,
+    truncated: false,
+  }));
+  const unused = async (): Promise<never> => {
+    throw new Error('unused mutation');
+  };
+  const handler = createMcpHandler({
+    config,
+    tools: createMcpReadTools({ execute }),
+    service: { submit: unused, confirm: unused, cancel: unused, status: unused },
+    loadIntent: async () => null,
+    verifyBearer: createBearerVerifier({ pool, config }),
+  });
+  const sdk = new SdkClient(
+    { name: 'real-issuer-test', version: '1' },
+    { versionNegotiation: { mode: { pin: '2026-07-28' } } }
+  );
+  await sdk.connect(
+    new StreamableHTTPClientTransport(new URL(resource), {
+      authProvider: { token: async () => tokens.access_token },
+      fetch: async (input, init) => {
+        const request = new Request(input, init);
+        request.headers.set('host', 'localhost');
+        return handler(request);
+      },
+    })
+  );
+  try {
+    await sdk.callTool({ name: 'drasil_list_guilds', arguments: {} });
+    expect(execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: discordId,
+        clientId: a.client.client_id,
+        connectionId: grant.id,
+        grantVersion: 1,
+        scopes: ['drasil:read'],
+      }),
+      expect.objectContaining({ kind: 'list_guilds' })
+    );
+    for (const change of [
+      { exp: Math.floor(Date.now() / 1000) - 60 },
+      { aud: 'https://other.example/api/mcp' },
+    ]) {
+      const signed = await auth.auth.api.signJWT({
+        body: { payload: { ...payload(tokens), ...change } },
+      });
+      const response = await handler(
+        new Request(resource, {
+          headers: { host: 'localhost', authorization: `Bearer ${signed.token}` },
+        })
+      );
+      expect(response.status).toBe(401);
+      expect(response.headers.get('www-authenticate')).toContain(
+        `${origin}/.well-known/oauth-protected-resource/api/mcp`
+      );
+    }
+    await pool.query('update mcp_connections set revoked_at=now(),version=version+1 where id=$1', [
+      grant.id,
+    ]);
+    expect(
+      (
+        await handler(
+          new Request(resource, {
+            headers: { host: 'localhost', authorization: `Bearer ${tokens.access_token}` },
+          })
+        )
+      ).status
+    ).toBe(401);
+  } finally {
+    await sdk.close();
+  }
 });

@@ -1,35 +1,6 @@
-import { z } from 'zod';
-import { type DelegatedActionService, type PublicActionResult } from '@drasil/application';
-import { bindMcpTool, mcpWorkflowManifest, type McpToolDefinition } from '../manifest';
-
-export interface ReportToolDependencies {
-  readonly service: Pick<DelegatedActionService, 'submit'>;
+import { createWorkflowTools, type WorkflowToolDependencies } from './bindings';
+export type ReportToolDependencies = WorkflowToolDependencies;
+export function createReportTools(deps: ReportToolDependencies) {
+  return createWorkflowTools(deps, ['reports', 'detections', 'reportReview']);
 }
-export function createReportTools(
-  deps: ReportToolDependencies
-): readonly McpToolDefinition<PublicActionResult>[] {
-  return mcpWorkflowManifest
-    .filter((entry) => ['reports', 'detections', 'reportReview'].includes(entry.family))
-    .map((entry) =>
-      bindMcpTool(entry, async (principal, input) => {
-        const parsed = entry.inputSchema
-          .extend({
-            guildId: z.string().regex(/^\d{17,20}$/),
-            idempotencyKey: z.string().min(1).max(128),
-          })
-          .strict()
-          .parse(input);
-        const { guildId: rawGuild, idempotencyKey: rawKey, ...options } = parsed;
-        const guildId = z.string().parse(rawGuild);
-        const idempotencyKey = z.string().parse(rawKey);
-        return deps.service.submit(principal, {
-          workflowId: entry.id,
-          guildId,
-          idempotencyKey,
-          input: options,
-        });
-      })
-    );
-}
-
 export { createReportIntentResolver } from '@drasil/application';

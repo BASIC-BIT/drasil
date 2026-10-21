@@ -19,20 +19,13 @@ export interface McpToolDefinition<Result = unknown> extends McpWorkflowManifest
 export const mcpWorkflowManifest: readonly McpWorkflowManifestEntry[] = workflowDefinitions.map(
   (definition) => ({
     ...definition,
-    schema: toMcpSchema(
-      definition.inputSchema
-        .extend({
-          guildId: z.string().min(1),
-          idempotencyKey: z.string().min(1).max(128),
-        })
-        .strict()
-    ),
+    schema: toMcpSchema(workflowToolSchema(definition)),
     annotations: {
       // Workflow-specific read/preview hints are refined by the owning tool family.
       readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: false,
+      destructiveHint: !/^(?:preview_|prepare_|audit_|refresh_)/.test(definition.id),
+      idempotentHint: true,
+      openWorldHint: true,
     },
   })
 );
@@ -48,10 +41,19 @@ export function bindMcpTool<Result>(
 /** Common transport input; workflow entries retain their complete canonical metadata. */
 export interface McpPublicToolDefinition<Result = unknown> {
   readonly toolName: string;
-  readonly scope: DelegatedScope;
+  readonly scope: DelegatedScope | 'saved_action';
   readonly description?: string;
   readonly schema: StandardSchemaWithJSON;
   readonly annotations: ToolAnnotations;
   readonly resultContract: string;
   readonly handler: (principal: DelegatedPrincipal, input: unknown) => Promise<Result>;
+}
+
+export function workflowToolSchema(entry: WorkflowDefinition) {
+  return entry.inputSchema
+    .extend({
+      guildId: z.string().regex(/^\d{17,20}$/),
+      idempotencyKey: z.string().min(1).max(128),
+    })
+    .strict();
 }

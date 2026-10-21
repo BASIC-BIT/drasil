@@ -249,3 +249,16 @@ test('canonical_setup_leaf_supports_commonjs_and_es_imports', async () => {
   );
   assert.equal(result.status, 0, result.stderr);
 });
+test('mcp_registration_cannot_call_domain_workflows', () => {
+  check(
+    {
+      'src/services/UserModerationService.ts': 'export const banUser = () => true;',
+      'apps/web/lib/mcp/server.ts':
+        "import { banUser } from '../../../../src/services/UserModerationService'; export function createMcpHandler() { return () => banUser(); }",
+    },
+    (result) => {
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /workflow/);
+    }
+  );
+});

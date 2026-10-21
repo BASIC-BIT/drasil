@@ -453,3 +453,36 @@ it.each([
     expect(f.store.acceptIntent).toHaveBeenCalledTimes(1);
   }
 );
+it('rejects oversized exact approval summaries before saving an actionable intent', async () => {
+  const f = fixture();
+  f.setResolution({ summary: '"\\😀'.repeat(10000) });
+  await expect(f.service.prepareIntent(principal, invocation)).rejects.toThrow('summary_too_large');
+  expect(await f.store.findIntentByKey(principal, invocation.idempotencyKey)).toBeNull();
+});
+it.each(['retry', 'confirm'] as const)(
+  'durably denies an oversized legacy pending summary on %s',
+  async (mode) => {
+    const f = fixture();
+    const saved = await f.service.prepareIntent(principal, invocation);
+    await f.store.saveIntent(principal, { ...saved, summary: '"'.repeat(20000) });
+    await expect(
+      mode === 'retry'
+        ? f.service.prepareIntent(principal, invocation)
+        : f.service.acceptIntent(principal, saved.confirmationId, 'client_confirmation')
+    ).rejects.toThrow('summary_too_large');
+    expect((await f.store.loadIntent(principal, saved.confirmationId))?.state).toBe('denied');
+  }
+);
+it('preserves consumed receipts when a historical saved summary exceeds the new admission limit', async () => {
+  const f = fixture();
+  const saved = await f.service.prepareIntent(principal, invocation);
+  await f.store.saveIntent(principal, {
+    ...saved,
+    state: 'consumed',
+    executionId: 'execution',
+    summary: '"'.repeat(20000),
+  });
+  expect((await f.service.prepareIntent(principal, invocation)).state).toBe('consumed');
+  await f.service.acceptIntent(principal, saved.confirmationId, 'client_confirmation');
+  expect(f.store.acceptIntent).toHaveBeenCalledTimes(1);
+});
