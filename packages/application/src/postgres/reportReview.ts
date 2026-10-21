@@ -14,9 +14,38 @@ const privateSchema = z
   })
   .strict();
 const uuid = z.string().uuid();
+const completedReceiptSchema = z
+  .object({
+    action_type: z.literal('prepare_report_ban_review'),
+    operationId: z.string(),
+    targetUserId: z.string(),
+    reviewReference: uuid,
+    expiresAt: z.string().datetime(),
+  })
+  .strict();
 interface Row extends Record<string, unknown> {
   id: string;
   private: unknown;
+}
+interface CompletedRow extends Row {
+  operationId: string;
+  result: unknown;
+}
+/** Queue completion is durable before the best-effort execution completion hook. */
+function completedPreparation(row: CompletedRow | undefined): z.infer<typeof privateSchema> | null {
+  if (!row) return null;
+  const payload = privateSchema.safeParse(row.private);
+  const receipt = completedReceiptSchema.safeParse(row.result);
+  if (
+    !payload.success ||
+    !receipt.success ||
+    receipt.data.reviewReference !== row.id ||
+    receipt.data.operationId !== row.operationId ||
+    receipt.data.operationId !== payload.data.operationId ||
+    receipt.data.targetUserId !== payload.data.targetUserId
+  )
+    return null;
+  return payload.data;
 }
 function portable(id: string, value: z.infer<typeof privateSchema>): PortableReportReview {
   return {
@@ -43,8 +72,8 @@ export function createReportReviewReferenceStore(
     },
     async load(principal, guildId, reference): ReturnType<ReportReviewReferenceStore['load']> {
       if (!uuid.safeParse(reference).success) return null;
-      const result = await database.query<Row>(
-        `select e.id,q.metadata->'mcp_report_review_private' as private from mcp_executions e join moderation_action_requests q on q.id=e.queue_request_id where e.id=$1::uuid and e.user_id=$2 and e.client_id=$3 and e.connection_id=$4::uuid and e.grant_version=$5 and e.resolved->>'guildId'=$6 and e.resolved->>'workflowId'='prepare_report_ban_review' and e.completed_at is not null and q.status='completed'`,
+      const result = await database.query<CompletedRow>(
+        `select e.id,e.resolved->'command'->>'operationId' as "operationId",q.result,q.metadata->'mcp_report_review_private' as private from mcp_executions e join moderation_action_requests q on q.id=e.queue_request_id where e.id=$1::uuid and e.user_id=$2 and e.client_id=$3 and e.connection_id=$4::uuid and e.grant_version=$5 and e.resolved->>'guildId'=$6 and e.resolved->>'workflowId'='prepare_report_ban_review' and q.status='completed' and q.action_type='prepare_report_ban_review' and q.actor_surface='mcp' and q.metadata->'delegation'->>'executionId'=e.id::text`,
         [
           reference,
           principal.userId,
@@ -54,31 +83,26 @@ export function createReportReviewReferenceStore(
           guildId,
         ]
       );
-      const parsed = privateSchema.safeParse(result.rows[0]?.private);
-      if (
-        !parsed.success ||
-        parsed.data.consumedBy ||
-        Date.parse(parsed.data.expiresAt) <= Date.now()
-      )
-        return null;
-      return portable(reference, parsed.data);
+      const parsed = completedPreparation(result.rows[0]);
+      if (!parsed || parsed.consumedBy || Date.parse(parsed.expiresAt) <= Date.now()) return null;
+      return portable(reference, parsed);
     },
     async claim(reviewExecutionId, reference): ReturnType<ReportReviewReferenceStore['claim']> {
       if (!uuid.safeParse(reference).success) return null;
       return database.transaction(async (client) => {
-        const result = await client.query<Row>(
-          `select p.id,q.metadata->'mcp_report_review_private' as private from mcp_executions r join mcp_executions p on p.id=$2::uuid join moderation_action_requests q on q.id=p.queue_request_id where r.id=$1::uuid and r.started_at is not null and r.completed_at is null and r.resolved->>'workflowId'='review_uncertain_report_ban' and r.resolved->'command'->>'reviewReference'=p.id::text and r.user_id=p.user_id and r.client_id=p.client_id and r.connection_id=p.connection_id and r.grant_version=p.grant_version and r.resolved->>'guildId'=p.resolved->>'guildId' and p.resolved->>'workflowId'='prepare_report_ban_review' and p.completed_at is not null and q.status='completed' for update of q`,
+        const result = await client.query<CompletedRow>(
+          `select p.id,p.resolved->'command'->>'operationId' as "operationId",q.result,q.metadata->'mcp_report_review_private' as private from mcp_executions r join mcp_executions p on p.id=$2::uuid join moderation_action_requests q on q.id=p.queue_request_id where r.id=$1::uuid and r.started_at is not null and r.completed_at is null and r.resolved->>'workflowId'='review_uncertain_report_ban' and r.resolved->'command'->>'reviewReference'=p.id::text and r.user_id=p.user_id and r.client_id=p.client_id and r.connection_id=p.connection_id and r.grant_version=p.grant_version and r.resolved->>'guildId'=p.resolved->>'guildId' and p.resolved->>'workflowId'='prepare_report_ban_review' and q.status='completed' and q.action_type='prepare_report_ban_review' and q.actor_surface='mcp' and q.metadata->'delegation'->>'executionId'=p.id::text for update of q`,
           [reviewExecutionId, reference]
         );
-        const parsed = privateSchema.safeParse(result.rows[0]?.private);
-        if (!parsed.success || parsed.data.consumedBy) return null;
+        const parsed = completedPreparation(result.rows[0]);
+        if (!parsed || parsed.consumedBy) return null;
         // Consume before expiry or domain binding validation, preserving native one-use semantics.
         await client.query(
           `update moderation_action_requests set metadata=jsonb_set(metadata,'{mcp_report_review_private,consumedBy}',to_jsonb($2::text)) where id=(select queue_request_id from mcp_executions where id=$1::uuid)`,
           [reference, reviewExecutionId]
         );
-        if (Date.parse(parsed.data.expiresAt) <= Date.now()) return null;
-        const payload = parsed.data;
+        if (Date.parse(parsed.expiresAt) <= Date.now()) return null;
+        const payload = parsed;
         return {
           operationId: payload.operationId,
           targetUserId: payload.targetUserId,

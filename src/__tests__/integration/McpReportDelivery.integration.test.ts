@@ -2,7 +2,12 @@ import { mockDeep } from 'jest-mock-extended';
 import type { Client } from 'discord.js';
 import type { IConfigService } from '../../config/ConfigService';
 import { getPrismaClient } from '../testDb';
-import { createBotDelegatedRuntime } from '../../application/adapters/delegation';
+import {
+  createBotDelegatedRuntime,
+  createDelegatedWorkerAdmission,
+} from '../../application/adapters/delegation';
+import { ModerationActionRequestRepository } from '../../repositories/ModerationActionRequestRepository';
+import { ModerationActionRequestService } from '../../services/ModerationActionRequestService';
 import { prepareQueuedRequest } from '../../application/requestRuntime';
 import {
   createReportResources,
@@ -134,7 +139,8 @@ integration('MCP report durable choices', () => {
       { kind: 'prepare_report_ban_review' | 'review_uncertain_report_ban' }
     >,
     key: string,
-    expiresAt: Date
+    expiresAt: Date,
+    start = true
   ) {
     const resolver: IntentResolver = {
       resolve: async () => ({
@@ -165,45 +171,94 @@ integration('MCP report durable choices', () => {
       kind === 'prepare_report_ban_review'
         ? await service.acceptWithoutConfirmation(principal, intent.confirmationId)
         : await service.acceptIntent(principal, intent.confirmationId, 'client_confirmation');
-    await pool.query('update mcp_executions set started_at=clock_timestamp() where id=$1', [
-      result.executionId,
-    ]);
+    if (start)
+      await pool.query('update mcp_executions set started_at=clock_timestamp() where id=$1', [
+        result.executionId,
+      ]);
     return result;
   }
-  it('keeps review authority private, portable, bound and atomically one-use', async () => {
+  it('loads and claims a durable preparation after the real service completion hook fails', async () => {
     const refs = createReportReviewReferenceStore(createWebDelegationDatabase(pool));
     const expires = new Date(Date.now() + 600000);
     const prepare = await execution(
       { kind: 'prepare_report_ban_review', operationId: 'operation' },
       'prepare',
-      expires
+      expires,
+      false
     );
-    const reference = await refs.save(prepare.executionId, {
+    const prepareReference = jest.fn(async () => {
+      const saved = await refs.save(prepare.executionId, {
+        operationId: 'operation',
+        targetUserId: 'target',
+        attemptToken: 'PRIVATE-TOKEN',
+        updatedAt: new Date('2026-01-01T00:00:00Z'),
+      });
+      return {
+        kind: 'outcome',
+        outcome: {
+          kind: 'prepare_report_ban_review',
+          reference: { ...saved, expiresAt: saved.expiresAt.toISOString() },
+        },
+      };
+    });
+    const complete = jest.fn().mockRejectedValue(new Error('completion bookkeeping unavailable'));
+    const repository = new ModerationActionRequestRepository(getPrismaClient());
+    const worker = new ModerationActionRequestService(
+      repository,
+      {
+        delegation: { ...createDelegatedWorkerAdmission({ store, access }), complete },
+        detectionRuntime: { forRequest: () => ({ execute: prepareReference }) },
+        caseConfirmations: { recordVerified: jest.fn() },
+      } as never,
+      mockDeep()
+    );
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await worker.processPendingRequests();
+    } finally {
+      warn.mockRestore();
+    }
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(prepareReference).toHaveBeenCalledTimes(1);
+    expect(await worker.processPendingRequests()).toBe(0);
+    expect(prepareReference).toHaveBeenCalledTimes(1);
+    const queue = (
+      await pool.query('select status,result from moderation_action_requests where id=$1', [
+        prepare.queueRequestId,
+      ])
+    ).rows[0];
+    expect(queue.status).toBe('completed');
+    expect(
+      (
+        await pool.query('select completed_at from mcp_executions where id=$1', [
+          prepare.executionId,
+        ])
+      ).rows[0].completed_at
+    ).toBeNull();
+    const reference = {
       operationId: 'operation',
       targetUserId: 'target',
-      attemptToken: 'PRIVATE-TOKEN',
-      updatedAt: new Date('2026-01-01T00:00:00Z'),
+      reviewReference: prepare.executionId,
+      expiresAt: new Date(queue.result.expiresAt),
+    };
+    const restarted = createReportReviewReferenceStore(createWebDelegationDatabase(pool));
+    for (const foreign of [
+      { ...principal, userId: 'other' },
+      { ...principal, clientId: 'other' },
+      { ...principal, connectionId: '00000000-0000-4000-8000-000000000001' },
+      { ...principal, grantVersion: principal.grantVersion + 1 },
+    ])
+      expect(await restarted.load(foreign, 'guild', reference.reviewReference)).toBeNull();
+    expect(await restarted.load(principal, 'other', reference.reviewReference)).toBeNull();
+    expect(await restarted.load(principal, 'guild', reference.reviewReference)).toEqual(reference);
+    expect(await store.loadExecution(principal, prepare.executionId)).toMatchObject({
+      outcome: {
+        result: {
+          state: 'completed',
+          outcome: { details: { reviewReference: prepare.executionId } },
+        },
+      },
     });
-    await pool.query(
-      "update moderation_action_requests set status='completed',result=$2::jsonb where id=$1",
-      [
-        prepare.queueRequestId,
-        JSON.stringify({
-          action_type: 'prepare_report_ban_review',
-          reviewReference: reference.reviewReference,
-          expiresAt: reference.expiresAt.toISOString(),
-        }),
-      ]
-    );
-    await store.completeExecution(prepare.executionId, {
-      state: 'completed',
-      outcome: { details: { reviewReference: reference.reviewReference } },
-    });
-    expect(
-      await refs.load({ ...principal, clientId: 'other' }, 'guild', reference.reviewReference)
-    ).toBeNull();
-    expect(await refs.load(principal, 'other', reference.reviewReference)).toBeNull();
-    expect(await refs.load(principal, 'guild', reference.reviewReference)).toEqual(reference);
     expect(JSON.stringify(await store.loadExecution(principal, prepare.executionId))).not.toContain(
       'PRIVATE-TOKEN'
     );
@@ -216,7 +271,29 @@ integration('MCP report durable choices', () => {
     };
     const first = await execution(command, 'review1', reference.expiresAt),
       second = await execution(command, 'review2', reference.expiresAt);
-    const restarted = createReportReviewReferenceStore(createWebDelegationDatabase(pool));
+    for (const invalid of [
+      { status: 'processing', result: queue.result },
+      { status: 'failed', result: queue.result },
+      { status: 'completed', result: {} },
+      {
+        status: 'completed',
+        result: { ...queue.result, action_type: 'delegated_admission', state: 'denied' },
+      },
+      { status: 'completed', result: { ...queue.result, reviewReference: first.executionId } },
+      { status: 'completed', result: { ...queue.result, operationId: 'other' } },
+      { status: 'completed', result: { ...queue.result, targetUserId: 'other' } },
+    ]) {
+      await pool.query(
+        'update moderation_action_requests set status=$2::moderation_action_request_status,result=$3::jsonb where id=$1',
+        [prepare.queueRequestId, invalid.status, JSON.stringify(invalid.result)]
+      );
+      expect(await restarted.load(principal, 'guild', reference.reviewReference)).toBeNull();
+      expect(await restarted.claim(first.executionId, reference.reviewReference)).toBeNull();
+    }
+    await pool.query(
+      "update moderation_action_requests set status='completed',result=$2::jsonb where id=$1",
+      [prepare.queueRequestId, JSON.stringify(queue.result)]
+    );
     const claims = await Promise.all([
       restarted.claim(first.executionId, reference.reviewReference),
       restarted.claim(second.executionId, reference.reviewReference),
@@ -249,8 +326,17 @@ integration('MCP report durable choices', () => {
       updatedAt: new Date(),
     });
     await pool.query(
-      "update moderation_action_requests set status='completed',result='{}'::jsonb where id=$1",
-      [prepare.queueRequestId]
+      "update moderation_action_requests set status='completed',result=$2::jsonb where id=$1",
+      [
+        prepare.queueRequestId,
+        JSON.stringify({
+          action_type: 'prepare_report_ban_review',
+          operationId: 'operation',
+          targetUserId: 'target',
+          reviewReference: ref.reviewReference,
+          expiresAt: ref.expiresAt.toISOString(),
+        }),
+      ]
     );
     await store.completeExecution(prepare.executionId, { state: 'completed' });
     const review = await execution(
