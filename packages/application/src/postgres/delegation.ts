@@ -1,3 +1,4 @@
+import type { ActorApprovalStore } from '../delegation/approvals';
 import { acceptCleanupJob, hasCommittedContainment } from './containment';
 import { validateReportCaseTerminal } from '../reports/terminal';
 import { nativeCompletion } from './nativeEnforcement';
@@ -813,4 +814,49 @@ function matchesQueue(execution: ExecutionRecord, row: QueuedRow): boolean {
   return Object.entries(encoded.metadata).every(
     ([key, value]) => canonicalDigest(row.metadata?.[key] ?? null) === canonicalDigest(value)
   );
+}
+
+/** Lookup by runtime-authenticated owner before revealing a saved summary or original grant. */
+export function createActorApprovalStore(database: DelegationDatabase): ActorApprovalStore {
+  return {
+    async loadApprovalForActor(
+      actorId,
+      confirmationId
+    ): ReturnType<ActorApprovalStore['loadApprovalForActor']> {
+      return database.transaction(async (client) => {
+        const found = await client.query<IntentRow>(
+          `${intentSelect} where i.user_id=$1 and i.confirmation_id=$2`,
+          [actorId, confirmationId]
+        );
+        if (!found.rows[0]) return null;
+        const intent = toIntent(found.rows[0]);
+        // Same parent-first lock as native acceptance/revocation; immutable intent identity is never supplied by the browser.
+        const grant = await lockIntentConnection(client, {
+          userId: actorId,
+          clientId: intent.clientId,
+          connectionId: intent.connectionId,
+          grantVersion: intent.grantVersion,
+          scopes: [],
+        });
+        const principal: DelegatedPrincipal = {
+          userId: grant.userId,
+          clientId: grant.clientId,
+          connectionId: grant.connectionId,
+          grantVersion: grant.version,
+          scopes: grant.scopes,
+        };
+        const current = await readIntent(client, principal, 'confirmation_id', confirmationId);
+        if (!current) return null;
+        checkIntentGrant(grant, principal, current);
+        // Read-only presentation. Acceptance performs durable expiration under its own lock.
+        return {
+          principal,
+          intent:
+            current.state === 'pending' && current.expiresAt.getTime() <= Date.now()
+              ? { ...current, state: 'expired' as const }
+              : current,
+        };
+      });
+    },
+  };
 }

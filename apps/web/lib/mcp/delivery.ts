@@ -1,77 +1,20 @@
 import { createApprovedSetupExecutor } from './adapters/setup';
 import {
   createDelegatedActionService,
-  ActionDeniedError,
-  type DirectActionExecutor,
-  type HumanOutcome,
+  createDelegatedDirectExecutor,
+  type ApprovedSetupExecutor,
   type IntentResolver,
   type DelegatedPrincipal,
   type IntentInvocation,
   type PublicActionResult,
-  type HumanCommand,
-  type ActionContext,
-  type IntentPreconditions,
 } from '@drasil/application';
 import { createDelegationStore } from '@drasil/application/postgres';
 import { createWebDelegationDatabase } from './adapters/database';
 import { createWebDelegatedAccess } from './access';
-import { createWebApplication, type WebApplication } from '../application/createWebApplication';
+import { createWebApplication } from '../application/createWebApplication';
 
-export interface ApprovedSetupExecutor {
-  execute(
-    context: ActionContext,
-    command: HumanCommand,
-    preconditions: Extract<IntentPreconditions, { kind: 'setup' }>
-  ): Promise<HumanOutcome>;
-}
-/** Setup registration must supply Task 11's atomic approved-state comparison and write. */
-export function createMcpDirectExecutor(
-  app: WebApplication,
-  setup?: ApprovedSetupExecutor
-): DirectActionExecutor {
-  return {
-    async execute(context, command, preconditions): Promise<HumanOutcome> {
-      switch (command.kind) {
-        case 'acknowledge_attention': {
-          const items = [];
-          for (const itemId of command.itemIds) {
-            try {
-              const result = await app.attention.acknowledge(context, { itemId });
-              items.push(
-                result.kind === 'denied'
-                  ? { itemId, state: 'denied' as const }
-                  : { itemId, state: 'completed' as const, status: result.outcome.status }
-              );
-            } catch {
-              items.push({ itemId, state: 'uncertain' as const });
-            }
-          }
-          return { kind: 'attention_batch', items };
-        }
-        case 'close_submitted_report': {
-          const result = await app.reportReview.close(context, {
-            reportId: command.reportId,
-            action: command.action,
-          });
-          if (result.kind === 'denied') throw new ActionDeniedError(result.code);
-          return result.outcome;
-        }
-        case 'update_setup':
-        case 'update_settings':
-        case 'update_heuristics':
-        case 'reset_heuristics':
-        case 'lockdown_allow_add':
-        case 'lockdown_allow_remove':
-        case 'disable_lockdown':
-          if (!setup || preconditions.kind !== 'setup')
-            throw new ActionDeniedError('approved_setup_executor_required');
-          return setup.execute(context, command, preconditions);
-        default:
-          throw new ActionDeniedError('unsupported_direct_workflow');
-      }
-    },
-  };
-}
+export { createDelegatedDirectExecutor as createMcpDirectExecutor } from '@drasil/application';
+export type { ApprovedSetupExecutor } from '@drasil/application';
 export interface McpDeadlineClock {
   after(ms: number, callback: () => void): () => void;
 }
@@ -105,7 +48,7 @@ export function createMcpActionDelivery(
     store: createDelegationStore(createWebDelegationDatabase()),
     access: createWebDelegatedAccess(),
     resolver,
-    direct: createMcpDirectExecutor(
+    direct: createDelegatedDirectExecutor(
       createWebApplication(),
       options.setup ?? createApprovedSetupExecutor()
     ),

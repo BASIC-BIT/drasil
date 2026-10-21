@@ -115,43 +115,7 @@ export function createBotDelegatedRuntime(
   deps: Pick<BotCaseDependencies, 'client' | 'configService'> & { prisma: PrismaClient }
 ): DelegatedWorkerRuntime {
   const store = createDelegationStore(createBotDelegationDatabase(deps.prisma));
-  const access = createDelegatedAccess({
-    store,
-    authority: createBotAuthority(deps.client),
-    staffRoles: {
-      loadRoleIds: async (guildId) =>
-        getCaseResponderSettings(
-          (
-            await deps.configService.getServerConfig(guildId, {
-              forceRefresh: true,
-              failOnReadError: true,
-            })
-          ).settings
-        ).roleIds,
-    },
-    guilds: {
-      isActive: async (guildId) =>
-        (
-          await deps.prisma.servers.findUnique({
-            where: { guild_id: guildId },
-            select: { is_active: true },
-          })
-        )?.is_active === true,
-      listActive: async ({ limit, cursor }) => {
-        const rows = await deps.prisma.servers.findMany({
-          where: { is_active: true, ...(cursor ? { guild_id: { gt: cursor } } : {}) },
-          select: { guild_id: true },
-          orderBy: { guild_id: 'asc' },
-          take: limit + 1,
-        });
-        const page = rows.slice(0, limit);
-        return {
-          guildIds: page.map((row) => row.guild_id),
-          nextCursor: rows.length > limit ? page[page.length - 1].guild_id : null,
-        };
-      },
-    },
-  });
+  const access = createBotDelegatedAccess(deps, store);
   const native = createNativeEnforcementStore(createBotDelegationDatabase(deps.prisma));
   const resources = createReportResources(createBotDelegationDatabase(deps.prisma));
   const authority = createBotAuthority(deps.client);
@@ -225,4 +189,46 @@ export function createBotDelegatedRuntime(
     reconcileNativeEnforcement: async (id) =>
       observeNativeEnforcement(deps.client, await native.reconcileNativeEnforcement(id)),
   };
+}
+export function createBotDelegatedAccess(
+  deps: Pick<BotCaseDependencies, 'client' | 'configService'> & { prisma: PrismaClient },
+  store: DelegationStore
+): DelegatedAccess {
+  return createDelegatedAccess({
+    store,
+    authority: createBotAuthority(deps.client),
+    staffRoles: {
+      loadRoleIds: async (guildId) =>
+        getCaseResponderSettings(
+          (
+            await deps.configService.getServerConfig(guildId, {
+              forceRefresh: true,
+              failOnReadError: true,
+            })
+          ).settings
+        ).roleIds,
+    },
+    guilds: {
+      isActive: async (guildId) =>
+        (
+          await deps.prisma.servers.findUnique({
+            where: { guild_id: guildId },
+            select: { is_active: true },
+          })
+        )?.is_active === true,
+      listActive: async ({ limit, cursor }) => {
+        const rows = await deps.prisma.servers.findMany({
+          where: { is_active: true, ...(cursor ? { guild_id: { gt: cursor } } : {}) },
+          select: { guild_id: true },
+          orderBy: { guild_id: 'asc' },
+          take: limit + 1,
+        });
+        const page = rows.slice(0, limit);
+        return {
+          guildIds: page.map((row) => row.guild_id),
+          nextCursor: rows.length > limit ? page[page.length - 1].guild_id : null,
+        };
+      },
+    },
+  });
 }

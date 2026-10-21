@@ -1,3 +1,4 @@
+import { McpCommandHandler } from './McpCommandHandler';
 import { deferConfigurationMutation, replyToConfiguration } from './configInteractionResponse';
 import { setupCommandSchema } from '@drasil/application';
 import { requireSetupOutcome } from '../application/adapters/setup';
@@ -214,6 +215,9 @@ export class CommandHandler implements ICommandHandler {
     const { commandName } = interaction;
 
     switch (commandName) {
+      case 'mcp':
+        await new McpCommandHandler(this.application?.mcp).handleSlashCommand(interaction);
+        break;
       case 'review-report-ban':
         await this.moderationCommandHandler.handleReviewReportBanCommand(interaction);
         break;

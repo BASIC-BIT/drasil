@@ -157,3 +157,26 @@ export function createIntakeChoiceReferences(
     },
   };
 }
+
+/** Revalidate a persisted, initially verified choice without sharing issuer signing secrets. */
+export async function revalidateSavedIntakeChoice(
+  principal: DelegatedPrincipal,
+  previous: import('../delegation/types').ResolvedIntent,
+  deps: IntakeChoiceDependencies
+): Promise<ResolvedIntakeChoice> {
+  const command = previous.command;
+  if (
+    (command.kind !== 'confirm_intake_candidate' && command.kind !== 'reject_intake_candidates') ||
+    previous.preconditions.kind !== 'intake_prompt'
+  )
+    throw new ActionDeniedError('binding_mismatch');
+  const current = await prepareIntakeChoice(principal, previous.guildId, command.intakeId, deps);
+  if (
+    canonicalDigest(current.precondition) !== canonicalDigest(previous.preconditions) ||
+    command.threadId !== current.threadId ||
+    command.promptMessageId !== current.promptMessageId ||
+    ('promptToken' in command && command.promptToken !== current.promptToken)
+  )
+    throw new ActionDeniedError('stale_state');
+  return current;
+}

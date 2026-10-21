@@ -6,6 +6,11 @@ import ts from 'typescript';
 // Mixed files retain read/presentation dependencies. Only these mutation bodies
 // (and their same-file helpers) are checked for calls to owned domain workflows.
 export const mutationMethods = {
+  'apps/web/app/mcp/confirm/[confirmationId]/actions.ts': [
+    'approveMcpConfirmation',
+    'cancelMcpConfirmation',
+  ],
+  'src/controllers/McpCommandHandler.ts': ['handleSlashCommand', 'handleButtonInteraction'],
   'apps/web/lib/mcp/server.ts': ['createMcpHandler'],
   'apps/web/lib/mcp/tools/bindings.ts': ['createWorkflowTools'],
   'apps/web/lib/mcp/tools/approvals.ts': ['createApprovalTools'],

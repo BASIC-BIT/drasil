@@ -89,3 +89,12 @@
     padding: 1.25rem;
   }
 }
+
+.mcp-approval-summary {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border-block: 1px solid var(--line);
+  padding-block: 1.5rem;
+  margin-block: 1.5rem;
+  line-height: 1.6;
+}

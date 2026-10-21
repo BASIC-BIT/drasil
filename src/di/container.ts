@@ -286,6 +286,7 @@ function configureServices(container: Container): void {
     .bind<BotApplication>(TYPES.BotApplication)
     .toDynamicValue((context) =>
       createBotApplication({
+        prisma: context.get<PrismaClient>(TYPES.PrismaClient),
         delegation: createBotDelegatedRuntime({
           prisma: context.get<PrismaClient>(TYPES.PrismaClient),
           client: context.get<Client>(TYPES.DiscordClient),

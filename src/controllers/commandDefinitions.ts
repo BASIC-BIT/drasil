@@ -53,6 +53,38 @@ interface CompactableCommandNode {
 }
 
 const baseApplicationCommandBuilders = [
+  // No default permission intersection: Ban/Kick-only actors may approve their exact workflow.
+  new SlashCommandBuilder()
+    .setName('mcp')
+    .setDescription('Review or cancel a saved action')
+    .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
+    .setContexts(InteractionContextType.Guild)
+    .addSubcommand((command) =>
+      command
+        .setName('confirm')
+        .setDescription('Review a saved action before approving')
+        .addStringOption((option) =>
+          option
+            .setName('confirmation-id')
+            .setDescription('Saved confirmation ID')
+            .setRequired(true)
+            .setMinLength(43)
+            .setMaxLength(43)
+        )
+    )
+    .addSubcommand((command) =>
+      command
+        .setName('cancel')
+        .setDescription('Cancel a saved action')
+        .addStringOption((option) =>
+          option
+            .setName('confirmation-id')
+            .setDescription('Saved confirmation ID')
+            .setRequired(true)
+            .setMinLength(43)
+            .setMaxLength(43)
+        )
+    ),
   new SlashCommandBuilder()
     .setName('ping')
     .setDescription('Check whether Drasil is responsive')

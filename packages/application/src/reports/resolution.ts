@@ -2,7 +2,12 @@ import { IntentError } from '../delegation/intents';
 import { ActionDeniedError } from '../results';
 import { workflowDefinitions, type HumanCommand } from '../delegation/commands';
 import type { DelegatedAccess } from '../delegation/access';
-import type { DelegatedPrincipal, IntentResolver, IntentResolution } from '../delegation/types';
+import type {
+  DelegatedPrincipal,
+  IntentResolver,
+  IntentResolution,
+  ResolvedIntent,
+} from '../delegation/types';
 import { queuedCommandSchema } from '../requests/commands';
 import { validateReportCaseTerminal } from './terminal';
 import type { ReportCasePreparation } from './review';
@@ -90,10 +95,14 @@ function reportSummary(
 
 export function createReportIntentResolver(deps: {
   readonly access: DelegatedAccess;
-  readonly resources: (principal: DelegatedPrincipal, guildId: string) => ReportResolutionResources;
+  readonly resources: (
+    principal: DelegatedPrincipal,
+    guildId: string,
+    previous?: ResolvedIntent
+  ) => ReportResolutionResources;
 }): IntentResolver {
   return {
-    async resolve(principal, invocation): Promise<IntentResolution> {
+    async resolve(principal, invocation, context): Promise<IntentResolution> {
       try {
         const workflow = workflowDefinitions.find(
           (w) =>
@@ -107,7 +116,7 @@ export function createReportIntentResolver(deps: {
           workflow.id
         );
         if (permission.kind === 'denied') throw new ActionDeniedError(permission.reason);
-        const resources = deps.resources(principal, invocation.guildId);
+        const resources = deps.resources(principal, invocation.guildId, context?.previous);
         const input = workflow.inputSchema.parse(invocation.input);
         let bindings: IntentResolution['bindings'];
         let candidateIds: readonly string[] = [];

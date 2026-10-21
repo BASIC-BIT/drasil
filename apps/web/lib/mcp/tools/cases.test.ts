@@ -1,5 +1,6 @@
 import { it, expect, vi } from 'vitest';
-import { createCaseTools, createCaseIntentResolver } from './cases';
+import { createCaseTools } from './cases';
+import { createCaseIntentResolver } from '@drasil/application';
 import { workflowDefinitions, readCasePolicy, createIntentService } from '@drasil/application';
 import { accessFixture, principal, guildId } from '../queryTestFixtures';
 

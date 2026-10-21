@@ -8,3 +8,6 @@ export { createReportResources } from './reports';
 export { persistSetupChange } from './setup';
 
 export { createContainmentResources } from './containment';
+export { createActorApprovalStore } from './delegation';
+export { createCaseResolutionResources } from './caseResolution';
+export { createReportClosureResources } from './reportClosure';

@@ -80,3 +80,7 @@ export type {
 } from './containment/resolution';
 
 export * from './cases/summary';
+export * from './delegation/approvals';
+export * from './delegation/caseResolution';
+export * from './delegation/resolution';
+export * from './delegation/direct';
