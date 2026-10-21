@@ -1,4 +1,5 @@
 import {
+  ActionDeniedError,
   createOperationsActions,
   type ActionResult,
   type AuthorityPort,
@@ -117,7 +118,8 @@ export function requireOperationsOutcome(
   result: ActionResult<OperationsOutcome>
 ): OperationsOutcome {
   if (result.kind === 'denied')
-    throw new Error(
+    throw new ActionDeniedError(
+      result.code,
       result.code === 'reason_required'
         ? 'Role intake execution requires a case reason.'
         : `Operation denied: ${result.code}`

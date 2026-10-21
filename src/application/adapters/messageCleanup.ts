@@ -1,5 +1,6 @@
 import { PermissionFlagsBits, type Client } from 'discord.js';
 import {
+  ActionDeniedError,
   createMessageCleanupActions,
   isQueuedMessageCleanupCommand,
   decodeQueuedAction,
@@ -290,5 +291,5 @@ export function requireMessageCleanupOutcome<T>(result: ActionResult<T>): T {
     binding_mismatch: 'Message cleanup job does not match the queued request.',
     stale_state: 'The cleanup preview changed. Refresh the case before continuing.',
   };
-  throw new Error(messages[result.code]);
+  throw new ActionDeniedError(result.code, messages[result.code]);
 }

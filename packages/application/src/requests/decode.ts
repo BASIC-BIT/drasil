@@ -44,7 +44,7 @@ export interface DecodedQueuedAction {
   readonly command: QueuedCommand;
 }
 export function decodeQueuedAction(row: unknown): DecodedQueuedAction {
-  const parsed = queuedRowSchema.parse(row);
+  const parsed = parseQueuedRow(row);
   const metadata = parsed.metadata ?? {};
   const reason = typeof metadata.reason === 'string' ? metadata.reason : null;
   const target = { kind: parsed.action_type, targetUserId: parsed.target_user_id };
@@ -136,4 +136,18 @@ function decodeFamilyCommand(row: QueuedRow, reason: string | null): QueuedComma
     decodeCaptchaCommand(row) ??
     decodeDetectionCommand(row, reason)
   );
+}
+
+/** Shape validation is not authorization; workers must verify the persisted execution link. */
+export const delegatedDeliveryBindingSchema = z
+  .object({
+    executionId: z.string().uuid(),
+    connectionId: z.string().uuid(),
+    grantVersion: z.number().int().positive(),
+    commandDigest: z.string().regex(/^v1:sha256:[a-f0-9]{64}$/),
+  })
+  .strict();
+
+export function parseQueuedRow(row: unknown): QueuedRow {
+  return queuedRowSchema.parse(row);
 }

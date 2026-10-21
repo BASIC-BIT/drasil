@@ -1,3 +1,4 @@
+import type { DelegatedWorkerRuntime } from './adapters/delegation';
 import {
   createBotSetupRuntime,
   type BotSetupRuntime,
@@ -43,6 +44,7 @@ import { createBotAuthority } from './adapters/authority';
 import { createBotAttentionMessageDeleter } from './adapters/attention';
 
 export interface BotApplication {
+  readonly delegation?: DelegatedWorkerRuntime;
   readonly setup: BotSetupRuntime['actions'];
   readonly setupRuntime: BotSetupRuntime;
   readonly reports: ReturnType<typeof createBotReportActions>;
@@ -71,6 +73,7 @@ export function createBotApplication(
       'captchaChallengeService' | 'threadManager' | 'notificationManager'
     > & {
       readonly client: Client;
+      readonly delegation?: DelegatedWorkerRuntime;
       readonly accountQuarantineService: BotQuarantineDependencies['accountQuarantineService'];
       readonly actionRequests: BotDetectionDependencies['actionRequests'];
       readonly queueRepository: IModerationQueueRepository;
@@ -94,6 +97,7 @@ export function createBotApplication(
   const messageCleanupRuntime = createBotMessageCleanupRuntime(deps);
   const quarantineRuntime = createBotQuarantineRuntime(deps);
   return {
+    delegation: deps.delegation,
     setup: setupRuntime.actions,
     setupRuntime,
     reports: createBotReportActions(deps),

@@ -140,7 +140,18 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       outcome.observed_ban_result.status === 'already_handled'
     )
       return;
-    await this.repository.complete(request.id, outcome, getReportBanAttemptToken(request));
+    const completed = await this.repository.complete(
+      request.id,
+      outcome,
+      getReportBanAttemptToken(request)
+    );
+    if (
+      !completed ||
+      completed.status !== 'completed' ||
+      getReportBanAttemptToken(completed) !== getReportBanAttemptToken(request)
+    )
+      return;
+    await execution.onComplete?.(completed.result);
     await execution.afterComplete?.();
   }
 

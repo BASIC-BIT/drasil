@@ -1,3 +1,4 @@
+import { createBotDelegatedRuntime } from '../application/adapters/delegation';
 import { createBotApplication, type BotApplication } from '../application/createBotApplication';
 import { ModerationEvidenceService } from '../services/ModerationEvidenceService';
 import 'reflect-metadata';
@@ -285,6 +286,11 @@ function configureServices(container: Container): void {
     .bind<BotApplication>(TYPES.BotApplication)
     .toDynamicValue((context) =>
       createBotApplication({
+        delegation: createBotDelegatedRuntime({
+          prisma: context.get<PrismaClient>(TYPES.PrismaClient),
+          client: context.get<Client>(TYPES.DiscordClient),
+          configService: context.get<IConfigService>(TYPES.ConfigService),
+        }),
         productAnalyticsService: context.get<IProductAnalyticsService>(
           TYPES.ProductAnalyticsService
         ),

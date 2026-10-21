@@ -58,3 +58,4 @@ export * from './delegation/access';
 
 export * from './delegation/confirmationPolicy';
 export * from './delegation/intents';
+export * from './delegation/execution';

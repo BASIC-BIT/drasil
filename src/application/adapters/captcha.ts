@@ -1,4 +1,5 @@
 import {
+  ActionDeniedError,
   createCaptchaActions,
   decodeQueuedAction,
   type AuthorityPort,
@@ -243,5 +244,5 @@ export function requireCaptchaOutcome<T>(result: ActionResult<T>): T {
     reason_required: 'A reason is required to continue without the browser check.',
     confirmation_required: 'Security-check confirmation is missing or expired.',
   };
-  throw new Error(messages[result.code]);
+  throw new ActionDeniedError(result.code, messages[result.code]);
 }

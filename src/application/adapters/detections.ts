@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { PermissionFlagsBits, type Guild, type User } from 'discord.js';
 import {
+  ActionDeniedError,
   createDetectionActions,
   type AuthorityPort,
   type DetectionActions,
@@ -272,6 +273,7 @@ export function createBotDetectionRuntime(
 export function requireDetectionOutcome(
   result: Awaited<ReturnType<DetectionActions['execute']>>
 ): DetectionOutcome {
-  if (result.kind === 'denied') throw new Error(`Detection action denied: ${result.code}`);
+  if (result.kind === 'denied')
+    throw new ActionDeniedError(result.code, `Detection action denied: ${result.code}`);
   return result.outcome;
 }

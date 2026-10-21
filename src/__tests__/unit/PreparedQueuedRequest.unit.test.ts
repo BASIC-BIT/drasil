@@ -80,7 +80,11 @@ function arrange() {
     authority
   );
   const bind = jest.spyOn(captchaRuntime, 'forRequest');
-  const runtime = mock<QueuedRequestRuntime>({ captchaRuntime, caseConfirmations });
+  const runtime = mock<QueuedRequestRuntime>({
+    delegation: undefined,
+    captchaRuntime,
+    caseConfirmations,
+  });
   const analytics = mock<IProductAnalyticsService>();
   return {
     runtime,

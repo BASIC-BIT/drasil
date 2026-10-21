@@ -1,3 +1,4 @@
+import type { DelegatedDeliveryBinding } from '../delegation/types';
 import { isQueuedSetupCommand } from '../setup/commands';
 import { encodeSetupAction } from './setup';
 import { isQueuedReportCommand } from '../reports/commands';
@@ -21,7 +22,17 @@ const caseAction = {
   refresh_case_notification: 'refresh_notification',
   sync_existing_ban: 'sync_existing_ban',
 } as const;
-export function encodeQueuedAction(context: ActionContext, input: QueuedCommand): EnqueueInput {
+export function encodeQueuedAction(
+  context: ActionContext,
+  input: QueuedCommand,
+  binding?: DelegatedDeliveryBinding
+): EnqueueInput {
+  const encoded = encodeAction(context, input);
+  return binding
+    ? { ...encoded, metadata: { ...encoded.metadata, delegation: { ...binding } } }
+    : encoded;
+}
+function encodeAction(context: ActionContext, input: QueuedCommand): EnqueueInput {
   const command = queuedCommandSchema.parse(input);
   if (isQueuedSetupCommand(command)) return encodeSetupAction(context, command);
   if (isQueuedReportCommand(command)) return encodeReportAction(context, command);

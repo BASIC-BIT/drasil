@@ -1,6 +1,7 @@
 import type { GuildMember } from 'discord.js';
 import type { VerificationEvent, ModerationActionRequest } from '../../repositories/types';
 import {
+  ActionDeniedError,
   buildAccountQuarantinePreviewFingerprint,
   createQuarantineActions,
   type ActionContext,
@@ -241,5 +242,5 @@ export function requireQuarantineOutcome<T>(result: ActionResult<T>): T {
     policy_disabled: 'Compromised-account quarantine is disabled for this server.',
     reason_required: 'Account-quarantine request requires a reason.',
   };
-  throw new Error(messages[result.code]);
+  throw new ActionDeniedError(result.code, messages[result.code]);
 }

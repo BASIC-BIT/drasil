@@ -1,5 +1,6 @@
 import type { IRoleGateService } from '../../services/RoleGateService';
 import {
+  ActionDeniedError,
   readCasePolicy,
   createCaseActions,
   type ActionDenialCode,
@@ -250,9 +251,9 @@ export function createBotCaseDependencies(deps: BotCaseDependencies): CaseDepend
     },
   };
 }
-export class CaseActionDeniedError extends Error {
+export class CaseActionDeniedError extends ActionDeniedError {
   public constructor(public readonly code: ActionDenialCode) {
-    super(`Case action denied: ${code}`);
+    super(code, `Case action denied: ${code}`);
     this.name = 'CaseActionDeniedError';
   }
 }

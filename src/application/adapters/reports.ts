@@ -1,4 +1,5 @@
 import {
+  ActionDeniedError,
   createReportActions,
   type ActionContext,
   type ActionResult,
@@ -395,7 +396,8 @@ export function requireReportOutcome<K extends ReportCommand['kind']>(
   kind: K
 ): Extract<ReportOutcome, { kind: K }> {
   if (result.kind === 'denied')
-    throw new Error(
+    throw new ActionDeniedError(
+      result.code,
       result.code === 'reason_required'
         ? 'Please include a reason for this report.'
         : result.code === 'confirmation_required'

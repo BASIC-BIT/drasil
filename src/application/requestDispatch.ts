@@ -79,6 +79,7 @@ export type QueuedActionOutcome =
       ));
 export type QueuedRequestRuntime = Pick<
   BotApplication,
+  | 'delegation'
   | 'cases'
   | 'reports'
   | 'operations'

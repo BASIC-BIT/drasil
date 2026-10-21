@@ -1,5 +1,6 @@
 import {
   decodeQueuedAction,
+  ActionDeniedError,
   isQueuedOperationCommand,
   isQueuedReportCommand,
   isQueuedSetupCommand,
@@ -16,8 +17,14 @@ import {
 import type { ModerationActionRequest } from '../repositories/types';
 import type { IProductAnalyticsService } from '../services/ProductAnalyticsService';
 
+export type DelegatedWorkerOutcome = {
+  readonly action_type: 'delegated_admission';
+  readonly state: 'denied' | 'uncertain';
+  readonly code?: string;
+};
 export interface PreparedQueuedRequest {
-  execute(): Promise<QueuedActionOutcome>;
+  execute(): Promise<QueuedActionOutcome | DelegatedWorkerOutcome>;
+  onComplete?: (outcome: unknown) => Promise<void>;
   afterComplete?: () => Promise<void>;
 }
 
@@ -30,6 +37,34 @@ export async function prepareQueuedRequest(input: {
 }): Promise<PreparedQueuedRequest> {
   const { runtime, request, analytics, recovery } = input;
   const decoded = await decodeRequest(runtime, request);
+  const delegation = runtime.delegation;
+  const admission = delegation
+    ? await delegation.authorizeDelegatedRequest(request, recovery === true, decoded)
+    : request.actor_surface === 'mcp' ||
+        Object.prototype.hasOwnProperty.call(request.metadata ?? {}, 'delegation')
+      ? { kind: 'denied' as const, code: 'delegation_unavailable' }
+      : { kind: 'ordinary' as const };
+  if (admission.kind === 'denied')
+    return {
+      execute: async () => ({
+        action_type: 'delegated_admission',
+        state: 'denied',
+        code: admission.code,
+      }),
+    };
+  if (admission.kind === 'already_bound')
+    return {
+      execute: async () => ({
+        action_type: 'delegated_admission',
+        state: 'uncertain',
+        code: 'already_started',
+      }),
+    };
+  const onComplete: PreparedQueuedRequest['onComplete'] =
+    delegation &&
+    (admission.kind === 'new_execution' || admission.kind === 'committed_reconciliation')
+      ? (outcome): Promise<void> => delegation.complete(admission.execution, outcome)
+      : undefined;
   const { command } = decoded;
   let action = decoded;
   if (recovery) {
@@ -62,19 +97,36 @@ export async function prepareQueuedRequest(input: {
         : command
     );
   }
-  const execute = prepareQueuedAction({ runtime, action, request });
+  const dispatch = prepareQueuedAction({ runtime, action, request });
+  const execute: PreparedQueuedRequest['execute'] =
+    admission.kind === 'ordinary'
+      ? dispatch
+      : async (): Promise<QueuedActionOutcome | DelegatedWorkerOutcome> => {
+          try {
+            return await dispatch();
+          } catch (error) {
+            if (error instanceof ActionDeniedError)
+              return { action_type: 'delegated_admission', state: 'denied', code: error.code };
+            throw error;
+          }
+        };
   if (isQueuedMessageCleanupCommand(command))
-    return { execute, afterComplete: () => runtime.messageCleanupRuntime.afterComplete(request) };
+    return {
+      execute,
+      onComplete,
+      afterComplete: () => runtime.messageCleanupRuntime.afterComplete(request),
+    };
   if (command.kind === 'complete_setup_verification' && command.onboardingWizard)
     return {
       execute,
+      onComplete,
       afterComplete: async (): Promise<void> => {
         void analytics.captureGuildEvent(request.server_id, 'setup wizard completed', {
           surface: 'web',
         });
       },
     };
-  return { execute };
+  return { execute, onComplete };
 }
 
 async function decodeRequest(

@@ -156,7 +156,7 @@ function grantMatches(
   );
 }
 /** This classification binds projection purpose; permissions still come only from the workflow. */
-function memberContextFor(workflow: WorkflowDefinition): MemberContextBinding | null {
+export function memberContextFor(workflow: WorkflowDefinition): MemberContextBinding | null {
   let purpose: MemberContextPurpose;
   switch (workflow.commandKind) {
     case 'ban_user':

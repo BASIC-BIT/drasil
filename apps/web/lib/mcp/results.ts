@@ -55,3 +55,12 @@ export function boundValue(
   const bounded = visit(value);
   return { value: bounded, truncated, attachmentCount };
 }
+
+/** Action service results have already passed their family-specific projection. */
+export function toMcpActionResult(result: import('@drasil/application').PublicActionResult) {
+  return {
+    content: [{ type: 'text' as const, text: JSON.stringify(result) }],
+    structuredContent: result,
+    isError: result.state === 'denied' || result.state === 'failed',
+  };
+}

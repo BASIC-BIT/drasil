@@ -1,4 +1,5 @@
 import {
+  ActionDeniedError,
   createSetupActions,
   setupCaptchaProviderIssues,
   setupCommandSchema,
@@ -82,25 +83,30 @@ export function requireSetupOutcome(
     command.repost &&
     (result.code === 'permission_denied' || result.code === 'actor_unavailable')
   )
-    throw new Error('Report panel repost requires current Administrator permission.');
+    throw new ActionDeniedError(
+      result.code,
+      'Report panel repost requires current Administrator permission.'
+    );
   if (
     result.code === 'permission_denied' &&
     command?.kind === 'update_settings' &&
     command.section === 'analytics' &&
     command.changes.analytics_consent_level === 'full'
   )
-    throw new Error(
+    throw new ActionDeniedError(
+      result.code,
       'Only the server owner can enable full analytics sharing because it may include raw Discord IDs.'
     );
   if (result.code === 'permission_denied' || result.code === 'actor_unavailable')
-    throw new Error('Setup requires current Administrator permission.');
+    throw new ActionDeniedError(result.code, 'Setup requires current Administrator permission.');
   if (result.code === 'policy_disabled')
-    throw new Error(
+    throw new ActionDeniedError(
+      result.code,
       'Configure the browser security-check provider and required roles before enabling this setting.'
     );
   if (result.code === 'confirmation_required')
-    throw new Error('Confirm the report panel repost before continuing.');
-  throw new Error(`Setup action denied: ${result.code}`);
+    throw new ActionDeniedError(result.code, 'Confirm the report panel repost before continuing.');
+  throw new ActionDeniedError(result.code, `Setup action denied: ${result.code}`);
 }
 function projectServer(server: Server): SetupConfigurationState {
   return {

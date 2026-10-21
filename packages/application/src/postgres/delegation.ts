@@ -1,3 +1,13 @@
+import { projectHumanOutcome } from '../delegation/execution';
+import { encodeQueuedAction } from '../requests/encode';
+import { delegatedDeliveryBindingSchema, type QueuedRow } from '../requests/decode';
+import type {
+  ExecutionStore,
+  ExecutionAuthorization,
+  WorkerAdmission,
+  DelegatedQueueAdmission,
+  ActionCompletion,
+} from '../delegation/types';
 import { randomUUID } from 'node:crypto';
 import {
   assertIntentBinding,
@@ -143,6 +153,7 @@ export function createDelegationStore(database: DelegationDatabase): DelegationS
 
   return {
     ...createIntentStore(database),
+    ...createExecutionStore(database),
     createConnection(input: CreateConnectionInput): Promise<ConnectionGrant> {
       return database.transaction(async (client) => {
         const inserted = await client.query<{ id: string }>(
@@ -186,7 +197,10 @@ async function lockIntentConnection(
 function checkIntentGrant(
   grant: ConnectionGrant,
   principal: DelegatedPrincipal,
-  intent: IntentRecord
+  intent: Pick<
+    IntentRecord,
+    'userId' | 'clientId' | 'connectionId' | 'grantVersion' | 'workflowId' | 'guildId'
+  >
 ): void {
   assertIntentBinding(principal, intent);
   const scope = workflowDefinitions.find((workflow) => workflow.id === intent.workflowId)?.scope;
@@ -505,4 +519,241 @@ function createIntentStore(database: DelegationDatabase): IntentStore {
       });
     },
   };
+}
+
+function createExecutionStore(database: DelegationDatabase): ExecutionStore {
+  async function read(client: DelegationQueryClient, id: string): Promise<ExecutionRecord | null> {
+    const result = await client.query<ExecutionRow>(
+      'select * from mcp_executions where id=$1::uuid',
+      [id]
+    );
+    return result.rows[0] ? toExecution(result.rows[0]) : null;
+  }
+  async function finish(
+    client: DelegationQueryClient,
+    id: string,
+    result: ActionCompletion
+  ): Promise<void> {
+    await client.query(
+      `update mcp_executions set completed_at=clock_timestamp(),outcome=$2::jsonb where id=$1::uuid and (outcome is null or outcome->'result'->>'state' in ('uncertain','partial'))`,
+      [id, JSON.stringify({ kind: 'delegated_terminal', result })]
+    );
+  }
+  async function admit(
+    executionId: string,
+    authorize: ExecutionAuthorization,
+    queue?: DelegatedQueueAdmission
+  ): Promise<WorkerAdmission> {
+    return database.transaction(async (client) => {
+      const first = await read(client, executionId);
+      if (!first) return { kind: 'denied', code: 'binding_mismatch' };
+      // Revocation and selection edits use this same first lock.
+      await client.query('select id from mcp_connections where id=$1::uuid for update', [
+        first.connectionId,
+      ]);
+      await client.query('select id from mcp_executions where id=$1::uuid for update', [
+        executionId,
+      ]);
+      const execution = (await read(client, executionId))!;
+      const intent = await client.query<IntentRow>(
+        `select * from mcp_intents where confirmation_id=$1 and state='consumed'`,
+        [execution.confirmationId]
+      );
+      const saved = intent.rows[0];
+      if (
+        !saved ||
+        saved.user_id !== execution.userId ||
+        saved.client_id !== execution.clientId ||
+        saved.connection_id !== execution.connectionId ||
+        saved.grant_version !== execution.grantVersion ||
+        canonicalDigest(saved.resolved) !== canonicalDigest(executionResolved(execution)) ||
+        execution.commandDigest !== canonicalDigest(execution.command)
+      )
+        return { kind: 'denied', code: 'binding_mismatch' };
+      if (queue) {
+        if (
+          execution.authorizedDelivery.kind !== 'queued' ||
+          execution.queueRequestId !== queue.request.id
+        )
+          return { kind: 'denied', code: 'binding_mismatch' };
+        const rows = await client.query<QueuedRow & Record<string, unknown>>(
+          'select * from moderation_action_requests where id=$1::uuid for update',
+          [queue.request.id]
+        );
+        const persisted = rows.rows[0];
+        if (
+          !persisted ||
+          !matchesQueue(execution, persisted) ||
+          !matchesQueue(execution, queue.request) ||
+          canonicalDigest(queue.action.command) !== execution.authorizedDelivery.commandDigest ||
+          queue.action.context.requestId !== queue.request.id ||
+          queue.action.context.guildId !== execution.guildId ||
+          queue.action.context.source !== 'mcp' ||
+          queue.action.context.actor.kind !== 'user' ||
+          queue.action.context.actor.userId !== execution.userId
+        )
+          return { kind: 'denied', code: 'binding_mismatch' };
+        if (queue.recovery) {
+          const metadata = persisted.metadata ?? {};
+          const protectedPhase = [
+            'preparing',
+            'enforcement_started',
+            'discord_confirmed',
+            'reconciliation_required',
+          ].includes(String(metadata.report_ban_phase));
+          const attempt = metadata.report_ban_attempt_token;
+          if (
+            execution.startedAt &&
+            execution.authorizedDelivery.command.kind === 'ban_observed_detection' &&
+            protectedPhase &&
+            typeof attempt === 'string' &&
+            attempt.length > 0 &&
+            queue.request.metadata?.report_ban_attempt_token === attempt
+          )
+            return { kind: 'committed_reconciliation', execution };
+          return { kind: 'denied', code: 'reconciliation_denied' };
+        }
+      } else if (
+        execution.authorizedDelivery.kind !== 'direct' ||
+        execution.queueRequestId !== null
+      )
+        return { kind: 'denied', code: 'binding_mismatch' };
+      if (execution.startedAt || execution.completedAt) return { kind: 'already_bound', execution };
+      const grant = await findConnection(client, execution.connectionId);
+      if (!grant) return { kind: 'denied', code: 'invalid_grant' };
+      // This principal is constructed solely by trusted runtime from the linked persisted identity.
+      const principal: DelegatedPrincipal = {
+        userId: execution.userId,
+        clientId: execution.clientId,
+        connectionId: execution.connectionId,
+        grantVersion: execution.grantVersion,
+        scopes: grant.scopes,
+      };
+      let denial: string | null = null;
+      try {
+        await lockIntentConnection(client, principal);
+        checkIntentGrant(grant, principal, execution);
+      } catch (error) {
+        if (!(error instanceof IntentError)) throw error;
+        denial = error.code;
+      }
+      if (!denial) {
+        const decision = await authorize(principal, execution);
+        if (decision.kind === 'denied') denial = decision.reason;
+      }
+      if (denial) {
+        await finish(client, executionId, { state: 'denied', code: denial });
+        return { kind: 'denied', code: denial };
+      }
+      await client.query(
+        'update mcp_executions set started_at=clock_timestamp() where id=$1::uuid',
+        [executionId]
+      );
+      return { kind: 'new_execution', execution: (await read(client, executionId))! };
+    });
+  }
+  return {
+    async loadExecution(principal, id): Promise<ExecutionRecord | null> {
+      if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id)) return null;
+      const execution = await read(database, id);
+      if (
+        !execution ||
+        execution.userId !== principal.userId ||
+        execution.clientId !== principal.clientId ||
+        execution.connectionId !== principal.connectionId
+      )
+        return null;
+      if (execution.queueRequestId) {
+        const result = await database.query<{ status: string; result: unknown }>(
+          'select status,result from moderation_action_requests where id=$1::uuid',
+          [execution.queueRequestId]
+        );
+        const queue = result.rows[0];
+        if (queue?.status === 'completed')
+          return {
+            ...execution,
+            outcome: {
+              kind: 'delegated_terminal',
+              result: projectHumanOutcome(execution.command, queue.result),
+            },
+          };
+        if (queue?.status === 'failed' && !execution.outcome)
+          return {
+            ...execution,
+            outcome: {
+              kind: 'delegated_terminal',
+              result: { state: execution.startedAt ? 'uncertain' : 'failed' },
+            },
+          };
+      }
+      return execution;
+    },
+    startDirectExecution: (id, authorize) => admit(id, authorize),
+    async admitQueuedExecution(input, authorize): Promise<WorkerAdmission> {
+      const found = await database.query<{ id: string }>(
+        'select id from mcp_executions where queue_request_id=$1::uuid',
+        [input.request.id]
+      );
+      if (!found.rows[0])
+        return input.request.actor_surface === 'mcp' ||
+          input.request.metadata?.delegation !== undefined
+          ? { kind: 'denied', code: 'binding_mismatch' }
+          : { kind: 'ordinary' };
+      return admit(found.rows[0].id, authorize, input);
+    },
+    completeExecution: (id, result) => finish(database, id, result),
+  };
+}
+function executionResolved(execution: ExecutionRecord): ResolvedIntent {
+  return {
+    workflowId: execution.workflowId,
+    guildId: execution.guildId,
+    command: execution.command,
+    commandDigest: execution.commandDigest,
+    authorizedDelivery: execution.authorizedDelivery,
+    preconditions: execution.preconditions,
+    stateFingerprint: execution.stateFingerprint,
+    summary: execution.summary,
+    previewExpiresAt: execution.previewExpiresAt,
+  };
+}
+function matchesQueue(execution: ExecutionRecord, row: QueuedRow): boolean {
+  if (execution.authorizedDelivery.kind !== 'queued') return false;
+  const binding = delegatedDeliveryBindingSchema.safeParse(row.metadata?.delegation);
+  const expected = {
+    executionId: execution.executionId,
+    connectionId: execution.connectionId,
+    grantVersion: execution.grantVersion,
+    commandDigest: execution.authorizedDelivery.commandDigest,
+  };
+  if (
+    !binding.success ||
+    canonicalDigest(binding.data) !== canonicalDigest(expected) ||
+    canonicalDigest(execution.authorizedDelivery.command) !== expected.commandDigest
+  )
+    return false;
+  const encoded = encodeQueuedAction(
+    {
+      guildId: execution.guildId,
+      requestId: execution.confirmationId,
+      source: 'mcp',
+      actor: { kind: 'user', userId: execution.userId },
+    },
+    execution.authorizedDelivery.command
+  );
+  if (
+    row.actor_id !== encoded.actorId ||
+    row.actor_surface !== encoded.actorSurface ||
+    row.server_id !== encoded.serverId ||
+    row.action_type !== encoded.actionType ||
+    row.target_user_id !== encoded.targetUserId ||
+    (row.detection_event_id ?? null) !== (encoded.detectionEventId ?? null) ||
+    (row.verification_event_id ?? null) !== (encoded.verificationEventId ?? null) ||
+    (row.report_intake_id ?? null) !== (encoded.reportIntakeId ?? null) ||
+    (row.message_deletion_job_id ?? null) !== (encoded.messageDeletionJobId ?? null)
+  )
+    return false;
+  return Object.entries(encoded.metadata).every(
+    ([key, value]) => canonicalDigest(row.metadata?.[key] ?? null) === canonicalDigest(value)
+  );
 }
