@@ -18,7 +18,11 @@ import {
   type DelegatedPrincipal,
   type IntentResolver,
 } from '@drasil/application';
-import { createDelegationStore, createNativeEnforcementStore } from '@drasil/application/postgres';
+import {
+  createDelegationStore,
+  createNativeEnforcementStore,
+  type DelegationSqlValue,
+} from '@drasil/application/postgres';
 import { createWebDelegationDatabase } from '../../../apps/web/lib/mcp/adapters/database';
 import { createDelegatedWorkerAdmission } from '../../application/adapters/delegation';
 import { prepareQueuedRequest } from '../../application/requestRuntime';
@@ -119,6 +123,7 @@ integration('MCP native enforcement', () => {
       : (await pool.query('select * from moderation_action_requests')).rows[0];
     const delegation = createDelegatedWorkerAdmission({ store, access, native });
     return {
+      database,
       native,
       store,
       service,
@@ -204,6 +209,69 @@ integration('MCP native enforcement', () => {
       [f.request.id]
     );
   }
+  it.each(['uncertain', 'partial', 'completed'] as const)(
+    'refreshes an absent-fence status snapshot after the native owner reaches %s',
+    async (expectedState) => {
+      const f = await fixture();
+      const send = jest.fn(async () => {
+        if (expectedState === 'uncertain')
+          throw new Error('provider accepted; acknowledgement lost');
+      });
+      const runtime = actualRuntime(f, send);
+      const owner = await prepareQueuedRequest({
+        runtime: runtime as never,
+        request: f.request,
+        analytics: mockDeep(),
+      });
+      let observed!: () => void;
+      let resume!: () => void;
+      const absentFenceObserved = new Promise<void>((resolve) => {
+        observed = resolve;
+      });
+      const resumeStatus = new Promise<void>((resolve) => {
+        resume = resolve;
+      });
+      const query = f.database.query;
+      let pauseNextFenceRead = true;
+      jest
+        .spyOn(f.database, 'query')
+        .mockImplementation(
+          async <Row extends Record<string, unknown>>(
+            sql: string,
+            values?: readonly DelegationSqlValue[]
+          ): Promise<{ rows: Row[] }> => {
+            const result = await query<Row>(sql, values);
+            if (
+              pauseNextFenceRead &&
+              sql.startsWith('select acknowledged_at from mcp_native_enforcements')
+            ) {
+              pauseNextFenceRead = false;
+              expect(result.rows).toHaveLength(0);
+              observed();
+              await resumeStatus;
+            }
+            return result;
+          }
+        );
+      const status = f.service.status(f.principal, f.accepted.executionId!);
+      await absentFenceObserved;
+      try {
+        const outcome = await owner.execute();
+        expect(send).toHaveBeenCalledTimes(1);
+        await expire(f);
+        await worker(f, runtime).processPendingRequests();
+        expect((await f.repository.findById(f.request.id))?.status).toBe('failed');
+        if (expectedState === 'completed') await f.repository.complete(f.request.id, outcome);
+      } finally {
+        resume();
+      }
+      const receipt = await status;
+      expect(receipt.state).toBe(expectedState);
+      expect(receipt.code).not.toBe('execution_interrupted_before_send');
+      if (expectedState === 'completed') expect(receipt.outcome).toMatchObject({ succeeded: true });
+      expect(send).toHaveBeenCalledTimes(1);
+    }
+  );
   it.each(['ban_user', 'kick_user'] as const)(
     'settles expired unadmitted %s claims and rejects a stale owner',
     async (kind) => {

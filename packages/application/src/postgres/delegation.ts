@@ -700,18 +700,25 @@ function createExecutionStore(database: DelegationDatabase): ExecutionStore {
               result: projectHumanOutcome(execution.command, queue.result),
             },
           };
-        if (queue?.status === 'failed' && !execution.outcome)
+        if (queue?.status === 'failed' && !execution.outcome) {
+          // The earlier absent fence may predate a send. After failed is observed,
+          // the queue gate prevents a new fence, so this fresh read can establish no send.
+          const failedNative =
+            execution.command.kind === 'ban_user' || execution.command.kind === 'kick_user'
+              ? await nativeCompletion(database, execution.executionId)
+              : null;
           return {
             ...execution,
             outcome: {
               kind: 'delegated_terminal',
               result:
-                native ??
+                failedNative ??
                 (execution.command.kind === 'ban_user' || execution.command.kind === 'kick_user'
                   ? { state: 'failed', code: 'execution_interrupted_before_send' }
                   : { state: execution.startedAt ? 'uncertain' : 'failed' }),
             },
           };
+        }
       }
       return native && (!execution.outcome || execution.outcome.result.state === 'uncertain')
         ? { ...execution, outcome: { kind: 'delegated_terminal', result: native } }
