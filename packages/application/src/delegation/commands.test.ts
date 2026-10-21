@@ -304,6 +304,7 @@ it('requires settings diffs for configuration and retains shared setup workflow 
     'lockdown_allow_add',
     'lockdown_allow_remove',
     'disable_lockdown',
+    'complete_setup_verification',
   ])
     expect(workflowDefinitions.find((entry) => entry.commandKind === kind)?.confirmationRule).toBe(
       'exact_settings_diff'
@@ -311,7 +312,7 @@ it('requires settings diffs for configuration and retains shared setup workflow 
   expect(
     workflowDefinitions.find((entry) => entry.id === 'complete_setup_verification_provision')
       ?.confirmationRule
-  ).toBe('shared_policy');
+  ).toBe('exact_settings_diff');
   expect(
     workflowDefinitions.find((entry) => entry.id === 'upsert_report_instructions_repair')
       ?.confirmationRule

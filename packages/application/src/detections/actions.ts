@@ -33,13 +33,16 @@ export interface DetectionActions {
     command: DetectionCommand
   ): Promise<ActionResult<DetectionOutcome>>;
 }
+export function detectionNeedsConfirmation(command: Pick<DetectionCommand, 'kind'>): boolean {
+  return command.kind !== 'prepare_report_ban_review';
+}
+
 export function createDetectionActions(deps: DetectionDependencies): DetectionActions {
   return {
     async execute(context, command): Promise<ActionResult<DetectionOutcome>> {
       // Claim the pending evidence before the first external read, including denied attempts.
       const confirmed =
-        command.kind === 'prepare_report_ban_review' ||
-        (await deps.confirmations.verify(context, command));
+        !detectionNeedsConfirmation(command) || (await deps.confirmations.verify(context, command));
       if (command.kind === 'ban_observed_detection') {
         const operation = await deps.repository.findOperation(context.requestId);
         if (!matchesOperation(context, command, operation))

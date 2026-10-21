@@ -88,7 +88,7 @@ export function createMessageCleanupActions(
     )
       return 'policy_disabled';
     if (
-      command.kind !== 'preview_case_message_deletion' &&
+      messageCleanupNeedsConfirmation(command) &&
       !(await deps.confirmations.verify(context, command))
     )
       return 'confirmation_required';
@@ -209,4 +209,10 @@ export function createMessageCleanupActions(
       };
     },
   };
+}
+
+export function messageCleanupNeedsConfirmation(
+  command: Pick<MessageCleanupCommand, 'kind'>
+): boolean {
+  return command.kind !== 'preview_case_message_deletion';
 }

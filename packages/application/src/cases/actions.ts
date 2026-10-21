@@ -287,14 +287,16 @@ async function executeCaseWorkflow(
   }
 }
 
+export function caseNeedsConfirmation(command: Pick<CaseCommand, 'kind'>): boolean {
+  return command.kind !== 'repair_active_case' && command.kind !== 'refresh_case_notification';
+}
+
 export function createCaseActions(deps: CaseDependencies): CaseActions {
   return {
     async execute(context, command): Promise<ActionResult<CaseOutcome>> {
       // Consume per-attempt evidence even when fresh policy or authority later denies execution.
       const confirmationVerified =
-        command.kind === 'repair_active_case' ||
-        command.kind === 'refresh_case_notification' ||
-        (await deps.confirmations.verify(context, command));
+        !caseNeedsConfirmation(command) || (await deps.confirmations.verify(context, command));
       const authorityDenial = await authorizeCase(deps, context, command);
       if (authorityDenial) return { kind: 'denied', code: authorityDenial };
       if (context.actor.kind !== 'user') return { kind: 'denied', code: 'permission_denied' };

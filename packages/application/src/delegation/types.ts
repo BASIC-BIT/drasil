@@ -9,7 +9,10 @@ import type { CaptchaOutcome } from '../containment/captcha';
 import type { QuarantinePreviewData, QuarantineExecutionResult } from '../containment/ports';
 import type { CloseSubmittedReportResult, OpenSubmittedReportCaseResult } from '../reports/review';
 import type { AttentionOutcome } from '../operations/attention';
-import type { SetupConfigurationState } from '../setup/ports';
+import type { SetupServerRecord } from '../setup/settings';
+import type { WorkflowId, WorkflowCommandBindings } from './commands';
+import type { QueuedCommand } from '../requests/commands';
+import type { EnqueueInput } from '../requests/receipt';
 import type { HumanCommand } from './commands';
 
 export type DelegatedScope = 'drasil:read' | 'drasil:moderate' | 'drasil:configure';
@@ -54,7 +57,7 @@ export type IntentPreconditions =
       readonly kind: 'cleanup_preview';
       readonly jobId: string;
       readonly generation: string | null;
-      readonly expiresAt: Date;
+      readonly expiresAt: Date | null;
     }
   | {
       readonly kind: 'quarantine_preview';
@@ -62,7 +65,13 @@ export type IntentPreconditions =
       readonly fingerprint: string;
       readonly expiresAt: Date;
     }
-  | { readonly kind: 'setup'; readonly approvedState: SetupConfigurationState };
+  | {
+      readonly kind: 'report_ban_review';
+      readonly operationId: string;
+      readonly reviewReference: string;
+      readonly expiresAt: Date;
+    }
+  | { readonly kind: 'setup'; readonly approvedState: SetupServerRecord };
 export type HumanOutcome =
   | CaseOutcome
   | DetectionOutcome
@@ -102,7 +111,7 @@ export type ConnectionMutationResult =
       readonly kind: 'denied';
       readonly reason: 'not_found' | 'identity_mismatch' | 'revoked';
     };
-export interface DelegationStore {
+export interface DelegationStore extends IntentStore {
   createConnection(input: CreateConnectionInput): Promise<ConnectionGrant>;
   findConnection(id: string): Promise<ConnectionGrant | null>;
   updateSelection(
@@ -114,4 +123,85 @@ export interface DelegationStore {
     principal: DelegatedPrincipal,
     expectedVersion: number
   ): Promise<ConnectionMutationResult>;
+}
+
+export type AuthorizedDelivery =
+  | { readonly kind: 'direct' }
+  | { readonly kind: 'queued'; readonly command: QueuedCommand; readonly commandDigest: string };
+export interface IntentInvocation {
+  readonly workflowId: WorkflowId;
+  readonly guildId: string;
+  readonly idempotencyKey: string;
+  readonly input: unknown;
+}
+/** Runtime-only resolution. Implementations must read current state without consuming previews,
+ * creating defaults, performing enforcement, writing settings or queuing work. */
+export interface IntentResolution {
+  readonly bindings?: WorkflowCommandBindings;
+  readonly delivery:
+    | { readonly kind: 'direct' }
+    | { readonly kind: 'queued'; readonly command: QueuedCommand };
+  readonly preconditions: IntentPreconditions;
+  readonly relevantState: unknown;
+  readonly summary: string;
+  readonly previewExpiresAt: Date | null;
+}
+export interface IntentResolver {
+  resolve(principal: DelegatedPrincipal, invocation: IntentInvocation): Promise<IntentResolution>;
+}
+export interface ResolvedIntent {
+  readonly workflowId: WorkflowId;
+  readonly guildId: string;
+  readonly command: HumanCommand;
+  readonly commandDigest: string;
+  readonly authorizedDelivery: AuthorizedDelivery;
+  readonly preconditions: IntentPreconditions;
+  readonly stateFingerprint: string;
+  readonly summary: string;
+  readonly previewExpiresAt: Date | null;
+}
+export interface IntentRecord extends ResolvedIntent {
+  readonly userId: string;
+  readonly clientId: string;
+  readonly connectionId: string;
+  readonly grantVersion: number;
+  readonly confirmationId: string;
+  readonly idempotencyKey: string;
+  readonly invocationDigest: string;
+  readonly input: unknown;
+  readonly createdAt: Date;
+  readonly expiresAt: Date;
+  readonly state: 'pending' | 'consumed' | 'cancelled' | 'expired' | 'denied';
+  readonly confirmationMethod: ConfirmationMethod | null;
+  readonly executionId: string | null;
+}
+export interface ExecutionRecord extends ResolvedIntent {
+  readonly userId: string;
+  readonly clientId: string;
+  readonly connectionId: string;
+  readonly grantVersion: number;
+  readonly executionId: string;
+  readonly confirmationId: string;
+  readonly confirmationMethod: ConfirmationMethod;
+  readonly queueRequestId: string | null;
+  readonly createdAt: Date;
+  readonly startedAt: Date | null;
+  readonly completedAt: Date | null;
+  readonly outcome: HumanOutcome | null;
+}
+export type IntentDelivery = { readonly kind: 'direct' } | EnqueueInput;
+/** Trusted persistence interface. The runtime resolves/revalidates before acceptance;
+ * this store atomically binds only the frozen, canonical delivery. */
+export interface IntentStore {
+  saveIntent(principal: DelegatedPrincipal, intent: IntentRecord): Promise<IntentRecord>;
+  findIntentByKey(principal: DelegatedPrincipal, key: string): Promise<IntentRecord | null>;
+  loadIntent(principal: DelegatedPrincipal, confirmationId: string): Promise<IntentRecord | null>;
+  denyIntent(principal: DelegatedPrincipal, confirmationId: string): Promise<IntentRecord | null>;
+  cancelIntent(principal: DelegatedPrincipal, confirmationId: string): Promise<IntentRecord | null>;
+  acceptIntent(
+    principal: DelegatedPrincipal,
+    confirmationId: string,
+    method: ConfirmationMethod,
+    delivery: IntentDelivery
+  ): Promise<ExecutionRecord>;
 }

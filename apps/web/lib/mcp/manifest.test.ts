@@ -223,3 +223,20 @@ it.each([
     required: expect.arrayContaining(['cleanupReference']),
   });
 });
+
+it('advertises the frozen report child delivery and complete setup diff requirements', () => {
+  expect(
+    mcpWorkflowManifest.find((entry) => entry.id === 'open_submitted_report_case')
+  ).toMatchObject({ delivery: 'queued' });
+  for (const id of [
+    'complete_setup_verification_provision',
+    'complete_setup_verification_verification_modal',
+  ]) {
+    expect(mcpWorkflowManifest.find((entry) => entry.id === id)).toMatchObject({
+      confirmationRule: 'exact_settings_diff',
+    });
+  }
+  expect(mcpWorkflowManifest.find((entry) => entry.id === 'close_submitted_report')).toMatchObject({
+    delivery: 'direct',
+  });
+});

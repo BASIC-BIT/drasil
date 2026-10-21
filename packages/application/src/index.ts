@@ -55,3 +55,6 @@ export * from './setup/actions';
 export * from './delegation/commands';
 export * from './delegation/types';
 export * from './delegation/access';
+
+export * from './delegation/confirmationPolicy';
+export * from './delegation/intents';

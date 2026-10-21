@@ -199,7 +199,7 @@ function define(
   const scope = family === 'setup' ? 'drasil:configure' : 'drasil:moderate';
   const delivery =
     family === 'attention' ||
-    family === 'reportReview' ||
+    kind === 'close_submitted_report' ||
     (family === 'setup' && kind === 'update_setup')
       ? 'direct'
       : 'queued';
@@ -222,6 +222,7 @@ function define(
       'lockdown_allow_add',
       'lockdown_allow_remove',
       'disable_lockdown',
+      'complete_setup_verification',
     ].includes(kind)
       ? 'exact_settings_diff'
       : family === 'attention'

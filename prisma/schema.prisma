@@ -104,6 +104,7 @@ model moderation_queue_items {
 }
 
 model moderation_action_requests {
+  mcp_executions          mcp_executions?
   id                      String                           @id @default(dbgenerated("extensions.uuid_generate_v4()")) @db.Uuid
   server_id               String
   action_type             moderation_action_request_type
@@ -848,6 +849,8 @@ enum verification_status {
 
 /// Private MCP grants shared by the web issuer and bot worker. RLS is enabled by migration.
 model mcp_connections {
+  mcp_intents    mcp_intents[]
+  mcp_executions mcp_executions[]
   id             String                         @id @default(dbgenerated("extensions.uuid_generate_v4()")) @db.Uuid
   user_id        String
   client_id      String
@@ -1169,4 +1172,49 @@ model mcp_authorization_references {
   mcp_auth_user           mcp_auth_user           @relation(fields: [issuer_user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([connection_id], map: "mcp_authorization_references_connection_idx")
+}
+
+/// Private exact approvals; RLS and expiry constraints are installed by migration.
+model mcp_intents {
+  confirmation_id     String          @id
+  connection_id       String          @db.Uuid
+  user_id             String
+  client_id           String
+  grant_version       Int
+  idempotency_key     String
+  invocation_digest   String
+  input               Json
+  resolved            Json
+  created_at          DateTime        @default(now()) @db.Timestamptz(6)
+  expires_at          DateTime        @db.Timestamptz(6)
+  state               String          @default("pending")
+  confirmation_method String?
+  mcp_connections     mcp_connections @relation(fields: [connection_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  mcp_executions      mcp_executions?
+
+  @@unique([connection_id, idempotency_key], map: "mcp_intents_connection_key")
+  @@index([state, expires_at], map: "mcp_intents_pending_expiry_idx")
+  @@index([user_id, state, expires_at], map: "mcp_intents_actor_pending_idx")
+}
+
+/// Public execution UUIDs are separate from private worker fencing tokens.
+model mcp_executions {
+  id                         String                      @id @db.Uuid
+  confirmation_id            String                      @unique
+  connection_id              String                      @db.Uuid
+  user_id                    String
+  client_id                  String
+  grant_version              Int
+  resolved                   Json
+  confirmation_method        String
+  queue_request_id           String?                     @unique @db.Uuid
+  created_at                 DateTime                    @default(now()) @db.Timestamptz(6)
+  started_at                 DateTime?                   @db.Timestamptz(6)
+  completed_at               DateTime?                   @db.Timestamptz(6)
+  outcome                    Json?
+  mcp_intents                mcp_intents                 @relation(fields: [confirmation_id], references: [confirmation_id], onDelete: Cascade, onUpdate: NoAction)
+  mcp_connections            mcp_connections             @relation(fields: [connection_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  moderation_action_requests moderation_action_requests? @relation(fields: [queue_request_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([connection_id], map: "mcp_executions_connection_idx")
 }

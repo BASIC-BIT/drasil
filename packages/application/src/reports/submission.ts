@@ -1,3 +1,4 @@
+import type { ReportCommand } from './commands';
 import type { ActionContext } from '../context';
 import type { ConfirmationPort } from '../confirmation';
 import type { ActionResult } from '../results';
@@ -46,12 +47,15 @@ export function createReportRequestSubmission(deps: ReportRequestSubmissionDepen
         const intake = await deps.intakes.openForReporter(context);
         if (intake?.id !== command.intakeId) return { kind: 'denied', code: 'stale_state' };
       }
-      if (
-        command.kind !== 'start_report_intake' &&
-        !(await deps.confirmations.verify(context, command))
-      )
+      if (reportNeedsConfirmation(command) && !(await deps.confirmations.verify(context, command)))
         return { kind: 'denied', code: 'confirmation_required' };
       return { kind: 'outcome', outcome: { status: await deps.queue.enqueue(context, command) } };
     },
   };
+}
+
+export function reportNeedsConfirmation<T extends Pick<ReportCommand, 'kind'>>(
+  command: T
+): command is Exclude<T, { kind: 'start_report_intake' | 'reject_intake_candidates' }> {
+  return command.kind !== 'start_report_intake' && command.kind !== 'reject_intake_candidates';
 }

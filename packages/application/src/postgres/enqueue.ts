@@ -95,7 +95,9 @@ set (status, updated_at, requested_at, started_at, completed_at, attempts,
   CROSS JOIN LATERAL (SELECT (retry_noop OR (
     moderation_action_requests.action_type = 'ban_observed_detection' AND moderation_action_requests.status = 'failed'
   )) AS new_attempt) AS attempt
-  CROSS JOIN LATERAL (SELECT same_binding AND NOT protected AND (
+  CROSS JOIN LATERAL (SELECT same_binding AND NOT protected
+    AND NOT (coalesce(moderation_action_requests.metadata, '{}'::jsonb) ? 'delegation')
+    AND NOT (coalesce(excluded.metadata, '{}'::jsonb) ? 'delegation') AND (
     new_attempt OR (
       moderation_action_requests.actor_id = excluded.actor_id
       AND moderation_action_requests.actor_surface = excluded.actor_surface
@@ -112,7 +114,7 @@ returning *`;
  * SELECT fallback, this also sees a competing insert committed after our snapshot. */
 export function buildEnqueueStatement(input: EnqueueInput): {
   text: string;
-  values: readonly unknown[];
+  values: readonly (string | number | boolean | Date | null | readonly string[])[];
 } {
   return {
     text,

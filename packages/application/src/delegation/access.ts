@@ -125,6 +125,12 @@ export interface DelegatedAccess {
     scope: DelegatedScope
   ): Promise<AccessDecision>;
   authorizeRead(principal: DelegatedPrincipal, query: DelegatedReadQuery): Promise<AccessDecision>;
+  /** Check the workflow's fixed semantic authority before resolving private resource bindings. */
+  authorizeWorkflowId(
+    principal: DelegatedPrincipal,
+    guildId: string,
+    workflowId: WorkflowId
+  ): Promise<AccessDecision>;
   authorizeWorkflow(
     principal: DelegatedPrincipal,
     guildId: string,
@@ -400,6 +406,19 @@ export function createDelegatedAccess(deps: DelegatedAccessDependencies): Delega
       return binding.kind === 'denied'
         ? binding
         : { kind: 'allowed', capabilities: capabilities(binding, principal) };
+    },
+    async authorizeWorkflowId(principal, guildId, workflowId): Promise<AccessDecision> {
+      const definition = workflowDefinitions.find((candidate) => candidate.id === workflowId);
+      if (!definition) return denied('permission_denied');
+      const binding = await authorizeGuild(principal, guildId, definition.scope);
+      if (binding.kind === 'denied') return binding;
+      try {
+        return permitsWorkflow(binding, definition.authorityCommand)
+          ? binding
+          : denied('permission_denied');
+      } catch {
+        return denied('permission_denied');
+      }
     },
     async authorizeWorkflow(principal, guildId, command): Promise<AccessDecision> {
       const parsed = humanCommandSchema.safeParse(command);

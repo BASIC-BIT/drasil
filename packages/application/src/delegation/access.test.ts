@@ -508,3 +508,64 @@ it('refreshes capabilities and enforces read consent and selected guilds', async
     reason: 'invalid_grant',
   });
 });
+it('preflights exact semantic workflow authority without invented resource bindings', async () => {
+  const f = fixture();
+  f.setFacts({ permissions: '32' });
+  expect(
+    await f.access.authorizeWorkflowId(principal, guildId, 'open_admin_case_administrator')
+  ).toMatchObject({ kind: 'allowed' });
+  expect(
+    await f.access.authorizeWorkflowId(principal, guildId, 'open_admin_case_moderator')
+  ).toMatchObject({ kind: 'denied', reason: 'permission_denied' });
+  f.setFacts({ permissions: '8' });
+  expect(
+    await f.access.authorizeWorkflowId(principal, guildId, 'execute_case_message_deletion')
+  ).toMatchObject({ kind: 'allowed' });
+  f.setGrant({ revokedAt: new Date() });
+  expect(
+    await f.access.authorizeWorkflowId(principal, guildId, 'execute_case_message_deletion')
+  ).toEqual({ kind: 'denied', reason: 'invalid_grant' });
+});
+it('preflights staff-only and ban-only authority with the existing family predicates', async () => {
+  const f = fixture();
+  f.setFacts({ roleIds: ['staff'] });
+  expect(
+    await f.access.authorizeWorkflowId(principal, guildId, 'start_report_intake')
+  ).toMatchObject({ kind: 'allowed' });
+  expect(await f.access.authorizeWorkflowId(principal, guildId, 'ban_user')).toMatchObject({
+    kind: 'denied',
+  });
+  f.setFacts({ permissions: '4', roleIds: [] });
+  expect(await f.access.authorizeWorkflowId(principal, guildId, 'ban_user')).toMatchObject({
+    kind: 'allowed',
+  });
+  expect(await f.access.authorizeWorkflowId(principal, guildId, 'kick_user')).toMatchObject({
+    kind: 'denied',
+  });
+});
+it('preflights current token scope, persisted scope, guild selection and grant version', async () => {
+  const f = fixture();
+  f.setFacts({ permissions: '8' });
+  expect(
+    await f.access.authorizeWorkflowId(
+      { ...principal, scopes: ['drasil:read'] },
+      guildId,
+      'ban_user'
+    )
+  ).toEqual({ kind: 'denied', reason: 'scope_denied' });
+  f.setGrant({ scopes: ['drasil:read'] });
+  expect(await f.access.authorizeWorkflowId(principal, guildId, 'ban_user')).toEqual({
+    kind: 'denied',
+    reason: 'scope_denied',
+  });
+  f.setGrant({ scopes: principal.scopes, selection: { mode: 'selected', guildIds: [] } });
+  expect(await f.access.authorizeWorkflowId(principal, guildId, 'ban_user')).toEqual({
+    kind: 'denied',
+    reason: 'guild_denied',
+  });
+  f.setGrant({ selection: { mode: 'all_eligible' }, version: 2 });
+  expect(await f.access.authorizeWorkflowId(principal, guildId, 'ban_user')).toEqual({
+    kind: 'denied',
+    reason: 'invalid_grant',
+  });
+});
