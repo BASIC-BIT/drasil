@@ -1,3 +1,4 @@
+import { hasAuthority, hasStaffAuthority, MODERATION_PERMISSIONS } from '../authorization';
 import { z } from 'zod';
 import type { ActionContext } from '../context';
 import type { ActionDenialCode, ActionResult } from '../results';
@@ -116,7 +117,6 @@ export const reportStatusByClosureAction: Record<ReportClosureAction, ReportRevi
 export function isReportClosureAction(action: string): action is ReportClosureAction {
   return reportClosureActions.some((candidate) => candidate === action);
 }
-const REPORT_MODERATION_PERMISSIONS = (1n << 3n) | (1n << 5n) | (1n << 40n);
 
 const closeSchema = z
   .object({ reportId: z.string().min(1), action: z.enum(reportClosureActions) })
@@ -144,11 +144,10 @@ export function createReportReviewActions(deps: ReportReviewDependencies): Repor
     if (!facts || !facts.present) return 'actor_unavailable';
     if (facts.guildId !== context.guildId || facts.userId !== context.actor.userId)
       return 'binding_mismatch';
-    const permissions = /^\d+$/.test(facts.permissions) ? BigInt(facts.permissions) : 0n;
-    if (facts.owner || (permissions & REPORT_MODERATION_PERMISSIONS) !== 0n) return null;
+    if (hasAuthority(facts, MODERATION_PERMISSIONS)) return null;
     if (requiredAuthority === 'case_opening') return 'permission_denied';
     const roleIds = await deps.staffRoles.loadRoleIds(context.guildId);
-    return roleIds.some((id) => facts.roleIds.includes(id)) ? null : 'permission_denied';
+    return hasStaffAuthority(facts, roleIds) ? null : 'permission_denied';
   }
   async function clearReportThreadAttention(reportId: string): Promise<ReportQueueCleanupStatus> {
     if (!deps.queueRepository || !deps.queueMessageDeleter) return 'skipped';

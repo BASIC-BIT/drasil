@@ -95,6 +95,11 @@ export interface WorkflowCommandBindings {
     readonly submissionId: string;
   };
 }
+/** Canonical fields used by family authority predicates; frozen by the workflow definition. */
+export interface WorkflowAuthorityCommand {
+  readonly kind: HumanCommand['kind'];
+  readonly intent?: string;
+}
 export interface WorkflowDefinition {
   readonly id: WorkflowId;
   readonly commandKind: HumanCommand['kind'];
@@ -102,6 +107,7 @@ export interface WorkflowDefinition {
   readonly family: WorkflowFamily;
   readonly scope: DelegatedScope;
   readonly authorityPolicy: string;
+  readonly authorityCommand: WorkflowAuthorityCommand;
   readonly confirmationRule: WorkflowConfirmationRule;
   readonly delivery: 'direct' | 'queued';
   readonly resultContract: WorkflowFamily;
@@ -204,6 +210,10 @@ function define(
     family,
     scope,
     authorityPolicy: variant.authority ?? `${family}.${kind}`,
+    authorityCommand: {
+      kind,
+      ...(typeof fixed.intent === 'string' ? { intent: fixed.intent } : {}),
+    },
     confirmationRule: [
       'update_settings',
       'update_setup',

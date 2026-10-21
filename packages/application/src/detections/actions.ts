@@ -1,3 +1,4 @@
+import { hasAuthority } from '../authorization';
 import type { ActionContext } from '../context';
 import type { ActionDenialCode, ActionResult } from '../results';
 import type { DetectionCommand, QueuedDetectionCommand } from './commands';
@@ -144,23 +145,22 @@ async function authorize(
   if (!actor?.present) return 'actor_unavailable';
   if (actor.guildId !== context.guildId || actor.userId !== context.actor.userId)
     return 'binding_mismatch';
-  const bits = /^\d+$/.test(actor.permissions) ? BigInt(actor.permissions) : 0n;
-  const required =
-    command.kind === 'kick_observed_detection'
-      ? 1n << 1n
-      : [
-            'ban_observed_detection',
-            'prepare_report_ban_review',
-            'review_uncertain_report_ban',
-          ].includes(command.kind)
-        ? 1n << 2n
-        : isAccountingCommand(command)
-          ? 1n << 5n
-          : (1n << 5n) | (1n << 40n);
-  return actor.owner || (bits & (1n << 3n)) !== 0n || (bits & required) !== 0n
-    ? null
-    : 'permission_denied';
+  return hasAuthority(actor, detectionRequiredPermissions(command)) ? null : 'permission_denied';
 }
+export function detectionRequiredPermissions(command: Pick<DetectionCommand, 'kind'>): bigint {
+  return command.kind === 'kick_observed_detection'
+    ? 1n << 1n
+    : [
+          'ban_observed_detection',
+          'prepare_report_ban_review',
+          'review_uncertain_report_ban',
+        ].includes(command.kind)
+      ? 1n << 2n
+      : isAccountingCommand(command)
+        ? 1n << 5n
+        : (1n << 5n) | (1n << 40n);
+}
+
 async function checkDetection(
   deps: DetectionDependencies,
   context: ActionContext,
@@ -259,7 +259,7 @@ async function checkReviewBinding(
   return operation.continuation === 'uncertain' ? null : 'stale_state';
 }
 
-function isAccountingCommand(command: DetectionCommand): boolean {
+function isAccountingCommand(command: Pick<DetectionCommand, 'kind'>): boolean {
   return (
     command.kind === 'ignore_detection_accounting' ||
     command.kind === 'restore_detection_accounting'

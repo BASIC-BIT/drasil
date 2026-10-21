@@ -1,0 +1,354 @@
+import { createDelegatedAccess, type DelegatedAccess } from './access';
+import type { AuthorityFacts } from '../authorization';
+import type { ConnectionGrant, DelegatedPrincipal } from './types';
+import { humanCommandSchema, workflowDefinitions } from './commands';
+
+const guildId = 'guild';
+const principal: DelegatedPrincipal = {
+  userId: 'user',
+  clientId: 'client',
+  connectionId: 'connection',
+  grantVersion: 1,
+  scopes: ['drasil:read', 'drasil:moderate', 'drasil:configure'],
+};
+const caseQuery = { kind: 'cases' as const, guildId };
+const banCommand = humanCommandSchema.parse({
+  kind: 'ban_user',
+  targetUserId: 'target',
+  reason: null,
+});
+function fixture(): {
+  access: DelegatedAccess;
+  authority: { loadFresh: jest.Mock<Promise<AuthorityFacts>, [string]> };
+  directory: {
+    isActive: jest.Mock<Promise<boolean>, []>;
+    listActive: jest.Mock<Promise<{ guildIds: string[]; nextCursor: null }>, []>;
+  };
+  setFacts(change: Partial<AuthorityFacts>): void;
+  setGrant(change: Partial<ConnectionGrant>): void;
+} {
+  let grant: ConnectionGrant = {
+    ...principal,
+    version: 1,
+    selection: { mode: 'selected', guildIds: [guildId] },
+    createdAt: new Date(),
+    revokedAt: null,
+  };
+  let facts: AuthorityFacts = {
+    userId: principal.userId,
+    guildId,
+    present: true,
+    owner: false,
+    permissions: '0',
+    roleIds: [],
+  };
+  const authority = { loadFresh: jest.fn(async (id: string) => ({ ...facts, guildId: id })) };
+  const directory = {
+    isActive: jest.fn(async () => true),
+    listActive: jest.fn(async () => ({ guildIds: [guildId, 'new-guild'], nextCursor: null })),
+  };
+  const access = createDelegatedAccess({
+    store: { findConnection: async () => grant },
+    authority,
+    staffRoles: { loadRoleIds: async () => ['staff'] },
+    guilds: directory,
+  });
+  return {
+    access,
+    authority,
+    directory,
+    setFacts: (change: Partial<AuthorityFacts>): void => {
+      facts = { ...facts, ...change };
+    },
+    setGrant: (change: Partial<ConnectionGrant>): void => {
+      grant = { ...grant, ...change };
+    },
+  };
+}
+
+describe('delegated access', () => {
+  it.each([
+    ['owner', '0', true],
+    ['Administrator', '8', false],
+    ['Manage Server', '32', false],
+    ['Moderate Members', (1n << 40n).toString(), false],
+    ['Ban Members', '4', false],
+    ['Kick Members', '2', false],
+  ])('accepts current %s eligibility', async (_name, permissions, owner) => {
+    const f = fixture();
+    f.setFacts({ permissions, owner });
+    expect(await f.access.authorizeGuild(principal, guildId, 'drasil:read')).toMatchObject({
+      kind: 'allowed',
+    });
+  });
+  it('does not turn staff eligibility into enforcement authority', async () => {
+    const f = fixture();
+    f.setFacts({ roleIds: ['staff'] });
+    const roleOnly = principal;
+    expect(await f.access.authorizeRead(roleOnly, caseQuery)).toMatchObject({ kind: 'allowed' });
+    expect(await f.access.authorizeRead(roleOnly, { kind: 'reports', guildId })).toMatchObject({
+      kind: 'allowed',
+    });
+    expect(await f.access.authorizeWorkflow(roleOnly, guildId, banCommand)).toMatchObject({
+      kind: 'denied',
+    });
+    expect(
+      await f.access.authorizeWorkflow(
+        roleOnly,
+        guildId,
+        humanCommandSchema.parse({
+          kind: 'open_admin_case',
+          intent: 'native_case_open',
+          targetUserId: 'target',
+          reason: null,
+          detectionEventId: null,
+          selectedMessage: null,
+        })
+      )
+    ).toMatchObject({ kind: 'denied' });
+    expect(
+      await f.access.authorizeWorkflow(roleOnly, guildId, {
+        kind: 'open_submitted_report_case',
+        reportId: 'report',
+      })
+    ).toMatchObject({ kind: 'denied' });
+    f.setGrant({ revokedAt: new Date() });
+    const revoked = principal;
+    expect(await f.access.authorizeGuild(revoked, guildId, 'drasil:read')).toMatchObject({
+      kind: 'denied',
+    });
+  });
+  it.each(['2', '4'])(
+    'limits enforcement-only permission %s to its workflow',
+    async (permissions) => {
+      const f = fixture();
+      f.setFacts({ permissions });
+      expect(await f.access.authorizeRead(principal, caseQuery)).toMatchObject({ kind: 'denied' });
+      expect(await f.access.authorizeRead(principal, { kind: 'reports', guildId })).toMatchObject({
+        kind: 'denied',
+      });
+      expect(
+        await f.access.authorizeRead(principal, {
+          kind: 'member_context',
+          guildId,
+          purpose: permissions === '4' ? 'ban' : 'kick',
+        })
+      ).toMatchObject({ kind: 'allowed' });
+      expect(
+        await f.access.authorizeRead(principal, {
+          kind: 'member_context',
+          guildId,
+          purpose: 'case',
+        })
+      ).toMatchObject({ kind: 'denied' });
+    }
+  );
+  it('refreshes departed members, inactive installations and changed roles', async () => {
+    const f = fixture();
+    f.setFacts({ roleIds: ['staff'] });
+    expect(await f.access.authorizeRead(principal, caseQuery)).toMatchObject({ kind: 'allowed' });
+    f.setFacts({ roleIds: [] });
+    expect(await f.access.authorizeRead(principal, caseQuery)).toMatchObject({ kind: 'denied' });
+    f.setFacts({ owner: true, present: false });
+    expect(await f.access.authorizeRead(principal, caseQuery)).toMatchObject({ kind: 'denied' });
+    f.setFacts({ present: true });
+    f.directory.isActive.mockResolvedValue(false);
+    expect(await f.access.authorizeRead(principal, caseQuery)).toMatchObject({ kind: 'denied' });
+  });
+  it('fails closed on refresh failure or mismatched facts', async () => {
+    const f = fixture();
+    f.authority.loadFresh.mockRejectedValueOnce(new Error('Discord down'));
+    expect(await f.access.authorizeRead(principal, caseQuery)).toMatchObject({
+      kind: 'denied',
+      reason: 'unavailable',
+    });
+    f.authority.loadFresh.mockResolvedValueOnce({
+      guildId: 'other',
+      userId: 'other',
+      present: true,
+      owner: true,
+      roleIds: [],
+      permissions: '8',
+    });
+    expect(await f.access.authorizeRead(principal, caseQuery)).toMatchObject({
+      kind: 'denied',
+      reason: 'binding_mismatch',
+    });
+  });
+  it('enforces both scope ceilings and the persisted identity and version', async () => {
+    const f = fixture();
+    f.setFacts({ owner: true });
+    for (const change of [
+      { scopes: [] },
+      { grantVersion: 2 },
+      { userId: 'other' },
+      { clientId: 'other' },
+    ]) {
+      expect(await f.access.authorizeRead({ ...principal, ...change }, caseQuery)).toMatchObject({
+        kind: 'denied',
+      });
+    }
+    f.setGrant({ scopes: ['drasil:read'] });
+    expect(await f.access.authorizeWorkflow(principal, guildId, banCommand)).toMatchObject({
+      kind: 'denied',
+    });
+  });
+  it('keeps selected grants fixed and includes future guilds for all-eligible grants', async () => {
+    const f = fixture();
+    f.setFacts({ owner: true });
+    expect(await f.access.authorizeGuild(principal, 'new-guild', 'drasil:read')).toMatchObject({
+      kind: 'denied',
+    });
+    expect(await f.access.listEligibleGuilds(principal, {})).toMatchObject({
+      kind: 'allowed',
+      guilds: [{ guildId }],
+    });
+    f.setGrant({ selection: { mode: 'all_eligible' } });
+    expect(await f.access.authorizeGuild(principal, 'new-guild', 'drasil:read')).toMatchObject({
+      kind: 'allowed',
+    });
+    expect(await f.access.listEligibleGuilds(principal, {})).toMatchObject({
+      kind: 'allowed',
+      guilds: [{ guildId }, { guildId: 'new-guild' }],
+    });
+    f.setFacts({ owner: false });
+    expect(await f.access.listEligibleGuilds(principal, {})).toMatchObject({
+      kind: 'allowed',
+      guilds: [],
+    });
+  });
+  it('binds reporter reads and own status to the actor, connection and underlying resource', async () => {
+    const f = fixture();
+    f.setFacts({ permissions: '4' });
+    expect(
+      await f.access.authorizeRead(principal, { kind: 'reports', guildId, audience: 'reporter' })
+    ).toMatchObject({ kind: 'allowed', reporterId: principal.userId });
+    const query = {
+      kind: 'own_execution' as const,
+      guildId,
+      userId: principal.userId,
+      connectionId: principal.connectionId,
+      resource: { kind: 'member_context' as const, guildId, purpose: 'ban' as const },
+    };
+    expect(await f.access.authorizeRead(principal, query)).toMatchObject({ kind: 'allowed' });
+    expect(
+      await f.access.authorizeRead(principal, { ...query, connectionId: 'other' })
+    ).toMatchObject({ kind: 'denied' });
+    expect(
+      await f.access.authorizeRead(principal, { ...query, resource: caseQuery })
+    ).toMatchObject({ kind: 'denied' });
+  });
+  it('keeps setup and diagnostics on their family authority', async () => {
+    const f = fixture();
+    f.setFacts({ permissions: '32' });
+    expect(await f.access.authorizeRead(principal, { kind: 'diagnostics', guildId })).toMatchObject(
+      { kind: 'allowed' }
+    );
+    expect(await f.access.authorizeRead(principal, { kind: 'setup', guildId })).toMatchObject({
+      kind: 'denied',
+    });
+    expect(await f.access.authorizeRead(principal, { kind: 'attention', guildId })).toMatchObject({
+      kind: 'allowed',
+    });
+  });
+});
+
+it.each([
+  ['32', 'open_admin_case', 'native_case_open', 'denied'],
+  ['32', 'open_admin_case', 'dashboard_case_open', 'allowed'],
+  [(1n << 40n).toString(), 'open_admin_case', 'native_case_open', 'allowed'],
+  [(1n << 40n).toString(), 'open_admin_case', 'dashboard_case_open', 'denied'],
+])('retains %s permission semantics for %s %s', async (permissions, kind, intent, expected) => {
+  const f = fixture();
+  f.setFacts({ permissions });
+  const command = humanCommandSchema.parse({
+    kind,
+    intent,
+    targetUserId: 'target',
+    reason: null,
+    detectionEventId: null,
+    selectedMessage: null,
+  });
+  expect(await f.access.authorizeWorkflow(principal, guildId, command)).toMatchObject({
+    kind: expected,
+  });
+});
+it.each([
+  ['repair_active_case', 'administrator_repair', 'denied'],
+  ['repair_active_case', 'moderator_repair', 'allowed'],
+  ['close_resolved_case_threads', 'guild_audit', 'allowed'],
+  ['close_resolved_case_threads', 'administrator_operation', 'denied'],
+])('retains Manage Server semantics for %s %s', async (kind, intent, expected) => {
+  const f = fixture();
+  f.setFacts({ permissions: '32' });
+  const command = humanCommandSchema.parse(
+    kind === 'repair_active_case'
+      ? { kind, intent, caseId: 'case', targetUserId: 'target' }
+      : { kind, intent, execute: false, days: 30, limit: 25, userId: null }
+  );
+  expect(await f.access.authorizeWorkflow(principal, guildId, command)).toMatchObject({
+    kind: expected,
+  });
+});
+
+it('reports workflow capabilities from fresh family authority rather than eligibility', async () => {
+  const f = fixture();
+  f.setFacts({ roleIds: ['staff'] });
+  expect(await f.access.listEligibleGuilds(principal, {})).toMatchObject({
+    kind: 'allowed',
+    guilds: [{ workflows: expect.arrayContaining(['close_submitted_report']) }],
+  });
+  const staff = await f.access.listEligibleGuilds(principal, {});
+  for (const workflow of ['ban_user', 'open_admin_case_moderator', 'update_setup']) {
+    expect(staff).toMatchObject({
+      guilds: [{ workflows: expect.not.arrayContaining([workflow]) }],
+    });
+  }
+  f.setFacts({ permissions: '4', roleIds: [] });
+  expect(await f.access.listEligibleGuilds(principal, {})).toMatchObject({
+    guilds: [
+      {
+        workflows: expect.arrayContaining(['ban_user', 'ban_observed_detection_report']),
+        reads: [],
+      },
+    ],
+  });
+  f.setFacts({ permissions: '32' });
+  const managed = await f.access.listEligibleGuilds(principal, {});
+  expect(managed).toMatchObject({
+    guilds: [
+      {
+        workflows: expect.arrayContaining([
+          'open_admin_case_administrator',
+          'repair_active_case_moderator',
+          'close_resolved_case_threads_guild_audit',
+        ]),
+      },
+    ],
+  });
+  for (const workflow of [
+    'open_admin_case_moderator',
+    'repair_active_case_administrator',
+    'close_resolved_case_threads_administrator',
+  ]) {
+    expect(managed).toMatchObject({
+      guilds: [{ workflows: expect.not.arrayContaining([workflow]) }],
+    });
+  }
+  f.setFacts({ owner: true });
+  expect(await f.access.listEligibleGuilds(principal, {})).toMatchObject({
+    guilds: [{ workflows: workflowDefinitions.map((definition) => definition.id) }],
+  });
+  f.setGrant({ scopes: ['drasil:read'] });
+  expect(await f.access.listEligibleGuilds(principal, {})).toMatchObject({
+    guilds: [{ workflows: [] }],
+  });
+});
+
+it('allows minimal case context for existing Manage Server case workflows', async () => {
+  const f = fixture();
+  f.setFacts({ permissions: '32' });
+  expect(
+    await f.access.authorizeRead(principal, { kind: 'member_context', guildId, purpose: 'case' })
+  ).toMatchObject({ kind: 'allowed' });
+});

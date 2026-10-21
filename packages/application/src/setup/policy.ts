@@ -1,3 +1,4 @@
+import { hasAuthority } from '../authorization';
 import type { ActionContext } from '../context';
 import type { ActionDenialCode } from '../results';
 import type { SetupCommand } from './commands';
@@ -19,10 +20,7 @@ export async function authorizeSetup(
   if (facts.guildId !== context.guildId || facts.userId !== context.actor.userId) {
     return 'binding_mismatch';
   }
-  const permissions = /^\d+$/.test(facts.permissions) ? BigInt(facts.permissions) : 0n;
-  return facts.owner || (permissions & (1n << 3n)) !== 0n
-    ? { owner: facts.owner }
-    : 'permission_denied';
+  return hasAuthority(facts, 0n) ? { owner: facts.owner } : 'permission_denied';
 }
 
 export function validateSetupPolicy(

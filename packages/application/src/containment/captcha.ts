@@ -1,3 +1,4 @@
+import { hasAuthority, MODERATION_PERMISSIONS } from '../authorization';
 import { z } from 'zod';
 import type { ActionContext } from '../context';
 import type { ActionResult, ActionDenialCode } from '../results';
@@ -189,10 +190,7 @@ async function authorizeCaptchaModerator(
   if (!facts?.present) return 'actor_unavailable';
   if (facts.guildId !== context.guildId || facts.userId !== context.actor.userId)
     return 'binding_mismatch';
-  const permissions = /^\d+$/.test(facts.permissions) ? BigInt(facts.permissions) : 0n;
-  return facts.owner || (permissions & ((1n << 3n) | (1n << 5n) | (1n << 40n))) !== 0n
-    ? null
-    : 'permission_denied';
+  return hasAuthority(facts, MODERATION_PERMISSIONS) ? null : 'permission_denied';
 }
 function checkCaptchaBinding(
   context: ActionContext,

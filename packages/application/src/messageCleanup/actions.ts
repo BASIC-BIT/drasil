@@ -1,3 +1,4 @@
+import { hasAuthority } from '../authorization';
 import type { ActionContext } from '../context';
 import type { ActionResult, ActionDenialCode } from '../results';
 import type { AuthorityPort } from '../authorization';
@@ -32,8 +33,7 @@ export async function authorizeMessageCleanup(
   if (!facts?.present) return 'actor_unavailable';
   if (facts.guildId !== context.guildId || facts.userId !== context.actor.userId)
     return 'binding_mismatch';
-  const permissions = /^\d+$/.test(facts.permissions) ? BigInt(facts.permissions) : 0n;
-  return facts.owner || (permissions & 8n) !== 0n ? null : 'permission_denied';
+  return hasAuthority(facts, 0n) ? null : 'permission_denied';
 }
 export function checkMessageCleanupBinding(
   context: ActionContext,
