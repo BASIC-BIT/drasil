@@ -1,3 +1,4 @@
+import { ActionDeniedError } from '../results';
 import { approvedResetDelivery } from '../setup/resolution';
 import { validateReportCaseTerminal } from '../reports/terminal';
 import { createHash, randomBytes } from 'node:crypto';
@@ -280,7 +281,10 @@ export function createIntentService(deps: {
         throw new IntentError('stale_state');
     } catch (error) {
       // Temporary resolver failures remain retryable; authoritative denials consume approval.
-      if (error instanceof IntentError && error.code !== 'unavailable')
+      if (
+        (error instanceof IntentError || error instanceof ActionDeniedError) &&
+        error.code !== 'unavailable'
+      )
         await deps.store.denyIntent(principal, confirmationId);
       throw error;
     }

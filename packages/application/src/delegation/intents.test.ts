@@ -1,5 +1,7 @@
+import { ActionDeniedError } from '../results';
 import {
   canonicalDigest,
+  IntentError,
   createIntentService,
   setupFingerprintState,
   type IntentService,
@@ -413,3 +415,41 @@ it('checks exact workflow authority before a resolver can inspect private resour
   await expect(service.prepareIntent(principal, invocation)).rejects.toThrow('permission_denied');
   expect(resolver.resolve).not.toHaveBeenCalled();
 });
+
+it.each([new IntentError('policy_disabled'), new ActionDeniedError('policy_disabled')])(
+  'terminally denies revalidation rejection %p even after the resolver recovers',
+  async (error) => {
+    const f = fixture();
+    const intent = await f.service.prepareIntent(principal, invocation);
+    jest.spyOn(f.resolver, 'resolve').mockRejectedValueOnce(error);
+    await expect(
+      f.service.acceptIntent(principal, intent.confirmationId, 'client_confirmation')
+    ).rejects.toBe(error);
+    expect((await f.store.loadIntent(principal, intent.confirmationId))?.state).toBe('denied');
+    await expect(
+      f.service.acceptIntent(principal, intent.confirmationId, 'client_confirmation')
+    ).rejects.toThrow('denied');
+    expect(f.store.acceptIntent).not.toHaveBeenCalled();
+  }
+);
+it.each([
+  new IntentError('unavailable'),
+  new ActionDeniedError('unavailable'),
+  new Error('transport interrupted'),
+])(
+  'keeps temporary revalidation failure %p pending for successful same-ID retry',
+  async (error) => {
+    const f = fixture();
+    const intent = await f.service.prepareIntent(principal, invocation);
+    jest.spyOn(f.resolver, 'resolve').mockRejectedValueOnce(error);
+    await expect(
+      f.service.acceptIntent(principal, intent.confirmationId, 'client_confirmation')
+    ).rejects.toBe(error);
+    expect((await f.store.loadIntent(principal, intent.confirmationId))?.state).toBe('pending');
+    expect(f.store.acceptIntent).not.toHaveBeenCalled();
+    await expect(
+      f.service.acceptIntent(principal, intent.confirmationId, 'client_confirmation')
+    ).resolves.toMatchObject({ executionId: 'execution' });
+    expect(f.store.acceptIntent).toHaveBeenCalledTimes(1);
+  }
+);

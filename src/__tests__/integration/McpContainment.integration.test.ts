@@ -14,6 +14,8 @@ import {
 import { Pool } from 'pg';
 import { randomUUID } from 'node:crypto';
 import {
+  ActionDeniedError,
+  IntentError,
   createContainmentIntentResolver,
   createIntentService,
   createDelegatedAccess,
@@ -160,6 +162,123 @@ integration.each(['pg', 'prisma'] as const)('MCP containment via %s', (driver) =
     );
     return { execution, jobId, generation };
   }
+  it.each(['request_captcha_challenge', 'quarantine_compromised_account'] as const)(
+    'terminally denies %s confirmation when policy is disabled, including after restoration',
+    async (workflowId) => {
+      const effects = jest.fn();
+      const service = createDelegatedActionService({
+        store,
+        access,
+        resolver: createContainmentIntentResolver(resources),
+        direct: { execute: effects },
+      });
+      let previewReference: string | undefined;
+      if (workflowId === 'quarantine_compromised_account') {
+        const preview = await intents().prepareIntent(
+          principal,
+          invoke('preview_account_quarantine', { caseId, targetUserId: 'target' })
+        );
+        const execution = await intents().acceptWithoutConfirmation(
+          principal,
+          preview.confirmationId
+        );
+        previewReference = execution.executionId;
+        await pool.query('update mcp_executions set started_at=now() where id=$1', [
+          execution.executionId,
+        ]);
+        await pool.query(
+          `update moderation_action_requests set status='completed',completed_at=now(),result=$2::jsonb where id=$1`,
+          [
+            execution.queueRequestId,
+            JSON.stringify({
+              action_type: 'preview_account_quarantine',
+              verification_event_id: caseId,
+              target_user_id: 'target',
+              containment_fingerprint: 'private-fingerprint',
+              planned_roles: [],
+              retained_roles: [],
+              can_contain: true,
+            }),
+          ]
+        );
+      }
+      const prepared = await service.submit(
+        principal,
+        invoke(workflowId, {
+          caseId,
+          targetUserId: 'target',
+          ...(previewReference ? { previewReference, reason: 'Contain compromise' } : {}),
+        })
+      );
+      expect(prepared.state).toBe('confirmation_required');
+      const confirmationId = prepared.confirmationId!;
+      const originalQueues = workflowId === 'quarantine_compromised_account' ? 1 : 0;
+      await pool.query(
+        `update servers set settings='{"captcha_mode":"off","account_quarantine_enabled":false}' where guild_id='guild'`
+      );
+      expect(await service.confirm(principal, confirmationId, 'client_confirmation')).toMatchObject(
+        { state: 'denied', code: 'policy_disabled' }
+      );
+      expect((await store.loadIntent(principal, confirmationId))?.state).toBe('denied');
+      await pool.query(
+        `update servers set settings='{"captcha_mode":"manual","account_quarantine_enabled":true}' where guild_id='guild'`
+      );
+      expect(await service.confirm(principal, confirmationId, 'client_confirmation')).toMatchObject(
+        { state: 'denied', code: 'denied' }
+      );
+      expect((await store.loadIntent(principal, confirmationId))?.state).toBe('denied');
+      expect(
+        (await pool.query('select count(*)::int as n from moderation_action_requests')).rows[0].n
+      ).toBe(originalQueues);
+      expect((await pool.query('select count(*)::int as n from mcp_executions')).rows[0].n).toBe(
+        originalQueues
+      );
+      expect(effects).not.toHaveBeenCalled();
+    }
+  );
+  it.each([
+    new IntentError('unavailable'),
+    new ActionDeniedError('unavailable'),
+    new Error('transport interrupted'),
+  ])(
+    'keeps temporary containment revalidation %p pending and accepts the same ID after recovery',
+    async (error) => {
+      const effects = jest.fn();
+      const service = createDelegatedActionService({
+        store,
+        access,
+        resolver: createContainmentIntentResolver(resources),
+        direct: { execute: effects },
+      });
+      const prepared = await service.submit(
+        principal,
+        invoke('request_captcha_challenge', { caseId, targetUserId: 'target' })
+      );
+      expect(prepared.state).toBe('confirmation_required');
+      const confirmationId = prepared.confirmationId!;
+      jest.spyOn(resources, 'loadPolicy').mockRejectedValueOnce(error);
+      if (error instanceof IntentError || error instanceof ActionDeniedError)
+        expect(
+          await service.confirm(principal, confirmationId, 'client_confirmation')
+        ).toMatchObject({ state: 'denied', code: 'unavailable' });
+      else
+        await expect(
+          service.confirm(principal, confirmationId, 'client_confirmation')
+        ).rejects.toBe(error);
+      expect((await store.loadIntent(principal, confirmationId))?.state).toBe('pending');
+      expect(
+        (await pool.query('select count(*)::int as n from moderation_action_requests')).rows[0].n
+      ).toBe(0);
+      expect(await service.confirm(principal, confirmationId, 'client_confirmation')).toMatchObject(
+        { state: 'queued' }
+      );
+      expect((await store.loadIntent(principal, confirmationId))?.state).toBe('consumed');
+      expect(
+        (await pool.query('select count(*)::int as n from moderation_action_requests')).rows[0].n
+      ).toBe(1);
+      expect(effects).not.toHaveBeenCalled();
+    }
+  );
   it('reserves without writes then atomically creates exactly one job, execution and queue on concurrent acceptance', async () => {
     const saved = await prepareCleanup();
     expect(
