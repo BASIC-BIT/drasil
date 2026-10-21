@@ -69,6 +69,14 @@ function schemaFor<K extends QueuedCommand['kind']>(
 }
 /** Exhaustive persisted command registry; direct-only operations are deliberately absent. */
 export const queuedCommandSchemas = {
+  audit_integrity: schemaFor('audit_integrity'),
+  update_settings: schemaFor('update_settings'),
+  update_heuristics: schemaFor('update_heuristics'),
+  reset_heuristics: schemaFor('reset_heuristics'),
+  lockdown_allow_add: schemaFor('lockdown_allow_add'),
+  lockdown_allow_remove: schemaFor('lockdown_allow_remove'),
+  disable_lockdown: schemaFor('disable_lockdown'),
+  clear_report_instructions: schemaFor('clear_report_instructions'),
   submit_message_report: schemaFor('submit_message_report'),
   confirm_intake_candidate: schemaFor('confirm_intake_candidate'),
   reject_intake_candidates: schemaFor('reject_intake_candidates'),

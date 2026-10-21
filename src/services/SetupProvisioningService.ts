@@ -1,12 +1,13 @@
+import {
+  selectSetupCandidate,
+  setupProvisioningDetectionMode,
+  type SetupProvisioningSelection,
+} from '@drasil/application';
 import type { DetectionResponseMode } from '../contracts/setup';
-import { ChannelType, Guild, Role, TextChannel } from 'discord.js';
+import { ChannelType, Guild, Role, TextChannel, type GuildBasedChannel } from 'discord.js';
 import { IConfigService } from '../config/ConfigService';
 import type { Server, VerificationChannelPermissionSyncState } from '../repositories/types';
-import {
-  DEFAULT_DETECTION_RESPONSE_MODE,
-  DEFAULT_FIRST_SETUP_DETECTION_RESPONSE_MODE,
-  getDetectionResponseSettings,
-} from '../utils/detectionResponseSettings';
+import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
 import { getCaseResponderSettings } from '../utils/caseResponderSettings';
 import { getManualIntakeSettings } from '../utils/manualIntakeSettings';
 import { getModerationQueueSettings } from '../utils/moderationQueueSettings';
@@ -55,6 +56,10 @@ export type SetupProvisioningResult =
     };
 
 export interface ProvisionSetupInput {
+  readonly bindVerificationSelection?: boolean;
+  readonly beforeSelection?: () => Promise<void>;
+  readonly assertSelection?: (selection: SetupProvisioningSelection) => Promise<void>;
+
   readonly guild: Guild;
   readonly adminChannelId: string;
   readonly caseRole?: Role | null;
@@ -84,6 +89,7 @@ type CaseRoleCandidate =
 type VerificationChannelCandidate =
   | {
       channelId: string | null;
+      channelName?: string;
       willSyncPermissions: boolean;
       ambiguousChannelIds: readonly string[];
     }
@@ -91,7 +97,7 @@ type VerificationChannelCandidate =
 
 export class SetupProvisioningService {
   public constructor(
-    private readonly configService: IConfigService,
+    private readonly configService: Pick<IConfigService, 'getServerConfig'>,
     private readonly setupDiagnosticsService: ISetupDiagnosticsService,
     private readonly setupWorkflowService: SetupWorkflowService
   ) {}
@@ -105,22 +111,11 @@ export class SetupProvisioningService {
       failOnReadError: true,
       forceRefresh: true,
     });
-    const coreSetupIncomplete =
-      !existingConfig.case_role_id ||
-      !existingConfig.admin_channel_id ||
-      !existingConfig.verification_channel_id;
-    const surfaceProtectionModeAlreadyConfigured =
-      existingConfig.settings.message_detection_response_mode != null ||
-      existingConfig.settings.join_detection_response_mode != null;
-    const persistedDefaultMode = existingConfig.settings.detection_response_mode;
-    const needsFirstSetupProtectionDefault =
-      coreSetupIncomplete &&
-      !surfaceProtectionModeAlreadyConfigured &&
-      (persistedDefaultMode === undefined ||
-        persistedDefaultMode === DEFAULT_DETECTION_RESPONSE_MODE);
-    const detectionResponseMode =
-      input.detectionResponseMode ??
-      (needsFirstSetupProtectionDefault ? DEFAULT_FIRST_SETUP_DETECTION_RESPONSE_MODE : undefined);
+    await input.beforeSelection?.();
+    const detectionResponseMode = setupProvisioningDetectionMode(
+      existingConfig,
+      input.detectionResponseMode
+    );
     const caseRoleCandidate = await this.resolveCaseRoleCandidate(
       input.guild,
       input.caseRole ?? null,
@@ -188,6 +183,19 @@ export class SetupProvisioningService {
       return { status: 'invalid_selection', detail: channelSelectionError };
     }
 
+    await input.assertSelection?.({
+      role: caseRoleCandidate.role
+        ? { kind: 'reuse', id: caseRoleCandidate.role.id, name: caseRoleCandidate.roleName }
+        : { kind: 'create', name: caseRoleCandidate.roleName },
+      verification: verificationCandidate.channelId
+        ? {
+            kind: 'reuse',
+            id: verificationCandidate.channelId,
+            name: verificationCandidate.channelName ?? DEFAULT_VERIFICATION_CHANNEL_NAME,
+          }
+        : { kind: 'create', name: DEFAULT_VERIFICATION_CHANNEL_NAME },
+      detectionResponseMode: detectionResponseMode ?? null,
+    });
     const candidateReport = await this.setupDiagnosticsService.validateSetupCandidate(input.guild, {
       caseRoleId: caseRoleCandidate.role?.id ?? null,
       willCreateCaseRole: !caseRoleCandidate.role,
@@ -237,6 +245,20 @@ export class SetupProvisioningService {
       previousCaseRoleId: existingConfig.case_role_id,
       candidatePermissionSyncState: input.candidatePermissionSyncState,
       persistPermissionSyncState: input.persistPermissionSyncState,
+      ...(input.bindVerificationSelection
+        ? {
+            verificationBinding: {
+              choice: verificationCandidate.channelId
+                ? { kind: 'reuse' as const, id: verificationCandidate.channelId }
+                : { kind: 'create' as const },
+              previousSyncState:
+                input.candidatePermissionSyncState ??
+                input.previousPermissionSyncState ??
+                existingConfig.settings.verification_channel_permission_sync ??
+                null,
+            },
+          }
+        : {}),
     });
   }
 
@@ -305,34 +327,41 @@ export class SetupProvisioningService {
     requestedRoleName: string | null,
     serverConfig: Server
   ): Promise<CaseRoleCandidate> {
-    if (explicitCaseRole) {
-      return { role: explicitCaseRole, roleName: explicitCaseRole.name, ambiguousRoleIds: [] };
-    }
-    if (explicitCaseRoleId) {
-      const explicitRole = await this.fetchRole(guild, explicitCaseRoleId);
-      return explicitRole
-        ? { role: explicitRole, roleName: explicitRole.name, ambiguousRoleIds: [] }
-        : { invalidDetail: 'The selected case role no longer exists.' };
-    }
-
-    const roleName = requestedRoleName ?? DEFAULT_CASE_ROLE_NAME;
-    if (serverConfig.case_role_id) {
-      const configuredRole = await this.fetchRole(guild, serverConfig.case_role_id);
-      if (configuredRole && (!requestedRoleName || configuredRole.name === roleName)) {
-        return { role: configuredRole, roleName: configuredRole.name, ambiguousRoleIds: [] };
-      }
-    }
-
-    const matchingRoles = this.cachedValues(
-      (guild as { roles?: { cache?: unknown } }).roles?.cache
-    ).filter((role): role is Role => (role as Role | null)?.name === roleName);
-    return matchingRoles.length === 1
-      ? { role: matchingRoles[0], roleName, ambiguousRoleIds: [] }
-      : {
-          role: null,
-          roleName,
-          ambiguousRoleIds: matchingRoles.map((role) => role.id),
-        };
+    const explicit =
+      explicitCaseRole ??
+      (explicitCaseRoleId ? await this.fetchRole(guild, explicitCaseRoleId) : null);
+    const configured =
+      !explicitCaseRole && !explicitCaseRoleId && serverConfig.case_role_id
+        ? await this.fetchRole(guild, serverConfig.case_role_id)
+        : null;
+    const candidates = new Map(
+      this.cachedValues<Role>((guild as { roles?: { cache?: unknown } }).roles?.cache).map(
+        (role) => [role.id, role]
+      )
+    );
+    if (explicit) candidates.set(explicit.id, explicit);
+    if (configured) candidates.set(configured.id, configured);
+    if (explicitCaseRoleId && !explicit) candidates.delete(explicitCaseRoleId);
+    const selected = selectSetupCandidate({
+      explicitId: explicitCaseRole?.id ?? explicitCaseRoleId,
+      configuredId: configured?.id,
+      requestedName: requestedRoleName,
+      defaultName: DEFAULT_CASE_ROLE_NAME,
+      candidates: [...candidates.values()].map(({ id, name }) => ({ id, name })),
+    });
+    if (selected.kind === 'invalid')
+      return { invalidDetail: 'The selected case role no longer exists.' };
+    if (selected.kind === 'ambiguous')
+      return {
+        role: null,
+        roleName: requestedRoleName ?? DEFAULT_CASE_ROLE_NAME,
+        ambiguousRoleIds: selected.ids,
+      };
+    return {
+      role: selected.kind === 'reuse' ? (candidates.get(selected.id) ?? null) : null,
+      roleName: selected.name,
+      ambiguousRoleIds: [],
+    };
   }
 
   private async resolveVerificationChannelCandidate(
@@ -341,50 +370,41 @@ export class SetupProvisioningService {
     explicitChannelId: string | null,
     serverConfig: Server
   ): Promise<VerificationChannelCandidate> {
-    if (explicitChannel) {
-      return { channelId: explicitChannel.id, willSyncPermissions: true, ambiguousChannelIds: [] };
-    }
-    if (explicitChannelId) {
-      const fetchedChannel = await this.fetchVerificationChannel(guild, explicitChannelId);
-      return fetchedChannel?.type === ChannelType.GuildText
-        ? { channelId: explicitChannelId, willSyncPermissions: true, ambiguousChannelIds: [] }
-        : { invalidDetail: 'The selected verification channel is not an available text channel.' };
-    }
-
-    if (serverConfig.verification_channel_id) {
-      const configuredChannel = await this.fetchVerificationChannel(
-        guild,
-        serverConfig.verification_channel_id
-      );
-      if (configuredChannel?.type === ChannelType.GuildText) {
-        return {
-          channelId: serverConfig.verification_channel_id,
-          willSyncPermissions: true,
-          ambiguousChannelIds: [],
-        };
-      }
-    }
-
-    const matchingChannels = this.cachedValues(
-      (guild as { channels?: { cache?: unknown } }).channels?.cache
-    ).filter((channel): channel is TextChannel => {
-      const textChannel = channel as TextChannel | null;
-      return (
-        textChannel?.type === ChannelType.GuildText &&
-        textChannel.name === DEFAULT_VERIFICATION_CHANNEL_NAME
-      );
+    const explicit =
+      explicitChannel ??
+      (explicitChannelId ? await this.fetchVerificationChannel(guild, explicitChannelId) : null);
+    const configured =
+      !explicitChannel && !explicitChannelId && serverConfig.verification_channel_id
+        ? await this.fetchVerificationChannel(guild, serverConfig.verification_channel_id)
+        : null;
+    const candidates = new Map(
+      this.cachedValues<GuildBasedChannel>(
+        (guild as { channels?: { cache?: unknown } }).channels?.cache
+      )
+        .filter((c): c is TextChannel => c.type === ChannelType.GuildText)
+        .map((c) => [c.id, c])
+    );
+    if (explicit) candidates.set(explicit.id, explicit);
+    if (configured) candidates.set(configured.id, configured);
+    if (explicitChannelId && !explicit) candidates.delete(explicitChannelId);
+    const selected = selectSetupCandidate({
+      explicitId: explicitChannel?.id ?? explicitChannelId,
+      configuredId: configured?.id,
+      defaultName: DEFAULT_VERIFICATION_CHANNEL_NAME,
+      candidates: [...candidates.values()].map(({ id, name }) => ({ id, name })),
     });
-    return matchingChannels.length === 1
-      ? {
-          channelId: matchingChannels[0].id,
-          willSyncPermissions: true,
-          ambiguousChannelIds: [],
-        }
-      : {
-          channelId: null,
-          willSyncPermissions: false,
-          ambiguousChannelIds: matchingChannels.map((channel) => channel.id),
-        };
+    if (selected.kind === 'invalid')
+      return {
+        invalidDetail: 'The selected verification channel is not an available text channel.',
+      };
+    if (selected.kind === 'ambiguous')
+      return { channelId: null, willSyncPermissions: false, ambiguousChannelIds: selected.ids };
+    return {
+      channelId: selected.kind === 'reuse' ? selected.id : null,
+      channelName: selected.name,
+      willSyncPermissions: selected.kind === 'reuse',
+      ambiguousChannelIds: [],
+    };
   }
 
   private cachedValues<T>(cache: { values(): IterableIterator<T> } | unknown): T[] {

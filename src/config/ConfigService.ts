@@ -1,3 +1,11 @@
+import {
+  materializeSetupStoredChange,
+  normalizeHeuristicKeywords,
+  setupStateMatches,
+  parseSetupStoredRecord,
+  type SetupWritePrecondition,
+  type SetupStoredChange,
+} from '@drasil/application';
 import { injectable, inject } from 'inversify';
 import { Client, Role, TextChannel } from 'discord.js';
 import { z } from 'zod';
@@ -132,6 +140,13 @@ const HeuristicSettingsUpdateSchema = z
  * Interface for the ConfigService
  */
 export interface IConfigService {
+  findServerConfig(guildId: string): Promise<Server | null>;
+  updateSetupIfUnchanged(
+    guildId: string,
+    precondition: SetupWritePrecondition | undefined,
+    change: SetupStoredChange
+  ): Promise<Server | null>;
+
   /**
    * Initialize the configuration service
    * Loads all active servers into cache
@@ -246,29 +261,12 @@ export class ConfigService implements IConfigService {
     this.discordClient = discordClient;
 
     const globalSettings = globalConfig.getSettings();
-    const defaultKeywords = this.normalizeKeywords(globalSettings.defaultSuspiciousKeywords);
+    const defaultKeywords = normalizeHeuristicKeywords(globalSettings.defaultSuspiciousKeywords);
     this.defaultHeuristicSettings = this.freezeHeuristicSettings({
       messageThreshold: globalSettings.defaultServerSettings.messageThreshold,
       timeWindowMs: globalSettings.defaultServerSettings.messageTimeframe * 1000,
       suspiciousKeywords: defaultKeywords,
     });
-  }
-
-  private normalizeKeywords(keywords: readonly string[]): string[] {
-    const seen = new Set<string>();
-    const normalized: string[] = [];
-
-    for (const rawKeyword of keywords) {
-      const keyword = rawKeyword.trim().toLowerCase();
-      if (!keyword || seen.has(keyword)) {
-        continue;
-      }
-
-      seen.add(keyword);
-      normalized.push(keyword);
-    }
-
-    return normalized;
   }
 
   private freezeHeuristicSettings(settings: {
@@ -298,7 +296,7 @@ export class ConfigService implements IConfigService {
     return this.freezeHeuristicSettings({
       messageThreshold: parsed.data.heuristic_message_threshold,
       timeWindowMs: parsed.data.heuristic_message_timeframe_seconds * 1000,
-      suspiciousKeywords: this.normalizeKeywords(parsed.data.heuristic_suspicious_keywords),
+      suspiciousKeywords: normalizeHeuristicKeywords(parsed.data.heuristic_suspicious_keywords),
     });
   }
 
@@ -409,6 +407,52 @@ export class ConfigService implements IConfigService {
       .join('; ');
   }
 
+  public findServerConfig(guildId: string): Promise<Server | null> {
+    return this.serverRepository.findByGuildId(guildId);
+  }
+  public async updateSetupIfUnchanged(
+    guildId: string,
+    precondition: SetupWritePrecondition | undefined,
+    change: SetupStoredChange
+  ): Promise<Server | null> {
+    if (!process.env.DATABASE_URL) {
+      const cached = this.serverCache.get(guildId);
+      if (precondition && !cached) return null;
+      const current = cached ?? this.createDefaultConfig(guildId);
+      if (
+        precondition &&
+        !setupStateMatches(
+          parseSetupStoredRecord(current as unknown as Record<string, unknown>),
+          precondition
+        )
+      )
+        return null;
+      change = materializeSetupStoredChange(
+        parseSetupStoredRecord(current as unknown as Record<string, unknown>),
+        change
+      );
+      const settings = { ...current.settings, ...change.settings };
+      for (const key of change.resetSettings ?? []) delete settings[key];
+      const updated: Server = {
+        ...current,
+        ...Object.fromEntries(
+          Object.entries(change.columns ?? {}).filter(([, value]) => value !== undefined)
+        ),
+        settings,
+        updated_at: new Date().toISOString(),
+      };
+      this.cacheServerConfig(updated);
+      return updated;
+    }
+    const updated = await this.serverRepository.updateSetupIfUnchanged(
+      guildId,
+      precondition,
+      change
+    );
+    if (updated) this.cacheServerConfig(updated);
+    return updated;
+  }
+
   public getCachedServerConfig(guildId: string): Server | undefined {
     return this.serverCache.get(guildId);
   }
@@ -443,19 +487,14 @@ export class ConfigService implements IConfigService {
       throw new Error(this.formatZodError(parsed.error));
     }
 
-    const currentConfig = await this.getServerConfig(guildId);
-    const nextThreshold = parsed.data.messageThreshold ?? currentConfig.heuristic_message_threshold;
-    const nextTimeframeSeconds =
-      parsed.data.timeframeSeconds ?? currentConfig.heuristic_message_timeframe_seconds;
-    const nextKeywords =
-      parsed.data.suspiciousKeywords !== undefined
-        ? this.normalizeKeywords(parsed.data.suspiciousKeywords)
-        : this.normalizeKeywords(currentConfig.heuristic_suspicious_keywords);
-
-    await this.updateServerConfig(guildId, {
-      heuristic_message_threshold: nextThreshold,
-      heuristic_message_timeframe_seconds: nextTimeframeSeconds,
-      heuristic_suspicious_keywords: nextKeywords,
+    await this.getServerConfig(guildId);
+    await this.updateSetupIfUnchanged(guildId, undefined, {
+      normalizeHeuristicKeywords: true,
+      columns: {
+        heuristic_message_threshold: parsed.data.messageThreshold,
+        heuristic_message_timeframe_seconds: parsed.data.timeframeSeconds,
+        heuristic_suspicious_keywords: parsed.data.suspiciousKeywords,
+      },
     });
 
     return this.getCachedHeuristicSettings(guildId);
@@ -576,7 +615,7 @@ export class ConfigService implements IConfigService {
           settings: defaultConfig.settings,
         };
 
-        await this.serverRepository.upsertByGuildId(guildId, configForDb);
+        await this.serverRepository.createIfMissing(guildId, configForDb);
 
         const savedServer = await this.serverRepository.findByGuildId(guildId);
         if (savedServer) {
@@ -628,7 +667,7 @@ export class ConfigService implements IConfigService {
       this.serverCache.get(guildId) || (await this.createDefaultServerConfig(guildId));
     const updatedServer: Server = {
       ...currentConfig,
-      ...data,
+      ...Object.fromEntries(Object.entries(data).filter(([, value]) => value !== undefined)),
       updated_at: new Date().toISOString(),
     };
 

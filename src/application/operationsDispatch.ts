@@ -6,6 +6,12 @@ import type {
 } from '@drasil/application';
 import { requireOperationsOutcome } from './adapters/operations';
 export type QueuedOperationsOutcome = { readonly server_id: string } & (
+  | {
+      readonly action_type: 'audit_integrity';
+      readonly error_count: number;
+      readonly warning_count: number;
+      readonly checked_cases: number;
+    }
   | { readonly action_type: 'sync_moderation_queue'; readonly synced: true }
   | { readonly action_type: 'clear_moderation_queue'; readonly removed_count: number }
   | {
@@ -129,7 +135,15 @@ function projectOperationsOutcome(
       };
     }
     case 'audit_integrity':
-      throw new Error('Integrity audit executes directly.');
+      return {
+        ...base,
+        action_type: outcome.kind,
+        error_count: outcome.report.findings.filter((f) => f.severity === 'error').length,
+        warning_count: outcome.report.findings.filter((f) => f.severity === 'warning').length,
+        checked_cases:
+          outcome.report.candidateCounts.pendingCases +
+          outcome.report.candidateCounts.recentResolvedCases,
+      };
     default: {
       const exhaustive: never = outcome;
       return exhaustive;

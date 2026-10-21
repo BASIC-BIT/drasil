@@ -21,6 +21,7 @@ export type HandlerOverrides = Partial<{
   banUser: jest.Mock;
   banUserById: jest.Mock;
   updateSetupConfiguration: jest.Mock;
+  updateSetupIfUnchanged: jest.Mock;
   updateServerConfig: jest.Mock;
   updateServerSettings: jest.Mock;
   getCachedServerConfig: jest.Mock;
@@ -60,6 +61,8 @@ export const buildHandler = (overrides: HandlerOverrides = {}) => {
     jest.fn().mockResolvedValue({});
   const configService = {
     updateSetupConfiguration,
+    updateSetupIfUnchanged:
+      overrides.updateSetupIfUnchanged ?? jest.fn().mockResolvedValue({ settings: {} }),
     updateServerConfig:
       overrides.updateServerConfig ?? jest.fn().mockResolvedValue({ settings: {} }),
     updateServerSettings:

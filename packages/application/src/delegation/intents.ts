@@ -1,3 +1,4 @@
+import { approvedResetDelivery } from '../setup/resolution';
 import { validateReportCaseTerminal } from '../reports/terminal';
 import { createHash, randomBytes } from 'node:crypto';
 import { workflowDefinitions, type HumanCommand } from './commands';
@@ -195,7 +196,9 @@ export function createIntentService(deps: {
           ? delivery.command.kind === 'open_case_from_observed_detection' &&
             delivery.command.reportId === command.reportId &&
             delivery.command.origin === undefined
-          : delivery.commandDigest === canonicalDigest(command);
+          : command.kind === 'reset_heuristics'
+            ? approvedResetDelivery(command, delivery.command, resolution.preconditions)
+            : delivery.commandDigest === canonicalDigest(command);
       if (!matches) throw new IntentError('delivery_mismatch');
     }
     if (

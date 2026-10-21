@@ -283,6 +283,10 @@ export async function fetchDiscordGuildMember(
 ): Promise<DiscordGuildMember> {
   return fetchBotJson(`/guilds/${guildId}/members/${userId}`);
 }
+export async function fetchDiscordGuildChannels(guildId: string): Promise<DiscordChannel[]> {
+  assertDiscordId(guildId);
+  return fetchBotJson(`/guilds/${guildId}/channels`);
+}
 export async function fetchDiscordGuildRoles(guildId: string): Promise<DiscordRole[]> {
   return fetchBotJson(`/guilds/${guildId}/roles`);
 }

@@ -1,5 +1,9 @@
 import type { ActionContext } from '../context';
-import { queuedSetupCommandSchema, type QueuedSetupCommand } from '../setup/commands';
+import {
+  queuedSetupCommandSchema,
+  isQueuedSetupKind,
+  type QueuedSetupCommand,
+} from '../setup/commands';
 import type { QueuedRow } from './decode';
 import type { EnqueueInput } from './receipt';
 export function encodeSetupAction(
@@ -14,6 +18,16 @@ export function encodeSetupAction(
     serverId: context.guildId,
     targetUserId: null,
   };
+  if (
+    context.source === 'mcp' ||
+    (command.kind !== 'upsert_report_instructions' &&
+      command.kind !== 'complete_setup_verification')
+  )
+    return {
+      ...base,
+      idempotencyKey: `${context.source}:setup:${command.kind}:${context.guildId}:${context.requestId}`,
+      metadata: { setup_command: command, requested_surface: context.source },
+    };
   if (command.kind === 'upsert_report_instructions')
     return {
       ...base,
@@ -56,6 +70,12 @@ export function encodeSetupAction(
 }
 export function decodeSetupCommand(row: QueuedRow): QueuedSetupCommand | null {
   const metadata = row.metadata ?? {};
+  if (metadata.setup_command !== undefined) {
+    const command = queuedSetupCommandSchema.parse(metadata.setup_command);
+    if (!isQueuedSetupKind(row.action_type) || command.kind !== row.action_type)
+      throw new Error('Setup command binding mismatch.');
+    return command;
+  }
   if (row.action_type === 'upsert_report_instructions')
     return queuedSetupCommandSchema.parse({
       kind: row.action_type,

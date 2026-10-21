@@ -65,3 +65,8 @@ export * from './reports/delegation';
 export * from './reports/terminal';
 export * from './reports/reviewReference';
 export * from './reports/resolution';
+export * from './setup/persistence';
+export * from './setup/defaults';
+export * from './setup/resolution';
+export * from './setup/selection';
+export * from './setup/resources';

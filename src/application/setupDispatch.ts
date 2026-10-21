@@ -6,6 +6,11 @@ import type {
 import { requireSetupOutcome, type BotSetupRuntime } from './adapters/setup';
 export type QueuedSetupOutcome =
   | {
+      readonly action_type: QueuedSetupCommand['kind'];
+      readonly status: 'completed' | 'uncertain';
+      readonly action?: string;
+    }
+  | {
       readonly action_type: 'upsert_report_instructions';
       readonly action: string;
       readonly channel_id: string;
@@ -42,10 +47,18 @@ export async function dispatchSetupAction(
       message_id: outcome.result.messageId,
       server_id: context.guildId,
     };
-  if (outcome.kind !== 'complete_setup_verification' || command.kind !== outcome.kind)
-    throw new Error('Setup receipt outcome mismatch.');
+  if (outcome.kind !== 'complete_setup_verification')
+    return {
+      action_type: command.kind,
+      status: 'completed',
+      ...('action' in outcome ? { action: outcome.action } : {}),
+    };
+  if (command.kind !== outcome.kind) throw new Error('Setup receipt outcome mismatch.');
   const result = outcome.result;
-  if (result.status !== 'completed') throw new Error(describeSetupFailure(result));
+  if (result.status !== 'completed') {
+    if (context.source === 'mcp') return { action_type: command.kind, status: 'uncertain' };
+    throw new Error(describeSetupFailure(result));
+  }
   return {
     action_type: outcome.kind,
     admin_channel_id: result.adminChannelId,

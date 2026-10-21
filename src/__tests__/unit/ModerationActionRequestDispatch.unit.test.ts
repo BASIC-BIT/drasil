@@ -16,7 +16,7 @@ import {
   type ModerationActionRequest,
 } from '../../repositories/types';
 
-// Stored-row fixtures are independent of the encoder. All forty shipped enum values
+// Stored-row fixtures are independent of the encoder. All persisted enum values
 // must decode, reach their owning family, and retain the receipt/storage projection.
 interface Fixture {
   family:
@@ -80,6 +80,77 @@ const captchaReceipt = {
   verification_event_id: 'case',
 };
 const fixtures = {
+  update_settings: {
+    family: 'setupRuntime',
+    target: null,
+    metadata: {
+      setup_command: {
+        kind: 'update_settings',
+        section: 'caseStaff',
+        changes: { case_responder_role_ids: [] },
+      },
+    },
+    outcome: {},
+  },
+  update_heuristics: {
+    family: 'setupRuntime',
+    target: null,
+    metadata: { setup_command: { kind: 'update_heuristics', changes: { messageThreshold: 8 } } },
+    outcome: {},
+  },
+  reset_heuristics: {
+    family: 'setupRuntime',
+    target: null,
+    metadata: { setup_command: { kind: 'reset_heuristics', scope: 'keywords' } },
+    outcome: {},
+  },
+  lockdown_allow_add: {
+    family: 'setupRuntime',
+    target: null,
+    metadata: {
+      setup_command: { kind: 'lockdown_allow_add', targetKind: 'category', targetId: 'category' },
+    },
+    outcome: {},
+  },
+  lockdown_allow_remove: {
+    family: 'setupRuntime',
+    target: null,
+    metadata: {
+      setup_command: { kind: 'lockdown_allow_remove', targetKind: 'channel', targetId: 'channel' },
+    },
+    outcome: {},
+  },
+  disable_lockdown: {
+    family: 'setupRuntime',
+    target: null,
+    metadata: { setup_command: { kind: 'disable_lockdown' } },
+    outcome: {},
+  },
+  clear_report_instructions: {
+    family: 'setupRuntime',
+    target: null,
+    metadata: { setup_command: { kind: 'clear_report_instructions' } },
+    outcome: {},
+  },
+  audit_integrity: {
+    family: 'operations',
+    target: null,
+    metadata: {
+      operation_command: {
+        kind: 'audit_integrity',
+        scope: 'all',
+        days: 30,
+        limit: 100,
+        userId: null,
+      },
+    },
+    outcome: {
+      report: {
+        findings: [{ severity: 'warning' }],
+        candidateCounts: { pendingCases: 2, recentResolvedCases: 3 },
+      },
+    },
+  },
   open_case_from_observed_detection: {
     family: 'cases',
     metadata: { inbox_action: 'open_case', reason: null, requested_surface: 'web' },
@@ -321,8 +392,8 @@ const fixtures = {
 const kinds = Object.keys(fixtures) as (keyof typeof fixtures)[];
 it('has exact schema, handler and shipped database enum coverage', () => {
   const expected = Object.values(ModerationActionRequestType).sort();
-  expect(expected).toHaveLength(47);
-  expect(kinds).toHaveLength(40);
+  expect(expected).toHaveLength(55);
+  expect(kinds).toHaveLength(48);
   expect(Object.keys(queuedCommandSchemas).sort()).toEqual(expected);
   expect(Object.keys(queuedActionHandlers).sort()).toEqual(expected);
   expect(
@@ -342,19 +413,21 @@ it.each(kinds)('decodes and dispatches the shipped %s row with its receipt', asy
   jest.useFakeTimers().setSystemTime(new Date('2026-10-20T00:00:00.000Z'));
   try {
     const fixture: Fixture = fixtures[kind];
-    const request = mock<ModerationActionRequest>({
-      id: 'request',
-      action_type: kind as ModerationActionRequestType,
-      server_id: 'guild',
-      actor_surface: fixture.source ?? 'web',
-      actor_id: fixture.source === 'captcha' ? 'drasil:captcha' : 'moderator',
-      target_user_id: fixture.target === null ? null : 'target',
-      detection_event_id: 'detection',
-      verification_event_id: 'case',
-      report_intake_id: kind === 'close_report_intake' ? 'report' : null,
-      message_deletion_job_id: 'job',
+    const request = {
+      ...mock<ModerationActionRequest>({
+        id: 'request',
+        action_type: kind as ModerationActionRequestType,
+        server_id: 'guild',
+        actor_surface: fixture.source ?? 'web',
+        actor_id: fixture.source === 'captcha' ? 'drasil:captcha' : 'moderator',
+        target_user_id: fixture.target === null ? null : 'target',
+        detection_event_id: 'detection',
+        verification_event_id: 'case',
+        report_intake_id: kind === 'close_report_intake' ? 'report' : null,
+        message_deletion_job_id: 'job',
+      }),
       metadata: fixture.metadata ?? {},
-    });
+    };
     const action = decodeQueuedAction(request);
     expect(queuedCommandSchemas[kind].safeParse(action.command).success).toBe(true);
     expect(JSON.stringify(action)).not.toContain('private');

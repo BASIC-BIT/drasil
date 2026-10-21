@@ -291,6 +291,14 @@ export enum ModerationQueueItemType {
 }
 
 export enum ModerationActionRequestType {
+  AUDIT_INTEGRITY = 'audit_integrity',
+  UPDATE_SETTINGS = 'update_settings',
+  UPDATE_HEURISTICS = 'update_heuristics',
+  RESET_HEURISTICS = 'reset_heuristics',
+  LOCKDOWN_ALLOW_ADD = 'lockdown_allow_add',
+  LOCKDOWN_ALLOW_REMOVE = 'lockdown_allow_remove',
+  DISABLE_LOCKDOWN = 'disable_lockdown',
+  CLEAR_REPORT_INSTRUCTIONS = 'clear_report_instructions',
   BAN_USER = 'ban_user',
   KICK_USER = 'kick_user',
   OPEN_CASE_FROM_OBSERVED_DETECTION = 'open_case_from_observed_detection',

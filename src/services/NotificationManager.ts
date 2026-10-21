@@ -73,9 +73,12 @@ export type CaptchaAttentionReason =
   | 'evidence_only_pass'
   | 'automatic_resolution_held';
 
-/**
- * Interface for NotificationManager service
- */
+/** Delegated setup supplies its resolved choice and exact prior provenance; native callers omit it. */
+export interface BoundVerificationSetup {
+  readonly choice: { readonly kind: 'create' } | { readonly kind: 'reuse'; readonly id: string };
+  readonly previousSyncState: VerificationChannelPermissionSyncState | null;
+}
+
 export interface INotificationManager {
   /**
    * Creates or updates a notification about a suspicious user
@@ -126,7 +129,8 @@ export interface INotificationManager {
       snapshot: VerificationPermissionSnapshot,
       state: VerificationChannelPermissionSyncState
     ) => void | Promise<void>,
-    previousSyncStateOverride?: VerificationChannelPermissionSyncState
+    previousSyncStateOverride?: VerificationChannelPermissionSyncState,
+    binding?: BoundVerificationSetup
   ): Promise<string | null>;
   restoreVerificationChannelPermissions?(
     guild: Guild,
@@ -965,7 +969,8 @@ export class NotificationManager implements INotificationManager {
       snapshot: VerificationPermissionSnapshot,
       state: VerificationChannelPermissionSyncState
     ) => void | Promise<void>,
-    previousSyncStateOverride?: VerificationChannelPermissionSyncState
+    previousSyncStateOverride?: VerificationChannelPermissionSyncState,
+    binding?: BoundVerificationSetup
   ): Promise<string | null> {
     if (!caseRoleId) {
       console.error('Case role ID is required to set up verification channel');
@@ -974,17 +979,34 @@ export class NotificationManager implements INotificationManager {
 
     let createdVerificationChannel: GuildBasedChannel | null = null;
     try {
-      const serverConfig = await this.configService.getServerConfig(guild.id);
-      const previousSyncState =
-        previousSyncStateOverride ?? serverConfig.settings.verification_channel_permission_sync;
+      if (binding && persistConfig)
+        throw new Error('Bound verification setup must persist through its scoped workflow.');
+      const serverConfig = binding ? null : await this.configService.getServerConfig(guild.id);
+      const previousSyncState = binding
+        ? (binding.previousSyncState ?? undefined)
+        : (previousSyncStateOverride ??
+          serverConfig?.settings.verification_channel_permission_sync);
       const permissionOverwrites = this.buildVerificationChannelPermissionOverwrites(
         guild,
         caseRoleId
       );
-      const configuredVerificationChannel = await this.findConfiguredVerificationChannel(
-        guild,
-        configuredVerificationChannelId
-      );
+      let configuredVerificationChannel: TextChannel | null;
+      if (binding) {
+        const channel =
+          binding.choice.kind === 'reuse'
+            ? await guild.channels.fetch(binding.choice.id, { force: true })
+            : null;
+        if (
+          binding.choice.kind === 'reuse' &&
+          (!channel || channel.type !== ChannelType.GuildText || channel.guildId !== guild.id)
+        )
+          return null;
+        configuredVerificationChannel = channel?.type === ChannelType.GuildText ? channel : null;
+      } else
+        configuredVerificationChannel = await this.findConfiguredVerificationChannel(
+          guild,
+          configuredVerificationChannelId
+        );
       if (configuredVerificationChannel) {
         const snapshot = this.snapshotPermissionOverwrites(configuredVerificationChannel);
         const nextSyncState = this.buildVerificationPermissionSyncState(

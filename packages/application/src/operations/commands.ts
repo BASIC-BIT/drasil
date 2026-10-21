@@ -3,12 +3,22 @@ import { z } from 'zod';
 const id = z.string().min(1);
 const days = z.number().int().min(1).max(365);
 export const queuedOperationCommandSchema = z.discriminatedUnion('kind', [
+  z
+    .object({
+      kind: z.literal('audit_integrity'),
+      scope: z.enum(['all', 'cases', 'case_role', 'queue']),
+      days,
+      limit: z.number().int().min(1).max(250),
+      userId: id.nullable(),
+    })
+    .strict(),
+
   z.object({ kind: z.literal('sync_moderation_queue') }).strict(),
   z.object({ kind: z.literal('clear_moderation_queue') }).strict(),
   z
     .object({
       kind: z.literal('close_resolved_case_threads'),
-      intent: z.literal('administrator_operation'),
+      intent: z.enum(['administrator_operation', 'guild_audit']),
       execute: z.boolean(),
       days,
       limit: z.number().int().min(1).max(500),
@@ -29,32 +39,12 @@ export const queuedOperationCommandSchema = z.discriminatedUnion('kind', [
     })
     .strict(),
 ]);
-export const operationCommandSchema = z.union([
-  queuedOperationCommandSchema,
-  z
-    .object({
-      kind: z.literal('close_resolved_case_threads'),
-      intent: z.literal('guild_audit'),
-      execute: z.boolean(),
-      days,
-      limit: z.number().int().min(1).max(500),
-      userId: id.nullable(),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal('audit_integrity'),
-      scope: z.enum(['all', 'cases', 'case_role', 'queue']),
-      days,
-      limit: z.number().int().min(1).max(250),
-      userId: id.nullable(),
-    })
-    .strict(),
-]);
+export const operationCommandSchema = queuedOperationCommandSchema;
 export type QueuedOperationCommand = z.infer<typeof queuedOperationCommandSchema>;
 export type OperationCommand = z.infer<typeof operationCommandSchema>;
 export function isQueuedOperationKind(kind: string): kind is QueuedOperationCommand['kind'] {
   return [
+    'audit_integrity',
     'sync_moderation_queue',
     'clear_moderation_queue',
     'close_resolved_case_threads',
@@ -67,8 +57,5 @@ export function isQueuedOperationKind(kind: string): kind is QueuedOperationComm
 export function isQueuedOperationCommand(
   command: QueuedCommand | OperationCommand
 ): command is QueuedOperationCommand {
-  return (
-    isQueuedOperationKind(command.kind) &&
-    (command.kind !== 'close_resolved_case_threads' || command.intent === 'administrator_operation')
-  );
+  return isQueuedOperationKind(command.kind);
 }

@@ -1,5 +1,18 @@
 import {
+  createApprovedSetupConfiguration,
+  type ApprovedSetupConfiguration,
+  type SetupWorkflowConfig,
+} from './approvedSetup';
+import {
   ActionDeniedError,
+  setupStoredChange,
+  setupResourceReferences,
+  validateSetupResourceReferences,
+  canonicalDigest,
+  selectSetupProvisioning,
+  parseSetupStoredRecord,
+  type SetupProvisioningSelection,
+  type ExecutionRecord,
   createSetupActions,
   setupCaptchaProviderIssues,
   setupCommandSchema,
@@ -22,11 +35,17 @@ import {
 import { ChannelType, type Client, type TextChannel, type Guild, type Role } from 'discord.js';
 import type { IConfigService } from '../../config/ConfigService';
 import { globalConfig } from '../../config/GlobalConfig';
-import type { INotificationManager } from '../../services/NotificationManager';
+import type {
+  INotificationManager,
+  BoundVerificationSetup,
+} from '../../services/NotificationManager';
 import type { IProductAnalyticsService } from '../../services/ProductAnalyticsService';
 import type { ISetupDiagnosticsService } from '../../services/SetupDiagnosticsService';
 import { SetupWorkflowService } from '../../services/SetupWorkflowService';
-import { SetupProvisioningService } from '../../services/SetupProvisioningService';
+import {
+  SetupProvisioningService,
+  runSerializedGuildSetup,
+} from '../../services/SetupProvisioningService';
 import {
   ReportInstructionsManager,
   ReportInstructionsRollbackRequiredError,
@@ -67,6 +86,7 @@ export type SetupExecution =
 export interface BotSetupRuntime {
   readonly actions: SetupActions;
   readonly confirmations: ReturnType<typeof createCaseConfirmationStore>;
+  forExecution(execution: ExecutionRecord): BotSetupRuntime;
   execute(
     context: ActionContext,
     command: SetupCommand,
@@ -119,20 +139,58 @@ function projectServer(server: Server): SetupConfigurationState {
     }),
   };
 }
-function createConfiguration(config: IConfigService): SetupDependencies['configuration'] {
+function createConfiguration(
+  config: IConfigService,
+  command: SetupCommand,
+  approved?: ApprovedSetupConfiguration
+): SetupDependencies['configuration'] {
   return {
     async loadFresh(guildId): Promise<SetupConfigurationState> {
+      if (approved) return projectServer(await approved.read(guildId));
       return projectServer(
         await config.getServerConfig(guildId, { forceRefresh: true, failOnReadError: true })
       );
     },
     async save(context, change): Promise<SetupConfigurationState> {
+      if (command.kind === 'lockdown_allow_add' || command.kind === 'lockdown_allow_remove') {
+        const edit = {
+          lockdownAllowlist: {
+            operation:
+              command.kind === 'lockdown_allow_add' ? ('add' as const) : ('remove' as const),
+            targetKind: command.targetKind,
+            targetId: command.targetId,
+          },
+        };
+        const saved = approved
+          ? await approved.save(context.guildId, edit)
+          : await config.updateSetupIfUnchanged(context.guildId, undefined, edit);
+        if (!saved) throw new Error('Server configuration is unavailable.');
+        return projectServer(saved);
+      }
+      if (approved)
+        return projectServer(await approved.save(context.guildId, setupStoredChange(change)));
       return saveConfiguration(config, context, change);
     },
-    updateHeuristics(context, changes): Promise<SetupHeuristics> {
+    async updateHeuristics(context, changes): Promise<SetupHeuristics> {
+      if (approved) {
+        const updated = await approved.save(context.guildId, {
+          normalizeHeuristicKeywords: true,
+          columns: {
+            heuristic_message_threshold: changes.messageThreshold,
+            heuristic_message_timeframe_seconds: changes.timeframeSeconds,
+            heuristic_suspicious_keywords: changes.suspiciousKeywords,
+          },
+        });
+        return {
+          messageThreshold: updated.heuristic_message_threshold,
+          timeWindowMs: updated.heuristic_message_timeframe_seconds * 1000,
+          suspiciousKeywords: updated.heuristic_suspicious_keywords,
+        };
+      }
       return config.updateHeuristicSettings(context.guildId, changes);
     },
     resetHeuristics(context, scope): Promise<SetupHeuristics> {
+      if (approved) throw new ActionDeniedError('frozen_reset_delivery_required');
       return scope === 'keywords'
         ? config.updateHeuristicSettings(context.guildId, {
             suspiciousKeywords: [...globalConfig.getSettings().defaultSuspiciousKeywords],
@@ -146,48 +204,26 @@ async function saveConfiguration(
   context: ActionContext,
   change: SetupPersistenceChange
 ): Promise<SetupConfigurationState> {
-  if (change.resetSettings?.length) {
-    const current = await config.getServerConfig(context.guildId, {
-      forceRefresh: true,
-      failOnReadError: true,
-    });
-    const settings = { ...current.settings, ...change.settings };
-    for (const key of change.resetSettings) delete settings[key];
-    return projectServer(await config.updateServerConfig(context.guildId, { settings }));
-  }
-  if (!change.columns)
-    return projectServer(await config.updateServerSettings(context.guildId, change.settings));
-  const columns = change.columns;
-  const data = Object.fromEntries(
-    Object.entries({
-      case_role_id: columns.caseRoleId,
-      admin_channel_id: columns.adminChannelId,
-      verification_channel_id: columns.verificationChannelId,
-      admin_notification_role_id: columns.adminNotificationRoleId,
-    }).filter(([, value]) => value !== undefined)
-  );
-  let updated = Object.keys(data).length
-    ? await config.updateServerConfig(context.guildId, data)
-    : null;
+  // The native static JSON merge is already atomic; only derived/reset/column edits need the new port.
   if (
-    columns.heuristicMessageThreshold !== undefined ||
-    columns.heuristicMessageTimeframeSeconds !== undefined ||
-    columns.heuristicSuspiciousKeywords !== undefined
-  ) {
-    await config.updateHeuristicSettings(context.guildId, {
-      messageThreshold: columns.heuristicMessageThreshold,
-      timeframeSeconds: columns.heuristicMessageTimeframeSeconds,
-      suspiciousKeywords: columns.heuristicSuspiciousKeywords,
-    });
-    updated = null;
-  }
-  if (Object.keys(change.settings).length)
+    !change.columns &&
+    !change.resetSettings?.length &&
+    !('captcha_mode' in change.settings && change.settings.captcha_mode === 'off')
+  )
     return projectServer(await config.updateServerSettings(context.guildId, change.settings));
-  return projectServer(
-    updated ??
-      (await config.getServerConfig(context.guildId, { forceRefresh: true, failOnReadError: true }))
-  );
+  const stored = setupStoredChange(change);
+  const heuristicsChanged =
+    stored.columns?.heuristic_suspicious_keywords !== undefined ||
+    stored.columns?.heuristic_message_threshold !== undefined ||
+    stored.columns?.heuristic_message_timeframe_seconds !== undefined;
+  const updated = await config.updateSetupIfUnchanged(context.guildId, undefined, {
+    ...stored,
+    ...(heuristicsChanged ? { normalizeHeuristicKeywords: true as const } : {}),
+  });
+  if (!updated) throw new Error('Server configuration is unavailable.');
+  return projectServer(updated);
 }
+
 export async function fetchSetupTextChannel(
   client: Client,
   guildId: string,
@@ -212,11 +248,23 @@ function createSetupAuthority(client: Client): AuthorityPort {
 }
 export function createBotSetupRuntime(
   deps: BotSetupDependencies,
-  authority: AuthorityPort = createSetupAuthority(deps.client)
+  authority: AuthorityPort = createSetupAuthority(deps.client),
+  approved?: ApprovedSetupConfiguration,
+  expectedSelection?: SetupProvisioningSelection
 ): BotSetupRuntime {
   const runtimeConfirmations = createCaseConfirmationStore();
   const runtime: BotSetupRuntime = {
     confirmations: runtimeConfirmations,
+    forExecution(execution) {
+      if (execution.preconditions.kind !== 'setup')
+        throw new ActionDeniedError('setup_preconditions_required');
+      return createBotSetupRuntime(
+        deps,
+        authority,
+        createApprovedSetupConfiguration(deps.configService, execution.preconditions),
+        execution.preconditions.provisioning
+      );
+    },
     actions: {
       execute(context, command) {
         return runtime.execute(context, command, { kind: 'configuration' });
@@ -237,14 +285,30 @@ export function createBotSetupRuntime(
         if (command.kind === 'upsert_report_instructions' && command.repost)
           confirmations.recordVerified(context, setupConfirmationCommand(context, command));
       }
-      const panels = new ReportInstructionsManager(deps.client, deps.configService);
+      if (approved) {
+        await approved.read(context.guildId);
+        const references = setupResourceReferences(command);
+        if (references.length) {
+          const guild = await deps.client.guilds.fetch(context.guildId);
+          const roles = await guild.roles.fetch();
+          const channels = await guild.channels.fetch();
+          validateSetupResourceReferences(references, {
+            roles: [...roles.values()].map(({ id, name }) => ({ id, name })),
+            channels: [...channels.values()]
+              .filter((channel): channel is NonNullable<typeof channel> => channel !== null)
+              .map(({ id, name, type }) => ({ id, name, type })),
+          });
+        }
+      }
+      const workflowConfig = approved?.config ?? deps.configService;
+      const panels = new ReportInstructionsManager(deps.client, workflowConfig);
       return createSetupActions({
         authority,
         confirmations:
           execution.kind === 'queued'
             ? confirmations.confirmations
             : runtimeConfirmations.confirmations,
-        configuration: createConfiguration(deps.configService),
+        configuration: createConfiguration(deps.configService, command, approved),
         provider: {
           isConfigured: () =>
             setupCaptchaProviderIssues({
@@ -259,6 +323,7 @@ export function createBotSetupRuntime(
         },
         panels: {
           async upsert(actionContext, panel) {
+            approved?.startEffects();
             return panels.upsertReportInstructionsMessage(
               actionContext.guildId,
               await fetchSetupTextChannel(
@@ -277,12 +342,21 @@ export function createBotSetupRuntime(
             );
           },
           async clear(actionContext) {
+            approved?.startEffects();
             return panels.clearReportInstructions(actionContext.guildId);
           },
         },
         provisioning: {
           complete(actionContext, setup) {
-            return completeSetup(deps, actionContext, setup, execution);
+            return completeSetup(
+              deps,
+              actionContext,
+              setup,
+              execution,
+              workflowConfig,
+              approved,
+              expectedSelection
+            );
           },
         },
       }).execute(context, command);
@@ -345,14 +419,17 @@ async function completeSetup(
   deps: BotSetupDependencies,
   context: ActionContext,
   command: Extract<SetupCommand, { kind: 'complete_setup_verification' }>,
-  execution: SetupExecution
+  execution: SetupExecution,
+  config: SetupWorkflowConfig,
+  approved?: ApprovedSetupConfiguration,
+  expectedSelection?: SetupProvisioningSelection
 ): Promise<SetupProvisioningOutcome> {
   if (execution.kind === 'configuration')
     throw new Error('Provisioning requires an execution envelope.');
   const guild =
     execution.kind === 'direct' ? execution.guild : await deps.client.guilds.fetch(context.guildId);
   const workflow = new SetupWorkflowService(
-    deps.configService,
+    config,
     deps.notificationManager,
     deps.productAnalyticsService,
     deps.setupDiagnosticsService
@@ -364,18 +441,85 @@ async function completeSetup(
       command.adminChannelId,
       'Admin channel'
     );
+  const refreshCandidates = async (): Promise<void> => {
+    await guild.roles.fetch();
+    await guild.channels.fetch();
+  };
+  const assertSelection = async (
+    selection: SetupProvisioningSelection,
+    startEffects = true
+  ): Promise<void> => {
+    if (!expectedSelection || canonicalDigest(selection) !== canonicalDigest(expectedSelection))
+      throw new ActionDeniedError('stale_state');
+    await approved?.read(context.guildId);
+    if (startEffects) approved?.startEffects();
+  };
+  const revalidateSelection = async (): Promise<void> => {
+    await refreshCandidates();
+    if (!approved) return;
+    const state = parseSetupStoredRecord(
+      (await approved.read(context.guildId)) as unknown as Record<string, unknown>
+    );
+    await assertSelection(
+      selectSetupProvisioning(state, command, {
+        roles: [...guild.roles.cache.values()].map(({ id, name }) => ({ id, name })),
+        channels: [...guild.channels.cache.values()].map(({ id, name, type }) => ({
+          id,
+          name,
+          type,
+        })),
+      }),
+      false
+    );
+  };
   if (command.mode === 'verification_modal') {
-    const role = command.caseRoleId ? await guild.roles.fetch(command.caseRoleId) : null;
-    if (!role) return { status: 'invalid_selection', detail: 'Case role no longer exists.' };
-    return workflow.completeSetup({
-      guild,
-      guildId: context.guildId,
-      caseRole: role,
-      adminChannelId: command.adminChannelId,
-      initialVerificationChannelId: command.verificationChannelId ?? null,
-      candidateVerificationChannelId: command.verificationChannelId ?? null,
-      reportInstructionsChannelId: null,
-    });
+    const finish = async (): Promise<SetupProvisioningOutcome> => {
+      let verificationBinding: BoundVerificationSetup | undefined;
+      if (approved) {
+        await refreshCandidates();
+        const state = parseSetupStoredRecord(
+          (await approved.read(context.guildId)) as unknown as Record<string, unknown>
+        );
+        await assertSelection(
+          selectSetupProvisioning(state, command, {
+            roles: [...guild.roles.cache.values()].map(({ id, name }) => ({ id, name })),
+            channels: [...guild.channels.cache.values()].map(({ id, name, type }) => ({
+              id,
+              name,
+              type,
+            })),
+          })
+        );
+        if (!expectedSelection) throw new ActionDeniedError('setup_preconditions_required');
+        const choice = expectedSelection.verification;
+        if (choice.kind !== 'reuse' && choice.kind !== 'create')
+          throw new ActionDeniedError('invalid_selection');
+        verificationBinding = {
+          choice,
+          previousSyncState:
+            state.settings.verification_channel_permission_sync == null
+              ? null
+              : permissionSyncSchema.parse(state.settings.verification_channel_permission_sync),
+        };
+      }
+      const role = command.caseRoleId ? await guild.roles.fetch(command.caseRoleId) : null;
+      if (!role) return { status: 'invalid_selection', detail: 'Case role no longer exists.' };
+      return workflow.completeSetup({
+        guild,
+        guildId: context.guildId,
+        caseRole: role,
+        adminChannelId: command.adminChannelId,
+        initialVerificationChannelId: command.verificationChannelId ?? null,
+        candidateVerificationChannelId:
+          command.verificationChannelId ??
+          (approved && expectedSelection?.verification.kind === 'reuse'
+            ? expectedSelection.verification.id
+            : null),
+        reportInstructionsChannelId: null,
+        verificationBinding,
+      });
+    };
+    return approved ? runSerializedGuildSetup(context.guildId, finish) : finish();
   }
   const publication: { action: string | null; messageId: string | null; error: string | null } = {
     action: null,
@@ -383,12 +527,15 @@ async function completeSetup(
     error: null,
   };
   const result = await new SetupProvisioningService(
-    deps.configService,
+    config,
     deps.setupDiagnosticsService,
     workflow
   ).provision({
     guild,
     ...command,
+    ...(approved
+      ? { beforeSelection: revalidateSelection, assertSelection, bindVerificationSelection: true }
+      : {}),
     ...(execution.kind === 'direct'
       ? { caseRole: execution.caseRole, verificationChannel: execution.verificationChannel }
       : {}),
@@ -402,7 +549,7 @@ async function completeSetup(
       if (execution.kind === 'direct' && !execution.publishPanel) return;
       if (!command.reportInstructionsChannelId && !command.onboardingWizard) return;
       try {
-        const manager = new ReportInstructionsManager(deps.client, deps.configService);
+        const manager = new ReportInstructionsManager(deps.client, config);
         const panel = command.reportInstructionsChannelId
           ? await manager.upsertReportInstructionsMessage(
               context.guildId,

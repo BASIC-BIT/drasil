@@ -20,6 +20,12 @@ export function encodeOperationAction(
     idempotencyKey: `${context.source}:operation:${command.kind}:${context.guildId}:${context.requestId}`,
     metadata: {
       operation_action: command.kind,
+      ...(context.source === 'mcp' ||
+      command.kind === 'audit_integrity' ||
+      (command.kind === 'close_resolved_case_threads' && command.intent === 'guild_audit')
+        ? { operation_command: command }
+        : {}),
+      ...('scope' in command ? { scope: command.scope } : {}),
       requested_surface: context.source,
       ...('days' in command ? { days: command.days } : {}),
       ...('execute' in command ? { execute: command.execute } : {}),
@@ -36,8 +42,21 @@ export function encodeOperationAction(
 export function decodeOperationCommand(row: QueuedRow): QueuedOperationCommand | null {
   if (!isQueuedOperationKind(row.action_type)) return null;
   const metadata = row.metadata ?? {};
+  if (metadata.operation_command !== undefined) {
+    const command = queuedOperationCommandSchema.parse(metadata.operation_command);
+    if (command.kind !== row.action_type) throw new Error('Operation command binding mismatch.');
+    return command;
+  }
   const base = { kind: row.action_type };
   switch (row.action_type) {
+    case 'audit_integrity':
+      return queuedOperationCommandSchema.parse({
+        ...base,
+        scope: metadata.scope,
+        days: metadata.days,
+        limit: metadata.limit,
+        userId: metadata.user_id ?? null,
+      });
     case 'close_resolved_case_threads':
       return queuedOperationCommandSchema.parse({
         ...base,

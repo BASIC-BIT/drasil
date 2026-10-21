@@ -634,6 +634,14 @@ enum moderation_queue_item_type {
 }
 
 enum moderation_action_request_type {
+  audit_integrity
+  update_settings
+  update_heuristics
+  reset_heuristics
+  lockdown_allow_add
+  lockdown_allow_remove
+  disable_lockdown
+  clear_report_instructions
   submit_message_report
   confirm_intake_candidate
   reject_intake_candidates

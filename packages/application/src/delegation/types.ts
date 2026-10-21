@@ -76,7 +76,11 @@ export type IntentPreconditions =
       readonly reviewReference: string;
       readonly expiresAt: Date;
     }
-  | { readonly kind: 'setup'; readonly approvedState: SetupServerRecord };
+  | {
+      readonly kind: 'setup';
+      readonly approvedState: SetupServerRecord;
+      readonly provisioning?: import('../setup/selection').SetupProvisioningSelection;
+    };
 export type HumanOutcome =
   | CaseOutcome
   | DetectionOutcome

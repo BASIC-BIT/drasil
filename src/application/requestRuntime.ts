@@ -1,3 +1,5 @@
+import { ReportInstructionsRollbackRequiredError } from '../controllers/ReportInstructionsManager';
+import { SetupEffectsStateChangedError } from './adapters/approvedSetup';
 import {
   decodeQueuedAction,
   workflowDefinitions,
@@ -147,7 +149,23 @@ export async function prepareQueuedRequest(input: {
       }),
       onComplete,
     };
-  const dispatch = prepareQueuedAction({ runtime: caseRuntime, action, request });
+  let scopedRuntime = caseRuntime;
+  if (admission.kind === 'new_execution') {
+    const family = workflowDefinitions.find(
+      (entry) => entry.id === admission.execution.workflowId
+    )?.family;
+    if (family === 'setup')
+      scopedRuntime = {
+        ...caseRuntime,
+        setupRuntime: runtime.setupRuntime.forExecution(admission.execution),
+      };
+    if (family === 'operations')
+      scopedRuntime = {
+        ...caseRuntime,
+        operations: runtime.operationsRuntime.forExecution(admission.execution),
+      };
+  }
+  const dispatch = prepareQueuedAction({ runtime: scopedRuntime, action, request });
   const execute: PreparedQueuedRequest['execute'] =
     admission.kind === 'ordinary'
       ? dispatch
@@ -168,6 +186,21 @@ export async function prepareQueuedRequest(input: {
             }
             return await dispatch();
           } catch (error) {
+            if (
+              isQueuedSetupCommand(command) &&
+              error instanceof ReportInstructionsRollbackRequiredError
+            )
+              return {
+                action_type: 'delegated_admission',
+                state: 'uncertain',
+                code: 'report_panel_recovery_required',
+              };
+            if (error instanceof SetupEffectsStateChangedError)
+              return {
+                action_type: 'delegated_admission',
+                state: 'uncertain',
+                code: 'stale_state_after_external_effects',
+              };
             if (command.kind === 'ban_user' || command.kind === 'kick_user') {
               const receipt = await delegation?.reconcileNativeEnforcement?.(
                 admission.execution.executionId

@@ -1,3 +1,4 @@
+import { createApprovedSetupExecutor } from './adapters/setup';
 import {
   createDelegatedActionService,
   ActionDeniedError,
@@ -104,7 +105,10 @@ export function createMcpActionDelivery(
     store: createDelegationStore(createWebDelegationDatabase()),
     access: createWebDelegatedAccess(),
     resolver,
-    direct: createMcpDirectExecutor(createWebApplication(), options.setup),
+    direct: createMcpDirectExecutor(
+      createWebApplication(),
+      options.setup ?? createApprovedSetupExecutor()
+    ),
     waitForExecution: (work, pending) => withinMcpDeadline(work, pending, options.clock),
   });
 }

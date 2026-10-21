@@ -13,7 +13,7 @@ const context = {
   source: 'web',
   actor: { kind: 'user' as const, userId: 'admin' },
 };
-const commands: QueuedOperationCommand[] = [
+const commands = [
   { kind: 'sync_moderation_queue' },
   { kind: 'clear_moderation_queue' },
   {
@@ -27,7 +27,7 @@ const commands: QueuedOperationCommand[] = [
   { kind: 'audit_case_role_lockdown' },
   { kind: 'apply_case_role_lockdown', unsyncAllowedChannels: false },
   { kind: 'intake_role_members', execute: true, limit: 12, roleId: 'role', reason: 'reason' },
-];
+] satisfies QueuedOperationCommand[];
 beforeEach(() => vi.clearAllMocks());
 test.each(commands)(
   'queues shared typed operation $kind preserving metadata and idempotency',

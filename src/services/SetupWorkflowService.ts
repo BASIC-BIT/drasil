@@ -2,7 +2,11 @@ import type { Guild, Role } from 'discord.js';
 import type { DetectionResponseMode } from '../contracts/setup';
 import { IConfigService } from '../config/ConfigService';
 import type { VerificationChannelPermissionSyncState } from '../repositories/types';
-import { INotificationManager, type VerificationPermissionSnapshot } from './NotificationManager';
+import {
+  INotificationManager,
+  type BoundVerificationSetup,
+  type VerificationPermissionSnapshot,
+} from './NotificationManager';
 import { IProductAnalyticsService } from './ProductAnalyticsService';
 import { ISetupDiagnosticsService, SetupDiagnosticReport } from './SetupDiagnosticsService';
 
@@ -39,6 +43,7 @@ export type SetupWorkflowResult =
     };
 
 export interface CompleteSetupWorkflowInput {
+  verificationBinding?: BoundVerificationSetup;
   guild: Guild;
   guildId?: string;
   caseRole: Role;
@@ -78,7 +83,7 @@ type VerificationChannelPreparationResult =
 
 export class SetupWorkflowService {
   public constructor(
-    private readonly configService: IConfigService,
+    private readonly configService: Pick<IConfigService, 'updateSetupConfiguration'>,
     private readonly notificationManager: INotificationManager,
     private readonly productAnalyticsService: IProductAnalyticsService,
     private readonly setupDiagnosticsService: ISetupDiagnosticsService
@@ -278,30 +283,41 @@ export class SetupWorkflowService {
       }
     }
 
-    const verificationChannelId = input.candidateVerificationChannelId
-      ? typeof this.notificationManager.restoreVerificationChannelPermissions === 'function'
-        ? await this.notificationManager.setupVerificationChannel(
-            input.guild,
-            input.caseRole.id,
-            false,
-            onChannelCreated,
-            input.candidateVerificationChannelId,
-            onPermissionsUpdated,
-            input.candidatePermissionSyncState ?? input.previousPermissionSyncState
-          )
+    const verificationChannelId = input.verificationBinding
+      ? await this.notificationManager.setupVerificationChannel(
+          input.guild,
+          input.caseRole.id,
+          false,
+          onChannelCreated,
+          input.candidateVerificationChannelId ?? undefined,
+          onPermissionsUpdated,
+          undefined,
+          input.verificationBinding
+        )
+      : input.candidateVerificationChannelId
+        ? typeof this.notificationManager.restoreVerificationChannelPermissions === 'function'
+          ? await this.notificationManager.setupVerificationChannel(
+              input.guild,
+              input.caseRole.id,
+              false,
+              onChannelCreated,
+              input.candidateVerificationChannelId,
+              onPermissionsUpdated,
+              input.candidatePermissionSyncState ?? input.previousPermissionSyncState
+            )
+          : await this.notificationManager.setupVerificationChannel(
+              input.guild,
+              input.caseRole.id,
+              false,
+              onChannelCreated,
+              input.candidateVerificationChannelId
+            )
         : await this.notificationManager.setupVerificationChannel(
             input.guild,
             input.caseRole.id,
             false,
-            onChannelCreated,
-            input.candidateVerificationChannelId
-          )
-      : await this.notificationManager.setupVerificationChannel(
-          input.guild,
-          input.caseRole.id,
-          false,
-          onChannelCreated
-        );
+            onChannelCreated
+          );
 
     if (!verificationChannelId) {
       const setupFailureDetail = await this.rollbackCreatedArtifacts(

@@ -89,6 +89,7 @@ export type QueuedRequestRuntime = Pick<
   | 'cases'
   | 'reports'
   | 'operations'
+  | 'operationsRuntime'
   | 'setupRuntime'
   | 'caseConfirmations'
   | 'captchaRuntime'
@@ -121,6 +122,46 @@ function handler<K extends QueuedCommand['kind'], Actions>(
   };
 }
 export const queuedActionHandlers = {
+  update_settings: handler(
+    'update_settings',
+    (runtime) => runtime.setupRuntime,
+    dispatchSetupAction
+  ),
+  update_heuristics: handler(
+    'update_heuristics',
+    (runtime) => runtime.setupRuntime,
+    dispatchSetupAction
+  ),
+  reset_heuristics: handler(
+    'reset_heuristics',
+    (runtime) => runtime.setupRuntime,
+    dispatchSetupAction
+  ),
+  lockdown_allow_add: handler(
+    'lockdown_allow_add',
+    (runtime) => runtime.setupRuntime,
+    dispatchSetupAction
+  ),
+  lockdown_allow_remove: handler(
+    'lockdown_allow_remove',
+    (runtime) => runtime.setupRuntime,
+    dispatchSetupAction
+  ),
+  disable_lockdown: handler(
+    'disable_lockdown',
+    (runtime) => runtime.setupRuntime,
+    dispatchSetupAction
+  ),
+  clear_report_instructions: handler(
+    'clear_report_instructions',
+    (runtime) => runtime.setupRuntime,
+    dispatchSetupAction
+  ),
+  audit_integrity: handler(
+    'audit_integrity',
+    (runtime) => runtime.operations,
+    dispatchOperationsAction
+  ),
   submit_message_report: handler(
     'submit_message_report',
     (runtime) => runtime.reports,

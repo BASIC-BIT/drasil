@@ -59,7 +59,7 @@ function assertChecked(formData: FormData | undefined, key: string, message: str
 function readOperationCommand(
   action: ModerationQueueOperationAction,
   formData: FormData | undefined
-): QueuedOperationCommand {
+): Exclude<QueuedOperationCommand, { kind: 'audit_integrity' }> {
   switch (action) {
     case 'clear_moderation_queue':
       assertChecked(formData, 'confirmClearQueue', 'Confirm queue clearing before queueing it.');
@@ -142,7 +142,8 @@ export async function queueModerationQueueOperationAction(
     throw new Error(`Unsupported moderation queue operation: ${action}`);
   }
 
-  const command = queuedOperationCommandSchema.parse(readOperationCommand(action, formData));
+  const command = readOperationCommand(action, formData);
+  queuedOperationCommandSchema.parse(command);
 
   const setupService = createSetupDashboardService();
   const guild = await setupService.assertCanManageGuild(guildId, token.accessToken);
