@@ -594,6 +594,22 @@ function createExecutionStore(database: DelegationDatabase): ExecutionStore {
           queue.action.context.actor.userId !== execution.userId
         )
           return { kind: 'denied', code: 'binding_mismatch' };
+        // A stale native owner cannot admit new work after its queue lease expires.
+        // Already-admitted executions remain read-only observations, including after revocation.
+        if (
+          (execution.command.kind === 'ban_user' || execution.command.kind === 'kick_user') &&
+          !execution.startedAt &&
+          !execution.completedAt
+        ) {
+          // Check the clock after acquiring the lock, including time spent waiting for it.
+          const claim = await client.query<{ live: boolean }>(
+            `select status='processing' and updated_at >= clock_timestamp()-interval '15 minutes' as live
+             from moderation_action_requests where id=$1::uuid`,
+            [queue.request.id]
+          );
+          if (!claim.rows[0]?.live)
+            return { kind: 'denied', code: 'execution_interrupted_before_send' };
+        }
         if (queue.recovery) {
           const metadata = persisted.metadata ?? {};
           const protectedPhase = [
@@ -689,7 +705,11 @@ function createExecutionStore(database: DelegationDatabase): ExecutionStore {
             ...execution,
             outcome: {
               kind: 'delegated_terminal',
-              result: native ?? { state: execution.startedAt ? 'uncertain' : 'failed' },
+              result:
+                native ??
+                (execution.command.kind === 'ban_user' || execution.command.kind === 'kick_user'
+                  ? { state: 'failed', code: 'execution_interrupted_before_send' }
+                  : { state: execution.startedAt ? 'uncertain' : 'failed' }),
             },
           };
       }

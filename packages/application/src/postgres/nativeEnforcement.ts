@@ -30,16 +30,37 @@ export function createNativeEnforcementStore(database: DelegationDatabase): Nati
     async start(execution): Promise<string> {
       if (execution.command.kind !== 'ban_user' && execution.command.kind !== 'kick_user')
         throw new Error('Native enforcement binding mismatch.');
-      const token = randomUUID();
-      const inserted = await database.query<{ token: string }>(
-        `insert into mcp_native_enforcements (execution_id,token)
-        select id,$2::uuid from mcp_executions where id=$1::uuid and started_at is not null and completed_at is null
-        and queue_request_id=$3::uuid and resolved->>'commandDigest'=$4
-        on conflict (execution_id) do nothing returning token`,
-        [execution.executionId, token, execution.queueRequestId, canonicalDigest(execution.command)]
-      );
-      if (!inserted.rows[0]) throw new Error('Native execution already fenced or no longer bound.');
-      return token;
+      return database.transaction(async (client) => {
+        // Serialize expiry settlement with the send fence. Once the fence exists,
+        // a late original sender may still acknowledge and finish bookkeeping.
+        // Admission locks execution before queue; keep that order for the FK insert too.
+        await client.query('select id from mcp_executions where id=$1::uuid for update', [
+          execution.executionId,
+        ]);
+        await client.query(
+          'select id from moderation_action_requests where id=$1::uuid for update',
+          [execution.queueRequestId]
+        );
+        const token = randomUUID();
+        const inserted = await client.query<{ token: string }>(
+          `insert into mcp_native_enforcements (execution_id,token)
+          select e.id,$2::uuid from mcp_executions e
+          join moderation_action_requests q on q.id=e.queue_request_id
+          where e.id=$1::uuid and e.started_at is not null and e.completed_at is null
+          and e.queue_request_id=$3::uuid and e.resolved->>'commandDigest'=$4
+          and q.status='processing' and q.updated_at >= clock_timestamp()-interval '15 minutes'
+          on conflict (execution_id) do nothing returning token`,
+          [
+            execution.executionId,
+            token,
+            execution.queueRequestId,
+            canonicalDigest(execution.command),
+          ]
+        );
+        if (!inserted.rows[0])
+          throw new Error('Native execution already fenced, expired or no longer bound.');
+        return token;
+      });
     },
     async acknowledge(executionId, token): Promise<void> {
       const updated = await database.query<{ execution_id: string }>(
@@ -70,7 +91,10 @@ export function createNativeEnforcementStore(database: DelegationDatabase): Nati
       const durable =
         row.queue_status === 'completed'
           ? projectHumanOutcome(row.resolved.command, row.queue_result)
-          : saved;
+          : (saved ??
+            (row.queue_status === 'failed' && !fence
+              ? { state: 'failed' as const, code: 'execution_interrupted_before_send' }
+              : undefined));
       const result =
         fence?.state === 'uncertain'
           ? fence

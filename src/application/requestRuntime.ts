@@ -155,11 +155,12 @@ export async function prepareQueuedRequest(input: {
               const receipt = await delegation?.reconcileNativeEnforcement?.(
                 admission.execution.executionId
               );
-              if (
-                error instanceof ActionDeniedError &&
-                receipt?.code === 'execution_interrupted_before_send'
-              )
-                return { action_type: 'delegated_admission', state: 'denied', code: error.code };
+              if (receipt?.code === 'execution_interrupted_before_send')
+                return {
+                  action_type: 'delegated_admission',
+                  state: error instanceof ActionDeniedError ? 'denied' : 'failed',
+                  code: error instanceof ActionDeniedError ? error.code : receipt.code,
+                };
               return {
                 action_type: 'delegated_admission',
                 state: receipt?.state === 'partial' ? 'partial' : 'uncertain',

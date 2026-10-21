@@ -1,3 +1,4 @@
+import { DISCORD_UNKNOWN_MEMBER_ERROR_CODE, isDiscordErrorCode } from '../../utils/discordErrors';
 import type { IRoleGateService } from '../../services/RoleGateService';
 import {
   ActionDeniedError,
@@ -186,7 +187,14 @@ export function createBotCaseDependencies(deps: BotCaseDependencies): CaseDepend
         await enforcePermission(input.guildId, PermissionFlagsBits.KickMembers, 'Kick Members');
         const target = input.caseId
           ? await member(input.guildId, input.targetUserId)
-          : await member(input.guildId, input.targetUserId).catch(() => null);
+          : await member(input.guildId, input.targetUserId).catch((error: unknown) => {
+              if (
+                deps.nativeLifecycle &&
+                !isDiscordErrorCode(error, DISCORD_UNKNOWN_MEMBER_ERROR_CODE)
+              )
+                throw error;
+              return null;
+            });
         if (!target) return false;
         if (deps.nativeLifecycle)
           return deps.userModerationService.kickUser(

@@ -142,6 +142,7 @@ export class ModerationActionRequestRepository implements IModerationActionReque
         where status = 'processing'::moderation_action_request_status
           and (
             verification_event_id is not null
+            or (action_type in ('ban_user', 'kick_user') and actor_surface = 'mcp')
             or action_type = 'complete_setup_verification'::moderation_action_request_type
             or action_type = 'ban_observed_detection'::moderation_action_request_type
           )
@@ -206,6 +207,7 @@ export class ModerationActionRequestRepository implements IModerationActionReque
             metadata = case when metadata->>'report_ban_phase' is not null then metadata || jsonb_build_object('report_ban_lease_until', (now() + interval '15 minutes')::text) else metadata end
         where id = ${id}::uuid
           AND (action_type <> 'ban_observed_detection' OR metadata->>'report_ban_attempt_token' IS NOT DISTINCT FROM ${expectedAttemptToken ?? null}::text)
+          and not (action_type in ('ban_user', 'kick_user') and actor_surface = 'mcp' and updated_at < clock_timestamp() - interval '15 minutes')
           and (status = 'processing'::moderation_action_request_status or metadata->>'report_ban_phase' is not null)
         returning *
       `;
@@ -675,6 +677,7 @@ export class ModerationActionRequestRepository implements IModerationActionReque
             last_error = ${errorMessage}
         where id = ${id}::uuid
           AND (action_type <> 'ban_observed_detection' OR metadata->>'report_ban_attempt_token' IS NOT DISTINCT FROM ${expectedAttemptToken ?? null}::text)
+          AND NOT (action_type in ('ban_user', 'kick_user') AND status = 'completed')
           AND NOT (action_type = 'ban_observed_detection' AND (metadata->>'report_ban_phase' IS NOT NULL OR coalesce(result->'observed_ban_result'->>'status', '') IN ('banned', 'banned_updates_pending', 'ban_outcome_unknown')))
         returning *
       `;

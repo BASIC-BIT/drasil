@@ -161,8 +161,14 @@ export class ModerationActionRequestService implements IModerationActionRequestS
       getReportBanAttemptToken(completed) !== getReportBanAttemptToken(request)
     )
       return;
-    await execution.onComplete?.(completed.result);
-    await execution.afterComplete?.();
+    try {
+      await execution.onComplete?.(completed.result);
+      await execution.afterComplete?.();
+    } catch (error) {
+      // The queue result is committed. Hook failures cannot turn that result into
+      // an execution failure; status/reconciliation can read the durable receipt.
+      console.warn(`Moderation action request ${request.id} completion hook failed:`, error);
+    }
   }
 
   private resolvePollIntervalMs(): number {

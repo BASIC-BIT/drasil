@@ -5,6 +5,9 @@ import type { BotCaseDependencies } from '../../application/adapters/cases';
 import { UserModerationService } from '../../services/UserModerationService';
 import { createCaseConfirmationStore } from '../../application/context';
 import { Pool } from 'pg';
+import { getPrismaClient } from '../testDb';
+import { ModerationActionRequestRepository } from '../../repositories/ModerationActionRequestRepository';
+import { ModerationActionRequestService } from '../../services/ModerationActionRequestService';
 import {
   createDelegatedAccess,
   resolveCasePreconditions,
@@ -28,7 +31,7 @@ integration('MCP native enforcement', () => {
     pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
   });
   afterAll(async () => pool.end());
-  async function fixture(kind: 'ban_user' | 'kick_user' = 'ban_user') {
+  async function fixture(kind: 'ban_user' | 'kick_user' = 'ban_user', claim = true) {
     const database = createWebDelegationDatabase(pool);
     const store = createDelegationStore(database);
     const native = createNativeEnforcementStore(database);
@@ -110,14 +113,28 @@ integration('MCP native enforcement', () => {
       pending.confirmationId!,
       'client_confirmation'
     );
-    const request = (await pool.query('select * from moderation_action_requests')).rows[0];
+    const repository = new ModerationActionRequestRepository(getPrismaClient());
+    const request = claim
+      ? (await repository.claimNext())!
+      : (await pool.query('select * from moderation_action_requests')).rows[0];
     const delegation = createDelegatedWorkerAdmission({ store, access, native });
-    return { native, store, service, principal, accepted, request, delegation, command };
+    return {
+      native,
+      store,
+      service,
+      principal,
+      accepted,
+      request,
+      delegation,
+      command,
+      repository,
+    };
   }
   function actualRuntime(
     f: Awaited<ReturnType<typeof fixture>>,
     provider: jest.Mock,
-    path: 'member' | 'by_id' | 'kick' = 'member'
+    path: 'member' | 'by_id' | 'kick' = 'member',
+    lookupError?: unknown
   ) {
     const deps = mockDeep<BotCaseDependencies>();
     const confirmations = createCaseConfirmationStore();
@@ -138,6 +155,7 @@ integration('MCP native enforcement', () => {
       members: {
         fetch: async (input: unknown) => {
           if (input === 'target') {
+            if (lookupError) throw lookupError;
             if (path === 'by_id') throw { code: 10007 };
             return member;
           }
@@ -174,6 +192,211 @@ integration('MCP native enforcement', () => {
         createDelegatedCaseActions(caseDeps, execution, f.native),
     };
   }
+  function worker(
+    f: Awaited<ReturnType<typeof fixture>>,
+    runtime: ReturnType<typeof actualRuntime>
+  ) {
+    return new ModerationActionRequestService(f.repository, runtime as never, mockDeep());
+  }
+  async function expire(f: Awaited<ReturnType<typeof fixture>>) {
+    await pool.query(
+      "update moderation_action_requests set updated_at=now()-interval '16 minutes' where id=$1::uuid",
+      [f.request.id]
+    );
+  }
+  it.each(['ban_user', 'kick_user'] as const)(
+    'settles expired unadmitted %s claims and rejects a stale owner',
+    async (kind) => {
+      const f = await fixture(kind);
+      const send = jest.fn();
+      const runtime = actualRuntime(f, send);
+      await expire(f);
+      expect(await worker(f, runtime).processPendingRequests()).toBe(0);
+      expect((await f.repository.findById(f.request.id))?.status).toBe('failed');
+      expect((await f.service.status(f.principal, f.accepted.executionId!)).state).toBe('failed');
+      const stale = await prepareQueuedRequest({
+        runtime: runtime as never,
+        request: f.request,
+        analytics: mockDeep(),
+      });
+      expect(await stale.execute()).toMatchObject({ state: 'denied' });
+      expect(send).not.toHaveBeenCalled();
+    }
+  );
+  it('does not revive an expired native claim through a stale heartbeat', async () => {
+    const f = await fixture();
+    await expire(f);
+    await f.repository.heartbeat(f.request.id);
+    const send = jest.fn();
+    const stale = await prepareQueuedRequest({
+      runtime: actualRuntime(f, send) as never,
+      request: f.request,
+      analytics: mockDeep(),
+    });
+    expect(await stale.execute()).toMatchObject({ state: 'denied' });
+    expect(send).not.toHaveBeenCalled();
+    await worker(f, actualRuntime(f, send)).processPendingRequests();
+    expect((await f.repository.findById(f.request.id))?.status).toBe('failed');
+  });
+  it('rejects an expired unadmitted owner even before the next poll settles its claim', async () => {
+    const f = await fixture();
+    await expire(f);
+    const send = jest.fn();
+    const stale = await prepareQueuedRequest({
+      runtime: actualRuntime(f, send) as never,
+      request: f.request,
+      analytics: mockDeep(),
+    });
+    expect(await stale.execute()).toMatchObject({ state: 'denied' });
+    expect(send).not.toHaveBeenCalled();
+  });
+  it('denies a live native claim after connection revocation before admission', async () => {
+    const f = await fixture('ban_user', false);
+    await f.store.revokeConnection(f.principal, f.principal.grantVersion);
+    const send = jest.fn();
+    await worker(f, actualRuntime(f, send)).processPendingRequests();
+    expect((await f.repository.findById(f.request.id))?.result).toMatchObject({ state: 'denied' });
+    expect(send).not.toHaveBeenCalled();
+  });
+  it('settles expired pre-admission work after revocation without sending', async () => {
+    const f = await fixture();
+    await f.store.revokeConnection(f.principal, f.principal.grantVersion);
+    await expire(f);
+    const send = jest.fn();
+    await worker(f, actualRuntime(f, send)).processPendingRequests();
+    expect((await f.repository.findById(f.request.id))?.status).toBe('failed');
+    const stale = await prepareQueuedRequest({
+      runtime: actualRuntime(f, send) as never,
+      request: f.request,
+      analytics: mockDeep(),
+    });
+    expect(await stale.execute()).toMatchObject({ state: 'denied' });
+    expect(send).not.toHaveBeenCalled();
+  });
+  it.each([false, true])(
+    'prevents a paused admitted owner from sending after lease expiry (settled=%s)',
+    async (settled) => {
+      const f = await fixture();
+      const send = jest.fn();
+      const runtime = actualRuntime(f, send);
+      const paused = await prepareQueuedRequest({
+        runtime: runtime as never,
+        request: f.request,
+        analytics: mockDeep(),
+      });
+      await expire(f);
+      if (settled) await worker(f, runtime).processPendingRequests();
+      await paused.execute();
+      expect(send).not.toHaveBeenCalled();
+      await worker(f, runtime).processPendingRequests();
+      expect((await f.repository.findById(f.request.id))?.status).toBe('failed');
+      expect(await f.native.reconcileNativeEnforcement(f.accepted.executionId!)).toMatchObject({
+        state: 'failed',
+        code: 'execution_interrupted_before_send',
+      });
+    }
+  );
+  it.each([false, true])(
+    'settles expired fenced work without resending (acknowledged=%s)',
+    async (acknowledged) => {
+      const f = await fixture();
+      const send = jest.fn();
+      const runtime = actualRuntime(f, send);
+      await prepareQueuedRequest({
+        runtime: runtime as never,
+        request: f.request,
+        analytics: mockDeep(),
+      });
+      const execution = (await f.store.loadExecution(f.principal, f.accepted.executionId!))!;
+      const token = await f.native.start(execution);
+      send();
+      if (acknowledged) await f.native.acknowledge(execution.executionId, token);
+      await f.store.revokeConnection(f.principal, f.principal.grantVersion);
+      await expire(f);
+      await worker(f, runtime).processPendingRequests();
+      expect((await f.repository.findById(f.request.id))?.status).toBe('failed');
+      expect(await f.native.reconcileNativeEnforcement(execution.executionId)).toMatchObject({
+        state: acknowledged ? 'partial' : 'uncertain',
+      });
+      const observer = await prepareQueuedRequest({
+        runtime: runtime as never,
+        request: f.request,
+        analytics: mockDeep(),
+      });
+      expect(observer.persistence).toBe('observe_only');
+      await observer.execute();
+      expect(send).toHaveBeenCalledTimes(1);
+    }
+  );
+  it('allows a late fenced winner to complete after expiry and a competing worker poll', async () => {
+    const f = await fixture('ban_user', false);
+    let release!: () => void;
+    let sent!: () => void;
+    const sending = new Promise<void>((resolve) => {
+      sent = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const send = jest.fn(async () => {
+      sent();
+      await gate;
+    });
+    const runtime = actualRuntime(f, send);
+    const winner = worker(f, runtime).processPendingRequests(1);
+    await sending;
+    await expire(f);
+    await worker(f, runtime).processPendingRequests();
+    const expired = await f.repository.findById(f.request.id);
+    release();
+    await winner;
+    expect(expired?.status).toBe('failed');
+    expect((await f.repository.findById(f.request.id))?.status).toBe('completed');
+    expect(await f.service.status(f.principal, f.accepted.executionId!)).toMatchObject({
+      state: 'completed',
+      outcome: { succeeded: true },
+    });
+    await expire(f);
+    await worker(f, runtime).processPendingRequests();
+    expect((await f.repository.findById(f.request.id))?.status).toBe('completed');
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+  it('preserves a successful durable completion when the real service completion hook rejects', async () => {
+    const f = await fixture('ban_user', false);
+    const send = jest.fn();
+    const runtime = actualRuntime(f, send);
+    runtime.delegation = {
+      ...runtime.delegation,
+      complete: jest.fn().mockRejectedValue(new Error('completion database unavailable')),
+    };
+    await worker(f, runtime).processPendingRequests();
+    expect(runtime.delegation.complete).toHaveBeenCalled();
+    expect((await f.repository.findById(f.request.id))?.status).toBe('completed');
+    expect(await f.service.status(f.principal, f.accepted.executionId!)).toMatchObject({
+      state: 'completed',
+      outcome: { succeeded: true },
+    });
+    expect(await f.native.reconcileNativeEnforcement(f.accepted.executionId!)).toMatchObject({
+      state: 'completed',
+      outcome: { succeeded: true },
+    });
+    await worker(f, runtime).processPendingRequests();
+    await f.repository.fail(f.request.id, 'late stale failure');
+    expect((await f.repository.findById(f.request.id))?.status).toBe('completed');
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+  it.each([new Error('member lookup timeout'), { status: 503 }])(
+    'does not complete a native kick as a no-op after a transient member lookup error: %p',
+    async (error) => {
+      const f = await fixture('kick_user', false);
+      const send = jest.fn();
+      await worker(f, actualRuntime(f, send, 'kick', error)).processPendingRequests();
+      const receipt = await f.service.status(f.principal, f.accepted.executionId!);
+      expect(receipt).toMatchObject({ state: 'failed', code: 'execution_interrupted_before_send' });
+      expect(send).not.toHaveBeenCalled();
+      expect((await pool.query('select * from mcp_native_enforcements')).rows).toHaveLength(0);
+    }
+  );
   it('does not repeat enforcement after a lost provider acknowledgement', async () => {
     const f = await fixture();
     const discordBan = jest.fn(async () => {
@@ -363,16 +586,13 @@ integration('MCP native enforcement', () => {
     }
   );
   it('returns an honest kick no-op for an absent member without entering the send fence', async () => {
-    const f = await fixture('kick_user');
+    const f = await fixture('kick_user', false);
     const provider = jest.fn();
-    const runtime = actualRuntime(f, provider, 'by_id');
-    const prepared = await prepareQueuedRequest({
-      runtime: runtime as never,
-      request: f.request,
-      analytics: {} as never,
+    await worker(f, actualRuntime(f, provider, 'by_id')).processPendingRequests();
+    expect(await f.service.status(f.principal, f.accepted.executionId!)).toMatchObject({
+      state: 'completed',
+      outcome: { succeeded: false },
     });
-    const result = await prepared.execute();
-    expect(result).toMatchObject({ action_type: 'kick_user', succeeded: false });
     expect(provider).not.toHaveBeenCalled();
     expect((await pool.query('select * from mcp_native_enforcements')).rows).toHaveLength(0);
   });
