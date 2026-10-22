@@ -8,81 +8,100 @@ import { messageCleanupNeedsConfirmation } from '../messageCleanup/actions';
 
 export type ConfirmationRequirement = 'none' | 'confirm' | 'preview_confirm';
 const requirement = (needed: boolean): ConfirmationRequirement => (needed ? 'confirm' : 'none');
+type CommandByKind = { [K in HumanCommand['kind']]: Extract<HumanCommand, { kind: K }> };
+type ConfirmationPolicies = {
+  [K in keyof CommandByKind]: (command: CommandByKind[K]) => ConfirmationRequirement;
+};
+const confirm = (): ConfirmationRequirement => 'confirm';
+const none = (): ConfirmationRequirement => 'none';
+const previewConfirm = (): ConfirmationRequirement => 'preview_confirm';
+const casePolicy = (
+  command: Parameters<typeof caseNeedsConfirmation>[0]
+): ConfirmationRequirement => requirement(caseNeedsConfirmation(command));
+const detectionPolicy = (
+  command: Parameters<typeof detectionNeedsConfirmation>[0]
+): ConfirmationRequirement => requirement(detectionNeedsConfirmation(command));
+const operationPolicy = (
+  command: Parameters<typeof operationNeedsConfirmation>[0]
+): ConfirmationRequirement => requirement(operationNeedsConfirmation(command));
+const reportPolicy = (
+  command: Parameters<typeof reportNeedsConfirmation>[0]
+): ConfirmationRequirement => requirement(reportNeedsConfirmation(command));
+const setupPolicy = (
+  command: Parameters<typeof setupNeedsConfirmation>[0]
+): ConfirmationRequirement => requirement(setupNeedsConfirmation(command));
+const cleanupPolicy = (
+  command: Parameters<typeof messageCleanupNeedsConfirmation>[0]
+): ConfirmationRequirement =>
+  messageCleanupNeedsConfirmation(command) ? 'preview_confirm' : 'none';
+
+/** Exhaustive dispatch keeps each native confirmation predicate authoritative. */
+const policies: ConfirmationPolicies = {
+  repair_active_case: (command) => requirement(command.intent === 'moderator_repair'),
+  ban_user: casePolicy,
+  kick_user: casePolicy,
+  open_case_from_observed_detection: casePolicy,
+  manual_flag_user: casePolicy,
+  verify_case_user: casePolicy,
+  close_case_no_action: casePolicy,
+  kick_case_user: casePolicy,
+  ban_case_user: casePolicy,
+  ban_case_user_by_id: casePolicy,
+  reopen_case: casePolicy,
+  refresh_case_notification: casePolicy,
+  sync_existing_ban: casePolicy,
+  open_admin_case: casePolicy,
+  review_uncertain_report_ban: previewConfirm,
+  dismiss_observed_detection: detectionPolicy,
+  mark_observed_detection_false_positive: detectionPolicy,
+  undo_observed_detection_action: detectionPolicy,
+  kick_observed_detection: detectionPolicy,
+  ignore_detection_accounting: detectionPolicy,
+  restore_detection_accounting: detectionPolicy,
+  prepare_report_ban_review: detectionPolicy,
+  ban_observed_detection: detectionPolicy,
+  sync_moderation_queue: operationPolicy,
+  clear_moderation_queue: operationPolicy,
+  audit_case_role_lockdown: operationPolicy,
+  apply_case_role_lockdown: operationPolicy,
+  intake_role_members: operationPolicy,
+  audit_integrity: operationPolicy,
+  close_resolved_case_threads: operationPolicy,
+  submit_user_report: reportPolicy,
+  start_report_intake: reportPolicy,
+  close_report_intake: reportPolicy,
+  submit_message_report: reportPolicy,
+  confirm_intake_candidate: reportPolicy,
+  reject_intake_candidates: reportPolicy,
+  update_settings: confirm,
+  update_setup: confirm,
+  update_heuristics: confirm,
+  reset_heuristics: confirm,
+  lockdown_allow_add: confirm,
+  lockdown_allow_remove: confirm,
+  disable_lockdown: confirm,
+  complete_setup_verification: confirm,
+  upsert_report_instructions: setupPolicy,
+  clear_report_instructions: setupPolicy,
+  preview_case_message_deletion: cleanupPolicy,
+  execute_case_message_deletion: cleanupPolicy,
+  ban_case_user_with_message_cleanup: cleanupPolicy,
+  quarantine_compromised_account: previewConfirm,
+  request_captcha_challenge: confirm,
+  retry_captcha_challenge: confirm,
+  bypass_captcha_challenge: confirm,
+  open_submitted_report_case: confirm,
+  preview_account_quarantine: none,
+  close_submitted_report: none,
+  acknowledge_attention: none,
+};
+function requirementForKind<K extends keyof CommandByKind>(
+  kind: K,
+  command: CommandByKind[K]
+): ConfirmationRequirement {
+  return policies[kind](command);
+}
 /** Delegated additions do not add a second modal to existing native/site control flows. */
 export function confirmationRequirement(command: HumanCommand): ConfirmationRequirement {
-  switch (command.kind) {
-    case 'repair_active_case':
-      return requirement(command.intent === 'moderator_repair');
-    case 'ban_user':
-    case 'kick_user':
-    case 'open_case_from_observed_detection':
-    case 'manual_flag_user':
-    case 'verify_case_user':
-    case 'close_case_no_action':
-    case 'kick_case_user':
-    case 'ban_case_user':
-    case 'ban_case_user_by_id':
-    case 'reopen_case':
-    case 'refresh_case_notification':
-    case 'sync_existing_ban':
-    case 'open_admin_case':
-      return requirement(caseNeedsConfirmation(command));
-    case 'review_uncertain_report_ban':
-      return 'preview_confirm';
-    case 'dismiss_observed_detection':
-    case 'mark_observed_detection_false_positive':
-    case 'undo_observed_detection_action':
-    case 'kick_observed_detection':
-    case 'ignore_detection_accounting':
-    case 'restore_detection_accounting':
-    case 'prepare_report_ban_review':
-    case 'ban_observed_detection':
-      return requirement(detectionNeedsConfirmation(command));
-    case 'sync_moderation_queue':
-    case 'clear_moderation_queue':
-    case 'audit_case_role_lockdown':
-    case 'apply_case_role_lockdown':
-    case 'intake_role_members':
-    case 'audit_integrity':
-    case 'close_resolved_case_threads':
-      return requirement(operationNeedsConfirmation(command));
-    case 'submit_user_report':
-    case 'start_report_intake':
-    case 'close_report_intake':
-    case 'submit_message_report':
-    case 'confirm_intake_candidate':
-    case 'reject_intake_candidates':
-      return requirement(reportNeedsConfirmation(command));
-    case 'update_settings':
-    case 'update_setup':
-    case 'update_heuristics':
-    case 'reset_heuristics':
-    case 'lockdown_allow_add':
-    case 'lockdown_allow_remove':
-    case 'disable_lockdown':
-    case 'complete_setup_verification':
-      return 'confirm';
-    case 'upsert_report_instructions':
-    case 'clear_report_instructions':
-      return requirement(setupNeedsConfirmation(command));
-    case 'preview_case_message_deletion':
-    case 'execute_case_message_deletion':
-    case 'ban_case_user_with_message_cleanup':
-      return messageCleanupNeedsConfirmation(command) ? 'preview_confirm' : 'none';
-    case 'quarantine_compromised_account':
-      return 'preview_confirm';
-    case 'request_captcha_challenge':
-    case 'retry_captcha_challenge':
-    case 'bypass_captcha_challenge':
-    case 'open_submitted_report_case':
-      return 'confirm';
-    case 'preview_account_quarantine':
-    case 'close_submitted_report':
-    case 'acknowledge_attention':
-      return 'none';
-    default: {
-      const exhaustive: never = command;
-      return exhaustive;
-    }
-  }
+  return requirementForKind(command.kind, command);
 }

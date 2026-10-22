@@ -28,6 +28,7 @@ import { createWebDelegationDatabase } from '../../../apps/web/lib/mcp/adapters/
 jest.mock('../../../apps/web/lib/setupDataAdapter', () => ({ getPostgresPool: jest.fn() }));
 const integration = process.env.JEST_INTEGRATION === '1' ? describe : describe.skip;
 integration('MCP report durable choices', () => {
+  const previousEnabled = process.env.DRASIL_MCP_ENABLED;
   let pool: Pool;
   let principal: DelegatedPrincipal;
   let store: ReturnType<typeof createDelegationStore>;
@@ -37,9 +38,17 @@ integration('MCP report durable choices', () => {
     authorizeRead: async () => ({ kind: 'allowed' }),
   } as unknown as DelegatedAccess;
   beforeAll(() => {
+    process.env.DRASIL_MCP_ENABLED = 'true';
     pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
   });
-  afterAll(async () => pool.end());
+  afterAll(async () => {
+    try {
+      await pool.end();
+    } finally {
+      if (previousEnabled === undefined) delete process.env.DRASIL_MCP_ENABLED;
+      else process.env.DRASIL_MCP_ENABLED = previousEnabled;
+    }
+  });
   beforeEach(async () => {
     await pool.query("insert into servers(guild_id) values('guild')");
     await pool.query("insert into users(discord_id) values ('target')");

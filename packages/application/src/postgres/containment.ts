@@ -172,6 +172,23 @@ export function createContainmentResources(
     },
   };
 }
+type CleanupCommand = Extract<
+  IntentRecord['command'],
+  {
+    kind:
+      | 'preview_case_message_deletion'
+      | 'execute_case_message_deletion'
+      | 'ban_case_user_with_message_cleanup';
+  }
+>;
+type CleanupCaseState = {
+  user_id: string | null;
+  status: string;
+  private_evidence_thread_id: string | null;
+  case_revision: number;
+  detection_event_id: string | null;
+};
+
 /** Fixed domain branch in the same transaction as queue/execution/intent acceptance. */
 export async function acceptCleanupJob(
   client: DelegationQueryClient,
@@ -185,13 +202,7 @@ export async function acceptCleanupJob(
   )
     return;
   const state = (
-    await client.query<{
-      user_id: string | null;
-      status: string;
-      private_evidence_thread_id: string | null;
-      case_revision: number;
-      detection_event_id: string | null;
-    }>(
+    await client.query<CleanupCaseState>(
       `select user_id,status,private_evidence_thread_id,case_revision,detection_event_id from verification_events where id=$1::uuid and server_id=$2 for update`,
       [command.caseId, intent.guildId]
     )
@@ -209,60 +220,77 @@ export async function acceptCleanupJob(
     [command.caseId]
   );
   if (active.rows.length) throw new IntentError('queue_conflict');
+  if (command.kind === 'preview_case_message_deletion')
+    await provisionCleanupJob(client, intent, command, state);
+  else await acceptCleanupPreview(client, intent, command, state);
+}
+
+async function provisionCleanupJob(
+  client: DelegationQueryClient,
+  intent: IntentRecord,
+  command: Extract<CleanupCommand, { kind: 'preview_case_message_deletion' }>,
+  state: CleanupCaseState
+): Promise<void> {
   const p = intent.preconditions;
-  if (command.kind === 'preview_case_message_deletion') {
-    if (
-      p.kind !== 'cleanup_job_provision' ||
-      p.jobId !== command.jobId ||
-      p.caseId !== command.caseId ||
-      p.targetUserId !== command.targetUserId ||
-      p.revision !== state.case_revision ||
-      p.evidenceThreadId !== state.private_evidence_thread_id ||
-      p.detectionEventId !== state.detection_event_id ||
-      command.previewReference.jobId !== p.jobId ||
-      command.previewReference.generation !== null
+  if (
+    p.kind !== 'cleanup_job_provision' ||
+    p.jobId !== command.jobId ||
+    p.caseId !== command.caseId ||
+    p.targetUserId !== command.targetUserId ||
+    p.revision !== state.case_revision ||
+    p.evidenceThreadId !== state.private_evidence_thread_id ||
+    p.detectionEventId !== state.detection_event_id ||
+    command.previewReference.jobId !== p.jobId ||
+    command.previewReference.generation !== null
+  )
+    throw new IntentError('stale_state');
+  const inserted = await client.query<{ id: string }>(
+    `insert into message_deletion_jobs(id,server_id,user_id,verification_event_id,requested_by,actor_surface,mode,scope,reason,evidence_thread_id,metadata) values($1::uuid,$2,$3,$4::uuid,$5,'mcp',$6::message_deletion_job_mode,$7::message_deletion_scope,$8,$9,'{"source":"mcp"}'::jsonb) on conflict(id) do nothing returning id`,
+    [
+      p.jobId,
+      intent.guildId,
+      command.targetUserId,
+      command.caseId,
+      intent.userId,
+      command.mode,
+      command.scope,
+      command.reason,
+      p.evidenceThreadId,
+    ]
+  );
+  if (!inserted.rows.length) throw new IntentError('queue_conflict');
+}
+
+async function acceptCleanupPreview(
+  client: DelegationQueryClient,
+  intent: IntentRecord,
+  command: Exclude<CleanupCommand, { kind: 'preview_case_message_deletion' }>,
+  state: CleanupCaseState
+): Promise<void> {
+  const p = intent.preconditions;
+  const row = (
+    await client.query<{ job: unknown }>(
+      `select to_jsonb(j) as job from message_deletion_jobs j where id=$1::uuid for update`,
+      [command.jobId]
     )
-      throw new IntentError('stale_state');
-    const inserted = await client.query<{ id: string }>(
-      `insert into message_deletion_jobs(id,server_id,user_id,verification_event_id,requested_by,actor_surface,mode,scope,reason,evidence_thread_id,metadata) values($1::uuid,$2,$3,$4::uuid,$5,'mcp',$6::message_deletion_job_mode,$7::message_deletion_scope,$8,$9,'{"source":"mcp"}'::jsonb) on conflict(id) do nothing returning id`,
-      [
-        p.jobId,
-        intent.guildId,
-        command.targetUserId,
-        command.caseId,
-        intent.userId,
-        command.mode,
-        command.scope,
-        command.reason,
-        p.evidenceThreadId,
-      ]
-    );
-    if (!inserted.rows.length) throw new IntentError('queue_conflict');
-  } else {
-    const row = (
-      await client.query<{ job: unknown }>(
-        `select to_jsonb(j) as job from message_deletion_jobs j where id=$1::uuid for update`,
-        [command.jobId]
-      )
-    ).rows[0];
-    const job = jobSchema.safeParse(row?.job);
-    if (
-      !job.success ||
-      p.kind !== 'cleanup_preview' ||
-      p.jobId !== command.jobId ||
-      p.generation !== job.data.previewed_at.toISOString() ||
-      job.data.server_id !== intent.guildId ||
-      job.data.user_id !== command.targetUserId ||
-      job.data.verification_event_id !== command.caseId ||
-      job.data.requested_by !== intent.userId ||
-      job.data.actor_surface !== 'mcp' ||
-      job.data.evidence_thread_id !== state.private_evidence_thread_id ||
-      job.data.mode !== command.mode ||
-      job.data.scope !== command.scope ||
-      job.data.reason !== command.reason
-    )
-      throw new IntentError('stale_state');
-  }
+  ).rows[0];
+  const job = jobSchema.safeParse(row?.job);
+  if (
+    !job.success ||
+    p.kind !== 'cleanup_preview' ||
+    p.jobId !== command.jobId ||
+    p.generation !== job.data.previewed_at.toISOString() ||
+    job.data.server_id !== intent.guildId ||
+    job.data.user_id !== command.targetUserId ||
+    job.data.verification_event_id !== command.caseId ||
+    job.data.requested_by !== intent.userId ||
+    job.data.actor_surface !== 'mcp' ||
+    job.data.evidence_thread_id !== state.private_evidence_thread_id ||
+    job.data.mode !== command.mode ||
+    job.data.scope !== command.scope ||
+    job.data.reason !== command.reason
+  )
+    throw new IntentError('stale_state');
 }
 
 /** Admission only selects a completion-only adapter. It never authorizes another effect. */

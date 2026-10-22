@@ -291,3 +291,47 @@ test('pages through all own connections without exposing another actor', async (
   await expect(page.getByRole('heading', { name: 'Paged client', exact: true })).toHaveCount(26);
   await expect(page.getByRole('button', { name: 'Load more connections' })).toHaveCount(0);
 });
+
+test('only the current Strict Mode load initializes the server selection', async ({
+  context,
+  page,
+}) => {
+  const client = await fixtures.client(context.request, 'Current load owner');
+  const started = await fixtures.begin(context.request, client.client_id);
+  let flowReplies = 0;
+  let releaseCurrent!: () => void;
+  const currentReply = new Promise<void>((resolve) => {
+    releaseCurrent = resolve;
+  });
+  await page.route('**/mcp/select-servers?**', async (route) => {
+    if (route.request().method() !== 'POST' || !route.request().headers()['next-action'])
+      return route.continue();
+    const response = await route.fetch();
+    const body = await response.text();
+    if (body.includes('requestedScopes')) {
+      flowReplies += 1;
+      console.log(`Strict Mode flow reply ${flowReplies}`);
+      if (flowReplies === 2) await currentReply;
+    }
+    await route.fulfill({ response, body });
+  });
+  try {
+    await page.goto(started.url);
+    await expect.poll(() => flowReplies, { timeout: 20_000 }).toBe(2);
+    // The superseded effect's response must not expose an editable, soon-to-be-reset form.
+    await expect(page.getByRole('group', { name: 'Server access' })).not.toBeVisible();
+    releaseCurrent();
+    const allEligible = page.getByLabel(
+      'All eligible servers, including servers you become eligible for in the future'
+    );
+    await allEligible.check();
+    await expect(allEligible).toBeChecked();
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Allow this connection?' })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Connection summary' })).toContainText(
+      'All eligible'
+    );
+  } finally {
+    releaseCurrent();
+  }
+});

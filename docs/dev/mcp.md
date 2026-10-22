@@ -43,3 +43,5 @@ Bot polling prunes only application-owned ephemeral data, independently of enabl
 ## Local verification
 
 Use only an owned disposable database and serialize database suites. Build `@drasil/application` before consumer tests and after shared changes. The task fixture uses `127.0.0.1:55433/drasil_mcp_test`; never point truncating integration fixtures at another database. Source inspection and synthetic header tests do not prove deployed ingress or real-client behavior. Full CI and the ChatGPT/Codex/Claude acceptance matrix are separate launch gates.
+
+See [client acceptance](mcp-client-compatibility.md) for the current client matrix, reproducible controlled journeys and unresolved launch requirements.

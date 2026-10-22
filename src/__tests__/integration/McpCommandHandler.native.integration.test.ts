@@ -37,6 +37,10 @@ import { type IModerationQueueService } from '../../services/ModerationQueueServ
 import { getPrismaClient } from '../testDb';
 const integration = process.env.JEST_INTEGRATION === '1' ? describe : describe.skip;
 integration('McpCommandHandler native composition', () => {
+  const previousEnabled = process.env.DRASIL_MCP_ENABLED;
+  beforeAll(() => {
+    process.env.DRASIL_MCP_ENABLED = 'true';
+  });
   const guildId = '111111111111111111',
     actorId = '222222222222222222',
     targetUserId = '333333333333333333';
@@ -156,7 +160,14 @@ integration('McpCommandHandler native composition', () => {
     });
     containment = createContainmentIntentResolver(createContainmentResources(database));
   });
-  afterAll(() => pool.end());
+  afterAll(async () => {
+    try {
+      await pool.end();
+    } finally {
+      if (previousEnabled === undefined) delete process.env.DRASIL_MCP_ENABLED;
+      else process.env.DRASIL_MCP_ENABLED = previousEnabled;
+    }
+  });
   it('queues case approval without read scope and preserves original command/client', async () => {
     const intent = await initial(cases, {
       workflowId: 'ban_user',

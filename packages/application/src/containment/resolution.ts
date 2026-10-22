@@ -1,5 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { workflowDefinitions, type WorkflowCommandBindings } from '../delegation/commands';
+import {
+  workflowDefinitions,
+  type WorkflowCommandBindings,
+  type HumanCommand,
+  type WorkflowFamily,
+} from '../delegation/commands';
 import type {
   DelegatedPrincipal,
   IntentResolver,
@@ -114,14 +119,7 @@ export function createContainmentIntentResolver(
           };
         } else {
           preview = await resources.resolvePreviewReference(principal, options.cleanupReference);
-          if (
-            preview.kind !== 'cleanup' ||
-            preview.guildId !== state.guildId ||
-            preview.caseId !== state.id ||
-            preview.targetUserId !== state.targetUserId ||
-            preview.detectionEventId !== options.detectionEventId ||
-            preview.job.requestedBy !== principal.userId
-          )
+          if (!matchesCleanupPreview(preview, state, options.detectionEventId, principal.userId))
             throw new ActionDeniedError('binding_mismatch');
           bindings = { cleanup: { jobId: preview.job.id, generation: preview.job.generation } };
           preconditions = {
@@ -134,14 +132,7 @@ export function createContainmentIntentResolver(
       }
       if (definition.commandKind === 'quarantine_compromised_account') {
         preview = await resources.resolvePreviewReference(principal, options.previewReference);
-        if (
-          preview.kind !== 'quarantine' ||
-          preview.guildId !== state.guildId ||
-          preview.caseId !== state.id ||
-          preview.targetUserId !== state.targetUserId ||
-          preview.expiresAt.getTime() <= Date.now()
-        )
-          throw new ActionDeniedError('stale_state');
+        if (!matchesQuarantinePreview(preview, state)) throw new ActionDeniedError('stale_state');
         bindings = { quarantine: { requestId: preview.requestId } };
         preconditions = {
           kind: 'quarantine_preview',
@@ -151,82 +142,23 @@ export function createContainmentIntentResolver(
         };
       }
       const command = definition.parseCommand(options, bindings);
-      if (definition.family === 'captcha') {
-        if (state.caseKind !== 'standard') throw new ActionDeniedError('stale_state');
-        if (command.kind !== 'bypass_captcha_challenge' && !policy.captchaEnabled)
-          throw new ActionDeniedError('policy_disabled');
-        if (
-          'expectedChallengeId' in command &&
-          (command.expectedChallengeId !== state.challenge?.id ||
-            command.expectedGeneration !== state.challenge.generation)
-        )
-          throw new ActionDeniedError('stale_state');
-        if (command.kind === 'bypass_captcha_challenge' && !command.reason.trim())
-          throw new ActionDeniedError('reason_required');
-      }
-      if (definition.family === 'quarantine' && !policy.quarantineEnabled)
-        throw new ActionDeniedError('policy_disabled');
-      if (preview?.kind === 'cleanup' && 'jobId' in command) {
-        const denial = checkMessageCleanupBinding(
-          {
-            guildId: invocation.guildId,
-            requestId: 'preparation',
-            source: 'mcp',
-            actor: { kind: 'user', userId: principal.userId },
-          },
-          command,
-          preview.job,
-          state
-        );
-        if (denial) throw new ActionDeniedError(denial);
-        if (!canSubmitMessageCleanup(preview.job)) throw new ActionDeniedError('stale_state');
-        if (command.kind === 'ban_case_user_with_message_cleanup' && !policy.banEnabled)
-          throw new ActionDeniedError('policy_disabled');
-      }
-      const actionLabels: Record<string, string> = {
-        request_captcha_challenge: 'Send browser security check',
-        retry_captcha_challenge: 'Replace and resend browser security check',
-        bypass_captcha_challenge: 'Bypass browser security check',
-        preview_account_quarantine: 'Preview compromised-account quarantine',
-        quarantine_compromised_account: 'Quarantine compromised account',
-        preview_case_message_deletion: 'Preview message cleanup',
-        execute_case_message_deletion: 'Delete previewed messages',
-        ban_case_user_with_message_cleanup: 'Ban account and delete previewed messages',
-      };
-      const summary = [
-        `${actionLabels[command.kind]} for account ${state.targetUserId} in case ${state.id}.`,
-        ...('jobId' in command ? [`Scope: ${command.scope}; mode: ${command.mode}.`] : []),
-        ...('expectedGeneration' in command
-          ? [
-              `Expected security check ${command.expectedChallengeId}, generation ${command.expectedGeneration}.`,
-            ]
-          : []),
-        ...('reason' in command ? [`Reason: ${JSON.stringify(command.reason)}.`] : []),
-        ...(preview?.kind === 'cleanup'
-          ? [
-              `Frozen preview: ${preview.job.candidateCount} candidates; coverage ${preview.job.coverage}.`,
-            ]
-          : []),
-        ...(preview?.kind === 'quarantine'
-          ? [
-              `Planned role removals: ${JSON.stringify(preview.plannedRoleIds)}; retained roles: ${JSON.stringify(preview.retainedRoleIds)}; containment ready: ${preview.canContain}.`,
-            ]
-          : []),
-      ].join('\n');
+      validateContainmentCommand(
+        command,
+        definition.family,
+        state,
+        policy,
+        preview,
+        principal,
+        invocation.guildId
+      );
+      const summary = containmentSummary(command, state, preview);
       return {
         bindings,
         delivery: { kind: 'queued', command: command as QueuedCommand },
         preconditions,
         relevantState: {
           state,
-          policy:
-            definition.family === 'quarantine'
-              ? { enabled: policy.quarantineEnabled }
-              : definition.family === 'captcha' && command.kind !== 'bypass_captcha_challenge'
-                ? { enabled: policy.captchaEnabled }
-                : command.kind === 'ban_case_user_with_message_cleanup'
-                  ? { enabled: policy.banEnabled }
-                  : null,
+          policy: relevantPolicy(definition.family, command, policy),
           preview,
         },
         summary,
@@ -234,4 +166,126 @@ export function createContainmentIntentResolver(
       };
     },
   };
+}
+
+type ContainmentPolicy = Awaited<ReturnType<ContainmentResolutionResources['loadPolicy']>>;
+function validateContainmentCommand(
+  command: HumanCommand,
+  family: WorkflowFamily,
+  state: ContainmentCase,
+  policy: ContainmentPolicy,
+  preview: ResolvedPreview | undefined,
+  principal: DelegatedPrincipal,
+  guildId: string
+): void {
+  if (family === 'captcha') {
+    if (state.caseKind !== 'standard') throw new ActionDeniedError('stale_state');
+    if (command.kind !== 'bypass_captcha_challenge' && !policy.captchaEnabled)
+      throw new ActionDeniedError('policy_disabled');
+    if (
+      'expectedChallengeId' in command &&
+      (command.expectedChallengeId !== state.challenge?.id ||
+        command.expectedGeneration !== state.challenge.generation)
+    )
+      throw new ActionDeniedError('stale_state');
+    if (command.kind === 'bypass_captcha_challenge' && !command.reason.trim())
+      throw new ActionDeniedError('reason_required');
+  }
+  if (family === 'quarantine' && !policy.quarantineEnabled)
+    throw new ActionDeniedError('policy_disabled');
+  if (preview?.kind === 'cleanup' && 'jobId' in command) {
+    const denial = checkMessageCleanupBinding(
+      {
+        guildId,
+        requestId: 'preparation',
+        source: 'mcp',
+        actor: { kind: 'user', userId: principal.userId },
+      },
+      command,
+      preview.job,
+      state
+    );
+    if (denial) throw new ActionDeniedError(denial);
+    if (!canSubmitMessageCleanup(preview.job)) throw new ActionDeniedError('stale_state');
+    if (command.kind === 'ban_case_user_with_message_cleanup' && !policy.banEnabled)
+      throw new ActionDeniedError('policy_disabled');
+  }
+}
+const containmentSummary = (
+  command: HumanCommand,
+  state: ContainmentCase,
+  preview: ResolvedPreview | undefined
+): string => {
+  const actionLabels: Record<string, string> = {
+    request_captcha_challenge: 'Send browser security check',
+    retry_captcha_challenge: 'Replace and resend browser security check',
+    bypass_captcha_challenge: 'Bypass browser security check',
+    preview_account_quarantine: 'Preview compromised-account quarantine',
+    quarantine_compromised_account: 'Quarantine compromised account',
+    preview_case_message_deletion: 'Preview message cleanup',
+    execute_case_message_deletion: 'Delete previewed messages',
+    ban_case_user_with_message_cleanup: 'Ban account and delete previewed messages',
+  };
+  const summary = [
+    `${actionLabels[command.kind]} for account ${state.targetUserId} in case ${state.id}.`,
+    ...('jobId' in command ? [`Scope: ${command.scope}; mode: ${command.mode}.`] : []),
+    ...('expectedGeneration' in command
+      ? [
+          `Expected security check ${command.expectedChallengeId}, generation ${command.expectedGeneration}.`,
+        ]
+      : []),
+    ...('reason' in command ? [`Reason: ${JSON.stringify(command.reason)}.`] : []),
+    ...(preview?.kind === 'cleanup'
+      ? [
+          `Frozen preview: ${preview.job.candidateCount} candidates; coverage ${preview.job.coverage}.`,
+        ]
+      : []),
+    ...(preview?.kind === 'quarantine'
+      ? [
+          `Planned role removals: ${JSON.stringify(preview.plannedRoleIds)}; retained roles: ${JSON.stringify(preview.retainedRoleIds)}; containment ready: ${preview.canContain}.`,
+        ]
+      : []),
+  ].join('\n');
+  return summary;
+};
+function relevantPolicy(
+  family: WorkflowFamily,
+  command: HumanCommand,
+  policy: ContainmentPolicy
+): { enabled: boolean } | null {
+  return family === 'quarantine'
+    ? { enabled: policy.quarantineEnabled }
+    : family === 'captcha' && command.kind !== 'bypass_captcha_challenge'
+      ? { enabled: policy.captchaEnabled }
+      : command.kind === 'ban_case_user_with_message_cleanup'
+        ? { enabled: policy.banEnabled }
+        : null;
+}
+
+function matchesCleanupPreview(
+  preview: ResolvedPreview,
+  state: ContainmentCase,
+  detectionEventId: unknown,
+  userId: string
+): preview is Extract<ResolvedPreview, { kind: 'cleanup' }> {
+  return (
+    preview.kind === 'cleanup' &&
+    preview.guildId === state.guildId &&
+    preview.caseId === state.id &&
+    preview.targetUserId === state.targetUserId &&
+    preview.detectionEventId === detectionEventId &&
+    preview.job.requestedBy === userId
+  );
+}
+function matchesQuarantinePreview(
+  preview: ResolvedPreview,
+  state: ContainmentCase
+): preview is Extract<ResolvedPreview, { kind: 'quarantine' }> {
+  return (
+    preview.kind === 'quarantine' &&
+    preview.guildId === state.guildId &&
+    preview.caseId === state.id &&
+    preview.targetUserId === state.targetUserId &&
+    !(preview.expiresAt.getTime() <= Date.now())
+  );
 }

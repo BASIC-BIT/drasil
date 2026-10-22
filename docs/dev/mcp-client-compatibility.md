@@ -1,0 +1,33 @@
+# MCP client acceptance
+
+Acceptance recorded on 2026-10-21. MCP remains disabled by default. Required external acceptance is pending, so the implementation must remain a draft PR until that evidence is supplied and reviewed.
+
+## External clients and hosting
+
+No ChatGPT, Codex or Claude user interface was available for this acceptance run. No controlled Discord server, deployed Vercel host or live Discord OAuth callback was supplied. Package tests establish the behavior below only for the installed SDK and local controlled fixtures.
+
+| Client or deployment      | Exact product surface/version                                 | Protocol          | OAuth connect/refresh   | Read    | Confirmation                                 | Controlled mutation/poll/revoke                           | Status                       |
+| ------------------------- | ------------------------------------------------------------- | ----------------- | ----------------------- | ------- | -------------------------------------------- | --------------------------------------------------------- | ---------------------------- |
+| ChatGPT                   | Unavailable, version unobserved                               | Unobserved        | Pending                 | Pending | Native/user interaction unobserved           | Pending                                                   | PENDING launch requirement   |
+| Codex                     | Remote MCP user interaction unavailable, version unobserved   | Unobserved        | Pending                 | Pending | Native/user interaction unobserved           | Pending                                                   | PENDING launch requirement   |
+| Claude                    | Unavailable, version unobserved                               | Unobserved        | Pending                 | Pending | Native/user interaction unobserved           | Pending                                                   | PENDING launch requirement   |
+| Controlled Discord server | Unavailable, disposable targets unspecified                   | External provider | Live callback pending   | Pending | Pending                                      | Pending                                                   | PENDING launch requirement   |
+| Deployed Vercel app       | Unavailable, deployment unobserved                            | HTTPS             | Public callback pending | Pending | Pending                                      | Ingress aliases/spoof resistance and route budget pending | PENDING launch requirement   |
+| Standard SDK, local Next  | `@modelcontextprotocol/client` 2.3.1; controlled browser/HTTP | `2026-07-28`      | Local issuer PASS       | PASS    | No elicitation; saved intent, cancel/confirm | Actual worker completed; revoke-before-start denied       | LOCAL PASS; external fixture |
+| Standard SDK, local Next  | `@modelcontextprotocol/client` 2.3.1; controlled browser/HTTP | `2025-11-25`      | Local issuer PASS       | PASS    | No elicitation; saved intent, cancel/confirm | All-eligible actual worker completed; revoked work denied | LOCAL PASS; external fixture |
+
+## Reproducible local package evidence
+
+The pinned official `@modelcontextprotocol/client` and server versions are 2.3.1; `mcp-handler` is 2.3.0. Better Auth and its OAuth Provider are 1.7.12. The transport-only Zod version is 4.6.7; application validators remain Zod 3.
+
+`apps/web/lib/mcp/server.test.ts` covers real SDK negotiation for `2026-07-28` and the stateless `2025-11-25` compatibility path, native 2026 form elicitation acceptance/decline and the saved-intent fallback without elicitation. The legacy stateless path uses `confirmation_required` and explicit `confirm_action`; it does not promise native elicitation. `apps/web/lib/mcp/auth/issuer.integration.test.ts` uses the maintained issuer, signed access tokens, PKCE, refresh rotation, resource and connection mapping, plus an SDK client. These are package-level observations, not ChatGPT, Codex or Claude acceptance.
+
+`apps/web/e2e/mcp-flow.spec.ts` connects through the actual local Next issuer endpoints, selects two servers, calls tools over HTTP with the SDK without elicitation, declines and approves exact saved actions, polls queued/completed receipts, runs the compiled production worker and existing moderation queue service, then revokes before a second worker start. Its Discord boundary is a local controlled HTTP fixture and its database is disposable. It repeats selection with all eligible servers over the 2025 compatibility protocol. Role-only staff read context, complete a staff-only submitted-report closure, decline and queue a report-intake closure, then revoke before worker start; administrator operations remain denied. Connection and alternative website-confirmation journeys run alongside it. This is not live Discord moderation evidence.
+
+Run all database consumers serially. Supply matching `TEST_DATABASE_URL`, `DATABASE_URL` and `POSTGRES_DB_URL` for the owned local `127.0.0.1:55433/drasil_mcp_test` or CI loopback `5432/drasil_test` database. `npm run test:db:prepare` creates the required extension and deploys migrations before coverage's first DB consumer. The canonical `npm run check:ci` includes serial native DB, web issuer/DB and enabled MCP browser suites, followed by RLS checks. `npm run web:e2e:mcp` builds the application and bot before loading the compiled worker.
+
+## Remaining manual acceptance
+
+After local verification and independent review, use an owner-approved controlled Discord server and disposable targets. Register the separate issuer callback while preserving the existing website callback. For each actual client, record product name, exact version/build and interface, date, negotiated protocol, OAuth connect and refresh, selected/all-eligible scope, permitted read, exact confirmation presentation and user decision, controlled mutation, queued/completed polling and revocation before worker start. Record any auto-approval setting. A tool-call approval before the saved summary is shown does not establish approval of that summary.
+
+Check both native elicitation and a client without elicitation where supported. Verify role-only staff behavior, current authority changes and that revocation prevents new effects. Keep screenshots and receipt evidence free of private names and credentials. On the deployed host, verify every reachable ingress alias, forwarding-header overwrite/bypass resistance, disabled/enabled discovery and actual request duration/body limits. Record failures and unsupported client behavior explicitly. Do not mark a row passed from package tests or inferred UI behavior.

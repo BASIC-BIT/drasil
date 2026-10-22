@@ -389,3 +389,26 @@ it.each([
     });
   }
 );
+
+const systemCaptchaFixtures = [
+  {
+    kind: 'apply_captcha_pass',
+    caseId: 'case',
+    targetUserId: 'target',
+    challengeId: 'challenge',
+    generation: 1,
+    expectedCaseRevision: 0,
+  },
+  {
+    kind: 'notify_captcha_attention',
+    caseId: 'case',
+    targetUserId: 'target',
+    challengeId: 'challenge',
+    generation: 1,
+    reason: 'expired',
+  },
+] as const;
+it.each(systemCaptchaFixtures)('excludes canonical-valid system CAPTCHA $kind', (command) => {
+  expect(captchaCommandSchema.safeParse(command).success).toBe(true);
+  expect(humanCommandSchema.safeParse(command).success).toBe(false);
+});

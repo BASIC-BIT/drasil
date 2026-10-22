@@ -43,6 +43,10 @@ function record(value: unknown): Record<string, unknown> {
     ? (value as Record<string, unknown>)
     : {};
 }
+function delegatedExecutionId(envelope: ModerationActionRequest | null): string | null {
+  const executionId = record(record(envelope?.metadata).delegation).executionId;
+  return typeof executionId === 'string' ? executionId : null;
+}
 function continuation(request: ModerationActionRequest): DetectionOperation['continuation'] {
   const meta = record(request.metadata);
   if (meta.report_ban_phase === 'preparing') return 'preparing';
@@ -86,10 +90,7 @@ export function createBotDetectionRuntime(
   };
   const create = (envelope: ModerationActionRequest | null): DetectionActions => {
     let claimedReview: PrivateReportBanReview | null = null;
-    const executionId =
-      typeof record(record(envelope?.metadata).delegation).executionId === 'string'
-        ? String(record(record(envelope?.metadata).delegation).executionId)
-        : null;
+    const executionId = delegatedExecutionId(envelope);
     const ownedRequest = async (id: string): Promise<ModerationActionRequest> => {
       const persisted = await deps.actionRequests.findById(id);
       if (

@@ -1,3 +1,4 @@
+import { ownedTestDatabase } from '../../../scripts/owned-test-database.js';
 import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { Pool } from 'pg';
@@ -16,20 +17,23 @@ const names: Record<string, string> = {
   [guildFuture]: 'Fixture Future',
 };
 export function mcpBrowserFixtures(origin: string) {
-  const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
-  const store = createDelegationStore(createWebDelegationDatabase(pool));
-  let server: Server;
+  let roleOnly = false;
+  const effects: string[] = [];
+  let pool: Pool;
+  let store: ReturnType<typeof createDelegationStore>;
+  let server: Server | undefined;
   async function start() {
-    if (!process.env.TEST_DATABASE_URL) throw new Error('Source the owned MCP test.env first.');
-    const url = new URL(process.env.TEST_DATABASE_URL);
-    if (
-      !['localhost', '127.0.0.1'].includes(url.hostname) ||
-      url.port !== '55433' ||
-      url.pathname !== '/drasil_mcp_test'
-    )
-      throw new Error('Only the owned localhost MCP test database is allowed.');
-
+    const connectionString = ownedTestDatabase();
+    pool = new Pool({ connectionString });
+    store = createDelegationStore(createWebDelegationDatabase(pool));
+    await pool.query('TRUNCATE mcp_auth_jwks');
     server = createServer((request, response) => {
+      if (request.method === 'DELETE' && request.url?.startsWith('/channels/')) {
+        effects.push(request.url);
+        response.writeHead(204);
+        response.end();
+        return;
+      }
       const match = request.url?.match(/^\/guilds\/(\d+)(.*)$/);
       if (!match || !names[match[1]]) {
         response.writeHead(404);
@@ -40,23 +44,52 @@ export function mcpBrowserFixtures(origin: string) {
       const suffix = match[2];
       const body =
         suffix === '/roles'
-          ? [{ id, name: '@everyone', permissions: '8', position: 0, managed: false }]
+          ? [
+              {
+                id,
+                name: '@everyone',
+                permissions: roleOnly ? '0' : '8',
+                position: 0,
+                managed: false,
+              },
+              ...(roleOnly
+                ? [
+                    {
+                      id: '444444444444444444',
+                      name: 'Fixture responder',
+                      permissions: '0',
+                      position: 1,
+                      managed: false,
+                    },
+                  ]
+                : []),
+            ]
           : suffix.startsWith('/members/')
-            ? { user: { id: actorId }, roles: [] }
-            : { id, owner_id: actorId, name: names[id] };
+            ? { user: { id: actorId }, roles: roleOnly ? ['444444444444444444'] : [] }
+            : { id, owner_id: roleOnly ? '999999999999999999' : actorId, name: names[id] };
       response.setHeader('content-type', 'application/json');
       response.end(JSON.stringify(body));
     });
-    await new Promise<void>((resolve) => server.listen(34567, '127.0.0.1', resolve));
+    const listening = server;
+    await new Promise<void>((resolve, reject) => {
+      listening.once('error', reject);
+      listening.listen(34567, '127.0.0.1', () => {
+        listening.removeListener('error', reject);
+        resolve();
+      });
+    });
   }
   async function reset(context: BrowserContext) {
+    ownedTestDatabase();
+    roleOnly = false;
+    effects.length = 0;
     await pool.query(
-      'truncate mcp_auth_jwks, mcp_auth_user, mcp_auth_verification, mcp_auth_oauth_client, mcp_auth_rate_limit, mcp_authorization_flows, mcp_connections cascade'
+      'truncate moderation_action_requests, moderation_queue_items, mcp_rate_buckets, mcp_metadata_permits, mcp_auth_user, mcp_auth_verification, mcp_auth_oauth_client, mcp_auth_rate_limit, mcp_authorization_flows, mcp_connections cascade'
     );
     await pool.query('delete from servers where guild_id=$1', [guildFuture]);
     for (const id of [guildA, guildB])
       await pool.query(
-        'insert into servers(guild_id,settings,is_active) values($1,$2,true) on conflict(guild_id) do update set is_active=true',
+        'insert into servers(guild_id,settings,is_active) values($1,$2,true) on conflict(guild_id) do update set is_active=true, settings=EXCLUDED.settings',
         [id, '{}']
       );
     const userId = randomUUID();
@@ -91,7 +124,7 @@ export function mcpBrowserFixtures(origin: string) {
   }
   async function client(request: APIRequestContext, label: string) {
     const response = await request.post('/api/mcp-auth/oauth2/register', {
-      headers: { origin },
+      headers: { origin, 'x-forwarded-for': '127.0.0.1' },
       data: {
         client_name: label,
         redirect_uris: ['https://client.example/callback'],
@@ -139,7 +172,7 @@ export function mcpBrowserFixtures(origin: string) {
     code: string
   ) {
     const response = await request.post('/api/mcp-auth/oauth2/token', {
-      headers: { origin },
+      headers: { origin, 'x-forwarded-for': '127.0.0.1' },
       form: {
         grant_type: 'authorization_code',
         client_id: started.clientId,
@@ -157,8 +190,20 @@ export function mcpBrowserFixtures(origin: string) {
     };
   }
   return {
-    pool,
-    store,
+    get pool() {
+      return pool;
+    },
+    get store() {
+      return store;
+    },
+    effects,
+    async setRoleOnly() {
+      roleOnly = true;
+      await pool.query('update servers set settings=$1 where guild_id=ANY($2::text[])', [
+        JSON.stringify({ case_responder_role_ids: ['444444444444444444'] }),
+        [guildA, guildB],
+      ]);
+    },
     start,
     reset,
     client,
@@ -166,8 +211,15 @@ export function mcpBrowserFixtures(origin: string) {
     connection,
     exchange,
     async stop() {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-      await pool.end();
+      try {
+        const listening = server;
+        if (listening?.listening)
+          await new Promise<void>((resolve, reject) =>
+            listening.close((error) => (error ? reject(error) : resolve()))
+          );
+      } finally {
+        await pool?.end();
+      }
     },
   };
 }

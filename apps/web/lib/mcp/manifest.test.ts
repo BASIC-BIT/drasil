@@ -65,9 +65,17 @@ describe('strict public authority boundaries', () => {
     'fencingToken',
   ])('rejects client authority field %s', async (key) => {
     const entry = mcpWorkflowManifest.find((entry) => entry.id === 'ban_user');
+    const baseline = {
+      guildId: '100000000000000001',
+      idempotencyKey: 'retry',
+      targetUserId: '456',
+      reason: null,
+      selectedMessage: null,
+    };
+    expect(await entry?.schema['~standard'].validate(baseline)).toEqual({ value: baseline });
     expect(
       await entry?.schema['~standard'].validate({
-        guildId: '123',
+        guildId: '100000000000000001',
         idempotencyKey: 'retry',
         targetUserId: '456',
         reason: null,
@@ -145,9 +153,23 @@ it('rejects nested authority, raw prompt tokens and runtime-created cleanup jobs
   ];
   for (const fixture of fixtures) {
     const tool = mcpWorkflowManifest.find((entry) => entry.id === fixture.id);
+    const base = { guildId: '100000000000000001', idempotencyKey: 'retry', ...fixture.args };
+    const strip = (value: unknown): unknown => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+      return Object.fromEntries(
+        Object.entries(value)
+          .filter(
+            ([key]) =>
+              !['updatedBy', 'actor', 'interactionContext', 'promptToken', 'jobId'].includes(key)
+          )
+          .map(([key, entry]) => [key, strip(entry)])
+      );
+    };
+    const baseline = strip(base);
+    expect(await tool?.schema['~standard'].validate(baseline)).toEqual({ value: baseline });
     expect(
       await tool?.schema['~standard'].validate({
-        guildId: '123',
+        guildId: '100000000000000001',
         idempotencyKey: 'retry',
         ...fixture.args,
       })
@@ -157,7 +179,14 @@ it('rejects nested authority, raw prompt tokens and runtime-created cleanup jobs
 
 it('requires bounded idempotency keys and string guild IDs', async () => {
   const tool = mcpWorkflowManifest.find((entry) => entry.id === 'ban_user');
-  const valid = { guildId: '123', targetUserId: '456', reason: null, idempotencyKey: 'retry' };
+  const valid = {
+    guildId: '100000000000000001',
+    targetUserId: '456',
+    reason: null,
+    selectedMessage: null,
+    idempotencyKey: 'retry',
+  };
+  expect(await tool?.schema['~standard'].validate(valid)).toEqual({ value: valid });
   for (const key of [undefined, '', 'x'.repeat(129)])
     expect(
       await tool?.schema['~standard'].validate({ ...valid, idempotencyKey: key })

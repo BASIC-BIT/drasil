@@ -1,5 +1,7 @@
 const { spawnSync } = require('child_process');
 require('dotenv/config');
+const { ownedTestDatabase } = require('./owned-test-database.js');
+ownedTestDatabase();
 
 process.env.JEST_INTEGRATION = '1';
 

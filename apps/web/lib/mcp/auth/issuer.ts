@@ -231,7 +231,15 @@ export function createMcpIssuer({ pool, config, discord }: McpIssuerDependencies
         );
       const headers = new Headers(request.headers);
       headers.set('x-forwarded-for', identity.ip);
-      request = new Request(request, { headers });
+      // Next wraps Request in a Proxy; undici cannot read its private state.
+      const init = {
+        method: request.method,
+        headers,
+        body: request.body,
+        signal: request.signal,
+        duplex: 'half',
+      };
+      request = new Request(request.url, init);
     }
     if (path === '/oauth2/authorize') {
       if (request.method !== 'GET')

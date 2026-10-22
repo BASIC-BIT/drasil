@@ -94,12 +94,6 @@ export function createDelegatedWorkerAdmission(deps: {
     complete: async (execution, outcome): Promise<void> => {
       const result = projectHumanOutcome(execution.command, outcome);
       await deps.store.completeExecution(execution.executionId, result);
-      await audit({
-        event: 'execution',
-        ...execution,
-        requestId: execution.queueRequestId ?? undefined,
-        outcome: result.state,
-      });
     },
   };
 }

@@ -2,7 +2,7 @@
 
 Date: 2026-10-20
 
-Status: Approved for implementation planning on 2026-10-20. Product implementation awaits plan review.
+Status: Approved design implemented on the feature branch. Local acceptance and independent review are in progress; actual client and deployed-host acceptance remain pending. See [client acceptance](../../dev/mcp-client-compatibility.md).
 
 Related work: #89, merged PRs #255 and #257, [action boundary](../../dev/action-boundary.md), [caller inventory](../../dev/action-boundary-inventory.md).
 

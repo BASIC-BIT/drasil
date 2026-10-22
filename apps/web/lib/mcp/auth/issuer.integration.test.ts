@@ -932,7 +932,8 @@ it('serves SDK reads using real issued bearer identity and rejects expired, wron
         grantVersion: 1,
         scopes: ['drasil:read'],
       }),
-      expect.objectContaining({ kind: 'list_guilds' })
+      expect.objectContaining({ kind: 'list_guilds' }),
+      undefined
     );
     for (const change of [
       { exp: Math.floor(Date.now() / 1000) - 60 },
@@ -1104,4 +1105,24 @@ it('keeps the hourly IP gate after native short-window counters reset', async ()
   ).rows;
   expect(buckets).toHaveLength(1);
   expect(buckets[0].subject).toMatch(/^ip:[a-f0-9]{64}$/);
+});
+it('registers through a Next-style proxied request without losing the JSON body', async () => {
+  const native = new Request(issuer + '/oauth2/register', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-forwarded-for': '192.0.2.201' },
+    body: JSON.stringify({
+      client_name: 'Proxied controlled client',
+      redirect_uris: ['https://client.example/callback'],
+      token_endpoint_auth_method: 'none',
+      grant_types: ['authorization_code'],
+      response_types: ['code'],
+    }),
+  });
+  const request = new Proxy(native, { get: (target, key) => Reflect.get(target, key, target) });
+  const response = await auth.handler(request);
+  expect(response.status).toBe(201);
+  expect(await response.json()).toMatchObject({
+    client_name: 'Proxied controlled client',
+    redirect_uris: ['https://client.example/callback'],
+  });
 });

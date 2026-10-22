@@ -1,5 +1,6 @@
 import { Pool } from 'pg';
 import {
+  createMcpAudit,
   createDelegatedActionService,
   createDelegatedAccess,
   createDetectionActions,
@@ -489,6 +490,58 @@ integration.each(['pg', 'prisma'] as const)('MCP durable delivery via %s', (driv
       ).kind
     ).toBe('denied');
   });
+  it('emits one terminal event for a guarded composed worker completion', async () => {
+    const info = jest.spyOn(console, 'info').mockImplementation(() => undefined);
+    try {
+      store = createDelegationStore(
+        driver === 'pg'
+          ? createWebDelegationDatabase(pool)
+          : createBotDelegationDatabase(getPrismaClient()),
+        { audit: createMcpAudit((line) => console.info(line)) }
+      );
+      const receipt = await accept();
+      const operations = {
+        execute: jest.fn(async () => ({
+          kind: 'outcome',
+          outcome: { kind: 'clear_moderation_queue', removedCount: 1 },
+        })),
+      };
+      const runtime = {
+        operations,
+        operationsRuntime: { forExecution: () => operations },
+        caseConfirmations: { recordVerified: jest.fn() },
+        delegation: createDelegatedWorkerAdmission({ store, access }),
+      };
+      const worker = new ModerationActionRequestService(
+        new ModerationActionRequestRepository(getPrismaClient()),
+        runtime as never,
+        {} as never
+      );
+      await worker.processPendingRequests(1);
+      expect((await service().status(principal, receipt.executionId!)).state).toBe('completed');
+      expect(operations.execute).toHaveBeenCalledTimes(1);
+      const terminal = () =>
+        info.mock.calls
+          .map(([line]) => JSON.parse(String(line)))
+          .filter(
+            (event) =>
+              event.event === 'execution' &&
+              event.executionId === receipt.executionId &&
+              event.outcome === 'completed'
+          );
+      expect(terminal()).toHaveLength(1);
+      const execution = await store.loadExecution(principal, receipt.executionId!);
+      if (!execution) throw new Error('Missing completed execution');
+      await runtime.delegation.complete(execution, {
+        action_type: 'clear_moderation_queue',
+        removed_count: 1,
+      });
+      expect(terminal()).toHaveLength(1);
+    } finally {
+      info.mockRestore();
+    }
+  });
+
   it('persists the completed worker receipt after the durable queue outcome', async () => {
     const receipt = await accept();
     const operations = {

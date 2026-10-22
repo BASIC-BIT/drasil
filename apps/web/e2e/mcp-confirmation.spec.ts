@@ -7,16 +7,13 @@ import {
 } from '@drasil/application';
 import { createDelegationStore, createCaseResolutionResources } from '@drasil/application/postgres';
 import { createWebDelegationDatabase } from '../lib/mcp/adapters/database';
-import { Pool } from 'pg';
 const origin = `http://127.0.0.1:${process.env.PLAYWRIGHT_TEST_PORT || '3001'}`;
 const fixtures = mcpBrowserFixtures(origin);
-const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
 test.describe.configure({ mode: 'serial', timeout: 120_000 });
 test.skip(process.env.DRASIL_MCP_E2E !== 'true', 'Requires owned database and Discord fixture');
 test.beforeAll(() => fixtures.start());
 test.afterAll(async () => {
   await fixtures.stop();
-  await pool.end();
 });
 test('GET shows the full saved summary and only explicit POST approves', async ({
   context,
@@ -28,10 +25,10 @@ test('GET shows the full saved summary and only explicit POST approves', async (
     if (message.type() === 'error') browserErrors.push(message.text());
   });
   await fixtures.reset(context);
-  await pool.query(
+  await fixtures.pool.query(
     "insert into users(discord_id) values ('999999999999999999') on conflict do nothing"
   );
-  const store = createDelegationStore(createWebDelegationDatabase(pool));
+  const store = createDelegationStore(createWebDelegationDatabase(fixtures.pool));
   const grant = await store.createConnection({
     userId: actorId,
     clientId: 'fixture',
@@ -64,7 +61,11 @@ test('GET shows the full saved summary and only explicit POST approves', async (
     resolver: createCaseIntentResolver({
       access,
       resources: () =>
-        createCaseResolutionResources(createWebDelegationDatabase(pool), guildA, async () => null),
+        createCaseResolutionResources(
+          createWebDelegationDatabase(fixtures.pool),
+          guildA,
+          async () => null
+        ),
     }),
   });
   const invocation = {
@@ -92,7 +93,7 @@ test('GET shows the full saved summary and only explicit POST approves', async (
   await expect(page.getByRole('region', { name: 'Saved action summary' })).toHaveText(
     intent.summary
   );
-  expect((await pool.query('select * from mcp_executions')).rows).toHaveLength(0);
+  expect((await fixtures.pool.query('select * from mcp_executions')).rows).toHaveLength(0);
   await page.goto(`/mcp/confirm/${intent.confirmationId}`);
   expect((await store.loadIntent(principal, intent.confirmationId))?.state).toBe('pending');
   await page.screenshot({
@@ -109,10 +110,10 @@ test('GET shows the full saved summary and only explicit POST approves', async (
     idempotencyKey: 'browser-approved',
   });
   await page.goto(`/mcp/confirm/${accepted.confirmationId}`);
-  expect((await pool.query('select * from mcp_executions')).rows).toHaveLength(0);
+  expect((await fixtures.pool.query('select * from mcp_executions')).rows).toHaveLength(0);
   await page.getByRole('button', { name: 'Approve', exact: true }).click();
   await expect(page.getByText('Action queued', { exact: true })).toBeVisible();
-  const execution = (await pool.query('select * from mcp_executions')).rows;
+  const execution = (await fixtures.pool.query('select * from mcp_executions')).rows;
   expect(execution).toHaveLength(1);
   expect(execution[0]).toMatchObject({
     confirmation_method: 'website',
@@ -122,15 +123,15 @@ test('GET shows the full saved summary and only explicit POST approves', async (
   });
   await page.reload();
   await expect(page.getByText('Action queued', { exact: true })).toBeVisible();
-  expect((await pool.query('select * from mcp_executions')).rows).toHaveLength(1);
+  expect((await fixtures.pool.query('select * from mcp_executions')).rows).toHaveLength(1);
   expect(browserErrors).toEqual([]);
 });
 
 test('sign-in returns to the same confirmation without approving', async ({ context, page }) => {
   await context.clearCookies();
   const id = 'a'.repeat(43);
-  const before = (await pool.query('select count(*)::int as count from mcp_executions')).rows[0]
-    .count;
+  const before = (await fixtures.pool.query('select count(*)::int as count from mcp_executions'))
+    .rows[0].count;
   await page.route('**/api/mcp-auth/sign-in/social', (route) =>
     route.fulfill({
       status: 200,
@@ -146,6 +147,6 @@ test('sign-in returns to the same confirmation without approving', async ({ cont
     callbackURL: `/mcp/confirm/${id}`,
   });
   expect(
-    (await pool.query('select count(*)::int as count from mcp_executions')).rows[0].count
+    (await fixtures.pool.query('select count(*)::int as count from mcp_executions')).rows[0].count
   ).toBe(before);
 });

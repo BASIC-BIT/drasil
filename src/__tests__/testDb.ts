@@ -1,30 +1,16 @@
 import { createPrismaClient, PrismaClient } from '../db/prisma';
 import { Client } from 'pg';
 import { execSync } from 'child_process';
+import { ownedTestDatabase } from '../../scripts/owned-test-database.js';
 import * as dotenv from 'dotenv';
 
 dotenv.config();
+if (process.env.JEST_INTEGRATION === '1') ownedTestDatabase();
 
-let resolvedDatabaseUrl: string | null = null;
 let prismaClient: PrismaClient | null = null;
 
 function resolveDatabaseUrl(): string {
-  if (resolvedDatabaseUrl) {
-    return resolvedDatabaseUrl;
-  }
-
-  const databaseUrl = process.env.TEST_DATABASE_URL || process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    throw new Error('Missing TEST_DATABASE_URL or DATABASE_URL for integration tests.');
-  }
-
-  process.env.DATABASE_URL = databaseUrl;
-  resolvedDatabaseUrl = databaseUrl;
-  return databaseUrl;
-}
-
-function resolveAdminDatabaseUrl(): string {
-  return process.env.POSTGRES_DB_URL || resolveDatabaseUrl();
+  return ownedTestDatabase();
 }
 
 export function getPrismaClient(): PrismaClient {
@@ -42,7 +28,7 @@ export async function disconnectPrismaClient(): Promise<void> {
 }
 
 export async function ensureExtensions(): Promise<void> {
-  const client = new Client({ connectionString: resolveAdminDatabaseUrl() });
+  const client = new Client({ connectionString: resolveDatabaseUrl() });
   await client.connect();
   await client.query('CREATE SCHEMA IF NOT EXISTS extensions;');
   await client.query('CREATE EXTENSION IF NOT EXISTS "uuid-ossp" WITH SCHEMA extensions;');

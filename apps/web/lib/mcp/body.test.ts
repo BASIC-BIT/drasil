@@ -53,3 +53,24 @@ it('propagates stream failures and leaves unsupported methods to the handler', a
     (await wrapMcpBody(next)(new Request('https://example/api/mcp', { method: 'DELETE' }))).status
   ).toBe(405);
 });
+it('reconstructs a Next-style proxied request after bounded reading', async () => {
+  const controller = new AbortController();
+  const native = new Request('https://example/api/mcp', {
+    method: 'POST',
+    headers: { authorization: 'Bearer controlled', 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', method: 'tools/list', id: 1 }),
+    signal: controller.signal,
+  });
+  const request = new Proxy(native, { get: (target, key) => Reflect.get(target, key, target) });
+  let forwarded: Request | undefined;
+  const response = await wrapMcpBody(async (r) => {
+    forwarded = r;
+    return Response.json(await r.clone().json());
+  })(request);
+  expect(await response.json()).toMatchObject({ method: 'tools/list' });
+  expect(forwarded?.url).toBe(native.url);
+  expect(forwarded?.method).toBe('POST');
+  expect(forwarded?.headers.get('authorization')).toBe('Bearer controlled');
+  controller.abort();
+  expect(forwarded?.signal.aborted).toBe(true);
+});

@@ -3,8 +3,27 @@ import type { GuildSelection, HumanOutcome, DelegatedScope } from './types';
 
 it('keeps human command and outcome contracts separate from system authority', () => {
   // These compile-time fixtures fail typechecking if the human contracts are widened.
+  const completeSystemCommand = {
+    kind: 'apply_captcha_pass',
+    caseId: 'case',
+    targetUserId: 'target',
+    challengeId: 'challenge',
+    generation: 1,
+    expectedCaseRevision: 0,
+  } as const;
   // @ts-expect-error System CAPTCHA completion cannot be delegated as a human command.
-  const system: HumanCommand = { kind: 'apply_captcha_pass' };
+  const system: HumanCommand = completeSystemCommand;
+  const completeNotification = {
+    kind: 'notify_captcha_attention',
+    caseId: 'case',
+    targetUserId: 'target',
+    challengeId: 'challenge',
+    generation: 1,
+    reason: 'expired',
+  } as const;
+  // @ts-expect-error A complete canonical system notification is also excluded.
+  const notification: HumanCommand = completeNotification;
+  expect(humanCommandSchema.safeParse(notification).success).toBe(false);
   // @ts-expect-error Infrastructure diagnostics are not family outcomes.
   const arbitraryOutcome: HumanOutcome = { databaseWrite: 'arbitrary' };
   // @ts-expect-error All-eligible consent does not contain a hidden selected-guild restriction.

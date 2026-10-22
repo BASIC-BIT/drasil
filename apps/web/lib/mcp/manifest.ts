@@ -1,3 +1,5 @@
+/** Executable workflow/variant and 73-field coverage is verified in manifest.test.ts.
+ * Actual client acceptance is recorded in docs/dev/mcp-client-compatibility.md. */
 import { z } from 'zod';
 import {
   workflowDefinitions,

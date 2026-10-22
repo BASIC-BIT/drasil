@@ -11,6 +11,13 @@ export function wrapMcpBody(
       return new Response(null, { status: 413 });
     }
     // The maintained reader consumed the original. Preserve signal, headers, URL and method.
-    return next(new Request(request, { body: body.text }));
+    return next(
+      new Request(request.url, {
+        method: request.method,
+        headers: request.headers,
+        signal: request.signal,
+        body: body.text,
+      })
+    );
   };
 }

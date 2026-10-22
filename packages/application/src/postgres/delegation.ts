@@ -655,6 +655,105 @@ export async function recordMcpQueueObservation(
     // Read/telemetry failure supplies no evidence of a final outcome and cannot change the write.
   }
 }
+function matchesConsumedIntent(saved: IntentRow | undefined, execution: ExecutionRecord): boolean {
+  return !(
+    !saved ||
+    saved.user_id !== execution.userId ||
+    saved.client_id !== execution.clientId ||
+    saved.connection_id !== execution.connectionId ||
+    saved.grant_version !== execution.grantVersion ||
+    canonicalDigest(saved.resolved) !== canonicalDigest(executionResolved(execution)) ||
+    execution.commandDigest !== canonicalDigest(execution.command)
+  );
+}
+function matchesQueueAdmission(
+  execution: ExecutionRecord,
+  queue: DelegatedQueueAdmission,
+  persisted: QueuedRow
+): boolean {
+  if (execution.authorizedDelivery.kind !== 'queued') return false;
+  return !(
+    !matchesQueue(execution, persisted) ||
+    !matchesQueue(execution, queue.request) ||
+    canonicalDigest(queue.action.command) !== execution.authorizedDelivery.commandDigest ||
+    queue.action.context.requestId !== queue.request.id ||
+    queue.action.context.guildId !== execution.guildId ||
+    queue.action.context.source !== 'mcp' ||
+    queue.action.context.actor.kind !== 'user' ||
+    queue.action.context.actor.userId !== execution.userId
+  );
+}
+async function queueLeaseIsLive(
+  client: DelegationQueryClient,
+  requestId: string
+): Promise<boolean> {
+  const claim = await client.query<{ live: boolean }>(
+    "select status='processing' and updated_at >= clock_timestamp()-interval '15 minutes' as live from moderation_action_requests where id=$1::uuid",
+    [requestId]
+  );
+  return claim.rows[0]?.live === true;
+}
+function canReconcileReportBan(
+  execution: ExecutionRecord,
+  persisted: QueuedRow,
+  queue: DelegatedQueueAdmission
+): boolean {
+  if (execution.authorizedDelivery.kind !== 'queued') return false;
+  const metadata = persisted.metadata ?? {};
+  const protectedPhase = [
+    'preparing',
+    'enforcement_started',
+    'discord_confirmed',
+    'reconciliation_required',
+  ].includes(String(metadata.report_ban_phase));
+  const attempt = metadata.report_ban_attempt_token;
+  return Boolean(
+    execution.startedAt &&
+    execution.authorizedDelivery.command.kind === 'ban_observed_detection' &&
+    protectedPhase &&
+    typeof attempt === 'string' &&
+    attempt.length > 0 &&
+    queue.request.metadata?.report_ban_attempt_token === attempt
+  );
+}
+async function validateQueuedAdmission(
+  client: DelegationQueryClient,
+  execution: ExecutionRecord,
+  queue: DelegatedQueueAdmission
+): Promise<WorkerAdmission | null> {
+  if (
+    execution.authorizedDelivery.kind !== 'queued' ||
+    execution.queueRequestId !== queue.request.id
+  )
+    return { kind: 'denied', code: 'binding_mismatch' };
+  const rows = await client.query<QueuedRow & Record<string, unknown>>(
+    'select * from moderation_action_requests where id=$1::uuid for update',
+    [queue.request.id]
+  );
+  const persisted = rows.rows[0];
+  if (!persisted || !matchesQueueAdmission(execution, queue, persisted))
+    return { kind: 'denied', code: 'binding_mismatch' };
+  // A stale owner cannot admit new work after its queue lease expires.
+  // Already-admitted executions remain read-only observations, including after revocation.
+  if (!execution.startedAt && !execution.completedAt) {
+    // Check the clock after acquiring the lock, including time spent waiting for it.
+    if (!(await queueLeaseIsLive(client, queue.request.id)))
+      return {
+        kind: 'denied',
+        code: 'execution_interrupted_before_send',
+        persistence: 'observe_only',
+      };
+  }
+  if (await hasCommittedContainment(client, execution, queue.request))
+    return { kind: 'committed_containment', execution };
+  if (queue.recovery) {
+    if (canReconcileReportBan(execution, persisted, queue))
+      return { kind: 'committed_reconciliation', execution };
+    return { kind: 'denied', code: 'reconciliation_denied' };
+  }
+  return null;
+}
+
 function createExecutionStore(
   database: DelegationDatabase,
   operations: { enabled?: () => boolean; audit?: McpAuditPort }
@@ -702,77 +801,11 @@ function createExecutionStore(
         [execution.confirmationId]
       );
       const saved = intent.rows[0];
-      if (
-        !saved ||
-        saved.user_id !== execution.userId ||
-        saved.client_id !== execution.clientId ||
-        saved.connection_id !== execution.connectionId ||
-        saved.grant_version !== execution.grantVersion ||
-        canonicalDigest(saved.resolved) !== canonicalDigest(executionResolved(execution)) ||
-        execution.commandDigest !== canonicalDigest(execution.command)
-      )
+      if (!matchesConsumedIntent(saved, execution))
         return { kind: 'denied', code: 'binding_mismatch' };
       if (queue) {
-        if (
-          execution.authorizedDelivery.kind !== 'queued' ||
-          execution.queueRequestId !== queue.request.id
-        )
-          return { kind: 'denied', code: 'binding_mismatch' };
-        const rows = await client.query<QueuedRow & Record<string, unknown>>(
-          'select * from moderation_action_requests where id=$1::uuid for update',
-          [queue.request.id]
-        );
-        const persisted = rows.rows[0];
-        if (
-          !persisted ||
-          !matchesQueue(execution, persisted) ||
-          !matchesQueue(execution, queue.request) ||
-          canonicalDigest(queue.action.command) !== execution.authorizedDelivery.commandDigest ||
-          queue.action.context.requestId !== queue.request.id ||
-          queue.action.context.guildId !== execution.guildId ||
-          queue.action.context.source !== 'mcp' ||
-          queue.action.context.actor.kind !== 'user' ||
-          queue.action.context.actor.userId !== execution.userId
-        )
-          return { kind: 'denied', code: 'binding_mismatch' };
-        // A stale owner cannot admit new work after its queue lease expires.
-        // Already-admitted executions remain read-only observations, including after revocation.
-        if (!execution.startedAt && !execution.completedAt) {
-          // Check the clock after acquiring the lock, including time spent waiting for it.
-          const claim = await client.query<{ live: boolean }>(
-            `select status='processing' and updated_at >= clock_timestamp()-interval '15 minutes' as live
-             from moderation_action_requests where id=$1::uuid`,
-            [queue.request.id]
-          );
-          if (!claim.rows[0]?.live)
-            return {
-              kind: 'denied',
-              code: 'execution_interrupted_before_send',
-              persistence: 'observe_only',
-            };
-        }
-        if (await hasCommittedContainment(client, execution, queue.request))
-          return { kind: 'committed_containment', execution };
-        if (queue.recovery) {
-          const metadata = persisted.metadata ?? {};
-          const protectedPhase = [
-            'preparing',
-            'enforcement_started',
-            'discord_confirmed',
-            'reconciliation_required',
-          ].includes(String(metadata.report_ban_phase));
-          const attempt = metadata.report_ban_attempt_token;
-          if (
-            execution.startedAt &&
-            execution.authorizedDelivery.command.kind === 'ban_observed_detection' &&
-            protectedPhase &&
-            typeof attempt === 'string' &&
-            attempt.length > 0 &&
-            queue.request.metadata?.report_ban_attempt_token === attempt
-          )
-            return { kind: 'committed_reconciliation', execution };
-          return { kind: 'denied', code: 'reconciliation_denied' };
-        }
+        const admission = await validateQueuedAdmission(client, execution, queue);
+        if (admission) return admission;
       } else if (
         execution.authorizedDelivery.kind !== 'direct' ||
         execution.queueRequestId !== null
@@ -805,13 +838,7 @@ function createExecutionStore(
       }
       if (!denial && operations.enabled && !operations.enabled()) denial = 'mcp_disabled';
       if (queue && !denial) {
-        const {
-          rows: [claim],
-        } = await client.query<{ live: boolean }>(
-          "select status='processing' and updated_at >= clock_timestamp()-interval '15 minutes' as live from moderation_action_requests where id=$1::uuid",
-          [queue.request.id]
-        );
-        if (!claim?.live)
+        if (!(await queueLeaseIsLive(client, queue.request.id)))
           return {
             kind: 'denied',
             code: 'execution_interrupted_before_send',
@@ -859,19 +886,17 @@ function createExecutionStore(
     completeExecution: (id, result) => finish(database, id, result),
   };
 }
-function executionResolved(execution: ExecutionRecord): ResolvedIntent {
-  return {
-    workflowId: execution.workflowId,
-    guildId: execution.guildId,
-    command: execution.command,
-    commandDigest: execution.commandDigest,
-    authorizedDelivery: execution.authorizedDelivery,
-    preconditions: execution.preconditions,
-    stateFingerprint: execution.stateFingerprint,
-    summary: execution.summary,
-    previewExpiresAt: execution.previewExpiresAt,
-  };
-}
+const executionResolved = (execution: ExecutionRecord): ResolvedIntent => ({
+  workflowId: execution.workflowId,
+  guildId: execution.guildId,
+  command: execution.command,
+  commandDigest: execution.commandDigest,
+  authorizedDelivery: execution.authorizedDelivery,
+  preconditions: execution.preconditions,
+  stateFingerprint: execution.stateFingerprint,
+  summary: execution.summary,
+  previewExpiresAt: execution.previewExpiresAt,
+});
 function matchesQueue(execution: ExecutionRecord, row: QueuedRow): boolean {
   if (execution.authorizedDelivery.kind !== 'queued') return false;
   const binding = delegatedDeliveryBindingSchema.safeParse(row.metadata?.delegation);
@@ -896,7 +921,17 @@ function matchesQueue(execution: ExecutionRecord, row: QueuedRow): boolean {
     },
     execution.authorizedDelivery.command
   );
-  if (
+  if (!matchesQueueColumns(row, encoded)) return false;
+  return Object.entries(encoded.metadata).every(
+    ([key, value]) => canonicalDigest(row.metadata?.[key] ?? null) === canonicalDigest(value)
+  );
+}
+
+const matchesQueueColumns = (
+  row: QueuedRow,
+  encoded: ReturnType<typeof encodeQueuedAction>
+): boolean => {
+  return !(
     row.actor_id !== encoded.actorId ||
     row.actor_surface !== encoded.actorSurface ||
     row.server_id !== encoded.serverId ||
@@ -906,12 +941,8 @@ function matchesQueue(execution: ExecutionRecord, row: QueuedRow): boolean {
     (row.verification_event_id ?? null) !== (encoded.verificationEventId ?? null) ||
     (row.report_intake_id ?? null) !== (encoded.reportIntakeId ?? null) ||
     (row.message_deletion_job_id ?? null) !== (encoded.messageDeletionJobId ?? null)
-  )
-    return false;
-  return Object.entries(encoded.metadata).every(
-    ([key, value]) => canonicalDigest(row.metadata?.[key] ?? null) === canonicalDigest(value)
   );
-}
+};
 
 /** Lookup by runtime-authenticated owner before revealing a saved summary or original grant. */
 export function createActorApprovalStore(database: DelegationDatabase): ActorApprovalStore {

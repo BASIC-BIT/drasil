@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Pool } from 'pg';
 import { createWebDelegationDatabase } from './adapters/database';
 import { createMcpLimits } from './limits';
@@ -6,17 +6,14 @@ import { createDelegationStore } from '@drasil/application/postgres';
 import { createDelegatedAccess } from '@drasil/application';
 import { createMcpQueries } from './queries';
 import { createMcpReadTools } from './tools/reads';
-if (process.env.TEST_DATABASE_URL) {
-  const database = new URL(process.env.TEST_DATABASE_URL);
-  if (
-    !['127.0.0.1', 'localhost'].includes(database.hostname) ||
-    !database.pathname.endsWith('_test')
-  )
-    throw new Error('MCP limits tests require a disposable loopback *_test database.');
-}
+import { ownedTestDatabase } from '../../../../scripts/owned-test-database.js';
 describe.skipIf(!process.env.TEST_DATABASE_URL)('shared persisted budgets', () => {
-  const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
-  const db = createWebDelegationDatabase(pool);
+  let pool: Pool;
+  let db: ReturnType<typeof createWebDelegationDatabase>;
+  beforeAll(() => {
+    pool = new Pool({ connectionString: ownedTestDatabase() });
+    db = createWebDelegationDatabase(pool);
+  });
   const subject = {
     userId: '100',
     clientId: 'client',
@@ -26,10 +23,11 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('shared persisted budgets', () =
     guildId: '200',
   };
   beforeEach(async () => {
+    ownedTestDatabase();
     await pool.query('TRUNCATE mcp_rate_buckets,mcp_metadata_permits');
   });
   afterAll(async () => {
-    await pool.end();
+    await pool?.end();
   });
   it('shares read limits across web instances', async () => {
     const instances = [createMcpLimits(db), createMcpLimits(createWebDelegationDatabase(pool))];

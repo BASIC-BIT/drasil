@@ -26,6 +26,7 @@ const webServerEnv: Record<string, string> = {
 
 export default defineConfig({
   testDir: './e2e',
+  globalSetup: './e2e/globalSetup.ts',
   fullyParallel: true,
   workers: 1,
   timeout: 30_000,

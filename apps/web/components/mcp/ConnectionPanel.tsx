@@ -41,20 +41,23 @@ export function ConnectionPanel({
   const [editing, setEditing] = useState<OwnConnection | null>(null);
   const [pending, startTransition] = useTransition();
   useEffect(() => {
+    let current = true;
     const exactQuery = window.location.search.slice(1);
     setQuery(exactQuery);
     void (async () => {
       try {
         const sessionStatus = await mcpSessionStatus();
-        setStatus(sessionStatus);
+        if (current) setStatus(sessionStatus);
         if (sessionStatus !== 'authenticated') return;
         if (step === 'connections') {
           const own = await loadMcpConnections();
+          if (!current) return;
           setConnections(own.connections);
           setConnectionCursor(own.nextCursor);
           return;
         }
         const view = await loadMcpFlow(exactQuery);
+        if (!current) return;
         setFlow(view);
         setServers(view.servers);
         setCursor(view.nextCursor);
@@ -62,9 +65,13 @@ export function ConnectionPanel({
         if (view.selection?.mode === 'selected') setIds([...view.selection.guildIds]);
         setAllEligible(view.selection?.mode === 'all_eligible');
       } catch {
-        setError('This request is unavailable or expired. Start again from your client.');
+        if (current)
+          setError('This request is unavailable or expired. Start again from your client.');
       }
     })();
+    return () => {
+      current = false;
+    };
   }, [step]);
   function run(action: () => Promise<void>) {
     setError('');
