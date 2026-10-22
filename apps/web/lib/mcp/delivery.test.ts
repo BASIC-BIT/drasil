@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createMcpDirectExecutor, withinMcpDeadline } from './delivery';
+import { projectExecution, projectHumanOutcome, type ExecutionRecord } from '@drasil/application';
 
 const context = {
   guildId: 'guild',
@@ -149,3 +150,102 @@ it.each(['drasil:moderate', 'drasil:configure'] as const)(
     expect(status).not.toHaveBeenCalled();
   }
 );
+
+describe.each(['queued', 'running'] as const)(
+  'optional polling after an owned %s receipt',
+  (state) => {
+    it.each(
+      (['rate_limited', 'permission_denied', 'invalid_grant'] as const).flatMap((code) =>
+        [undefined, 'other-execution'].map((executionId) => ({ code, executionId }))
+      )
+    )('preserves the receipt and stops on $code with executionId=$executionId', async (denial) => {
+      const { waitForMcpReceipt } = await import('./delivery');
+      vi.useFakeTimers();
+      try {
+        const actor = {
+          userId: 'actor',
+          clientId: 'client',
+          connectionId: 'connection',
+          grantVersion: 1,
+          scopes: ['drasil:read'] as const,
+        };
+        const initial = { state: 'queued' as const, executionId: 'execution' };
+        const owned = { state, executionId: 'execution', requestId: 'request', retryAfterMs: 2000 };
+        const status = vi
+          .fn()
+          .mockResolvedValueOnce(owned)
+          .mockResolvedValue({ state: 'denied', ...denial });
+        const pending = waitForMcpReceipt({ status }, actor, initial);
+        await vi.advanceTimersByTimeAsync(500);
+        expect(await pending).toBe(owned);
+        expect(status).toHaveBeenCalledTimes(2);
+        await vi.advanceTimersByTimeAsync(5000);
+        expect(status).toHaveBeenCalledTimes(2);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  }
+);
+
+it('returns a terminal worker denial bound to the accepted execution', async () => {
+  const { waitForMcpReceipt } = await import('./delivery');
+  vi.useFakeTimers();
+  try {
+    const actor = {
+      userId: 'actor',
+      clientId: 'client',
+      connectionId: 'connection',
+      grantVersion: 1,
+      scopes: ['drasil:read'] as const,
+    };
+    const command = { kind: 'clear_moderation_queue' as const };
+    const execution: ExecutionRecord = {
+      ...actor,
+      executionId: 'execution',
+      confirmationId: 'confirmation',
+      confirmationMethod: 'client_confirmation',
+      workflowId: command.kind,
+      guildId: 'guild',
+      command,
+      commandDigest: 'digest',
+      authorizedDelivery: { kind: 'queued', command, commandDigest: 'digest' },
+      preconditions: { kind: 'none' },
+      stateFingerprint: 'fingerprint',
+      summary: 'Clear moderation queue',
+      previewExpiresAt: null,
+      queueRequestId: 'request',
+      createdAt: new Date(),
+      startedAt: null,
+      completedAt: new Date(),
+      outcome: {
+        kind: 'delegated_terminal',
+        result: projectHumanOutcome(command, {
+          action_type: 'delegated_admission',
+          state: 'denied',
+          code: 'permission_denied',
+        }),
+      },
+    };
+    const denied = projectExecution(execution);
+    expect(denied).toMatchObject({
+      state: 'denied',
+      executionId: 'execution',
+      requestId: 'request',
+      code: 'permission_denied',
+    });
+    const status = vi.fn(async () => denied);
+    const pending = waitForMcpReceipt({ status }, actor, {
+      state: 'running',
+      executionId: 'execution',
+    });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(await pending).toBe(denied);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(status).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    vi.useRealTimers();
+  }
+});

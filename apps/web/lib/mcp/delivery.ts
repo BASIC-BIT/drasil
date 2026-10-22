@@ -120,7 +120,10 @@ export async function waitForMcpReceipt(
         };
       });
       if (stopped) break;
-      latest = await service.status(principal, initial.executionId!).catch(() => latest);
+      const observed = await service.status(principal, initial.executionId!).catch(() => latest);
+      // A denial of observation is not a terminal outcome for the accepted execution.
+      if (observed.state === 'denied' && observed.executionId !== initial.executionId) break;
+      latest = observed;
     }
     return latest;
   };

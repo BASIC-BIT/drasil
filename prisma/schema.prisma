@@ -1158,6 +1158,8 @@ model mcp_authorization_flows {
   expires_at                   DateTime                      @db.Timestamptz(6)
   cancelled_at                 DateTime?                     @db.Timestamptz(6)
   reference_id                 String?                       @unique @db.Uuid
+  /// SQL NULL until selection; Prisma scalar lists generate nullable TEXT[] and do not support String[]?.
+  /// The flow repository uses pg with an explicitly nullable row type for this lifecycle.
   approved_scopes              String[]
   created_at                   DateTime                      @default(now()) @db.Timestamptz(6)
   mcp_auth_oauth_client        mcp_auth_oauth_client         @relation(fields: [client_id], references: [clientId], onDelete: Cascade, onUpdate: NoAction)
