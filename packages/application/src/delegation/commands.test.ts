@@ -103,6 +103,26 @@ it('covers every canonical human command and the independent caller inventory', 
   expect(actualKinds).toEqual(callers);
 });
 
+it('requires configure scope for configuration writes across workflow families', () => {
+  const writes = workflowDefinitions.filter(
+    (entry) => entry.family === 'setup' || entry.commandKind === 'apply_case_role_lockdown'
+  );
+  for (const entry of writes)
+    expect({ id: entry.id, scope: entry.scope }).toEqual({
+      id: entry.id,
+      scope: 'drasil:configure',
+    });
+  expect(
+    workflowDefinitions.find((entry) => entry.id === 'apply_case_role_lockdown')
+  ).toMatchObject({
+    family: 'operations',
+    delivery: 'queued',
+    authorityPolicy: 'operations.apply_case_role_lockdown',
+    authorityCommand: { kind: 'apply_case_role_lockdown' },
+    resultContract: 'operations',
+  });
+});
+
 it('distinguishes authority and delivery variants without client provenance', () => {
   const ids = workflowDefinitions.map((workflow) => workflow.id);
   for (const id of [
@@ -305,6 +325,7 @@ it('requires settings diffs for configuration and retains shared setup workflow 
     'lockdown_allow_remove',
     'disable_lockdown',
     'complete_setup_verification',
+    'apply_case_role_lockdown',
   ])
     expect(workflowDefinitions.find((entry) => entry.commandKind === kind)?.confirmationRule).toBe(
       'exact_settings_diff'

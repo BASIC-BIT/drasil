@@ -197,7 +197,10 @@ function define(
       .omit({ subject: true })
       .extend(variant.id === 'ban_observed_detection_report' ? { reportId: id } : {})
       .strict();
-  const scope = family === 'setup' ? 'drasil:configure' : 'drasil:moderate';
+  const scope =
+    family === 'setup' || kind === 'apply_case_role_lockdown'
+      ? 'drasil:configure'
+      : 'drasil:moderate';
   const delivery =
     family === 'attention' ||
     kind === 'close_submitted_report' ||
@@ -224,6 +227,7 @@ function define(
       'lockdown_allow_remove',
       'disable_lockdown',
       'complete_setup_verification',
+      'apply_case_role_lockdown',
     ].includes(kind)
       ? 'exact_settings_diff'
       : family === 'attention'

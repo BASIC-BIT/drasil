@@ -254,6 +254,10 @@ export function createSetupIntentResolver(resources: SetupResolutionResources): 
         // These fields are the canonical public operation options, never runtime provenance.
         const { kind, ...options } = command;
         summary = `${kind}\n${JSON.stringify(options)}`;
+        if (command.kind === 'apply_case_role_lockdown')
+          summary += `\nIntended settings change:\n${setupChangeSummary(state, {
+            settings: { case_role_lockdown_enabled: true },
+          })}\nAfter validation succeeds, lockdown is enabled when no overwrite changes are needed or at least one planned overwrite succeeds. External changes may be partial. If application is blocked or every planned overwrite fails, the enabled setting remains unchanged.`;
         if (
           command.kind === 'intake_role_members' &&
           command.execute &&

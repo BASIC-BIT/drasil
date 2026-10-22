@@ -146,6 +146,31 @@ test('only update_setup is delivered directly', () => {
   ).toEqual(['update_setup']);
 });
 
+test.each([false, undefined, true])(
+  'includes the intended lockdown setting diff from %s with conditional outcome language',
+  async (enabled) => {
+    const current = {
+      ...state,
+      settings: enabled === undefined ? {} : { case_role_lockdown_enabled: enabled },
+    };
+    const result = await resolver(true, true, current).resolve(principal, {
+      workflowId: 'apply_case_role_lockdown',
+      guildId: 'guild',
+      idempotencyKey: 'apply',
+      input: { unsyncAllowedChannels: true },
+    });
+    expect(result.summary).toContain(
+      setupChangeSummary(current, { settings: { case_role_lockdown_enabled: true } })
+    );
+    expect(result.summary).toContain('Intended settings change');
+    expect(result.summary).toContain('no overwrite changes are needed');
+    expect(result.summary).toContain('at least one planned overwrite succeeds');
+    expect(result.summary).toContain('partial');
+    expect(result.summary).toContain('"unsyncAllowedChannels":true');
+    expect(result.preconditions).toEqual({ kind: 'setup', approvedState: current });
+  }
+);
+
 test.each([
   {
     workflowId: 'update_setup' as const,
