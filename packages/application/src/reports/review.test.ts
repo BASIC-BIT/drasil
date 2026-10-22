@@ -1,10 +1,10 @@
-import { createReportReviewActions } from '../index';
-import type {
-  ActionContext,
-  AuthorityFacts,
-  ReportReviewRepository,
-  ReportOpenCaseCandidate,
-  ReportCaseOpenResult,
+import {
+  createReportReviewActions,
+  type ActionContext,
+  type AuthorityFacts,
+  type ReportReviewRepository,
+  type ReportOpenCaseCandidate,
+  type ReportCaseOpenResult,
 } from '../index';
 
 const context: ActionContext = {
@@ -256,10 +256,12 @@ it('skips absent or empty cleanup dependencies', async () => {
 });
 it('retains opener-unavailable when that runtime has no case opener', async () => {
   const f = arrange();
+  f.openCaseRepository.findSubmittedReportCaseCandidate.mockResolvedValue(null);
   const unavailable = createReportReviewActions({ ...f.dependencies, reportCaseOpener: null });
   await expect(unavailable.openCase(context, { reportId: 'report-1' })).resolves.toMatchObject({
     outcome: { status: 'opener_unavailable' },
   });
+  expect(f.openCaseRepository.findSubmittedReportCaseCandidate).not.toHaveBeenCalled();
 });
 it.each([
   [null, 'already_handled'],
@@ -412,4 +414,23 @@ it.each([
     kind: 'outcome',
     outcome: { status: 'queued' },
   });
+});
+
+it('prepares a bound child without opening a case or clearing attention', async () => {
+  const f = arrange();
+  const prepared = await f.actions.prepareSubmittedReportCaseOpen(context, {
+    reportId: 'report-1',
+  });
+  expect(prepared).toMatchObject({
+    kind: 'ready',
+    command: {
+      kind: 'open_case_from_observed_detection',
+      reportId: 'report-1',
+      targetUserId: 'user-1',
+      detectionEventId: 'det-1',
+    },
+    precondition: { kind: 'report_case_candidate', candidate: { id: 'report-1' } },
+  });
+  expect(f.reportCaseOpener.openObservedDetectionCase).not.toHaveBeenCalled();
+  expect(f.queueRepository.deleteReportThreadAttention).not.toHaveBeenCalled();
 });

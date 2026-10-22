@@ -93,6 +93,41 @@ exports[`decodes and dispatches the shipped audit_case_role_lockdown row with it
 }
 `;
 
+exports[`decodes and dispatches the shipped audit_integrity row with its receipt: receipt 1`] = `
+{
+  "action_type": "audit_integrity",
+  "checked_cases": 5,
+  "error_count": 0,
+  "server_id": "guild",
+  "warning_count": 1,
+}
+`;
+
+exports[`decodes and dispatches the shipped audit_integrity row with its receipt: storage 1`] = `
+{
+  "actionType": "audit_integrity",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:operation:audit_integrity:guild:request",
+  "metadata": {
+    "days": 30,
+    "limit": 100,
+    "operation_action": "audit_integrity",
+    "operation_command": {
+      "days": 30,
+      "kind": "audit_integrity",
+      "limit": 100,
+      "scope": "all",
+      "userId": null,
+    },
+    "requested_surface": "web",
+    "scope": "all",
+  },
+  "serverId": "guild",
+  "targetUserId": null,
+}
+`;
+
 exports[`decodes and dispatches the shipped ban_case_user row with its receipt: receipt 1`] = `
 {
   "action_type": "ban_case_user",
@@ -269,6 +304,30 @@ exports[`decodes and dispatches the shipped clear_moderation_queue row with its 
 }
 `;
 
+exports[`decodes and dispatches the shipped clear_report_instructions row with its receipt: receipt 1`] = `
+{
+  "action_type": "clear_report_instructions",
+  "status": "completed",
+}
+`;
+
+exports[`decodes and dispatches the shipped clear_report_instructions row with its receipt: storage 1`] = `
+{
+  "actionType": "clear_report_instructions",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:setup:clear_report_instructions:guild:request",
+  "metadata": {
+    "requested_surface": "web",
+    "setup_command": {
+      "kind": "clear_report_instructions",
+    },
+  },
+  "serverId": "guild",
+  "targetUserId": null,
+}
+`;
+
 exports[`decodes and dispatches the shipped close_case_no_action row with its receipt: receipt 1`] = `
 {
   "action_type": "close_case_no_action",
@@ -387,6 +446,30 @@ exports[`decodes and dispatches the shipped complete_setup_verification row with
     "requested_surface": "web",
     "setup_action": "complete_setup_verification",
     "verification_channel_id": null,
+  },
+  "serverId": "guild",
+  "targetUserId": null,
+}
+`;
+
+exports[`decodes and dispatches the shipped disable_lockdown row with its receipt: receipt 1`] = `
+{
+  "action_type": "disable_lockdown",
+  "status": "completed",
+}
+`;
+
+exports[`decodes and dispatches the shipped disable_lockdown row with its receipt: storage 1`] = `
+{
+  "actionType": "disable_lockdown",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:setup:disable_lockdown:guild:request",
+  "metadata": {
+    "requested_surface": "web",
+    "setup_command": {
+      "kind": "disable_lockdown",
+    },
   },
   "serverId": "guild",
   "targetUserId": null,
@@ -569,6 +652,58 @@ exports[`decodes and dispatches the shipped kick_observed_detection row with its
   },
   "serverId": "guild",
   "targetUserId": "target",
+}
+`;
+
+exports[`decodes and dispatches the shipped lockdown_allow_add row with its receipt: receipt 1`] = `
+{
+  "action_type": "lockdown_allow_add",
+  "status": "completed",
+}
+`;
+
+exports[`decodes and dispatches the shipped lockdown_allow_add row with its receipt: storage 1`] = `
+{
+  "actionType": "lockdown_allow_add",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:setup:lockdown_allow_add:guild:request",
+  "metadata": {
+    "requested_surface": "web",
+    "setup_command": {
+      "kind": "lockdown_allow_add",
+      "targetId": "category",
+      "targetKind": "category",
+    },
+  },
+  "serverId": "guild",
+  "targetUserId": null,
+}
+`;
+
+exports[`decodes and dispatches the shipped lockdown_allow_remove row with its receipt: receipt 1`] = `
+{
+  "action_type": "lockdown_allow_remove",
+  "status": "completed",
+}
+`;
+
+exports[`decodes and dispatches the shipped lockdown_allow_remove row with its receipt: storage 1`] = `
+{
+  "actionType": "lockdown_allow_remove",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:setup:lockdown_allow_remove:guild:request",
+  "metadata": {
+    "requested_surface": "web",
+    "setup_command": {
+      "kind": "lockdown_allow_remove",
+      "targetId": "channel",
+      "targetKind": "channel",
+    },
+  },
+  "serverId": "guild",
+  "targetUserId": null,
 }
 `;
 
@@ -765,6 +900,7 @@ exports[`decodes and dispatches the shipped preview_case_message_deletion row wi
   "coverage": "complete",
   "message_deletion_job_id": "job",
   "mode": "delete_only",
+  "preview_generation": "2026-10-20T00:00:00.000Z",
   "scope": "last_hour",
   "status": "preview_ready",
   "target_user_id": "target",
@@ -931,6 +1067,31 @@ exports[`decodes and dispatches the shipped request_captcha_challenge row with i
   "serverId": "guild",
   "targetUserId": "target",
   "verificationEventId": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped reset_heuristics row with its receipt: receipt 1`] = `
+{
+  "action_type": "reset_heuristics",
+  "status": "completed",
+}
+`;
+
+exports[`decodes and dispatches the shipped reset_heuristics row with its receipt: storage 1`] = `
+{
+  "actionType": "reset_heuristics",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:setup:reset_heuristics:guild:request",
+  "metadata": {
+    "requested_surface": "web",
+    "setup_command": {
+      "kind": "reset_heuristics",
+      "scope": "keywords",
+    },
+  },
+  "serverId": "guild",
+  "targetUserId": null,
 }
 `;
 
@@ -1115,6 +1276,61 @@ exports[`decodes and dispatches the shipped undo_observed_detection_action row w
   },
   "serverId": "guild",
   "targetUserId": "target",
+}
+`;
+
+exports[`decodes and dispatches the shipped update_heuristics row with its receipt: receipt 1`] = `
+{
+  "action_type": "update_heuristics",
+  "status": "completed",
+}
+`;
+
+exports[`decodes and dispatches the shipped update_heuristics row with its receipt: storage 1`] = `
+{
+  "actionType": "update_heuristics",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:setup:update_heuristics:guild:request",
+  "metadata": {
+    "requested_surface": "web",
+    "setup_command": {
+      "changes": {
+        "messageThreshold": 8,
+      },
+      "kind": "update_heuristics",
+    },
+  },
+  "serverId": "guild",
+  "targetUserId": null,
+}
+`;
+
+exports[`decodes and dispatches the shipped update_settings row with its receipt: receipt 1`] = `
+{
+  "action_type": "update_settings",
+  "status": "completed",
+}
+`;
+
+exports[`decodes and dispatches the shipped update_settings row with its receipt: storage 1`] = `
+{
+  "actionType": "update_settings",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:setup:update_settings:guild:request",
+  "metadata": {
+    "requested_surface": "web",
+    "setup_command": {
+      "changes": {
+        "case_responder_role_ids": [],
+      },
+      "kind": "update_settings",
+      "section": "caseStaff",
+    },
+  },
+  "serverId": "guild",
+  "targetUserId": null,
 }
 `;
 

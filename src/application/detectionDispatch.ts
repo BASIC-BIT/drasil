@@ -6,34 +6,48 @@ import type {
 } from '@drasil/application';
 import { requireDetectionOutcome } from './adapters/detections';
 type DetectionReceipt = { readonly target_user_id: string; readonly detection_event_id: string };
-export type QueuedDetectionOutcome = DetectionReceipt &
-  (
-    | {
-        readonly action_type:
-          | 'dismiss_observed_detection'
-          | 'mark_observed_detection_false_positive';
-        readonly dismissed: boolean;
-      }
-    | {
-        readonly action_type: 'undo_observed_detection_action';
-        readonly undone_action: 'dismiss' | 'false_positive' | null;
-      }
-    | { readonly action_type: 'kick_observed_detection'; readonly kicked: boolean }
-    | {
-        readonly action_type: 'ban_observed_detection';
-        readonly observed_ban_result: ObservedBanResult;
-        readonly report_intake_id: string | null;
-        readonly ban_by_id?: boolean;
-      }
-    | { readonly action_type: 'ignore_detection_accounting'; readonly ignored: boolean }
-    | { readonly action_type: 'restore_detection_accounting'; readonly restored: boolean }
-  );
+export type QueuedDetectionOutcome =
+  | {
+      readonly action_type: 'prepare_report_ban_review';
+      readonly reviewReference: string;
+      readonly expiresAt?: string;
+      readonly operationId: string;
+      readonly targetUserId: string;
+    }
+  | { readonly action_type: 'review_uncertain_report_ban'; readonly succeeded: boolean }
+  | (DetectionReceipt &
+      (
+        | {
+            readonly action_type:
+              | 'dismiss_observed_detection'
+              | 'mark_observed_detection_false_positive';
+            readonly dismissed: boolean;
+          }
+        | {
+            readonly action_type: 'undo_observed_detection_action';
+            readonly undone_action: 'dismiss' | 'false_positive' | null;
+          }
+        | { readonly action_type: 'kick_observed_detection'; readonly kicked: boolean }
+        | {
+            readonly action_type: 'ban_observed_detection';
+            readonly observed_ban_result: ObservedBanResult;
+            readonly report_intake_id: string | null;
+            readonly ban_by_id?: boolean;
+          }
+        | { readonly action_type: 'ignore_detection_accounting'; readonly ignored: boolean }
+        | { readonly action_type: 'restore_detection_accounting'; readonly restored: boolean }
+      ));
 export async function dispatchDetectionAction(
   actions: DetectionActions,
   context: ActionContext,
   command: QueuedDetectionCommand
 ): Promise<QueuedDetectionOutcome> {
   const outcome = requireDetectionOutcome(await actions.execute(context, command));
+  if (outcome.kind === 'prepare_report_ban_review')
+    return { action_type: outcome.kind, ...outcome.reference };
+  if (outcome.kind === 'review_uncertain_report_ban')
+    return { action_type: outcome.kind, succeeded: outcome.succeeded };
+  if (!('detectionEventId' in command)) throw new Error('Detection outcome mismatch.');
   const base = {
     target_user_id: command.targetUserId,
     detection_event_id: command.detectionEventId,

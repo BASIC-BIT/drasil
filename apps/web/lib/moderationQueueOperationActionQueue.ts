@@ -6,10 +6,12 @@ import {
 import { submitQueuedAction } from './application/queuedSubmission';
 import { isWebE2eFixtureMode } from './e2eFixtures';
 import type { ModerationActionRequestReceipt } from './moderationActionRequestQueue';
-export type ModerationQueueOperationAction = QueuedOperationCommand['kind'];
+// Native website integrity audits retain their existing read path.
+type NativeQueuedOperationCommand = Exclude<QueuedOperationCommand, { kind: 'audit_integrity' }>;
+export type ModerationQueueOperationAction = NativeQueuedOperationCommand['kind'];
 export interface QueueModerationQueueOperationInput {
   readonly context: ActionContext;
-  readonly command: QueuedOperationCommand;
+  readonly command: NativeQueuedOperationCommand;
 }
 export async function queueModerationQueueOperation(
   input: QueueModerationQueueOperationInput

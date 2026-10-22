@@ -48,13 +48,13 @@ describe('ConfigService (unit)', () => {
     const service = new ConfigService(serverRepository, discordClient);
 
     const findSpy = jest.spyOn(serverRepository, 'findByGuildId');
-    const upsertSpy = jest.spyOn(serverRepository, 'upsertByGuildId');
+    const initializeSpy = jest.spyOn(serverRepository, 'createIfMissing');
 
     await service.getServerConfig('guild-1');
     await service.getServerConfig('guild-1');
 
     expect(findSpy).toHaveBeenCalledTimes(2);
-    expect(upsertSpy).toHaveBeenCalledTimes(1);
+    expect(initializeSpy).toHaveBeenCalledTimes(1);
   });
 
   it('returns default config when DATABASE_URL is not set', async () => {

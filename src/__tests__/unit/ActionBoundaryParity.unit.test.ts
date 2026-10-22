@@ -1,6 +1,7 @@
 import { mock, mockDeep } from 'jest-mock-extended';
 import {
   createCaseActions,
+  caseCommandSchema,
   createReportActions,
   createCaptchaActions,
   createMessageCleanupActions,
@@ -329,3 +330,215 @@ describe.each(['case', 'report', 'captcha', 'cleanup', 'setup'] as const)(
     });
   }
 );
+
+// Independent semantic rows exercise the actual worker and shared authority/policy actions.
+describe('all case worker semantic parity', () => {
+  const variants = [
+    {
+      kind: 'ban_user',
+      metadata: { intent: 'slash_command' },
+      permission: 4n,
+      workflow: 'ban',
+      reason: 'No reason provided',
+    },
+    {
+      kind: 'ban_user',
+      metadata: { intent: 'native_action' },
+      permission: 4n,
+      workflow: 'ban',
+      reason: 'Banned by moderator action',
+    },
+    {
+      kind: 'kick_user',
+      metadata: {},
+      permission: 2n,
+      workflow: 'kick',
+      reason: 'Kicked by moderator action',
+    },
+    {
+      kind: 'open_admin_case',
+      metadata: { intent: 'native_case_open' },
+      permission: 1n << 40n,
+      workflow: 'openAdmin',
+    },
+    { kind: 'open_admin_case', metadata: {}, permission: 32n, workflow: 'openAdmin' },
+    {
+      kind: 'repair_active_case',
+      metadata: { intent: 'administrator_repair' },
+      permission: 8n,
+      workflow: 'repair',
+    },
+    { kind: 'repair_active_case', metadata: {}, permission: 1n << 40n, workflow: 'repair' },
+    {
+      kind: 'repair_active_case',
+      metadata: { intent: 'administrator_repair', case_action: 'create_thread' },
+      permission: 8n,
+      workflow: 'repair',
+    },
+    {
+      kind: 'repair_active_case',
+      metadata: { case_action: 'create_thread' },
+      permission: 1n << 40n,
+      workflow: 'repair',
+    },
+    {
+      kind: 'open_case_from_observed_detection',
+      metadata: {},
+      permission: 1n << 40n,
+      workflow: 'openObserved',
+    },
+    { kind: 'manual_flag_user', metadata: {}, permission: 8n, workflow: 'manualFlag' },
+    { kind: 'verify_case_user', metadata: {}, permission: 1n << 40n, workflow: 'verify' },
+    {
+      kind: 'close_case_no_action',
+      metadata: {},
+      permission: 1n << 40n,
+      workflow: 'closeNoAction',
+    },
+    {
+      kind: 'kick_case_user',
+      metadata: {},
+      permission: 2n,
+      workflow: 'kick',
+      reason: 'No reason provided for web kick action.',
+    },
+    {
+      kind: 'ban_case_user',
+      metadata: {},
+      permission: 4n,
+      workflow: 'ban',
+      reason: 'No reason provided for web ban action.',
+    },
+    {
+      kind: 'ban_case_user_by_id',
+      metadata: {},
+      permission: 4n,
+      workflow: 'banById',
+      reason: 'No reason provided for web ban action.',
+    },
+    { kind: 'reopen_case', metadata: {}, permission: 1n << 40n, workflow: 'reopen' },
+    { kind: 'refresh_case_notification', metadata: {}, permission: 8n, workflow: 'refresh' },
+    { kind: 'sync_existing_ban', metadata: {}, permission: 4n, workflow: 'syncExistingBan' },
+  ] as const;
+  it('covers every canonical case kind', () => {
+    expect([...new Set(variants.map((v) => v.kind))].sort()).toEqual(
+      caseCommandSchema.options.map((v) => v.shape.kind.value).sort()
+    );
+  });
+  it.each(variants)(
+    'runs $kind $metadata with its exact authority/default reason',
+    async (variant) => {
+      const { createCaseConfirmationStore } = await import('../../application/context');
+      const { prepareQueuedRequest } = await import('../../application/requestRuntime');
+      const confirmations = createCaseConfirmationStore();
+      const deps = mockDeep<CaseDependencies>();
+      deps.authority.loadFresh.mockResolvedValue({
+        guildId: 'guild',
+        userId: 'actor',
+        present: true,
+        owner: false,
+        permissions: String(variant.permission),
+        roleIds: [],
+      });
+      deps.settings.loadFresh.mockResolvedValue({
+        adminCaseOpenRequiresReason: false,
+        moderatorBanActionEnabled: true,
+        moderatorBanActionRequiresReason: false,
+        moderatorKickActionEnabled: true,
+        moderatorKickActionRequiresReason: false,
+      });
+      deps.repository.findById.mockResolvedValue({
+        id: 'case',
+        server_id: 'guild',
+        user_id: 'target',
+        status: 'pending',
+      });
+      deps.repository.findActive.mockResolvedValue({
+        id: 'case',
+        server_id: 'guild',
+        user_id: 'target',
+        status: 'pending',
+      });
+      if (variant.kind === 'reopen_case') {
+        deps.repository.findById.mockResolvedValue({
+          id: 'case',
+          server_id: 'guild',
+          user_id: 'target',
+          status: 'verified',
+        });
+        deps.repository.findActive.mockResolvedValue(null);
+      }
+      deps.repository.findDetection.mockResolvedValue({
+        server_id: 'guild',
+        user_id: 'target',
+        reportId: null,
+      });
+      deps.workflows.banById.mockResolvedValue(true);
+      deps.workflows.openObserved.mockResolvedValue(true);
+      deps.workflows.manualFlag.mockResolvedValue(true);
+      deps.workflows.verify.mockResolvedValue(true);
+      deps.workflows.closeNoAction.mockResolvedValue(1);
+      deps.workflows.reopen.mockResolvedValue(true);
+      deps.workflows.refresh.mockResolvedValue({ refreshed: true, message: 'refreshed' });
+      deps.workflows.syncExistingBan.mockResolvedValue(1);
+      deps.workflows.ban.mockResolvedValue(true);
+      deps.workflows.kick.mockResolvedValue(true);
+      deps.workflows.openAdmin.mockResolvedValue({
+        opened: true,
+        caseRoleActive: true,
+        caseRoleAttempted: true,
+      });
+      deps.workflows.repair.mockResolvedValue({
+        repaired: true,
+        message: 'repaired',
+        threadCreated: false,
+        userAdded: false,
+        promptSent: false,
+        promptAlreadyPresent: false,
+      });
+      const request = mock<ModerationActionRequest>({
+        id: 'request',
+        server_id: 'guild',
+        actor_id: 'actor',
+        actor_surface: 'web',
+        action_type: variant.kind as ModerationActionRequest['action_type'],
+        target_user_id: 'target',
+        verification_event_id: 'case',
+        detection_event_id:
+          variant.kind === 'open_case_from_observed_detection' ? 'detection' : null,
+        report_intake_id: null,
+        message_deletion_job_id: null,
+        metadata: variant.metadata,
+      });
+      const runtime = mock<QueuedRequestRuntime>({
+        delegation: undefined,
+        cases: createCaseActions({ ...deps, confirmations: confirmations.confirmations }),
+        caseConfirmations: confirmations,
+      });
+      const prepared = await prepareQueuedRequest({ runtime, request, analytics: {} as never });
+      await prepared.execute();
+      expect(deps.workflows[variant.workflow]).toHaveBeenCalledTimes(1);
+      if ('reason' in variant)
+        expect(deps.workflows[variant.workflow]).toHaveBeenCalledWith(
+          expect.objectContaining({ reason: variant.reason })
+        );
+      deps.authority.loadFresh.mockResolvedValue({
+        guildId: 'guild',
+        userId: 'actor',
+        present: true,
+        owner: false,
+        permissions: String(
+          variant.permission === 32n
+            ? 1n << 40n
+            : variant.permission === 1n << 40n && variant.kind === 'open_admin_case'
+              ? 32n
+              : 0n
+        ),
+        roleIds: [],
+      });
+      const denied = await prepareQueuedRequest({ runtime, request, analytics: {} as never });
+      await expect(denied.execute()).rejects.toThrow('permission_denied');
+      expect(deps.workflows[variant.workflow]).toHaveBeenCalledTimes(1);
+    }
+  );
+});

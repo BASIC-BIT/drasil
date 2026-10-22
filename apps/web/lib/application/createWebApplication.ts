@@ -21,7 +21,7 @@ import {
   PostgresQueuedReportCaseOpener,
   createReportReviewMessageDeleter,
 } from './adapters/reportReview';
-import { createSetupDataAdapter } from '../setupDataAdapter';
+import { createWebStaffRoles } from './adapters/staffRoles';
 
 export interface WebApplication {
   readonly setup: SetupUpdateActions;
@@ -34,14 +34,7 @@ export function createWebApplication(): WebApplication {
     setup: createWebSetupActions(),
     reportReview: createReportReviewActions({
       authority,
-      staffRoles: {
-        async loadRoleIds(guildId) {
-          return (
-            (await createSetupDataAdapter().getServer(guildId))?.settings.case_responder_role_ids ??
-            []
-          );
-        },
-      },
+      staffRoles: createWebStaffRoles(),
       repository: new PostgresReportReviewRepository(),
       queueRepository: new PostgresReportReviewQueueRepository(),
       queueMessageDeleter: createReportReviewMessageDeleter(),

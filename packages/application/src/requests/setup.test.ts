@@ -80,3 +80,41 @@ test('legacy panel rows bind retries to the durable request and cannot supply au
     }).idempotencyKey
   ).toBe('web:setup:repost_report_instructions:guild:channel:old:submission');
 });
+
+test.each([
+  {
+    kind: 'update_settings',
+    section: 'verification',
+    changes: { captcha_mode: 'off' },
+    reset: 'context',
+  },
+  { kind: 'update_heuristics', changes: { suspiciousKeywords: [] } },
+  { kind: 'reset_heuristics', scope: 'keywords' },
+  { kind: 'lockdown_allow_add', targetId: 'channel', targetKind: 'channel' },
+  { kind: 'lockdown_allow_remove', targetId: 'category', targetKind: 'category' },
+  { kind: 'disable_lockdown' },
+  { kind: 'clear_report_instructions' },
+  {
+    kind: 'complete_setup_verification',
+    mode: 'verification_modal',
+    adminChannelId: 'channel',
+    caseRoleId: 'role',
+    onboardingWizard: false,
+  },
+])('round trips newly queued setup command $kind', (command) => {
+  // Inputs pass through the public parser at runtime; keep this fixture independent of codec types.
+  const encoded = encodeQueuedAction(
+    { ...context, source: 'mcp' },
+    command as Parameters<typeof encodeQueuedAction>[1]
+  );
+  const decoded = decodeQueuedAction({
+    id: 'job',
+    server_id: 'guild',
+    action_type: encoded.actionType,
+    actor_id: 'admin',
+    actor_surface: 'mcp',
+    target_user_id: null,
+    metadata: encoded.metadata,
+  });
+  expect(decoded.command).toEqual(command);
+});

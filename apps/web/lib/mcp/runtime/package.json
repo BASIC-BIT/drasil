@@ -1,0 +1,57 @@
+{
+  "name": "@drasil/mcp-runtime",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./server": {
+      "types": "./server.d.ts",
+      "import": "./server.mjs"
+    },
+    "./handler": {
+      "types": "./handler.d.ts",
+      "import": "./handler.mjs"
+    },
+    "./auth": {
+      "types": "./auth.d.ts",
+      "import": "./auth.mjs"
+    },
+    "./oauth-provider": {
+      "types": "./oauth-provider.d.ts",
+      "import": "./oauth-provider.mjs"
+    },
+    "./cimd": {
+      "types": "./cimd.d.ts",
+      "import": "./cimd.mjs"
+    },
+    "./plugins": {
+      "types": "./plugins.d.ts",
+      "import": "./plugins.mjs"
+    },
+    "./cimd-node": {
+      "types": "./cimd-node.d.ts",
+      "import": "./cimd-node.mjs"
+    },
+    "./auth-next": {
+      "types": "./auth-next.d.ts",
+      "import": "./auth-next.mjs"
+    },
+    "./oauth2": {
+      "types": "./oauth2.d.ts",
+      "import": "./oauth2.mjs"
+    },
+    "./auth-ip": {
+      "types": "./auth-ip.d.ts",
+      "import": "./auth-ip.mjs"
+    }
+  },
+  "dependencies": {
+    "@better-auth/cimd": "1.7.12",
+    "@better-auth/oauth-provider": "1.7.12",
+    "@modelcontextprotocol/server": "2.3.1",
+    "better-auth": "1.7.12",
+    "mcp-handler": "2.3.0",
+    "zod": "4.6.7",
+    "@better-auth/core": "1.7.12"
+  }
+}

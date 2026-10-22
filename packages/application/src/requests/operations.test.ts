@@ -55,7 +55,7 @@ test('decodes shipped operation defaults without inventing proof fields', () => 
     }).command
   ).toEqual({ kind: 'apply_case_role_lockdown', unsyncAllowedChannels: false });
 });
-test('queued sweep decoder fixes administrator intent and rejects direct audit intent at submission', () => {
+test('legacy sweep rows keep administrator provenance; explicit guild audits retain their intent', () => {
   const row = {
     id: 'request',
     server_id: 'guild',
@@ -73,14 +73,16 @@ test('queued sweep decoder fixes administrator intent and rejects direct audit i
     limit: 100,
     userId: null,
   });
-  expect(() =>
-    encodeQueuedAction(context, {
-      kind: 'close_resolved_case_threads',
-      intent: 'guild_audit',
-      execute: false,
-      days: 30,
-      limit: 100,
-      userId: null,
-    } as never)
-  ).toThrow();
+  const command = {
+    kind: 'close_resolved_case_threads',
+    intent: 'guild_audit',
+    execute: false,
+    days: 30,
+    limit: 100,
+    userId: null,
+  } as const;
+  const encoded = encodeQueuedAction({ ...context, source: 'mcp' }, command);
+  expect(
+    decodeQueuedAction({ ...row, actor_surface: 'mcp', metadata: encoded.metadata }).command
+  ).toEqual(command);
 });

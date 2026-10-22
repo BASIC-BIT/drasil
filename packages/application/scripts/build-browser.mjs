@@ -11,3 +11,13 @@ const { outputText } = ts.transpileModule(source, {
 const directory = new URL('../dist/browser/', import.meta.url);
 await mkdir(directory, { recursive: true });
 await writeFile(new URL('settings.mjs', directory), outputText);
+
+const presentation = await readFile(
+  new URL('../src/delegation/approvalPresentation.ts', import.meta.url),
+  'utf8'
+);
+const compiled = ts.transpileModule(presentation, {
+  compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ES2020 },
+  fileName: 'approvalPresentation.ts',
+});
+await writeFile(new URL('approvalPresentation.mjs', directory), compiled.outputText);

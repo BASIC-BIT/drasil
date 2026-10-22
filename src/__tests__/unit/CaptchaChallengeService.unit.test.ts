@@ -175,6 +175,41 @@ describe('CaptchaChallengeService', () => {
     }
   });
 
+  it.each([false, true])(
+    'rejects delegated saved revision drift before request/retry effects (%s)',
+    async (retry) => {
+      const { service, challenges } = createHarness();
+      const approved = { expectedCaseRevision: 1 };
+      await expect(
+        service.requestChallenge({
+          ...approved,
+          verificationEventId: 'case-1',
+          requestSource: CaptchaChallengeRequestSource.MODERATOR,
+          requestedBy: 'moderator-1',
+          retry,
+          ...(retry ? { expectedChallengeId: 'challenge-1', expectedGeneration: 1 } : {}),
+        })
+      ).rejects.toThrow('stale_state');
+      expect(challenges.create).not.toHaveBeenCalled();
+      expect(challenges.retry).not.toHaveBeenCalled();
+    }
+  );
+
+  it('keeps an unknown database reply failure distinct from a proven stale revision rejection', async () => {
+    const { service, challenges, threads } = createHarness();
+    const unknown = new Error('Database response unavailable');
+    challenges.create.mockRejectedValue(unknown);
+    await expect(
+      service.requestChallenge({
+        verificationEventId: 'case-1',
+        requestSource: CaptchaChallengeRequestSource.MODERATOR,
+        requestedBy: 'moderator-1',
+        expectedCaseRevision: 2,
+      })
+    ).rejects.toBe(unknown);
+    expect(threads.sendCaptchaChallenge).not.toHaveBeenCalled();
+  });
+
   it('creates a case-scoped challenge and stores only the link token hash', async () => {
     const { challenges, notifications, service, threads } = createHarness();
 

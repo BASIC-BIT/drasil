@@ -1,3 +1,4 @@
+import { McpCommandHandler } from './McpCommandHandler';
 import { requireCaptchaOutcome } from '../application/adapters/captcha';
 import { requireQuarantineOutcome } from '../application/adapters/quarantine';
 import { requireDetectionOutcome } from '../application/adapters/detections';
@@ -266,6 +267,10 @@ export class InteractionHandler implements IInteractionHandler {
 
   public async handleButtonInteraction(interaction: ButtonInteraction): Promise<void> {
     const customId = interaction.customId;
+    if (customId.startsWith('mcp:')) {
+      await new McpCommandHandler(this.application?.mcp).handleButtonInteraction(interaction);
+      return;
+    }
 
     if (!interaction.guildId) {
       await interaction.reply({

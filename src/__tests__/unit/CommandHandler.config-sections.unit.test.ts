@@ -109,9 +109,14 @@ test('bare config set preserves its single column write without an empty setting
     ...configurationResponseMocks(),
   } as unknown as ChatInputCommandInteraction;
   await handler.handleSlashCommand(interaction);
-  expect(configService.updateServerConfig).toHaveBeenCalledTimes(1);
-  expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-    admin_channel_id: 'channel',
-  });
+  expect(configService.updateSetupIfUnchanged).toHaveBeenCalledTimes(1);
+  expect(configService.updateSetupIfUnchanged).toHaveBeenCalledWith(
+    'guild-1',
+    undefined,
+    expect.objectContaining({
+      columns: expect.objectContaining({ admin_channel_id: 'channel' }),
+      settings: {},
+    })
+  );
   expect(configService.updateServerSettings).not.toHaveBeenCalled();
 });

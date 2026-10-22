@@ -1,3 +1,9 @@
+import {
+  ActionDeniedError,
+  type SetupWritePrecondition,
+  setupStateMatches,
+  parseSetupStoredRecord,
+} from '@drasil/application';
 import { buildSetupSettingsPatch, normalizeOptionalId } from '@drasil/application/setup-settings';
 export { buildSetupSettingsPatch } from '@drasil/application/setup-settings';
 import { Pool, type PoolConfig } from 'pg';
@@ -23,7 +29,10 @@ export interface SetupDataAdapter {
   listConfiguredGuildIds(guildIds: readonly string[]): Promise<Set<string>>;
   listCoreConfiguredGuildIds(guildIds: readonly string[]): Promise<Set<string>>;
   getServer(guildId: string): Promise<SetupServerRecord | null>;
-  updateGuildSetup(update: GuildSetupUpdate): Promise<SetupServerRecord>;
+  updateGuildSetup(
+    update: GuildSetupUpdate,
+    precondition?: SetupWritePrecondition
+  ): Promise<SetupServerRecord>;
 }
 
 const SETUP_SUMMARY_READ_CONCURRENCY = 8;
@@ -203,14 +212,32 @@ export class PostgresSetupDataAdapter implements SetupDataAdapter {
     return row ? parseServerRow(row) : null;
   }
 
-  public async updateGuildSetup(rawUpdate: GuildSetupUpdate): Promise<SetupServerRecord> {
+  public async updateGuildSetup(
+    rawUpdate: GuildSetupUpdate,
+    precondition?: SetupWritePrecondition
+  ): Promise<SetupServerRecord> {
     const update = guildSetupUpdateSchema.parse(rawUpdate);
-    const current = await this.getServer(update.guildId);
     const settingsPatch = buildSetupSettingsPatch(update);
-    const updatedBy = update.updatedBy ?? current?.updated_by ?? null;
     const client = await getPostgresPool().connect();
     try {
       await client.query('begin');
+      if (!precondition)
+        await client.query(
+          'insert into servers(guild_id) values($1) on conflict(guild_id) do nothing',
+          [update.guildId]
+        );
+      const locked = await client.query('select * from servers where guild_id=$1 for update', [
+        update.guildId,
+      ]);
+      const row = locked.rows[0] as Record<string, unknown> | undefined;
+      const current = row
+        ? precondition
+          ? parseSetupStoredRecord(row)
+          : parseServerRow(row)
+        : null;
+      if (precondition && (!current || !setupStateMatches(current, precondition)))
+        throw new ActionDeniedError('stale_state');
+      const updatedBy = update.updatedBy ?? current?.updated_by ?? null;
       let result = await client.query(
         `insert into servers (
           guild_id,
@@ -349,7 +376,11 @@ export class ConvexSetupDataAdapter implements SetupDataAdapter {
     return setupServerRecordSchema.parse(await response.json());
   }
 
-  public async updateGuildSetup(update: GuildSetupUpdate): Promise<SetupServerRecord> {
+  public async updateGuildSetup(
+    update: GuildSetupUpdate,
+    precondition?: SetupWritePrecondition
+  ): Promise<SetupServerRecord> {
+    if (precondition) throw new ActionDeniedError('approved_setup_executor_required');
     const result = await this.fetchJson<unknown>('/api/setup/guild', {
       method: 'POST',
       body: JSON.stringify(update),
@@ -377,7 +408,11 @@ export class FixtureSetupDataAdapter implements SetupDataAdapter {
     return guildId === fixtureGuildId ? fixtureServerRecord() : null;
   }
 
-  public async updateGuildSetup(update: GuildSetupUpdate): Promise<SetupServerRecord> {
+  public async updateGuildSetup(
+    update: GuildSetupUpdate,
+    precondition?: SetupWritePrecondition
+  ): Promise<SetupServerRecord> {
+    if (precondition) throw new ActionDeniedError('approved_setup_executor_required');
     return updateFixtureServerRecord(update);
   }
 }

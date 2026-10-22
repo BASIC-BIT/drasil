@@ -1,3 +1,7 @@
+import { createBotMcpApprovals } from './adapters/approvals';
+import type { PrismaClient } from '../db/prisma';
+import { createDelegatedCaseActions } from './adapters/delegatedCases';
+import type { DelegatedWorkerRuntime } from './adapters/delegation';
 import {
   createBotSetupRuntime,
   type BotSetupRuntime,
@@ -35,6 +39,7 @@ import {
   createAttentionActions,
   type AttentionActions,
   type CaseActions,
+  type ExecutionRecord,
 } from '@drasil/application';
 import type { Client } from 'discord.js';
 import type { IModerationQueueRepository } from '../repositories/ModerationQueueRepository';
@@ -43,6 +48,8 @@ import { createBotAuthority } from './adapters/authority';
 import { createBotAttentionMessageDeleter } from './adapters/attention';
 
 export interface BotApplication {
+  readonly mcp?: import('@drasil/application').AlternativeApprovals;
+  readonly delegation?: DelegatedWorkerRuntime;
   readonly setup: BotSetupRuntime['actions'];
   readonly setupRuntime: BotSetupRuntime;
   readonly reports: ReturnType<typeof createBotReportActions>;
@@ -57,6 +64,7 @@ export interface BotApplication {
   readonly detectionRuntime: BotDetectionRuntime;
   readonly attention: AttentionActions;
   readonly cases: CaseActions;
+  readonly casesForExecution?: (execution: ExecutionRecord) => CaseActions;
   readonly caseConfirmations: ReturnType<typeof createCaseConfirmationStore>;
   readonly caseRepository: BotCaseDependencies['verificationEventRepository'];
 }
@@ -70,7 +78,9 @@ export function createBotApplication(
       BotCaptchaDependencies,
       'captchaChallengeService' | 'threadManager' | 'notificationManager'
     > & {
+      readonly prisma?: PrismaClient;
       readonly client: Client;
+      readonly delegation?: DelegatedWorkerRuntime;
       readonly accountQuarantineService: BotQuarantineDependencies['accountQuarantineService'];
       readonly actionRequests: BotDetectionDependencies['actionRequests'];
       readonly queueRepository: IModerationQueueRepository;
@@ -84,6 +94,7 @@ export function createBotApplication(
     confirmations: caseConfirmations.confirmations,
   });
   const detectionRuntime = createBotDetectionRuntime({
+    reviewReferences: deps.delegation?.reviews,
     ...deps,
     confirmations: caseConfirmations.confirmations,
   });
@@ -93,7 +104,16 @@ export function createBotApplication(
   });
   const messageCleanupRuntime = createBotMessageCleanupRuntime(deps);
   const quarantineRuntime = createBotQuarantineRuntime(deps);
+  const attention = createAttentionActions({
+    repository: deps.queueRepository,
+    authority: createBotAuthority(deps.client),
+    messageDeleter: createBotAttentionMessageDeleter(deps.queueService),
+  });
   return {
+    mcp: deps.prisma
+      ? createBotMcpApprovals({ ...deps, prisma: deps.prisma, attention })
+      : undefined,
+    delegation: deps.delegation,
     setup: setupRuntime.actions,
     setupRuntime,
     reports: createBotReportActions(deps),
@@ -106,13 +126,15 @@ export function createBotApplication(
     quarantineRuntime,
     detections: detectionRuntime.actions,
     detectionRuntime,
+    casesForExecution: (execution) =>
+      createDelegatedCaseActions(
+        { ...deps, confirmations: caseConfirmations.confirmations },
+        execution,
+        deps.delegation?.native
+      ),
     cases: createBotCaseActions({ ...deps, confirmations: caseConfirmations.confirmations }),
     caseConfirmations,
     caseRepository: deps.verificationEventRepository,
-    attention: createAttentionActions({
-      repository: deps.queueRepository,
-      authority: createBotAuthority(deps.client),
-      messageDeleter: createBotAttentionMessageDeleter(deps.queueService),
-    }),
+    attention,
   };
 }

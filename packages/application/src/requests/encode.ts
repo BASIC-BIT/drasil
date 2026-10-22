@@ -1,3 +1,4 @@
+import type { DelegatedDeliveryBinding } from '../delegation/types';
 import { isQueuedSetupCommand } from '../setup/commands';
 import { encodeSetupAction } from './setup';
 import { isQueuedReportCommand } from '../reports/commands';
@@ -21,13 +22,28 @@ const caseAction = {
   refresh_case_notification: 'refresh_notification',
   sync_existing_ban: 'sync_existing_ban',
 } as const;
-export function encodeQueuedAction(context: ActionContext, input: QueuedCommand): EnqueueInput {
+export function encodeQueuedAction(
+  context: ActionContext,
+  input: QueuedCommand,
+  binding?: DelegatedDeliveryBinding
+): EnqueueInput {
+  const encoded = encodeAction(context, input);
+  return binding
+    ? { ...encoded, metadata: { ...encoded.metadata, delegation: { ...binding } } }
+    : encoded;
+}
+function encodeAction(context: ActionContext, input: QueuedCommand): EnqueueInput {
   const command = queuedCommandSchema.parse(input);
   if (isQueuedSetupCommand(command)) return encodeSetupAction(context, command);
   if (isQueuedReportCommand(command)) return encodeReportAction(context, command);
   if (isQueuedOperationCommand(command)) return encodeOperationAction(context, command);
   if (isQueuedCaptchaCommand(command)) return encodeCaptchaAction(context, command);
   if (context.actor.kind !== 'user') throw new Error('Case submission requires a user actor.');
+  if (
+    command.kind === 'prepare_report_ban_review' ||
+    command.kind === 'review_uncertain_report_ban'
+  )
+    return encodeDetectionAction(context, command);
   const base = {
     actionType: command.kind,
     actorId: context.actor.userId,
@@ -36,6 +52,23 @@ export function encodeQueuedAction(context: ActionContext, input: QueuedCommand)
     targetUserId: command.targetUserId,
   };
   switch (command.kind) {
+    case 'ban_user':
+    case 'kick_user':
+      return {
+        ...base,
+        idempotencyKey: `${context.source}:native:${command.kind}:${context.guildId}:${context.requestId}`,
+        metadata: {
+          reason: command.reason,
+          requested_surface: context.source,
+          ...('intent' in command ? { intent: command.intent } : {}),
+          ...(command.selectedMessage
+            ? {
+                source_channel_id: command.selectedMessage.channelId,
+                source_message_id: command.selectedMessage.messageId,
+              }
+            : {}),
+        },
+      };
     case 'preview_case_message_deletion':
     case 'execute_case_message_deletion':
     case 'ban_case_user_with_message_cleanup':
@@ -100,6 +133,7 @@ export function encodeQueuedAction(context: ActionContext, input: QueuedCommand)
                 source_message_id: command.selectedMessage.messageId,
               }
             : {}),
+          ...(command.intent === 'native_case_open' ? { intent: command.intent } : {}),
           web_action: command.kind,
         },
       };
@@ -120,9 +154,12 @@ export function encodeQueuedAction(context: ActionContext, input: QueuedCommand)
         ...('detectionEventId' in command ? { detectionEventId: command.detectionEventId } : {}),
         idempotencyKey: `${context.source}:case-action:${command.kind === 'repair_active_case' ? command.mode : caseAction[command.kind]}:${context.guildId}:${command.caseId}`,
         metadata: {
+          ...(command.kind === 'repair_active_case' && command.intent === 'administrator_repair'
+            ? { intent: command.intent }
+            : {}),
           case_action:
             command.kind === 'repair_active_case' ? command.mode : caseAction[command.kind],
-          ...('reason' in command && command.reason ? { reason: command.reason } : {}),
+          ...('reason' in command && command.reason !== null ? { reason: command.reason } : {}),
           requested_surface: context.source,
         },
       };

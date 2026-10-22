@@ -1,4 +1,11 @@
+import { createApprovedSetupConfiguration, type ApprovedSetupConfiguration } from './approvedSetup';
 import {
+  CaseRoleLockdownService,
+  type ICaseRoleLockdownService,
+} from '../../services/CaseRoleLockdownService';
+import {
+  ActionDeniedError,
+  type ExecutionRecord,
   createOperationsActions,
   type ActionResult,
   type AuthorityPort,
@@ -11,7 +18,6 @@ import type { Client } from 'discord.js';
 import type { IConfigService } from '../../config/ConfigService';
 import type { IModerationQueueService } from '../../services/ModerationQueueService';
 import type { ICaseThreadClosureSweepService } from '../../services/CaseThreadClosureSweepService';
-import type { ICaseRoleLockdownService } from '../../services/CaseRoleLockdownService';
 import type { IIntegrityAuditService } from '../../services/IntegrityAuditService';
 import type { ISecurityActionService } from '../../services/SecurityActionService';
 import { getDetectionResponseSettings } from '../../utils/detectionResponseSettings';
@@ -27,6 +33,7 @@ export interface BotOperationsDependencies {
 }
 export interface BotOperationsRuntime {
   readonly actions: OperationsActions;
+  forExecution(execution: ExecutionRecord): OperationsActions;
   withProgress(onProgress: (progress: RoleIntakeProgress) => Promise<void>): OperationsActions;
 }
 export function createBotOperationsRuntime(
@@ -34,17 +41,20 @@ export function createBotOperationsRuntime(
   authority: AuthorityPort = createBotAuthority(deps.client)
 ): BotOperationsRuntime {
   const create = (
-    onProgress?: (progress: RoleIntakeProgress) => Promise<void>
+    onProgress?: (progress: RoleIntakeProgress) => Promise<void>,
+    approved?: ApprovedSetupConfiguration
   ): OperationsActions =>
     createOperationsActions({
       authority,
       confirmations: deps.confirmations,
       policy: {
         async loadFresh(guildId) {
-          const config = await deps.configService.getServerConfig(guildId, {
-            forceRefresh: true,
-            failOnReadError: true,
-          });
+          const config = approved
+            ? await approved.read(guildId)
+            : await deps.configService.getServerConfig(guildId, {
+                forceRefresh: true,
+                failOnReadError: true,
+              });
           return {
             intakeReasonRequired: getDetectionResponseSettings(config.settings)
               .adminCaseOpenRequiresReason,
@@ -72,11 +82,12 @@ export function createBotOperationsRuntime(
           return deps.caseRoleLockdownService.auditGuild(await deps.client.guilds.fetch(guildId));
         },
         async apply(input) {
-          return deps.caseRoleLockdownService.applyGuild(
-            await deps.client.guilds.fetch(input.guildId),
-            input.actorId,
-            { unsyncAllowedChannels: input.unsyncAllowedChannels }
-          );
+          approved?.startEffects();
+          return (
+            approved ? new CaseRoleLockdownService(approved.config) : deps.caseRoleLockdownService
+          ).applyGuild(await deps.client.guilds.fetch(input.guildId), input.actorId, {
+            unsyncAllowedChannels: input.unsyncAllowedChannels,
+          });
         },
       },
       integrity: {
@@ -111,13 +122,25 @@ export function createBotOperationsRuntime(
         },
       },
     });
-  return { actions: create(), withProgress: create };
+  return {
+    actions: create(),
+    withProgress: create,
+    forExecution(execution): OperationsActions {
+      if (execution.preconditions.kind !== 'setup')
+        throw new ActionDeniedError('setup_preconditions_required');
+      return create(
+        undefined,
+        createApprovedSetupConfiguration(deps.configService, execution.preconditions)
+      );
+    },
+  };
 }
 export function requireOperationsOutcome(
   result: ActionResult<OperationsOutcome>
 ): OperationsOutcome {
   if (result.kind === 'denied')
-    throw new Error(
+    throw new ActionDeniedError(
+      result.code,
       result.code === 'reason_required'
         ? 'Role intake execution requires a case reason.'
         : `Operation denied: ${result.code}`

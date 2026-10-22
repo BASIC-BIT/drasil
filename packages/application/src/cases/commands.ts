@@ -3,7 +3,7 @@ import { z } from 'zod';
 const id = z.string().min(1);
 const target = { targetUserId: id };
 const bound = { ...target, caseId: id };
-const reason = z.string().nullable();
+const reason = z.string().nullable().default(null);
 export const selectedMessageSchema = z.object({ channelId: id, messageId: id }).strict();
 export const caseCommandSchema = z.discriminatedUnion('kind', [
   z

@@ -22,7 +22,9 @@
     "prebuild": "npm --prefix ../.. run application:build",
     "pretest": "npm --prefix ../.. run application:build",
     "pretest:coverage": "npm --prefix ../.. run application:build",
-    "pretypecheck": "npm --prefix ../.. run application:build"
+    "pretypecheck": "npm --prefix ../.. run application:build",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "pretest:integration": "npm --prefix ../.. run application:build"
   },
   "dependencies": {
     "@drasil/contracts": "file:../../packages/contracts",
@@ -31,7 +33,9 @@
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "zod": "^3.25.76",
-    "@drasil/application": "file:../../packages/application"
+    "@drasil/application": "file:../../packages/application",
+    "@drasil/mcp-runtime": "file:lib/mcp/runtime",
+    "zod-to-json-schema": "3.25.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.23.0",
@@ -47,6 +51,7 @@
     "storybook": "^10.4.6",
     "typescript": "^5.5.4",
     "typescript-eslint": "^8.28.0",
-    "vitest": "^4.1.0"
+    "vitest": "^4.1.0",
+    "@modelcontextprotocol/client": "2.3.1"
   }
 }

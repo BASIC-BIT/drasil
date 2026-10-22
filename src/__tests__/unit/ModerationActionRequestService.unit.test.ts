@@ -1237,6 +1237,35 @@ describe('ModerationActionRequestService', () => {
     };
   }
 
+  it('runs bounded MCP maintenance while disabled and isolates its failure from ordinary moderation', async () => {
+    const { application, repository, productAnalyticsService } = buildService();
+    const previous = process.env.DRASIL_MCP_ENABLED;
+    process.env.DRASIL_MCP_ENABLED = 'false';
+    let calls = 0;
+    const service = new ModerationActionRequestService(
+      repository,
+      {
+        ...application,
+        delegation: {
+          pruneExpiredMcpData: async () => {
+            calls++;
+            throw new Error('PRIVATE_MAINTENANCE');
+          },
+          authorizeDelegatedRequest: async () => ({ kind: 'ordinary' }),
+          complete: async () => {},
+        },
+      },
+      productAnalyticsService as never
+    );
+    try {
+      expect(await service.processPendingRequests()).toBe(1);
+      expect(calls).toBe(1);
+      expect(repository.completed).toHaveLength(1);
+    } finally {
+      if (previous === undefined) delete process.env.DRASIL_MCP_ENABLED;
+      else process.env.DRASIL_MCP_ENABLED = previous;
+    }
+  });
   it('denies a queued verification after actor permissions are revoked', async () => {
     const { service, reporterMember, repository, userModerationService } = buildService([
       verifyRequest,

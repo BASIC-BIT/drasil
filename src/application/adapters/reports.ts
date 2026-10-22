@@ -1,4 +1,5 @@
 import {
+  ActionDeniedError,
   createReportActions,
   type ActionContext,
   type ActionResult,
@@ -190,6 +191,15 @@ export function createBotReportActions(
           channel?.isTextBased() && 'messages' in channel
             ? await channel.messages.fetch(command.messageId).catch(() => null)
             : null;
+        if (
+          context.source === 'mcp' &&
+          (!message ||
+            message.guildId !== context.guildId ||
+            message.channelId !== command.channelId ||
+            message.id !== command.messageId ||
+            message.author.id !== command.targetUserId)
+        )
+          throw new ActionDeniedError('binding_mismatch');
         return submission.submitMessageReport(target, reporter, {
           messageId: command.messageId,
           channelId: command.channelId,
@@ -395,7 +405,8 @@ export function requireReportOutcome<K extends ReportCommand['kind']>(
   kind: K
 ): Extract<ReportOutcome, { kind: K }> {
   if (result.kind === 'denied')
-    throw new Error(
+    throw new ActionDeniedError(
+      result.code,
       result.code === 'reason_required'
         ? 'Please include a reason for this report.'
         : result.code === 'confirmation_required'

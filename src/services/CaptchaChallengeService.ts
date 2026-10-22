@@ -1,3 +1,4 @@
+import { ActionDeniedError } from '@drasil/application';
 import { encodeCaptchaEffect } from '../application/captchaContext';
 import { createHash, randomBytes } from 'node:crypto';
 import { inject, injectable, optional } from 'inversify';
@@ -5,6 +6,7 @@ import { IConfigService } from '../config/ConfigService';
 import { TYPES } from '../di/symbols';
 import {
   CaptchaChallengeIssueInput,
+  CaptchaChallengeCaseChangedError,
   ICaptchaChallengeRepository,
 } from '../repositories/CaptchaChallengeRepository';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
@@ -34,6 +36,8 @@ const EXPIRY_SWEEP_INTERVAL_MS = 60_000;
 const DELIVERY_LEASE_MS = 5 * 60_000;
 
 export interface RequestCaptchaChallengeInput {
+  /** Trusted delegated approval revision; native callers retain current-state behavior. */
+  expectedCaseRevision?: number;
   actionRequestId?: string;
   verificationEventId: string;
   requestSource: CaptchaChallengeRequestSource;
@@ -58,6 +62,7 @@ export interface EvaluateCaptchaPassInput {
 }
 
 export interface BypassCaptchaChallengeInput {
+  expectedCaseRevision?: number;
   actionRequestId?: string;
   verificationEventId: string;
   moderatorId: string;
@@ -129,6 +134,11 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     input: RequestCaptchaChallengeInput
   ): Promise<CaptchaChallengeRequestResult> {
     const verificationEvent = await this.requireEligibleCase(input);
+    if (
+      input.expectedCaseRevision !== undefined &&
+      verificationEvent.case_revision !== input.expectedCaseRevision
+    )
+      throw new ActionDeniedError('stale_state');
     const server = await this.config.getServerConfig(verificationEvent.server_id, {
       failOnReadError: true,
       forceRefresh: true,
@@ -142,31 +152,40 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
       userId: verificationEvent.user_id,
       requestSource: input.requestSource,
       passEffect: selectCaptchaPassEffect(input.requestSource, settings.passAction),
-      caseRevision: verificationEvent.case_revision,
+      caseRevision: input.expectedCaseRevision ?? verificationEvent.case_revision,
       tokenHash: createHash('sha256').update(token).digest('hex'),
       expiresAt: new Date(Date.now() + settings.challengeLifetimeHours * 60 * 60 * 1000),
       requestedBy: input.requestedBy ?? null,
     };
     let challenge: CaptchaChallenge;
-    if (input.retry) {
-      const expectedGeneration = input.expectedGeneration;
-      if (
-        !input.expectedChallengeId ||
-        expectedGeneration === undefined ||
-        !Number.isInteger(expectedGeneration) ||
-        expectedGeneration < 1
-      ) {
-        throw new Error(
-          'The displayed security check is no longer available. Refresh and try again.'
-        );
+    try {
+      if (input.retry) {
+        const expectedGeneration = input.expectedGeneration;
+        if (
+          !input.expectedChallengeId ||
+          expectedGeneration === undefined ||
+          !Number.isInteger(expectedGeneration) ||
+          expectedGeneration < 1
+        ) {
+          throw new Error(
+            'The displayed security check is no longer available. Refresh and try again.'
+          );
+        }
+        challenge = await this.challenges.retry({
+          ...challengeInput,
+          expectedChallengeId: input.expectedChallengeId,
+          expectedGeneration,
+        });
+      } else {
+        challenge = await this.challenges.create(challengeInput);
       }
-      challenge = await this.challenges.retry({
-        ...challengeInput,
-        expectedChallengeId: input.expectedChallengeId,
-        expectedGeneration,
-      });
-    } else {
-      challenge = await this.challenges.create(challengeInput);
+    } catch (error) {
+      if (
+        input.expectedCaseRevision !== undefined &&
+        error instanceof CaptchaChallengeCaseChangedError
+      )
+        throw new ActionDeniedError('stale_state');
+      throw error;
     }
     const url = buildCaptchaChallengeUrl(token);
     if (!url) {
@@ -237,6 +256,11 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     ) {
       throw new Error('Only pending standard cases can bypass a security check.');
     }
+    if (
+      input.expectedCaseRevision !== undefined &&
+      verificationEvent.case_revision !== input.expectedCaseRevision
+    )
+      throw new ActionDeniedError('stale_state');
     const challenge = await this.challenges.findByCaseId(input.verificationEventId);
     if (!challenge || challenge.status === CaptchaChallengeStatus.PASSED) {
       throw new Error('This case does not have a bypassable security check.');
@@ -252,9 +276,11 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
       challenge.generation,
       input.moderatorId,
       input.reason,
-      input.actionRequestId
+      input.actionRequestId,
+      input.expectedCaseRevision
     );
     if (!bypassed) {
+      if (input.expectedCaseRevision !== undefined) throw new ActionDeniedError('stale_state');
       throw new Error('The security check changed before it could be bypassed.');
     }
     try {

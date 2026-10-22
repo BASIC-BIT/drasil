@@ -150,6 +150,9 @@ export function buildCaseApplication(
     operations: operationsRuntime.actions,
     operationsRuntime,
     messageCleanupRuntime: {
+      forCommittedRequest() {
+        throw new Error('Not arranged for these units');
+      },
       forRequest() {
         throw new Error('Not arranged for these units');
       },

@@ -136,7 +136,10 @@ export function parseReportQueueRow(row: ReportQueueRow, now = new Date()): Repo
 
 export class PostgresReportQueueDataAdapter implements ReportQueueDataAdapter {
   public constructor(
-    private readonly reportReview: ReportReviewActions = createWebApplication().reportReview
+    private readonly reportReview: Pick<
+      ReportReviewActions,
+      'close' | 'openCase'
+    > = createWebApplication().reportReview
   ) {}
 
   public async listSubmittedReports(guildId: string): Promise<ReportQueueItem[]> {

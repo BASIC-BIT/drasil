@@ -1,6 +1,7 @@
 import type { GuildMember } from 'discord.js';
 import type { VerificationEvent, ModerationActionRequest } from '../../repositories/types';
 import {
+  ActionDeniedError,
   buildAccountQuarantinePreviewFingerprint,
   createQuarantineActions,
   type ActionContext,
@@ -34,6 +35,7 @@ export interface BotQuarantineRuntime {
   readonly actions: QuarantineActions;
   readonly previews: ReturnType<typeof createQuarantinePreviewStore>;
   forRequest(request: ModerationActionRequest): QuarantineActions;
+  forCommittedRequest(request: ModerationActionRequest): QuarantineActions;
 }
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -228,7 +230,20 @@ export function createBotQuarantineRuntime(
       return result;
     },
   };
-  return { actions, previews, forRequest: (request) => createQuarantineActions(ports(request)) };
+  return {
+    actions,
+    previews,
+    forRequest: (request) => createQuarantineActions(ports(request)),
+    forCommittedRequest(request): QuarantineActions {
+      return {
+        preview: async () => ({ kind: 'denied', code: 'stale_state' }),
+        async execute(context, input): ReturnType<QuarantineActions['execute']> {
+          const outcome = await ports(request).workflows.recoverCommitted(context, input);
+          return outcome ? { kind: 'outcome', outcome } : { kind: 'denied', code: 'stale_state' };
+        },
+      };
+    },
+  };
 }
 export function requireQuarantineOutcome<T>(result: ActionResult<T>): T {
   if (result.kind === 'outcome') return result.outcome;
@@ -241,5 +256,5 @@ export function requireQuarantineOutcome<T>(result: ActionResult<T>): T {
     policy_disabled: 'Compromised-account quarantine is disabled for this server.',
     reason_required: 'Account-quarantine request requires a reason.',
   };
-  throw new Error(messages[result.code]);
+  throw new ActionDeniedError(result.code, messages[result.code]);
 }

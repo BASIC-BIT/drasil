@@ -320,6 +320,10 @@ resource "aws_ecs_task_definition" "bot" {
       essential = true
       environment = [
         {
+          name  = "DRASIL_MCP_ENABLED"
+          value = tostring(var.drasil_mcp_enabled)
+        },
+        {
           name  = "LANGFUSE_TRACING_ENABLED"
           value = tostring(var.langfuse_tracing_enabled)
         },

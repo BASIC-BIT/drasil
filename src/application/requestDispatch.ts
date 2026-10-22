@@ -22,6 +22,11 @@ import { requireCaseOutcome } from './adapters/cases';
 
 type CaseReceipt = { readonly target_user_id: string; readonly verification_event_id: string };
 export type QueuedActionOutcome =
+  | {
+      readonly action_type: 'ban_user' | 'kick_user';
+      readonly target_user_id: string;
+      readonly succeeded: boolean;
+    }
   | QueuedSetupOutcome
   | QueuedReportOutcome
   | QueuedOperationsOutcome
@@ -79,9 +84,12 @@ export type QueuedActionOutcome =
       ));
 export type QueuedRequestRuntime = Pick<
   BotApplication,
+  | 'delegation'
+  | 'casesForExecution'
   | 'cases'
   | 'reports'
   | 'operations'
+  | 'operationsRuntime'
   | 'setupRuntime'
   | 'caseConfirmations'
   | 'captchaRuntime'
@@ -114,6 +122,74 @@ function handler<K extends QueuedCommand['kind'], Actions>(
   };
 }
 export const queuedActionHandlers = {
+  update_settings: handler(
+    'update_settings',
+    (runtime) => runtime.setupRuntime,
+    dispatchSetupAction
+  ),
+  update_heuristics: handler(
+    'update_heuristics',
+    (runtime) => runtime.setupRuntime,
+    dispatchSetupAction
+  ),
+  reset_heuristics: handler(
+    'reset_heuristics',
+    (runtime) => runtime.setupRuntime,
+    dispatchSetupAction
+  ),
+  lockdown_allow_add: handler(
+    'lockdown_allow_add',
+    (runtime) => runtime.setupRuntime,
+    dispatchSetupAction
+  ),
+  lockdown_allow_remove: handler(
+    'lockdown_allow_remove',
+    (runtime) => runtime.setupRuntime,
+    dispatchSetupAction
+  ),
+  disable_lockdown: handler(
+    'disable_lockdown',
+    (runtime) => runtime.setupRuntime,
+    dispatchSetupAction
+  ),
+  clear_report_instructions: handler(
+    'clear_report_instructions',
+    (runtime) => runtime.setupRuntime,
+    dispatchSetupAction
+  ),
+  audit_integrity: handler(
+    'audit_integrity',
+    (runtime) => runtime.operations,
+    dispatchOperationsAction
+  ),
+  submit_message_report: handler(
+    'submit_message_report',
+    (runtime) => runtime.reports,
+    dispatchReportAction
+  ),
+  confirm_intake_candidate: handler(
+    'confirm_intake_candidate',
+    (runtime) => runtime.reports,
+    dispatchReportAction
+  ),
+  reject_intake_candidates: handler(
+    'reject_intake_candidates',
+    (runtime) => runtime.reports,
+    dispatchReportAction
+  ),
+  prepare_report_ban_review: handler(
+    'prepare_report_ban_review',
+    (runtime, request) => runtime.detectionRuntime.forRequest(request),
+    dispatchDetectionAction
+  ),
+  review_uncertain_report_ban: handler(
+    'review_uncertain_report_ban',
+    (runtime, request) => runtime.detectionRuntime.forRequest(request),
+    dispatchDetectionAction
+  ),
+
+  ban_user: handler('ban_user', (runtime) => runtime.cases, dispatchCaseAction),
+  kick_user: handler('kick_user', (runtime) => runtime.cases, dispatchCaseAction),
   open_case_from_observed_detection: handler(
     'open_case_from_observed_detection',
     (runtime) => runtime.cases,
@@ -329,7 +405,7 @@ async function dispatchCaseAction(
       return { ...target, action_type: outcome.kind, flagged: outcome.succeeded };
     case 'ban_user':
     case 'kick_user':
-      throw new Error('Ordinary staff actions execute directly.');
+      return { ...target, action_type: outcome.kind, succeeded: outcome.succeeded };
     default: {
       return projectBoundReceipt(command, outcome);
     }

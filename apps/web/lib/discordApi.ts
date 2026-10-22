@@ -46,6 +46,8 @@ export interface DiscordRole {
 }
 
 export interface DiscordChannel {
+  readonly guild_id?: string;
+  readonly parent_id?: string | null;
   readonly id: string;
   readonly name: string;
   readonly type: number;
@@ -68,6 +70,7 @@ export interface DiscordMessageAttachment {
   readonly url?: string;
   readonly proxy_url?: string;
   readonly content_type?: string;
+  readonly size?: number;
 }
 
 export interface DiscordMessage {
@@ -271,7 +274,7 @@ export async function fetchBotChannelMessages(
 
 export async function fetchDiscordGuild(
   guildId: string
-): Promise<{ readonly id: string; readonly owner_id: string }> {
+): Promise<{ readonly id: string; readonly owner_id: string; readonly name?: string }> {
   return fetchBotJson(`/guilds/${guildId}`);
 }
 export async function fetchDiscordGuildMember(
@@ -280,6 +283,44 @@ export async function fetchDiscordGuildMember(
 ): Promise<DiscordGuildMember> {
   return fetchBotJson(`/guilds/${guildId}/members/${userId}`);
 }
+export async function fetchDiscordGuildChannels(guildId: string): Promise<DiscordChannel[]> {
+  assertDiscordId(guildId);
+  return fetchBotJson(`/guilds/${guildId}/channels`);
+}
 export async function fetchDiscordGuildRoles(guildId: string): Promise<DiscordRole[]> {
   return fetchBotJson(`/guilds/${guildId}/roles`);
+}
+
+/** Narrow read APIs: callers cannot supply Discord paths or arbitrary URLs. */
+export async function fetchDiscordChannel(channelId: string): Promise<DiscordChannel> {
+  assertDiscordId(channelId);
+  return fetchBotJson(`/channels/${channelId}`);
+}
+export interface DiscordThreadMember {
+  readonly id: string;
+  readonly user_id: string;
+}
+export async function fetchDiscordThreadMember(
+  threadId: string,
+  userId: string
+): Promise<DiscordThreadMember> {
+  assertDiscordId(threadId);
+  assertDiscordId(userId);
+  return fetchBotJson(`/channels/${threadId}/thread-members/${userId}`);
+}
+export async function fetchBotMessagePage(
+  channelId: string,
+  limit: number,
+  before: string | null
+): Promise<DiscordMessage[]> {
+  assertDiscordId(channelId);
+  if (before) assertDiscordId(before);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100)
+    throw new Error('Invalid Discord page size.');
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (before) params.set('before', before);
+  return fetchBotJson(`/channels/${channelId}/messages?${params.toString()}`);
+}
+function assertDiscordId(id: string): void {
+  if (!/^\d{17,20}$/.test(id)) throw new Error('Invalid Discord ID.');
 }

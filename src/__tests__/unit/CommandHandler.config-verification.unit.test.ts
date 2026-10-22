@@ -140,8 +140,8 @@ describe('CommandHandler verification config commands (unit)', () => {
         [VERIFICATION_PROMPT_TEMPLATE_SETTING_KEY]: 'custom',
       },
     });
-    const updateServerConfig = jest.fn().mockResolvedValue({ settings: {} });
-    const { handler, configService } = buildHandler({ getServerConfig, updateServerConfig });
+    const updateSetupIfUnchanged = jest.fn().mockResolvedValue({ settings: {} });
+    const { handler, configService } = buildHandler({ getServerConfig, updateSetupIfUnchanged });
 
     const guild = {
       id: 'guild-1',
@@ -168,9 +168,11 @@ describe('CommandHandler verification config commands (unit)', () => {
 
     await handler.handleSlashCommand(interaction);
 
-    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-      settings: {},
-    });
+    expect(configService.updateSetupIfUnchanged).toHaveBeenCalledWith(
+      'guild-1',
+      undefined,
+      expect.objectContaining({ settings: {}, resetSettings: ['verification_prompt_template'] })
+    );
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('Reset verification prompt template to default'),
     });
@@ -355,8 +357,8 @@ describe('CommandHandler verification config commands (unit)', () => {
         [EXPECTED_TOPICS_SETTING_KEY]: ['doom'],
       },
     });
-    const updateServerConfig = jest.fn().mockResolvedValue({ settings: {} });
-    const { handler, configService } = buildHandler({ getServerConfig, updateServerConfig });
+    const updateSetupIfUnchanged = jest.fn().mockResolvedValue({ settings: {} });
+    const { handler, configService } = buildHandler({ getServerConfig, updateSetupIfUnchanged });
 
     const guild = {
       id: 'guild-1',
@@ -383,9 +385,14 @@ describe('CommandHandler verification config commands (unit)', () => {
 
     await handler.handleSlashCommand(interaction);
 
-    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-      settings: {},
-    });
+    expect(configService.updateSetupIfUnchanged).toHaveBeenCalledWith(
+      'guild-1',
+      undefined,
+      expect.objectContaining({
+        settings: {},
+        resetSettings: ['server_about', 'verification_context', 'expected_topics'],
+      })
+    );
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: '✅ Reset AI server context to defaults.',
     });

@@ -15,6 +15,21 @@ export function encodeDetectionAction(
   command: QueuedDetectionCommand
 ): EnqueueInput {
   if (context.actor.kind !== 'user') throw new Error('Detection submission requires a user actor.');
+  if (
+    command.kind === 'prepare_report_ban_review' ||
+    command.kind === 'review_uncertain_report_ban'
+  ) {
+    const { kind, ...fields } = command;
+    return {
+      actionType: kind,
+      actorId: context.actor.userId,
+      actorSurface: context.source,
+      serverId: context.guildId,
+      targetUserId: 'targetUserId' in command ? command.targetUserId : null,
+      idempotencyKey: `${context.source}:review:${kind}:${context.guildId}:${context.requestId}`,
+      metadata: { requested_surface: context.source, review_command: fields },
+    };
+  }
   const base = {
     actionType: command.kind,
     actorId: context.actor.userId,
@@ -71,6 +86,14 @@ export function decodeDetectionCommand(
   const target = { kind: parsed.action_type, targetUserId: parsed.target_user_id };
   let command: QueuedCommand;
   switch (parsed.action_type) {
+    case 'prepare_report_ban_review':
+    case 'review_uncertain_report_ban':
+      return queuedCommandSchema.parse({
+        ...(typeof parsed.metadata?.review_command === 'object'
+          ? parsed.metadata.review_command
+          : {}),
+        kind: parsed.action_type,
+      });
     case 'ban_observed_detection':
       command = queuedCommandSchema.parse({
         ...target,

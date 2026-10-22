@@ -211,7 +211,10 @@ const LOCKDOWN_POSTING_PERMISSIONS: readonly PermissionLabel[] = [
 
 @injectable()
 export class CaseRoleLockdownService implements ICaseRoleLockdownService {
-  constructor(@inject(TYPES.ConfigService) private readonly configService: IConfigService) {}
+  constructor(
+    @inject(TYPES.ConfigService)
+    private readonly configService: Pick<IConfigService, 'getServerConfig' | 'updateServerSettings'>
+  ) {}
 
   public async auditGuild(
     guild: Guild,

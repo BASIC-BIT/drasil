@@ -1,6 +1,16 @@
-import type { ActionContext, ReportActions, QueuedReportCommand } from '@drasil/application';
+import {
+  ActionDeniedError,
+  type ActionContext,
+  type ReportActions,
+  type QueuedReportCommand,
+} from '@drasil/application';
 import { requireReportOutcome } from './adapters/reports';
 export type QueuedReportOutcome =
+  | {
+      readonly action_type: QueuedReportCommand['kind'];
+      readonly status: import('@drasil/application').ReportOutcome['status'];
+      readonly statusRecorded?: boolean;
+    }
   | {
       action_type: 'submit_user_report';
       reporter_id: string;
@@ -41,6 +51,29 @@ export async function dispatchReportAction(
   command: QueuedReportCommand
 ): Promise<QueuedReportOutcome> {
   if (context.actor.kind !== 'user') throw new Error('Report request requires a user actor.');
+  if (context.source === 'mcp') {
+    const result = await actions.execute(context, command);
+    if (result.kind === 'denied') throw new ActionDeniedError(result.code);
+    return {
+      action_type: command.kind,
+      status: result.outcome.status,
+      ...('statusRecorded' in result.outcome
+        ? { statusRecorded: result.outcome.statusRecorded }
+        : {}),
+    };
+  }
+  if (
+    command.kind === 'submit_message_report' ||
+    command.kind === 'confirm_intake_candidate' ||
+    command.kind === 'reject_intake_candidates'
+  ) {
+    const outcome = requireReportOutcome(await actions.execute(context, command), command.kind);
+    return {
+      action_type: command.kind,
+      status: outcome.status,
+      ...('statusRecorded' in outcome ? { statusRecorded: outcome.statusRecorded } : {}),
+    };
+  }
   if (command.kind === 'close_report_intake') return closeReport(actions, context, command);
   const result = await actions.execute(context, command);
   if (command.kind === 'submit_user_report') {

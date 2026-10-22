@@ -104,7 +104,7 @@ test.each(['denied', 'failed'] as const)(
 
 test('edits bare set errors after acknowledging', async () => {
   const { handler } = buildHandler({
-    updateServerConfig: jest.fn(async () => {
+    updateSetupIfUnchanged: jest.fn(async () => {
       throw new Error('Storage failed');
     }),
   });

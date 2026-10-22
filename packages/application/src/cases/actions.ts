@@ -1,3 +1,10 @@
+import {
+  hasAuthority,
+  MANAGE_GUILD,
+  MODERATE_MEMBERS,
+  BAN_MEMBERS,
+  KICK_MEMBERS,
+} from '../authorization';
 import { evaluateCasePolicy } from './policy';
 import type { RoleGateResolutionResult } from './roleGate';
 import type { ActionContext } from '../context';
@@ -10,12 +17,6 @@ import type {
   CaseRepairResult,
   CaseRefreshResult,
 } from './ports';
-
-const ADMINISTRATOR = 1n << 3n;
-const MANAGE_GUILD = 1n << 5n;
-const MODERATE_MEMBERS = 1n << 40n;
-const BAN_MEMBERS = 1n << 2n;
-const KICK_MEMBERS = 1n << 1n;
 
 type BooleanCaseKind = Exclude<
   CaseCommand['kind'],
@@ -52,7 +53,9 @@ export type CaseOutcome =
 export interface CaseActions {
   execute(context: ActionContext, command: CaseCommand): Promise<ActionResult<CaseOutcome>>;
 }
-function requiredPermissions(command: CaseCommand): bigint {
+export function caseRequiredPermissions(
+  command: Pick<CaseCommand, 'kind'> & { readonly intent?: string }
+): bigint {
   return (command.kind === 'repair_active_case' && command.intent === 'administrator_repair') ||
     command.kind === 'refresh_case_notification' ||
     command.kind === 'manual_flag_user'
@@ -81,10 +84,7 @@ async function authorizeCase(
   if (!actor || !actor.present) return 'actor_unavailable';
   if (actor.guildId !== context.guildId || actor.userId !== context.actor.userId)
     return 'binding_mismatch';
-  const bits = /^\d+$/.test(actor.permissions) ? BigInt(actor.permissions) : 0n;
-  const admin = actor.owner || (bits & ADMINISTRATOR) !== 0n;
-  const required = requiredPermissions(command);
-  if (!admin && (bits & required) === 0n) return 'permission_denied';
+  if (!hasAuthority(actor, caseRequiredPermissions(command))) return 'permission_denied';
 
   return null;
 }
@@ -287,14 +287,16 @@ async function executeCaseWorkflow(
   }
 }
 
+export function caseNeedsConfirmation(command: Pick<CaseCommand, 'kind'>): boolean {
+  return command.kind !== 'repair_active_case' && command.kind !== 'refresh_case_notification';
+}
+
 export function createCaseActions(deps: CaseDependencies): CaseActions {
   return {
     async execute(context, command): Promise<ActionResult<CaseOutcome>> {
       // Consume per-attempt evidence even when fresh policy or authority later denies execution.
       const confirmationVerified =
-        command.kind === 'repair_active_case' ||
-        command.kind === 'refresh_case_notification' ||
-        (await deps.confirmations.verify(context, command));
+        !caseNeedsConfirmation(command) || (await deps.confirmations.verify(context, command));
       const authorityDenial = await authorizeCase(deps, context, command);
       if (authorityDenial) return { kind: 'denied', code: authorityDenial };
       if (context.actor.kind !== 'user') return { kind: 'denied', code: 'permission_denied' };

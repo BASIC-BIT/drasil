@@ -30,7 +30,8 @@ const queuedRowSchema = z
       row.target_user_id === null &&
       !isQueuedOperationKind(row.action_type) &&
       !isQueuedReportKind(row.action_type) &&
-      !isQueuedSetupKind(row.action_type)
+      !isQueuedSetupKind(row.action_type) &&
+      row.action_type !== 'prepare_report_ban_review'
     )
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -44,78 +45,10 @@ export interface DecodedQueuedAction {
   readonly command: QueuedCommand;
 }
 export function decodeQueuedAction(row: unknown): DecodedQueuedAction {
-  const parsed = queuedRowSchema.parse(row);
+  const parsed = parseQueuedRow(row);
   const metadata = parsed.metadata ?? {};
   const reason = typeof metadata.reason === 'string' ? metadata.reason : null;
-  const target = { kind: parsed.action_type, targetUserId: parsed.target_user_id };
-  let command: QueuedCommand;
-  const detectionCommand = decodeFamilyCommand(parsed, reason);
-  if (detectionCommand) {
-    command = detectionCommand;
-  } else {
-    switch (parsed.action_type) {
-      case 'open_case_from_observed_detection':
-        command = queuedCommandSchema.parse({
-          ...target,
-          detectionEventId: parsed.detection_event_id,
-          reportId: parsed.report_intake_id ?? null,
-          ...(metadata.inbox_action === 'open_case'
-            ? { origin: { kind: 'observed_alert', reason } }
-            : {}),
-        });
-        break;
-      case 'open_admin_case':
-        command = queuedCommandSchema.parse({
-          ...target,
-          intent: 'dashboard_case_open',
-          reason,
-          detectionEventId: parsed.detection_event_id ?? null,
-          selectedMessage:
-            metadata.source_channel_id || metadata.source_message_id
-              ? { channelId: metadata.source_channel_id, messageId: metadata.source_message_id }
-              : null,
-        });
-        break;
-      case 'repair_active_case':
-        command = queuedCommandSchema.parse({
-          ...target,
-          caseId: parsed.verification_event_id,
-          mode: metadata.case_action === 'create_thread' ? 'create_thread' : 'repair_thread',
-        });
-        break;
-      case 'preview_account_quarantine':
-      case 'quarantine_compromised_account':
-        command = queuedCommandSchema.parse({
-          ...target,
-          caseId: parsed.verification_event_id,
-          ...(parsed.action_type === 'quarantine_compromised_account'
-            ? {
-                reason,
-                previewReference: {
-                  kind: 'persisted_preview',
-                  requestId: metadata.preview_request_id,
-                },
-              }
-            : {}),
-        });
-        break;
-      case 'manual_flag_user':
-        command = queuedCommandSchema.parse({ ...target, reason });
-        break;
-      case 'kick_case_user':
-      case 'ban_case_user':
-      case 'ban_case_user_by_id':
-        command = queuedCommandSchema.parse({
-          ...target,
-          caseId: parsed.verification_event_id,
-          reason,
-          detectionEventId: parsed.detection_event_id ?? null,
-        });
-        break;
-      default:
-        command = queuedCommandSchema.parse({ ...target, caseId: parsed.verification_event_id });
-    }
-  }
+  const command = decodeFamilyCommand(parsed, reason) ?? decodeCaseCommand(parsed, reason);
   return {
     context: {
       guildId: parsed.server_id,
@@ -127,7 +60,89 @@ export function decodeQueuedAction(row: unknown): DecodedQueuedAction {
   };
 }
 
-function decodeFamilyCommand(row: QueuedRow, reason: string | null): QueuedCommand | null {
+const selectedMessage = (metadata: Record<string, unknown>): unknown => {
+  return metadata.source_channel_id || metadata.source_message_id
+    ? { channelId: metadata.source_channel_id, messageId: metadata.source_message_id }
+    : null;
+};
+const decodeCaseCreation = (row: QueuedRow, reason: string | null): QueuedCommand | null => {
+  const metadata = row.metadata ?? {};
+  const target = { kind: row.action_type, targetUserId: row.target_user_id };
+  switch (row.action_type) {
+    case 'ban_user':
+    case 'kick_user':
+      return queuedCommandSchema.parse({
+        ...target,
+        reason,
+        ...(row.action_type === 'ban_user' ? { intent: metadata.intent ?? 'native_action' } : {}),
+        selectedMessage: selectedMessage(metadata),
+      });
+    case 'open_case_from_observed_detection':
+      return queuedCommandSchema.parse({
+        ...target,
+        detectionEventId: row.detection_event_id,
+        reportId: row.report_intake_id ?? null,
+        ...(metadata.inbox_action === 'open_case'
+          ? { origin: { kind: 'observed_alert', reason } }
+          : {}),
+      });
+    case 'open_admin_case':
+      return queuedCommandSchema.parse({
+        ...target,
+        intent: metadata.intent ?? 'dashboard_case_open',
+        reason,
+        detectionEventId: row.detection_event_id ?? null,
+        selectedMessage: selectedMessage(metadata),
+      });
+    default:
+      return null;
+  }
+};
+const decodeCaseCommand = (row: QueuedRow, reason: string | null): QueuedCommand => {
+  const metadata = row.metadata ?? {};
+  const target = { kind: row.action_type, targetUserId: row.target_user_id };
+  const creation = decodeCaseCreation(row, reason);
+  if (creation) return creation;
+  switch (row.action_type) {
+    case 'repair_active_case':
+      return queuedCommandSchema.parse({
+        ...target,
+        caseId: row.verification_event_id,
+        intent: metadata.intent ?? 'moderator_repair',
+        mode: metadata.case_action === 'create_thread' ? 'create_thread' : 'repair_thread',
+      });
+    case 'preview_account_quarantine':
+    case 'quarantine_compromised_account':
+      return queuedCommandSchema.parse({
+        ...target,
+        caseId: row.verification_event_id,
+        ...(row.action_type === 'quarantine_compromised_account'
+          ? {
+              reason,
+              previewReference: {
+                kind: 'persisted_preview',
+                requestId: metadata.preview_request_id,
+              },
+            }
+          : {}),
+      });
+    case 'manual_flag_user':
+      return queuedCommandSchema.parse({ ...target, reason });
+    case 'kick_case_user':
+    case 'ban_case_user':
+    case 'ban_case_user_by_id':
+      return queuedCommandSchema.parse({
+        ...target,
+        caseId: row.verification_event_id,
+        reason,
+        detectionEventId: row.detection_event_id ?? null,
+      });
+    default:
+      return queuedCommandSchema.parse({ ...target, caseId: row.verification_event_id });
+  }
+};
+
+const decodeFamilyCommand = (row: QueuedRow, reason: string | null): QueuedCommand | null => {
   return (
     decodeSetupCommand(row) ??
     decodeReportCommand(row) ??
@@ -136,4 +151,18 @@ function decodeFamilyCommand(row: QueuedRow, reason: string | null): QueuedComma
     decodeCaptchaCommand(row) ??
     decodeDetectionCommand(row, reason)
   );
+};
+
+/** Shape validation is not authorization; workers must verify the persisted execution link. */
+export const delegatedDeliveryBindingSchema = z
+  .object({
+    executionId: z.string().uuid(),
+    connectionId: z.string().uuid(),
+    grantVersion: z.number().int().positive(),
+    commandDigest: z.string().regex(/^v1:sha256:[a-f0-9]{64}$/),
+  })
+  .strict();
+
+export function parseQueuedRow(row: unknown): QueuedRow {
+  return queuedRowSchema.parse(row);
 }

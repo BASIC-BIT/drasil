@@ -13,6 +13,9 @@ import {
   VerificationStatus,
 } from './types';
 
+/** The locked eligibility check failed before any mutation in its transaction. */
+export class CaptchaChallengeCaseChangedError extends Error {}
+
 export interface CaptchaChallengeIssueInput {
   actionRequestId?: string;
   verificationEventId: string;
@@ -142,7 +145,8 @@ export interface ICaptchaChallengeRepository {
     generation: number,
     moderatorId: string,
     reason: string,
-    actionRequestId?: string
+    actionRequestId?: string,
+    expectedCaseRevision?: number
   ): Promise<CaptchaChallenge | null>;
   cancelPendingForCase(verificationEventId: string): Promise<boolean>;
   cancelPendingForDisabledServers(limit: number): Promise<CaptchaChallenge[]>;
@@ -216,7 +220,9 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
           FOR UPDATE OF verification, server
         `;
         if (!pendingCase[0]) {
-          throw new Error('The case changed before the security check could be created.');
+          throw new CaptchaChallengeCaseChangedError(
+            'The case changed before the security check could be created.'
+          );
         }
         const challenge = await transaction.captcha_challenges.create({
           data: {
@@ -299,7 +305,9 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
         FOR UPDATE OF verification, server
       `;
       if (!pendingCase[0]) {
-        throw new Error('The case changed before the security check could be retried.');
+        throw new CaptchaChallengeCaseChangedError(
+          'The case changed before the security check could be retried.'
+        );
       }
       const existing = await transaction.captcha_challenges.findUnique({
         where: { id: input.expectedChallengeId },
@@ -486,7 +494,8 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
     generation: number,
     moderatorId: string,
     reason: string,
-    actionRequestId?: string
+    actionRequestId?: string,
+    expectedCaseRevision?: number
   ): Promise<CaptchaChallenge | null> {
     const normalizedReason = reason.trim();
     if (!normalizedReason) {
@@ -517,7 +526,7 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
           )
           and verification.status = ${VerificationStatus.PENDING}::verification_status
           and verification.case_kind = ${CaseKind.STANDARD}::case_kind
-          and coalesce(server.settings->>'captcha_mode', 'off') <> 'off'
+          and (${expectedCaseRevision ?? null}::int is null or verification.case_revision = ${expectedCaseRevision ?? null}::int)
         for update of verification, challenge, server
       `;
       if (!eligible[0]) {

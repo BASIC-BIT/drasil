@@ -72,7 +72,7 @@ async function runSerializedReportInstructions<T>(
 export class ReportInstructionsManager {
   public constructor(
     private readonly client: Client,
-    private readonly configService: IConfigService
+    private readonly configService: Pick<IConfigService, 'getServerConfig' | 'updateServerSettings'>
   ) {}
 
   public async readRepostBinding(

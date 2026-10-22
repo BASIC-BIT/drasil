@@ -16,7 +16,7 @@ import {
   type ModerationActionRequest,
 } from '../../repositories/types';
 
-// Stored-row fixtures are independent of the encoder. All forty shipped enum values
+// Stored-row fixtures are independent of the encoder. All persisted enum values
 // must decode, reach their owning family, and retain the receipt/storage projection.
 interface Fixture {
   family:
@@ -40,6 +40,7 @@ const cleanupJob = {
   mode: 'delete_only',
   scope: 'last_hour',
   status: 'preview_ready',
+  generation: '2026-10-20T00:00:00.000Z',
   candidateCount: 3,
   coverage: 'complete',
   targetUserId: 'target',
@@ -80,6 +81,77 @@ const captchaReceipt = {
   verification_event_id: 'case',
 };
 const fixtures = {
+  update_settings: {
+    family: 'setupRuntime',
+    target: null,
+    metadata: {
+      setup_command: {
+        kind: 'update_settings',
+        section: 'caseStaff',
+        changes: { case_responder_role_ids: [] },
+      },
+    },
+    outcome: {},
+  },
+  update_heuristics: {
+    family: 'setupRuntime',
+    target: null,
+    metadata: { setup_command: { kind: 'update_heuristics', changes: { messageThreshold: 8 } } },
+    outcome: {},
+  },
+  reset_heuristics: {
+    family: 'setupRuntime',
+    target: null,
+    metadata: { setup_command: { kind: 'reset_heuristics', scope: 'keywords' } },
+    outcome: {},
+  },
+  lockdown_allow_add: {
+    family: 'setupRuntime',
+    target: null,
+    metadata: {
+      setup_command: { kind: 'lockdown_allow_add', targetKind: 'category', targetId: 'category' },
+    },
+    outcome: {},
+  },
+  lockdown_allow_remove: {
+    family: 'setupRuntime',
+    target: null,
+    metadata: {
+      setup_command: { kind: 'lockdown_allow_remove', targetKind: 'channel', targetId: 'channel' },
+    },
+    outcome: {},
+  },
+  disable_lockdown: {
+    family: 'setupRuntime',
+    target: null,
+    metadata: { setup_command: { kind: 'disable_lockdown' } },
+    outcome: {},
+  },
+  clear_report_instructions: {
+    family: 'setupRuntime',
+    target: null,
+    metadata: { setup_command: { kind: 'clear_report_instructions' } },
+    outcome: {},
+  },
+  audit_integrity: {
+    family: 'operations',
+    target: null,
+    metadata: {
+      operation_command: {
+        kind: 'audit_integrity',
+        scope: 'all',
+        days: 30,
+        limit: 100,
+        userId: null,
+      },
+    },
+    outcome: {
+      report: {
+        findings: [{ severity: 'warning' }],
+        candidateCounts: { pendingCases: 2, recentResolvedCases: 3 },
+      },
+    },
+  },
   open_case_from_observed_detection: {
     family: 'cases',
     metadata: { inbox_action: 'open_case', reason: null, requested_surface: 'web' },
@@ -304,33 +376,59 @@ const fixtures = {
     metadata: { channel_id: 'channel' },
     outcome: { result: { action: 'updated', messageId: 'message' } },
   },
-} satisfies Record<QueuedCommand['kind'], Fixture>;
+} satisfies Record<
+  Exclude<
+    QueuedCommand['kind'],
+    | 'ban_user'
+    | 'kick_user'
+    | 'submit_message_report'
+    | 'confirm_intake_candidate'
+    | 'reject_intake_candidates'
+    | 'prepare_report_ban_review'
+    | 'review_uncertain_report_ban'
+  >,
+  Fixture
+>;
 
-const kinds = Object.keys(fixtures) as QueuedCommand['kind'][];
+const kinds = Object.keys(fixtures) as (keyof typeof fixtures)[];
 it('has exact schema, handler and shipped database enum coverage', () => {
   const expected = Object.values(ModerationActionRequestType).sort();
-  expect(expected).toHaveLength(40);
+  expect(expected).toHaveLength(55);
+  expect(kinds).toHaveLength(48);
   expect(Object.keys(queuedCommandSchemas).sort()).toEqual(expected);
   expect(Object.keys(queuedActionHandlers).sort()).toEqual(expected);
-  expect(kinds.slice().sort()).toEqual(expected);
+  expect(
+    [
+      ...kinds,
+      'ban_user',
+      'kick_user',
+      'submit_message_report',
+      'confirm_intake_candidate',
+      'reject_intake_candidates',
+      'prepare_report_ban_review',
+      'review_uncertain_report_ban',
+    ].sort()
+  ).toEqual(expected);
 });
 it.each(kinds)('decodes and dispatches the shipped %s row with its receipt', async (kind) => {
   jest.useFakeTimers().setSystemTime(new Date('2026-10-20T00:00:00.000Z'));
   try {
     const fixture: Fixture = fixtures[kind];
-    const request = mock<ModerationActionRequest>({
-      id: 'request',
-      action_type: kind as ModerationActionRequestType,
-      server_id: 'guild',
-      actor_surface: fixture.source ?? 'web',
-      actor_id: fixture.source === 'captcha' ? 'drasil:captcha' : 'moderator',
-      target_user_id: fixture.target === null ? null : 'target',
-      detection_event_id: 'detection',
-      verification_event_id: 'case',
-      report_intake_id: kind === 'close_report_intake' ? 'report' : null,
-      message_deletion_job_id: 'job',
+    const request = {
+      ...mock<ModerationActionRequest>({
+        id: 'request',
+        action_type: kind as ModerationActionRequestType,
+        server_id: 'guild',
+        actor_surface: fixture.source ?? 'web',
+        actor_id: fixture.source === 'captcha' ? 'drasil:captcha' : 'moderator',
+        target_user_id: fixture.target === null ? null : 'target',
+        detection_event_id: 'detection',
+        verification_event_id: 'case',
+        report_intake_id: kind === 'close_report_intake' ? 'report' : null,
+        message_deletion_job_id: 'job',
+      }),
       metadata: fixture.metadata ?? {},
-    });
+    };
     const action = decodeQueuedAction(request);
     expect(queuedCommandSchemas[kind].safeParse(action.command).success).toBe(true);
     expect(JSON.stringify(action)).not.toContain('private');
@@ -381,3 +479,65 @@ it.each(kinds)('decodes and dispatches the shipped %s row with its receipt', asy
     jest.useRealTimers();
   }
 });
+
+it.each([
+  {
+    kind: 'submit_message_report',
+    report_command: {
+      targetUserId: 'target',
+      channelId: 'channel',
+      messageId: 'message',
+      reason: null,
+    },
+    outcome: { status: 'submitted', result: { status: 'submitted' } },
+  },
+  {
+    kind: 'confirm_intake_candidate',
+    report_command: {
+      intakeId: 'report',
+      threadId: 'thread',
+      promptMessageId: 'prompt',
+      targetUserId: 'target',
+    },
+    outcome: { status: 'submitted', statusRecorded: false },
+  },
+  {
+    kind: 'reject_intake_candidates',
+    report_command: {
+      intakeId: 'report',
+      threadId: 'thread',
+      promptMessageId: 'prompt',
+      promptToken: 'token',
+    },
+    outcome: { status: 'not_rejected', result: { rejected: false, message: 'Changed' } },
+  },
+])(
+  'dispatches new report $kind preserving domain status',
+  async ({ kind, report_command, outcome }) => {
+    const request = mock<ModerationActionRequest>({
+      id: 'request',
+      server_id: 'guild',
+      actor_id: 'reporter',
+      actor_surface: 'mcp',
+      action_type: kind as ModerationActionRequestType,
+      target_user_id: 'target',
+      report_intake_id: 'report',
+      detection_event_id: null,
+      verification_event_id: null,
+      message_deletion_job_id: null,
+      metadata: { report_command: JSON.parse(JSON.stringify(report_command)) },
+    });
+    const action = decodeQueuedAction(request);
+    const execute = jest.fn().mockResolvedValue({ kind: 'outcome', outcome: { kind, ...outcome } });
+    const receipt = await prepareQueuedAction({
+      request,
+      action,
+      runtime: { reports: { execute } } as unknown as QueuedRequestRuntime,
+    })();
+    expect(receipt).toMatchObject({
+      action_type: kind,
+      status: outcome.status,
+      ...('statusRecorded' in outcome ? { statusRecorded: outcome.statusRecorded } : {}),
+    });
+  }
+);

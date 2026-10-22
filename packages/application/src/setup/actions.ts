@@ -31,6 +31,10 @@ export interface SetupActions {
 
 type SetupConfirmation = { readonly kind: string; readonly operationId: string };
 type SetupResetFields = SetupPersistenceChange['resetSettings'];
+export function setupNeedsConfirmation(command: SetupCommand): boolean {
+  return command.kind === 'upsert_report_instructions' && command.repost;
+}
+
 export function setupConfirmationCommand(
   context: ActionContext,
   command: SetupCommand
@@ -64,8 +68,7 @@ async function executeSetup(
     return { kind: 'denied', code: denied };
   }
   if (
-    command.kind === 'upsert_report_instructions' &&
-    command.repost &&
+    setupNeedsConfirmation(command) &&
     !(await deps.confirmations.verify(context, setupConfirmationCommand(context, command)))
   ) {
     return { kind: 'denied', code: 'confirmation_required' };

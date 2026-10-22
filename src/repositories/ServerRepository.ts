@@ -1,3 +1,5 @@
+import { persistSetupChange } from '@drasil/application/postgres';
+import { type SetupWritePrecondition, type SetupStoredChange } from '@drasil/application';
 import { injectable, inject } from 'inversify';
 import { Prisma, PrismaClient } from '../db/prisma';
 import { Server, ServerSettings } from './types'; // Keep existing domain types
@@ -31,6 +33,12 @@ interface ServerDatabaseRecord {
  * Interface for the ServerRepository (Remains the same)
  */
 export interface IServerRepository {
+  updateSetupIfUnchanged(
+    guildId: string,
+    precondition: SetupWritePrecondition | undefined,
+    change: SetupStoredChange
+  ): Promise<Server | null>;
+  createIfMissing(guildId: string, data: Partial<Server>): Promise<Server>;
   findById(id: string): Promise<Server | null>;
   findByGuildId(guildId: string): Promise<Server | null>;
   upsertByGuildId(guildId: string, data: Partial<Server>): Promise<Server>;
@@ -51,6 +59,47 @@ export interface IServerRepository {
 export class ServerRepository implements IServerRepository {
   // Inject PrismaClient instead of SupabaseClient
   constructor(@inject(TYPES.PrismaClient) private prisma: PrismaClient) {}
+
+  async updateSetupIfUnchanged(
+    guildId: string,
+    precondition: SetupWritePrecondition | undefined,
+    change: SetupStoredChange
+  ): Promise<Server | null> {
+    return this.prisma.$transaction(async (tx) => {
+      const record = await persistSetupChange(
+        {
+          query: async <Row extends Record<string, unknown>>(
+            text: string,
+            values: readonly import('@drasil/application/postgres').DelegationSqlValue[] = []
+          ) => ({ rows: await tx.$queryRawUnsafe<Row[]>(text, ...values) }),
+        },
+        guildId,
+        change,
+        precondition
+      );
+      return record as Server | null;
+    });
+  }
+
+  async createIfMissing(guildId: string, data: Partial<Server>): Promise<Server> {
+    const server = await this.prisma.servers.upsert({
+      where: { guild_id: guildId },
+      update: {},
+      create: {
+        guild_id: guildId,
+        case_role_id: data.case_role_id,
+        admin_channel_id: data.admin_channel_id,
+        verification_channel_id: data.verification_channel_id,
+        admin_notification_role_id: data.admin_notification_role_id,
+        heuristic_message_threshold: data.heuristic_message_threshold,
+        heuristic_message_timeframe_seconds: data.heuristic_message_timeframe_seconds,
+        heuristic_suspicious_keywords: data.heuristic_suspicious_keywords,
+        settings: data.settings as Prisma.InputJsonValue | undefined,
+        is_active: data.is_active,
+      },
+    });
+    return this.toDomainServer(server);
+  }
 
   private toDomainServer(server: ServerDatabaseRecord): Server {
     return {

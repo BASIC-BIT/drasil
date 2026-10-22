@@ -7,6 +7,7 @@ import type { AuthorityPort } from '../authorization';
 import type { ConfirmationPort } from '../confirmation';
 
 export interface CaseState {
+  readonly case_revision?: number;
   readonly id: string;
   readonly server_id: string;
   readonly user_id: string | null;

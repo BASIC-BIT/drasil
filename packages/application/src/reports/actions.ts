@@ -1,3 +1,4 @@
+import { hasAuthority, hasStaffAuthority, MODERATION_PERMISSIONS } from '../authorization';
 import type { ActionContext } from '../context';
 import type { ActionResult } from '../results';
 import { reportCommandSchema, type ReportCommand } from './commands';
@@ -46,7 +47,6 @@ export type ReportOutcome =
 export interface ReportActions {
   execute(context: ActionContext, command: ReportCommand): Promise<ActionResult<ReportOutcome>>;
 }
-const STAFF_PERMISSIONS = (1n << 3n) | (1n << 5n) | (1n << 40n);
 export function createReportActions(deps: ReportDependencies): ReportActions {
   async function staff(context: ActionContext): Promise<boolean> {
     if (context.actor.kind !== 'user') return false;
@@ -57,9 +57,9 @@ export function createReportActions(deps: ReportDependencies): ReportActions {
       facts.userId !== context.actor.userId
     )
       return false;
-    if (facts.owner || (BigInt(facts.permissions) & STAFF_PERMISSIONS) !== 0n) return true;
+    if (hasAuthority(facts, MODERATION_PERMISSIONS)) return true;
     const settings = await deps.settings.loadFresh(context.guildId);
-    return settings.staffRoleIds.some((id) => facts.roleIds.includes(id));
+    return hasStaffAuthority(facts, settings.staffRoleIds);
   }
   async function start(context: ActionContext, channelId: string): Promise<ReportOutcome> {
     const existing = await deps.intakes.findOpen(context);

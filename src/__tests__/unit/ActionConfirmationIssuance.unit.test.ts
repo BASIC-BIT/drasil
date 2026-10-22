@@ -29,7 +29,7 @@ it.each([
   },
   { kind: 'refresh_case_notification', caseId: 'case', targetUserId: 'target' },
 ] satisfies QueuedCommand[])('does not issue unused confirmation for $kind', async (command) => {
-  const app = mockDeep<BotApplication>();
+  const app = mockDeep<BotApplication>({ delegation: undefined });
   const encoded = encodeQueuedAction(
     {
       guildId: 'guild',
@@ -61,7 +61,7 @@ it.each([
 });
 
 it('retains evidence for a destructive operation', async () => {
-  const app = mockDeep<BotApplication>();
+  const app = mockDeep<BotApplication>({ delegation: undefined });
   const request = mock<ModerationActionRequest>({
     id: 'request',
     server_id: 'guild',

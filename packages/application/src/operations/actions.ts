@@ -1,3 +1,4 @@
+import { hasAuthority, MANAGE_GUILD } from '../authorization';
 import type { ActionContext } from '../context';
 import type { ActionResult, ActionDenialCode } from '../results';
 import type { OperationCommand } from './commands';
@@ -64,13 +65,17 @@ async function authorize(
   if (!facts || !facts.present) return 'actor_unavailable';
   if (facts.guildId !== context.guildId || facts.userId !== context.actor.userId)
     return 'binding_mismatch';
-  const permissions = /^\d+$/.test(facts.permissions) ? BigInt(facts.permissions) : 0n;
-  if (facts.owner || (permissions & (1n << 3n)) !== 0n) return null;
-  const manageGuildAllowed =
-    command.kind === 'audit_integrity' ||
-    (command.kind === 'close_resolved_case_threads' && command.intent === 'guild_audit');
-  return manageGuildAllowed && (permissions & (1n << 5n)) !== 0n ? null : 'permission_denied';
+  return hasAuthority(facts, operationRequiredPermissions(command)) ? null : 'permission_denied';
 }
+export function operationRequiredPermissions(
+  command: Pick<OperationCommand, 'kind'> & { readonly intent?: string }
+): bigint {
+  return command.kind === 'audit_integrity' ||
+    (command.kind === 'close_resolved_case_threads' && command.intent === 'guild_audit')
+    ? MANAGE_GUILD
+    : 0n;
+}
+
 export function createOperationsActions(deps: OperationsDependencies): OperationsActions {
   return {
     async execute(context, command): Promise<ActionResult<OperationsOutcome>> {

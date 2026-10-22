@@ -1,5 +1,10 @@
-import { buildEnqueueStatement } from '@drasil/application/postgres';
-import type { EnqueueInput } from '@drasil/application';
+import { createBotDelegationDatabase } from '../application/adapters/delegationDatabase';
+import {
+  settleMcpQueue,
+  buildEnqueueStatement,
+  recordMcpQueueObservation,
+} from '@drasil/application/postgres';
+import { createMcpAudit, type EnqueueInput } from '@drasil/application';
 import { REPORT_BAN_TERMINAL_ATTEMPT_PREFIX } from '../utils/caseRoleRelease';
 import { inject, injectable } from 'inversify';
 import { Prisma, PrismaClient } from '../db/prisma';
@@ -11,6 +16,7 @@ import {
   ModerationActionRequestStatus,
 } from './types';
 
+const mcpAudit = createMcpAudit((line) => console.info(line));
 export function getReportBanAttemptToken(request: ModerationActionRequest): string | undefined {
   const value = (request.metadata as Record<string, unknown> | null)?.report_ban_attempt_token;
   return typeof value === 'string' ? value : undefined;
@@ -68,7 +74,7 @@ export class ModerationActionRequestRepository implements IModerationActionReque
   constructor(@inject(TYPES.PrismaClient) private prisma: PrismaClient) {}
 
   private handleError(error: unknown, operation: string): never {
-    console.error(`Repository error during ${operation}:`, error);
+    console.error(`Repository error during ${operation}.`);
 
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
       throw new RepositoryError(
@@ -133,6 +139,8 @@ export class ModerationActionRequestRepository implements IModerationActionReque
 
   public async claimNext(): Promise<ModerationActionRequest | null> {
     try {
+      const continuation = await settleMcpQueue(createBotDelegationDatabase(this.prisma), mcpAudit);
+      if (continuation) return continuation as unknown as ModerationActionRequest;
       await this.prisma.$executeRaw`
         update moderation_action_requests
         set status = 'failed'::moderation_action_request_status,
@@ -140,6 +148,7 @@ export class ModerationActionRequestRepository implements IModerationActionReque
             updated_at = now(),
             last_error = 'Worker interrupted before this action completed.'
         where status = 'processing'::moderation_action_request_status
+          and actor_surface <> 'mcp'
           and (
             verification_event_id is not null
             or action_type = 'complete_setup_verification'::moderation_action_request_type
@@ -172,6 +181,7 @@ export class ModerationActionRequestRepository implements IModerationActionReque
                and coalesce(metadata->>'report_ban_phase', '') = '')
              or (
                status = 'processing'::moderation_action_request_status
+               and actor_surface <> 'mcp'
                and action_type in (
                  'preview_account_quarantine'::moderation_action_request_type,
                  'quarantine_compromised_account'::moderation_action_request_type,
@@ -206,6 +216,7 @@ export class ModerationActionRequestRepository implements IModerationActionReque
             metadata = case when metadata->>'report_ban_phase' is not null then metadata || jsonb_build_object('report_ban_lease_until', (now() + interval '15 minutes')::text) else metadata end
         where id = ${id}::uuid
           AND (action_type <> 'ban_observed_detection' OR metadata->>'report_ban_attempt_token' IS NOT DISTINCT FROM ${expectedAttemptToken ?? null}::text)
+          and not (actor_surface = 'mcp' and updated_at < clock_timestamp() - interval '15 minutes')
           and (status = 'processing'::moderation_action_request_status or metadata->>'report_ban_phase' is not null)
         returning *
       `;
@@ -651,6 +662,7 @@ export class ModerationActionRequestRepository implements IModerationActionReque
             result = CASE WHEN action_type = 'ban_observed_detection' AND metadata->>'report_ban_phase' = 'discord_confirmed' AND ${JSON.stringify(result ?? {})}::jsonb->'observed_ban_result'->>'status' = 'ban_outcome_unknown' THEN jsonb_set(${JSON.stringify(result ?? {})}::jsonb, '{observed_ban_result,status}', '"banned_updates_pending"'::jsonb) ELSE ${JSON.stringify(result ?? {})}::jsonb END
         where id = ${id}::uuid
           AND (action_type <> 'ban_observed_detection' OR metadata->>'report_ban_attempt_token' IS NOT DISTINCT FROM ${expectedAttemptToken ?? null}::text)
+          AND NOT (actor_surface='mcp' AND status='completed' AND action_type <> 'ban_observed_detection')
           AND NOT (action_type = 'ban_observed_detection' AND coalesce(result->'observed_ban_result'->>'status', '') = 'banned')
           AND NOT (action_type = 'ban_observed_detection' AND coalesce(result->'observed_ban_result'->>'status', '') = 'banned_updates_pending' AND ${JSON.stringify(result ?? {})}::jsonb->'observed_ban_result'->>'status' = 'ban_outcome_unknown')
         returning *
@@ -675,10 +687,14 @@ export class ModerationActionRequestRepository implements IModerationActionReque
             last_error = ${errorMessage}
         where id = ${id}::uuid
           AND (action_type <> 'ban_observed_detection' OR metadata->>'report_ban_attempt_token' IS NOT DISTINCT FROM ${expectedAttemptToken ?? null}::text)
+          AND NOT ((actor_surface='mcp' OR action_type in ('ban_user', 'kick_user')) AND status = 'completed')
           AND NOT (action_type = 'ban_observed_detection' AND (metadata->>'report_ban_phase' IS NOT NULL OR coalesce(result->'observed_ban_result'->>'status', '') IN ('banned', 'banned_updates_pending', 'ban_outcome_unknown')))
         returning *
       `;
-      return rows[0] ?? (await this.findById(id));
+      const request = rows.length ? rows[0] : await this.findById(id);
+      if (request?.actor_surface === 'mcp')
+        await recordMcpQueueObservation(createBotDelegationDatabase(this.prisma), id, mcpAudit);
+      return request;
     } catch (error) {
       this.handleError(error, 'failModerationActionRequest');
     }

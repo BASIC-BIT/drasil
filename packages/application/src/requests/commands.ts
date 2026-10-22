@@ -13,27 +13,8 @@ import {
 import { z } from 'zod';
 import { queuedDetectionCommandSchema, type QueuedDetectionCommand } from '../detections/commands';
 import { caseCommandSchema, type CaseCommand } from '../cases/commands';
-type QueuedRepairCommand = Extract<CaseCommand, { kind: 'repair_active_case' }> & {
-  readonly intent: 'moderator_repair';
-};
-type QueuedOpenCommand = Extract<CaseCommand, { kind: 'open_admin_case' }> & {
-  readonly intent: 'dashboard_case_open';
-};
-type QueuedCaseCommand =
-  | Exclude<
-      CaseCommand,
-      { kind: 'repair_active_case' | 'open_admin_case' | 'ban_user' | 'kick_user' }
-    >
-  | QueuedRepairCommand
-  | QueuedOpenCommand;
-const queuedCaseCommandSchema = caseCommandSchema.refine(
-  (command): command is QueuedCaseCommand =>
-    command.kind !== 'ban_user' &&
-    command.kind !== 'kick_user' &&
-    (command.kind !== 'repair_active_case' || command.intent === 'moderator_repair') &&
-    (command.kind !== 'open_admin_case' || command.intent === 'dashboard_case_open'),
-  'Ordinary staff moderation, native case openings and administrator slash repairs execute directly.'
-);
+type QueuedCaseCommand = CaseCommand;
+const queuedCaseCommandSchema = caseCommandSchema;
 
 export type QueuedCommand =
   | QueuedSetupCommand
@@ -88,6 +69,22 @@ function schemaFor<K extends QueuedCommand['kind']>(
 }
 /** Exhaustive persisted command registry; direct-only operations are deliberately absent. */
 export const queuedCommandSchemas = {
+  audit_integrity: schemaFor('audit_integrity'),
+  update_settings: schemaFor('update_settings'),
+  update_heuristics: schemaFor('update_heuristics'),
+  reset_heuristics: schemaFor('reset_heuristics'),
+  lockdown_allow_add: schemaFor('lockdown_allow_add'),
+  lockdown_allow_remove: schemaFor('lockdown_allow_remove'),
+  disable_lockdown: schemaFor('disable_lockdown'),
+  clear_report_instructions: schemaFor('clear_report_instructions'),
+  submit_message_report: schemaFor('submit_message_report'),
+  confirm_intake_candidate: schemaFor('confirm_intake_candidate'),
+  reject_intake_candidates: schemaFor('reject_intake_candidates'),
+  prepare_report_ban_review: schemaFor('prepare_report_ban_review'),
+  review_uncertain_report_ban: schemaFor('review_uncertain_report_ban'),
+
+  ban_user: schemaFor('ban_user'),
+  kick_user: schemaFor('kick_user'),
   open_case_from_observed_detection: schemaFor('open_case_from_observed_detection'),
   open_admin_case: schemaFor('open_admin_case'),
   manual_flag_user: schemaFor('manual_flag_user'),

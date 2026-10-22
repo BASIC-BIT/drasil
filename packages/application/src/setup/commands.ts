@@ -123,10 +123,6 @@ export const upsertReportInstructionsCommandSchema = z.discriminatedUnion('repos
     })
     .strict(),
 ]);
-export const queuedSetupCommandSchema = z.union([
-  completeSetupCommandSchema.extend({ mode: z.literal('provision').default('provision') }),
-  upsertReportInstructionsCommandSchema,
-]);
 export const heuristicChangesSchema = z
   .object({
     messageThreshold: guildSetupUpdateSchema.innerType().shape.heuristicMessageThreshold,
@@ -134,12 +130,11 @@ export const heuristicChangesSchema = z
     suspiciousKeywords: guildSetupUpdateSchema.innerType().shape.heuristicSuspiciousKeywords,
   })
   .strict();
-export const setupCommandSchema = z.union([
+export const queuedSetupCommandSchema = z.union([
   completeSetupCommandSchema,
-  queuedSetupCommandSchema,
+  upsertReportInstructionsCommandSchema,
   updateSettingsCommandSchema,
   z.object({ kind: z.literal('clear_report_instructions') }).strict(),
-  z.object({ kind: z.literal('update_setup'), changes: setupChangesSchema }).strict(),
   z.object({ kind: z.literal('update_heuristics'), changes: heuristicChangesSchema }).strict(),
   z
     .object({
@@ -163,13 +158,27 @@ export const setupCommandSchema = z.union([
     .strict(),
   z.object({ kind: z.literal('disable_lockdown') }).strict(),
 ]);
+export const setupCommandSchema = z.union([
+  queuedSetupCommandSchema,
+  z.object({ kind: z.literal('update_setup'), changes: setupChangesSchema }).strict(),
+]);
 export type SetupCommand = z.infer<typeof setupCommandSchema>;
 export type QueuedSetupCommand = z.infer<typeof queuedSetupCommandSchema>;
 export type UpdateSettingsCommand = z.infer<typeof updateSettingsCommandSchema>;
 export type SetupChanges = z.infer<typeof setupChangesSchema>;
 export type HeuristicChanges = z.infer<typeof heuristicChangesSchema>;
 export function isQueuedSetupKind(kind: string): boolean {
-  return kind === 'complete_setup_verification' || kind === 'upsert_report_instructions';
+  return [
+    'complete_setup_verification',
+    'upsert_report_instructions',
+    'update_settings',
+    'update_heuristics',
+    'reset_heuristics',
+    'lockdown_allow_add',
+    'lockdown_allow_remove',
+    'disable_lockdown',
+    'clear_report_instructions',
+  ].includes(kind);
 }
 export function isQueuedSetupCommand(command: {
   readonly kind: string;
