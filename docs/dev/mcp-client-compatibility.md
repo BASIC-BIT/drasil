@@ -1,6 +1,6 @@
 # MCP client acceptance
 
-Acceptance recorded on 2026-10-21. MCP remains disabled by default. Required external acceptance is pending, so the implementation must remain a draft PR until that evidence is supplied and reviewed.
+Acceptance recorded on 2026-10-21. MCP remains disabled by default. The implementation can be reviewed and merged while disabled; required external acceptance remains a launch gate and must be supplied and reviewed before enabling MCP.
 
 ## External clients and hosting
 
