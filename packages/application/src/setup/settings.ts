@@ -744,11 +744,7 @@ export function buildSetupSettingsPatch(update: GuildSetupUpdate): SettingsChang
       role_quarantine_mode: update.roleQuarantineMode,
       role_quarantine_exempt_role_ids: update.roleQuarantineExemptRoleIds,
       account_quarantine_enabled: update.accountQuarantineEnabled,
-      captcha_method:
-        update.captchaMethod ??
-        (update.captchaMode === undefined
-          ? undefined
-          : getEffectiveCaptchaMethod({ captcha_mode: update.captchaMode })),
+      captcha_method: update.captchaMethod,
       captcha_mode: update.captchaMode,
       captcha_pass_action: update.captchaPassAction,
       captcha_challenge_lifetime_hours: update.captchaChallengeLifetimeHours,

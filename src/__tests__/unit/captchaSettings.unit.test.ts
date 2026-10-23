@@ -64,16 +64,30 @@ describe('CAPTCHA method normalization', () => {
     }
   });
 
-  it('writes explicit methods only on CAPTCHA saves and rejects editable revision metadata', () => {
-    expect(
-      buildSetupSettingsPatch({ guildId: 'fixture-guild', captchaMode: 'manual' })
-    ).toMatchObject({
-      captcha_mode: 'manual',
-      captcha_method: 'turnstile',
-    });
-    expect(buildSetupSettingsPatch({ guildId: 'fixture-guild', captchaMode: 'off' })).toMatchObject(
-      { captcha_method: 'none' }
-    );
+  it.each(['manual', 'suspicious_join', 'off'] as const)(
+    'keeps %s mode-only patches independent of the saved method',
+    (captchaMode) => {
+      const patch = buildSetupSettingsPatch({ guildId: 'fixture-guild', captchaMode });
+      expect(patch).toEqual({ captcha_mode: captchaMode });
+      for (const method of ['discord_image', 'none', 'turnstile'] as const) {
+        const saved = {
+          captcha_method: method,
+          captcha_mode: 'manual',
+          captcha_method_revision: 4,
+        };
+        expect({ ...saved, ...patch }).toEqual({
+          captcha_method: method,
+          captcha_mode: captchaMode,
+          captcha_method_revision: 4,
+        });
+      }
+      const legacy = { captcha_mode: 'manual', ...patch };
+      expect(legacy).not.toHaveProperty('captcha_method');
+      expect(getEffectiveCaptchaMethod(legacy)).toBe(captchaMode === 'off' ? 'none' : 'turnstile');
+    }
+  );
+
+  it('writes only explicit method selections and rejects editable revision metadata', () => {
     expect(
       buildSetupSettingsPatch({
         guildId: 'fixture-guild',

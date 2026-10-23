@@ -304,3 +304,60 @@ test('an unrelated patch can repair a server with a stale manual-intake role', a
     ).kind
   ).toBe('outcome');
 });
+
+test.each(['discord_image', 'none', 'turnstile'] as const)(
+  'mode-only setup saves preserve the explicit %s method and its revision',
+  async (method) => {
+    const state = arrange();
+    Object.assign(state.server().settings, {
+      captcha_method: method,
+      captcha_mode: 'manual',
+      captcha_method_revision: 4,
+    });
+    for (const captchaMode of ['suspicious_join', 'off', 'manual'] as const) {
+      const result = await state.actions.execute(context, {
+        kind: 'update_setup',
+        changes: { captchaMode },
+      });
+      expect(result.kind).toBe('outcome');
+      expect(state.server().settings).toEqual({
+        unrelated_setting: 'preserved',
+        captcha_method: method,
+        captcha_mode: captchaMode,
+        captcha_method_revision: 4,
+      });
+    }
+  }
+);
+
+test('mode-only setup saves leave legacy method metadata absent', async () => {
+  const state = arrange();
+  state.server().settings.captcha_mode = 'manual';
+  const result = await state.actions.execute(context, {
+    kind: 'update_setup',
+    changes: { captchaMode: 'suspicious_join' },
+  });
+  expect(result.kind).toBe('outcome');
+  expect(state.server().settings).toEqual({
+    unrelated_setting: 'preserved',
+    captcha_mode: 'suspicious_join',
+  });
+});
+
+test('an explicit setup method selection still updates the selected method', async () => {
+  const state = arrange();
+  Object.assign(state.server().settings, {
+    captcha_method: 'discord_image',
+    captcha_mode: 'manual',
+  });
+  const result = await state.actions.execute(context, {
+    kind: 'update_setup',
+    changes: { captchaMethod: 'none' },
+  });
+  expect(result.kind).toBe('outcome');
+  expect(state.server().settings).toEqual({
+    unrelated_setting: 'preserved',
+    captcha_method: 'none',
+    captcha_mode: 'manual',
+  });
+});

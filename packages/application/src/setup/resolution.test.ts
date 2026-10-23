@@ -522,3 +522,28 @@ test('reset delivery cannot add fields outside its exact approved scope', () => 
     )
   ).toBe(false);
 });
+
+test.each(['discord_image', 'none', 'turnstile', undefined] as const)(
+  'mode-only setup previews do not propose a replacement for the stored %s method',
+  async (method) => {
+    const current = {
+      ...state,
+      settings: {
+        captcha_mode: 'manual' as const,
+        ...(method === undefined ? {} : { captcha_method: method }),
+        captcha_method_revision: 4,
+      },
+    };
+    for (const captchaMode of ['suspicious_join', 'off'] as const) {
+      const result = await resolver(true, true, current).resolve(principal, {
+        workflowId: 'update_setup',
+        guildId: 'guild',
+        idempotencyKey: `mode-${captchaMode}`,
+        input: { changes: { captchaMode } },
+      });
+      expect(result.summary).toContain(`captcha_mode: "manual" -> "${captchaMode}"`);
+      expect(result.summary).not.toContain('captcha_method:');
+      expect(result.preconditions).toEqual({ kind: 'setup', approvedState: current });
+    }
+  }
+);
