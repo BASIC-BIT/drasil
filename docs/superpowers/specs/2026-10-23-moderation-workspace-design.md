@@ -1,6 +1,8 @@
 # Drasil moderation workspace design
 
-Status: proposed design for review. Product implementation has not started.
+Status: proposed design for review, expanded to cover all six remaining moderation workflows before implementation. Product implementation has not started.
+
+See [the complete workflow coverage and studies](../../design/moderation-workflow-coverage.md) for mixed inbox kinds, account recovery, browser checks, message cleanup, channel conversations and live action outcomes. The user requested these be worked through together before finalizing the design.
 
 ## Intent and scope
 
