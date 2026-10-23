@@ -1,3 +1,5 @@
+import { handleCaptchaImageInteraction } from './captchaImageInteractions';
+import { createBotCaptchaImageActions } from '../application/adapters/captchaImage';
 import { McpCommandHandler } from './McpCommandHandler';
 import { requireCaptchaOutcome } from '../application/adapters/captcha';
 import { requireQuarantineOutcome } from '../application/adapters/quarantine';
@@ -266,6 +268,13 @@ export class InteractionHandler implements IInteractionHandler {
   }
 
   public async handleButtonInteraction(interaction: ButtonInteraction): Promise<void> {
+    if (
+      await handleCaptchaImageInteraction(
+        interaction,
+        this.application?.captchaImage ?? createBotCaptchaImageActions(null)
+      )
+    )
+      return;
     const customId = interaction.customId;
     if (customId.startsWith('mcp:')) {
       await new McpCommandHandler(this.application?.mcp).handleButtonInteraction(interaction);
@@ -2543,6 +2552,13 @@ export class InteractionHandler implements IInteractionHandler {
   }
 
   public async handleModalSubmit(interaction: ModalSubmitInteraction): Promise<void> {
+    if (
+      await handleCaptchaImageInteraction(
+        interaction,
+        this.application?.captchaImage ?? createBotCaptchaImageActions(null)
+      )
+    )
+      return;
     if (interaction.customId.startsWith(`${CAPTCHA_BYPASS_MODAL_PREFIX}:`)) {
       await this.handleCaptchaBypassModalSubmit(interaction);
       return;

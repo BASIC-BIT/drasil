@@ -291,3 +291,15 @@ test('a recorded mutation can finish its receipt after authority changes', async
     })
   ).toMatchObject({ kind: 'outcome', outcome: { resumed: true } });
 });
+
+it('accepts a generation-bound member assistance attention command', () => {
+  expect(
+    captchaCommandSchema.safeParse({
+      kind: 'notify_captcha_attention',
+      ...target,
+      challengeId: 'challenge',
+      generation: 2,
+      reason: 'member_assistance',
+    }).success
+  ).toBe(true);
+});

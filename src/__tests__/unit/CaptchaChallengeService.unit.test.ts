@@ -81,6 +81,7 @@ function buildChallenge(overrides: Partial<CaptchaChallenge> = {}): CaptchaChall
 function createHarness(settings: Record<string, unknown> = { captcha_mode: 'manual' }) {
   const challenge = buildChallenge();
   const challenges: jest.Mocked<ICaptchaChallengeRepository> = {
+    requestImageAssistance: jest.fn().mockResolvedValue(true),
     isImageBindingEligible: jest.fn().mockResolvedValue(true),
     invalidateImageMaterial: jest.fn().mockResolvedValue(false),
     storeImageMaterial: jest.fn().mockResolvedValue(false),

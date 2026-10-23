@@ -294,7 +294,7 @@ export class ThreadManager implements IThreadManager {
         content:
           typeof destination === 'string'
             ? 'Complete this browser check to confirm access to your Discord account.'
-            : 'Complete this security check in Discord.',
+            : 'Complete this security check in Discord. Completing this check does not itself verify your account.',
         components: [new ActionRowBuilder<ButtonBuilder>().addComponents(button)],
       });
       return message.id;

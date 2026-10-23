@@ -366,25 +366,41 @@ export class CaptchaEffects {
 
   private captchaChallengeMatchesAttentionReason(
     challenge: CaptchaChallenge | null,
-    reason: 'delivery_failed' | 'submission_limit' | 'expired' | 'cancelled' | 'bypassed'
+    reason: Extract<CaptchaCommand, { kind: 'notify_captcha_attention' }>['reason']
   ): challenge is CaptchaChallenge {
-    return reason === 'delivery_failed'
-      ? challenge?.status === CaptchaChallengeStatus.PENDING &&
+    if (!challenge) return false;
+    switch (reason) {
+      case 'member_assistance':
+        return (
+          challenge.status === CaptchaChallengeStatus.PENDING &&
+          challenge.provider === 'discord_image'
+        );
+      case 'delivery_failed':
+        return (
+          challenge.status === CaptchaChallengeStatus.PENDING &&
           challenge.delivered_at === null &&
           Boolean(challenge.delivery_error_code)
-      : reason === 'cancelled'
-        ? challenge?.status === CaptchaChallengeStatus.CANCELLED
-        : reason === 'bypassed'
-          ? challenge?.status === CaptchaChallengeStatus.BYPASSED
-          : challenge?.status ===
-            (reason === 'expired' ? CaptchaChallengeStatus.EXPIRED : CaptchaChallengeStatus.FAILED);
+        );
+      case 'cancelled':
+        return challenge.status === CaptchaChallengeStatus.CANCELLED;
+      case 'bypassed':
+        return challenge.status === CaptchaChallengeStatus.BYPASSED;
+      case 'expired':
+        return challenge.status === CaptchaChallengeStatus.EXPIRED;
+      case 'submission_limit':
+        return challenge.status === CaptchaChallengeStatus.FAILED;
+      default: {
+        const exhaustive: never = reason;
+        return exhaustive;
+      }
+    }
   }
 
   private async requireCaptchaStatusPresentation(
     request: ModerationActionRequest,
     verificationEvent: VerificationEvent,
     challenge: CaptchaChallenge,
-    reason: 'delivery_failed' | 'submission_limit' | 'expired' | 'cancelled' | 'bypassed'
+    reason: Extract<CaptchaCommand, { kind: 'notify_captcha_attention' }>['reason']
   ): Promise<boolean> {
     const canPresentAfterResolution = reason === 'cancelled' || reason === 'bypassed';
     if (verificationEvent.status !== VerificationStatus.PENDING) {
@@ -443,12 +459,14 @@ export class CaptchaEffects {
           attemptId,
           `Failed to deliver cancelled CAPTCHA status for case ${claimed.id}.`
         );
+      } else if (reason === 'member_assistance') {
+        await this.requireCaptchaAttention(request, claimed, reason, `${attemptId}:attention`);
       } else if (reason !== 'bypassed') {
         await this.requireCaptchaThreadStatus(
           request,
           claimed,
           reason === 'delivery_failed'
-            ? 'This security check link could not be delivered. Ask a moderator to retry.'
+            ? 'This security check could not be delivered. Ask a moderator to retry.'
             : reason === 'expired'
               ? 'This security check expired. Ask a moderator to issue a new check.'
               : 'This security check reached its attempt limit. Ask a moderator to issue a new check.',

@@ -315,6 +315,7 @@ describe('ThreadManager (unit)', () => {
     expect(extractComponentCustomIds([...(payload.components ?? [])])).toEqual([
       'captcha:image:open:00000000-0000-4000-8000-000000000001:3',
     ]);
+    expect(payload.content).toContain('Completing this check does not itself verify your account.');
   });
 
   it('does not deliver a CAPTCHA challenge when the subject cannot access the case thread', async () => {

@@ -1,3 +1,5 @@
+import { encodeQueuedAction } from '@drasil/application';
+import { buildEnqueueStatement } from '@drasil/application/postgres';
 import { inject, injectable } from 'inversify';
 import { Prisma, PrismaClient } from '../db/prisma';
 import { TYPES } from '../di/symbols';
@@ -156,6 +158,7 @@ function getCaptchaChallengeRetryState(
 }
 
 export interface ICaptchaChallengeRepository {
+  requestImageAssistance(binding: CaptchaImageBinding): Promise<boolean>;
   isImageBindingEligible(binding: CaptchaImageBinding): Promise<boolean>;
   invalidateImageMaterial(binding: CaptchaImageBinding, activeKeyVersion: string): Promise<boolean>;
   storeImageMaterial(input: CaptchaImageMaterialInput): Promise<boolean>;
@@ -261,6 +264,36 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
     `;
     // Expiry can elapse while waiting even when the locked row itself is unchanged.
     return !!challenges[0] && challenges[0].expires_at.getTime() > Date.now();
+  }
+
+  public async requestImageAssistance(binding: CaptchaImageBinding): Promise<boolean> {
+    return this.prisma.$transaction(async (transaction) => {
+      if (!(await this.lockImageBinding(transaction, binding))) return false;
+      const statement = buildEnqueueStatement(
+        encodeQueuedAction(
+          {
+            guildId: binding.serverId,
+            requestId: `${binding.challengeId}:${binding.generation}`,
+            source: 'captcha',
+            actor: { kind: 'system', purpose: 'captcha_attention' },
+          },
+          {
+            kind: 'notify_captcha_attention',
+            caseId: binding.verificationEventId,
+            targetUserId: binding.userId,
+            challengeId: binding.challengeId,
+            generation: binding.generation,
+            reason: 'member_assistance',
+          }
+        )
+      );
+      const receipts = await transaction.$queryRawUnsafe<Array<{ id: string }>>(
+        statement.text,
+        ...statement.values
+      );
+      if (!receipts[0]) throw new Error('Security-check assistance could not be queued.');
+      return true;
+    });
   }
 
   public async isImageBindingEligible(binding: CaptchaImageBinding): Promise<boolean> {

@@ -92,7 +92,7 @@ export class NotificationPresentationBuilder {
   public static readonly MODERATION_ACTION_WARNING_FIELD_NAME = 'Moderation Action Warning';
   public static readonly RESOLUTION_FIELD_NAME = 'Resolution';
   public static readonly ACCOUNT_QUARANTINE_FIELD_NAME = 'Account Quarantine';
-  public static readonly CAPTCHA_FIELD_NAME = 'Browser Security Check';
+  public static readonly CAPTCHA_FIELD_NAME = 'Security Check';
 
   public createSuspiciousUserEmbed(
     member: GuildMember,
@@ -857,7 +857,9 @@ export class NotificationPresentationBuilder {
     challenge: CaptchaChallenge | null
   ): void {
     const fields = (embed.data.fields ?? []).filter(
-      (field) => field.name !== NotificationPresentationBuilder.CAPTCHA_FIELD_NAME
+      (field) =>
+        field.name !== NotificationPresentationBuilder.CAPTCHA_FIELD_NAME &&
+        field.name !== 'Browser Security Check'
     );
     if (!challenge) {
       embed.setFields(...fields);
@@ -874,7 +876,9 @@ export class NotificationPresentationBuilder {
     };
     const requestedAt = Math.floor(challenge.requested_at.getTime() / 1000);
     const expiresAt = Math.floor(challenge.expires_at.getTime() / 1000);
+    const deliveryLabel = challenge.provider === 'discord_image' ? 'Check' : 'Link';
     const lines = [
+      `Method: ${challenge.provider === 'discord_image' ? 'Discord image CAPTCHA' : 'Cloudflare Turnstile'}`,
       `Status: ${statusLabels[challenge.status]}`,
       `Generation: ${challenge.generation} · Submissions: ${challenge.submission_count}`,
       `Requested: <t:${requestedAt}:F> (<t:${requestedAt}:R>)`,
@@ -887,10 +891,10 @@ export class NotificationPresentationBuilder {
           ? 'Requested by: Drasil suspicious-join policy'
           : null,
       challenge.delivered_at
-        ? `Link delivered: <t:${Math.floor(challenge.delivered_at.getTime() / 1000)}:R>`
+        ? `${deliveryLabel} delivered: <t:${Math.floor(challenge.delivered_at.getTime() / 1000)}:R>`
         : challenge.delivery_error_code
-          ? `Link delivery: failed (${challenge.delivery_error_code.replace(/_/g, ' ')})`
-          : 'Link delivery: pending',
+          ? `${deliveryLabel} delivery: failed (${challenge.delivery_error_code.replace(/_/g, ' ')})`
+          : `${deliveryLabel} delivery: pending`,
       challenge.passed_at
         ? `Passed: <t:${Math.floor(challenge.passed_at.getTime() / 1000)}:F>`
         : null,
@@ -912,7 +916,7 @@ export class NotificationPresentationBuilder {
           const delivery = entry.delivery_error_code
             ? `delivery failed (${entry.delivery_error_code.replace(/_/g, ' ')})`
             : 'no delivery failure recorded';
-          return `• ${entry.generation}: ${outcome}, ${delivery}${entry.bypass_reason ? `, bypass: ${entry.bypass_reason}` : ''}`;
+          return `• ${entry.generation}: ${entry.provider === 'discord_image' ? 'Discord image CAPTCHA' : 'Cloudflare Turnstile'}, ${outcome}, ${delivery}${entry.bypass_reason ? `, bypass: ${entry.bypass_reason}` : ''}`;
         }),
         ...(omittedCount > 0 ? [`• ${omittedCount} earlier generation(s) not shown`] : [])
       );
@@ -1371,7 +1375,7 @@ export class NotificationPresentationBuilder {
   }
 
   private formatActorReference(actorId: string): string {
-    return actorId === 'drasil:captcha' ? 'Drasil browser check' : `<@${actorId}>`;
+    return actorId === 'drasil:captcha' ? 'Drasil security check' : `<@${actorId}>`;
   }
 
   private metadataToRecord(metadata: DetectionEvent['metadata']): Record<string, unknown> {

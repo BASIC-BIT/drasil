@@ -520,6 +520,18 @@ describe('NotificationPresentationBuilder (unit)', () => {
     ).toContain('The member answered the questions directly.');
   });
 
+  it('retains the selected native method in case diagnostics without answer material', () => {
+    const embed = new EmbedBuilder();
+    builder.upsertCaptchaChallengePresentation(
+      embed,
+      buildCaptchaChallenge({ provider: CaptchaProvider.DISCORD_IMAGE })
+    );
+    const value = getField(embed, NotificationPresentationBuilder.CAPTCHA_FIELD_NAME);
+    expect(value).toContain('Method: Discord image CAPTCHA');
+    expect(value).not.toContain('Link delivery');
+    expect(value).not.toContain('digest');
+  });
+
   it('replaces the typed browser security-check field as the challenge advances', () => {
     const embed = new EmbedBuilder().setTitle('Suspicious User');
     builder.upsertCaptchaChallengePresentation(
@@ -609,9 +621,11 @@ describe('NotificationPresentationBuilder (unit)', () => {
 
     const field = getField(embed, NotificationPresentationBuilder.CAPTCHA_FIELD_NAME);
     expect(field).toContain('Previous generations:');
-    expect(field).toContain('• 1: no outcome recorded, delivery failed (discord delivery failed)');
     expect(field).toContain(
-      '• 2: bypassed, no delivery failure recorded, bypass: Identity confirmed'
+      '• 1: Cloudflare Turnstile, no outcome recorded, delivery failed (discord delivery failed)'
+    );
+    expect(field).toContain(
+      '• 2: Cloudflare Turnstile, bypassed, no delivery failure recorded, bypass: Identity confirmed'
     );
   });
 

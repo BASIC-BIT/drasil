@@ -2,6 +2,7 @@ import type { ActionContext, ActionResult } from '@drasil/application';
 import type {
   ICaptchaImageService,
   ImageChallengeReference,
+  ImageAssistanceOutcome,
   ImageOpenOutcome,
   ImageSubmitInput,
   ImageSubmitOutcome,
@@ -9,11 +10,16 @@ import type {
 
 export type {
   ImageChallengeReference,
+  ImageAssistanceOutcome,
   ImageOpenOutcome,
   ImageSubmitInput,
   ImageSubmitOutcome,
 } from '../../services/CaptchaImageService';
 export interface BotCaptchaImageActions {
+  requestAssistance(
+    context: ActionContext,
+    reference: ImageChallengeReference
+  ): Promise<ActionResult<ImageAssistanceOutcome>>;
   open(
     context: ActionContext,
     reference: ImageChallengeReference
@@ -28,6 +34,11 @@ export function createBotCaptchaImageActions(
   service: ICaptchaImageService | null
 ): BotCaptchaImageActions {
   return {
+    async requestAssistance(context, reference): Promise<ActionResult<ImageAssistanceOutcome>> {
+      if (context.actor.kind !== 'user') return { kind: 'denied', code: 'permission_denied' };
+      if (!service) return { kind: 'outcome', outcome: { kind: 'unavailable' } };
+      return { kind: 'outcome', outcome: await service.requestAssistance(context, reference) };
+    },
     async open(context, reference): Promise<ActionResult<ImageOpenOutcome>> {
       if (context.actor.kind !== 'user') return { kind: 'denied', code: 'permission_denied' };
       if (!service) return { kind: 'outcome', outcome: { kind: 'unavailable' } };

@@ -1,3 +1,6 @@
+import { mock } from 'jest-mock-extended';
+import { ButtonInteraction, ModalSubmitInteraction } from 'discord.js';
+import { handleCaptchaImageInteraction } from '../../controllers/captchaImageInteractions';
 import { randomUUID } from 'node:crypto';
 import { createCaptchaCompletionStore } from '@drasil/application/postgres';
 import type { ActionContext } from '@drasil/application';
@@ -89,6 +92,154 @@ describeIntegration('native CAPTCHA image service', () => {
       },
     };
   }
+  function discordInteraction(
+    f: Awaited<ReturnType<typeof fixture>>,
+    action: 'open' | 'answer' | 'help',
+    modal = false
+  ) {
+    const interaction = mock<ButtonInteraction>();
+    const fields = mock<ModalSubmitInteraction['fields']>();
+    Object.assign(interaction, {
+      id: randomUUID(),
+      guildId: f.context.guildId,
+      user: { id: f.challenge.user_id },
+      customId: `captcha:image:${action}:${f.challenge.id}:1`,
+      deferred: false,
+      replied: false,
+      fields,
+    });
+    interaction.isModalSubmit.mockReturnValue(modal);
+    interaction.deferReply.mockImplementation(async () => {
+      Object.assign(interaction, { deferred: true });
+      return undefined as never;
+    });
+    return { interaction, fields };
+  }
+  it('opens through Discord then submits a modal after restarting the image service against the same database', async () => {
+    const f = await fixture();
+    const opened = discordInteraction(f, 'open');
+    await handleCaptchaImageInteraction(
+      opened.interaction,
+      createBotCaptchaImageActions(f.service)
+    );
+    expect(JSON.stringify(opened.interaction.editReply.mock.calls)).toContain('security-check.png');
+    const restarted = createBotCaptchaImageActions(new CaptchaImageService(f.dependencies));
+    const answerButton = discordInteraction(f, 'answer');
+    await handleCaptchaImageInteraction(answerButton.interaction, restarted);
+    expect(answerButton.interaction.showModal).toHaveBeenCalledTimes(1);
+    const modal = discordInteraction(f, 'answer', true);
+    modal.fields.getTextInputValue.mockReturnValue(f.answers[0].toLowerCase());
+    await handleCaptchaImageInteraction(modal.interaction, restarted);
+    expect(JSON.stringify(modal.interaction.editReply.mock.calls)).toContain(
+      'Security check completed'
+    );
+    expect(await f.prisma.captcha_challenge_attempts.count()).toBe(1);
+    expect(
+      await f.prisma.moderation_action_requests.count({
+        where: { action_type: 'apply_captcha_pass' },
+      })
+    ).toBe(1);
+  });
+  it('rechecks actual Discord actor and guild on open and modal submit without leaking PNG or charging attempts', async () => {
+    const f = await fixture();
+    await f.service.open(f.context, f.reference);
+    for (const mismatch of ['actor', 'guild']) {
+      for (const modal of [false, true]) {
+        const item = discordInteraction(f, modal ? 'answer' : 'open', modal);
+        Object.assign(
+          item.interaction,
+          mismatch === 'actor' ? { user: { id: 'other-member' } } : { guildId: 'other-server' }
+        );
+        item.fields.getTextInputValue.mockReturnValue(f.answers[0]);
+        await handleCaptchaImageInteraction(
+          item.interaction,
+          createBotCaptchaImageActions(f.service)
+        );
+        expect(JSON.stringify(item.interaction.editReply.mock.calls)).not.toContain(
+          'security-check.png'
+        );
+        expect(await f.prisma.captcha_challenge_attempts.count()).toBe(0);
+      }
+    }
+  });
+  it('freshly rejects an already displayed modal after the method changes', async () => {
+    const f = await fixture();
+    await f.service.open(f.context, f.reference);
+    const answerButton = discordInteraction(f, 'answer');
+    await handleCaptchaImageInteraction(
+      answerButton.interaction,
+      createBotCaptchaImageActions(f.service)
+    );
+    await f.prisma.servers.update({
+      where: { guild_id: f.context.guildId },
+      data: {
+        settings: {
+          captcha_mode: 'manual',
+          captcha_method: 'turnstile',
+          captcha_method_revision: 1,
+        },
+      },
+    });
+    const modal = discordInteraction(f, 'answer', true);
+    modal.fields.getTextInputValue.mockReturnValue(f.answers[0]);
+    await handleCaptchaImageInteraction(
+      modal.interaction,
+      createBotCaptchaImageActions(new CaptchaImageService(f.dependencies))
+    );
+    expect(JSON.stringify(modal.interaction.editReply.mock.calls)).toContain('no longer active');
+    expect(await f.prisma.captcha_challenge_attempts.count()).toBe(0);
+  });
+  it('records one durable generation-bound assistance request across concurrent clicks and restarts even without a renderer key', async () => {
+    const f = await fixture();
+    f.loseKey();
+    const requests = Array.from({ length: 3 }, () => discordInteraction(f, 'help'));
+    await Promise.all(
+      requests.map(({ interaction }) =>
+        handleCaptchaImageInteraction(
+          interaction,
+          createBotCaptchaImageActions(new CaptchaImageService(f.dependencies))
+        )
+      )
+    );
+    const receipts = await f.prisma.moderation_action_requests.findMany();
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]).toMatchObject({
+      action_type: 'notify_captcha_attention',
+      idempotency_key: `captcha:attention:${f.challenge.id}:1:member-assistance`,
+      metadata: { challenge_id: f.challenge.id, generation: 1, reason: 'member_assistance' },
+    });
+    expect(await f.prisma.captcha_challenge_attempts.count()).toBe(0);
+    expect(
+      await f.prisma.captcha_challenges.findUnique({ where: { id: f.challenge.id } })
+    ).toMatchObject({ status: 'pending', generation: 1, submission_count: 0 });
+    expect(f.render).not.toHaveBeenCalled();
+    await f.prisma.moderation_action_requests.update({
+      where: { id: receipts[0].id },
+      data: { status: 'completed', result: { notified: true } },
+    });
+    expect(await f.service.requestAssistance(f.context, f.reference)).toEqual({ kind: 'queued' });
+    expect(await f.prisma.moderation_action_requests.count()).toBe(1);
+    expect(await f.prisma.moderation_action_requests.findFirst()).toMatchObject({
+      status: 'completed',
+    });
+  });
+  it('does not queue assistance for another member, guild, generation, or an inactive method', async () => {
+    const f = await fixture();
+    for (const ctx of [
+      { ...f.context, guildId: 'other' },
+      { ...f.context, actor: { kind: 'user' as const, userId: 'other' } },
+    ])
+      expect(await f.service.requestAssistance(ctx, f.reference)).toEqual({ kind: 'denied' });
+    expect(await f.service.requestAssistance(f.context, { ...f.reference, generation: 2 })).toEqual(
+      { kind: 'stale' }
+    );
+    await f.prisma.servers.update({
+      where: { guild_id: f.context.guildId },
+      data: { settings: { captcha_mode: 'off', captcha_method: 'discord_image' } },
+    });
+    expect(await f.service.requestAssistance(f.context, f.reference)).toEqual({ kind: 'stale' });
+    expect(await f.prisma.moderation_action_requests.count()).toBe(0);
+  });
   it('starts a native attempt through the bot database adapter', async () => {
     const f = await fixture();
     await expect(

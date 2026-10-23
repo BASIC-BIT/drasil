@@ -24,11 +24,16 @@ export type ImageOpenOutcome =
 export type ImageSubmitOutcome =
   | { kind: 'invalid'; remainingAttempts: number }
   | { kind: 'passed' | 'failed' | 'denied' | 'stale' | 'rate_limited' | 'unavailable' };
+export type ImageAssistanceOutcome = { kind: 'queued' | 'denied' | 'stale' | 'unavailable' };
 export interface ImageSubmitInput extends ImageChallengeReference {
   interactionId: string;
   answer: string;
 }
 export interface ICaptchaImageService {
+  requestAssistance(
+    context: ActionContext,
+    reference: ImageChallengeReference
+  ): Promise<ImageAssistanceOutcome>;
   open(context: ActionContext, reference: ImageChallengeReference): Promise<ImageOpenOutcome>;
   submit(context: ActionContext, input: ImageSubmitInput): Promise<ImageSubmitOutcome>;
 }
@@ -40,6 +45,7 @@ export interface CaptchaImageDependencies {
     | 'findImageMaterial'
     | 'storeImageMaterial'
     | 'invalidateImageMaterial'
+    | 'requestImageAssistance'
   >;
   completion: Pick<CaptchaCompletionStore, 'beginAttempt' | 'completeAttempt'>;
   renderer: CaptchaImageRenderer;
@@ -88,6 +94,24 @@ export class CaptchaImageService implements ICaptchaImageService {
     const binding = bindingFor(challenge);
     if (!(await this.deps.challenges.isImageBindingEligible(binding))) return { kind: 'stale' };
     return { kind: 'authorized', binding };
+  }
+
+  public async requestAssistance(
+    context: ActionContext,
+    reference: ImageChallengeReference
+  ): Promise<ImageAssistanceOutcome> {
+    try {
+      const authorized = await this.authorize(context, reference);
+      if (authorized.kind !== 'authorized') return authorized;
+      // Help does not need image material, the renderer, or an answer key.
+      return {
+        kind: (await this.deps.challenges.requestImageAssistance(authorized.binding))
+          ? 'queued'
+          : 'stale',
+      };
+    } catch {
+      return { kind: 'unavailable' };
+    }
   }
 
   public async open(

@@ -67,6 +67,7 @@ export type AccountQuarantineAttentionReason =
   | 'role_restoration_incomplete';
 
 export type CaptchaAttentionReason =
+  | 'member_assistance'
   | 'delivery_failed'
   | 'expired'
   | 'submission_limit'
@@ -728,16 +729,19 @@ export class NotificationManager implements INotificationManager {
       }
 
       const notificationRoleIds = this.presentationBuilder.getCaseNotificationRoleIds(serverConfig);
-      const summary =
-        reason === 'delivery_failed'
-          ? 'A browser security check could not be delivered. Review the case and retry when ready.'
-          : reason === 'expired'
-            ? 'A browser security check expired. The user remains restricted.'
-            : reason === 'submission_limit'
-              ? 'A browser security check reached its submission limit. The user remains restricted.'
-              : reason === 'evidence_only_pass'
-                ? 'A browser security check was completed. Review the pending case.'
-                : 'A browser security check passed, but current case state prevented automatic resolution.';
+      const summaries: Record<CaptchaAttentionReason, string> = {
+        member_assistance:
+          'A member requested moderator assistance with a Discord image security check. Review the pending case.',
+        delivery_failed:
+          'A security check could not be delivered. Review the case and retry when ready.',
+        expired: 'A security check expired. The user remains restricted.',
+        submission_limit:
+          'A security check reached its submission limit. The user remains restricted.',
+        evidence_only_pass: 'A security check was completed. Review the pending case.',
+        automatic_resolution_held:
+          'A security check passed, but current case state prevented automatic resolution.',
+      };
+      const summary = summaries[reason];
       const roleMentions = this.presentationBuilder.formatRoleMentions(notificationRoleIds) ?? '';
       const lines = [
         `${roleMentions} ${summary}`.trim(),
@@ -755,7 +759,7 @@ export class NotificationManager implements INotificationManager {
       return true;
     } catch (error) {
       console.warn(
-        `Failed to notify admins about browser security-check attention for case ${verificationEvent.id}:`,
+        `Failed to notify admins about security-check attention for case ${verificationEvent.id}:`,
         error
       );
       return false;

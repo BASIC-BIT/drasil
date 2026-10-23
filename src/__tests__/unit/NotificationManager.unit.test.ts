@@ -207,6 +207,20 @@ describe('NotificationManager (unit)', () => {
     }
   });
 
+  it('notifies moderators about member assistance with method-specific copy', async () => {
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+    await expect(
+      manager.notifyCaptchaAttention(buildVerificationEvent(), 'member_assistance')
+    ).resolves.toBe(true);
+    expect(adminChannel.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining(
+          'requested moderator assistance with a Discord image security check'
+        ),
+      })
+    );
+  });
+
   it('omits an undefined role prefix from CAPTCHA attention notifications', async () => {
     const manager = new NotificationManager({} as any, configService, detectionRepository);
 
@@ -231,7 +245,7 @@ describe('NotificationManager (unit)', () => {
     expect(adminChannel.send).toHaveBeenCalledWith(
       expect.objectContaining({
         content: expect.stringContaining(
-          'A browser security check was completed. Review the pending case.'
+          'A security check was completed. Review the pending case.'
         ),
       })
     );
@@ -1070,7 +1084,7 @@ describe('NotificationManager (unit)', () => {
     expect(editArgs.embeds[0].data.fields).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          name: 'Browser Security Check',
+          name: 'Security Check',
           value: expect.stringContaining('Status: Passed'),
         }),
       ])

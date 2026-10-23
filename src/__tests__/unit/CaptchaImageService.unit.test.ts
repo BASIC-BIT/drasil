@@ -50,6 +50,7 @@ function harness(secret: string | undefined) {
   };
   const dependencies: CaptchaImageDependencies = {
     challenges: {
+      requestImageAssistance: jest.fn(async () => true),
       findById: jest.fn(async () => challenge),
       isImageBindingEligible: jest.fn(async () => true),
       findImageMaterial: jest.fn(async () => null),
@@ -124,6 +125,29 @@ describe('native image application boundary', () => {
         answer: 'AB2CDE',
       })
     ).toEqual({ kind: 'denied', code: 'permission_denied' });
+  });
+  it('queues assistance without requiring rendering or an answer secret', async () => {
+    const { service, dependencies } = harness(undefined);
+    Object.assign(dependencies.challenges, { requestImageAssistance: jest.fn(async () => true) });
+    const actions = createBotCaptchaImageActions(service);
+    expect(await actions.requestAssistance(context, reference)).toEqual({
+      kind: 'outcome',
+      outcome: { kind: 'queued' },
+    });
+    expect(dependencies.renderer.render).not.toHaveBeenCalled();
+    expect(dependencies.completion.beginAttempt).not.toHaveBeenCalled();
+  });
+  it('denies assistance from other actors or guilds without queuing it', async () => {
+    const { service, dependencies } = harness(undefined);
+    const enqueue = jest.fn(async () => true);
+    Object.assign(dependencies.challenges, { requestImageAssistance: enqueue });
+    for (const ctx of [
+      { ...context, guildId: 'other' },
+      { ...context, actor: { kind: 'user' as const, userId: 'other' } },
+    ]) {
+      expect(await service.requestAssistance(ctx, reference)).toEqual({ kind: 'denied' });
+    }
+    expect(enqueue).not.toHaveBeenCalled();
   });
   it('keeps an uncomposed service unavailable', async () => {
     const actions = createBotCaptchaImageActions(null);
