@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { getEffectiveCaptchaMethod } from '../setup/settings';
 import { ActionDeniedError } from '../results';
 import { canonicalDigest, IntentError } from '../delegation/intents';
 import { decodeQueuedAction } from '../requests/decode';
@@ -65,7 +66,9 @@ export function createContainmentResources(
       if (!row) throw new ActionDeniedError('stale_state');
       const settings = row.settings ?? {};
       return {
-        captchaEnabled: ['manual', 'suspicious_join'].includes(String(settings.captcha_mode)),
+        captchaEnabled:
+          getEffectiveCaptchaMethod(settings) !== 'none' &&
+          ['manual', 'suspicious_join'].includes(String(settings.captcha_mode)),
         quarantineEnabled: settings.account_quarantine_enabled === true,
         banEnabled: settings.moderator_ban_action_enabled !== false,
       };

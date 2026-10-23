@@ -110,8 +110,20 @@ export function materializeSetupStoredChange(
   if ('captcha_method_revision' in settings) throw new Error('CAPTCHA method revision is private');
   if ('captcha_method' in settings) captchaMethodSchema.parse(settings.captcha_method);
   if ('captcha_method' in settings || 'captcha_mode' in settings) {
+    const previousMethod = getEffectiveCaptchaMethod(current.settings);
     const method = getEffectiveCaptchaMethod({ ...current.settings, ...settings });
     settings.captcha_method = method;
+    if (
+      'captcha_method' in (change.settings ?? {}) &&
+      method !== 'none' &&
+      (previousMethod === 'none' ||
+        (previousMethod !== method &&
+          !['manual', 'suspicious_join'].includes(String(current.settings.captcha_mode)))) &&
+      settings.captcha_mode !== 'suspicious_join'
+    ) {
+      // A hidden retained preference must not reactivate automatic issuance.
+      settings.captcha_mode = 'manual';
+    }
     if (
       change.captchaReadiness &&
       method !== 'none' &&

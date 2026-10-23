@@ -86,34 +86,37 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     );
   }
 
-  it('allows pending standard challenge bypass with mode off and preserves generation CAS', async () => {
-    const { verification } = await createCase('guild-off-bypass', 'user-off-bypass');
-    const repository = new CaptchaChallengeRepository(prisma);
-    const challenge = await repository.create({
-      verificationEventId: verification.id,
-      serverId: verification.server_id!,
-      userId: verification.user_id!,
-      requestSource: CaptchaChallengeRequestSource.MODERATOR,
-      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
-      provider: CaptchaProvider.TURNSTILE,
-      methodRevision: 0,
-      caseRevision: verification.case_revision,
-      tokenHash: 'off-test-hash',
-      expiresAt: new Date(Date.now() + 60_000),
-      requestedBy: 'moderator',
-    });
-    // Isolate policy from the separate mode-off cancellation sweep.
-    await prisma.servers.update({
-      where: { guild_id: verification.server_id! },
-      data: { settings: { captcha_mode: 'off' } },
-    });
-    expect(
-      await repository.bypass(challenge.id, challenge.generation + 1, 'moderator', 'Reviewed')
-    ).toBeNull();
-    expect(
-      await repository.bypass(challenge.id, challenge.generation, 'moderator', 'Reviewed')
-    ).toMatchObject({ status: 'bypassed' });
-  });
+  it.each([{ captcha_mode: 'off' }, { captcha_method: 'none', captcha_mode: 'suspicious_join' }])(
+    'allows pending standard challenge bypass after disablement %j and preserves generation CAS',
+    async (settings) => {
+      const { verification } = await createCase('guild-off-bypass', 'user-off-bypass');
+      const repository = new CaptchaChallengeRepository(prisma);
+      const challenge = await repository.create({
+        verificationEventId: verification.id,
+        serverId: verification.server_id!,
+        userId: verification.user_id!,
+        requestSource: CaptchaChallengeRequestSource.MODERATOR,
+        passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+        provider: CaptchaProvider.TURNSTILE,
+        methodRevision: 0,
+        caseRevision: verification.case_revision,
+        tokenHash: 'off-test-hash',
+        expiresAt: new Date(Date.now() + 60_000),
+        requestedBy: 'moderator',
+      });
+      // Isolate policy from the separate mode-off cancellation sweep.
+      await prisma.servers.update({
+        where: { guild_id: verification.server_id! },
+        data: { settings },
+      });
+      expect(
+        await repository.bypass(challenge.id, challenge.generation + 1, 'moderator', 'Reviewed')
+      ).toBeNull();
+      expect(
+        await repository.bypass(challenge.id, challenge.generation, 'moderator', 'Reviewed')
+      ).toMatchObject({ status: 'bypassed' });
+    }
+  );
 
   it('keeps a delivered generation recoverable until its presentation is recorded', async () => {
     const { verification } = await createCase(
@@ -2030,6 +2033,220 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     await expect(verifications.findById(verification.id)).resolves.toEqual(
       expect.objectContaining({ status: VerificationStatus.PENDING })
     );
+  });
+
+  it.each([
+    { captcha_method: 'none', captcha_mode: 'suspicious_join' },
+    { captcha_method: null, captcha_mode: 'suspicious_join' },
+    { captcha_method: 'discord_image', captcha_mode: 'manual' },
+    { captcha_method: 'turnstile', captcha_mode: 'manual', captcha_method_revision: 2 },
+  ])('fences issue, retry, delivery and expiry for changed settings %j', async (settings) => {
+    const { verification } = await createCase('guild-disabled-paths', 'user-disabled-paths');
+    const repository = new CaptchaChallengeRepository(prisma);
+    const input = {
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
+      caseRevision: verification.case_revision,
+      tokenHash: 'disabled-paths',
+      expiresAt: new Date(Date.now() + 60_000),
+    };
+    const challenge = await repository.create(input);
+    await prisma.captcha_challenges.update({
+      where: { id: challenge.id },
+      data: { updated_at: new Date(0) },
+    });
+    await prisma.servers.update({
+      where: { guild_id: verification.server_id },
+      data: { settings },
+    });
+    await expect(repository.create({ ...input, tokenHash: 'another-issue' })).rejects.toThrow(
+      /changed/
+    );
+    await expect(
+      repository.retry({ ...input, expectedChallengeId: challenge.id, expectedGeneration: 1 })
+    ).rejects.toThrow(/changed/);
+    await expect(repository.recordDelivery(challenge.id, 1)).resolves.toBe(false);
+    await expect(
+      repository.recordDeliveryFailure(challenge.id, 1, 'delivery_failed')
+    ).resolves.toBe(false);
+    await expect(repository.markStaleUndelivered(new Date(), 10)).resolves.toEqual([]);
+    await prisma.captcha_challenges.update({
+      where: { id: challenge.id },
+      data: { expires_at: new Date(0) },
+    });
+    await expect(repository.expirePending(new Date(), 10)).resolves.toEqual([]);
+    await expect(repository.cancelPendingForDisabledServers(10)).resolves.toEqual([
+      expect.objectContaining({ id: challenge.id, status: 'cancelled' }),
+    ]);
+  });
+
+  it('allows selected image automatic join resolution and holds new non-join evidence', async () => {
+    const { verification } = await createCase('guild-image-policy', 'user-image-policy');
+    const servers = new ServerRepository(prisma);
+    await servers.updateSettings(
+      verification.server_id,
+      {
+        captcha_method: 'discord_image',
+        captcha_mode: 'suspicious_join',
+        captcha_pass_action: 'verify_join_only',
+      },
+      { turnstile: true, discord_image: true }
+    );
+    const challenge = await new CaptchaChallengeRepository(prisma).create({
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
+      passEffect: CaptchaChallengePassEffect.VERIFY_JOIN_ONLY,
+      provider: CaptchaProvider.DISCORD_IMAGE,
+      methodRevision: 1,
+      caseRevision: verification.case_revision,
+      tokenHash: 'image-policy',
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    await prisma.captcha_challenges.update({
+      where: { id: challenge.id },
+      data: { status: CaptchaChallengeStatus.PASSED, passed_at: new Date() },
+    });
+    const completion = {
+      challengeId: challenge.id,
+      generation: 1,
+      id: verification.id,
+      expectedCaseRevision: verification.case_revision,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      resolvedAt: new Date(),
+      resolvedBy: 'drasil:captcha',
+    };
+    const events = new VerificationEventRepository(prisma);
+    await prisma.detection_events.updateMany({
+      where: { latest_verification_event_id: verification.id },
+      data: { detection_type: DetectionType.SUSPICIOUS_CONTENT },
+    });
+    await expect(events.completeCaptchaVerification(completion)).resolves.toBeNull();
+    await prisma.detection_events.updateMany({
+      where: { latest_verification_event_id: verification.id },
+      data: { detection_type: DetectionType.NEW_ACCOUNT },
+    });
+    await expect(events.completeCaptchaVerification(completion)).resolves.toMatchObject({
+      status: 'verified',
+    });
+  });
+
+  it.each(['none', 'discord_image', 'round_trip'] as const)(
+    'holds old passed evidence after method change %s',
+    async (method) => {
+      const { verification } = await createCase('guild-method-fence', 'user-method-fence');
+      await enableAutomaticCaptchaResolution(verification.server_id);
+      const challenges = new CaptchaChallengeRepository(prisma);
+      const challenge = await challenges.create({
+        verificationEventId: verification.id,
+        serverId: verification.server_id,
+        userId: verification.user_id,
+        requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
+        passEffect: CaptchaChallengePassEffect.VERIFY_JOIN_ONLY,
+        provider: CaptchaProvider.TURNSTILE,
+        methodRevision: 0,
+        caseRevision: verification.case_revision,
+        tokenHash: 'method-fence',
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+      await prisma.captcha_challenges.update({
+        where: { id: challenge.id },
+        data: { status: CaptchaChallengeStatus.PASSED, passed_at: new Date() },
+      });
+      // Keep the passed generation. Settings changes must hold evidence even when no pending generation is cancelled.
+      const servers = new ServerRepository(prisma);
+      await servers.updateSettings(
+        verification.server_id,
+        { captcha_method: method === 'none' ? 'none' : 'discord_image' },
+        { turnstile: true, discord_image: true }
+      );
+      if (method === 'round_trip')
+        await servers.updateSettings(
+          verification.server_id,
+          { captcha_method: 'turnstile' },
+          { turnstile: true, discord_image: true }
+        );
+      await expect(
+        new VerificationEventRepository(prisma).completeCaptchaVerification({
+          challengeId: challenge.id,
+          generation: 1,
+          id: verification.id,
+          expectedCaseRevision: verification.case_revision,
+          serverId: verification.server_id,
+          userId: verification.user_id,
+          resolvedAt: new Date(),
+          resolvedBy: 'drasil:captcha',
+        })
+      ).resolves.toBeNull();
+      expect(await challenges.findById(challenge.id)).toMatchObject({
+        status: CaptchaChallengeStatus.PASSED,
+      });
+    }
+  );
+
+  it('rereads method revision after a server-lock wait even when the selected method returns to Turnstile', async () => {
+    const { verification } = await createCase('guild-revision-race', 'user-revision-race');
+    await enableAutomaticCaptchaResolution(verification.server_id);
+    const challenge = await new CaptchaChallengeRepository(prisma).create({
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
+      passEffect: CaptchaChallengePassEffect.VERIFY_JOIN_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
+      caseRevision: verification.case_revision,
+      tokenHash: 'revision-race',
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    await prisma.captcha_challenges.update({
+      where: { id: challenge.id },
+      data: { status: CaptchaChallengeStatus.PASSED, passed_at: new Date() },
+    });
+    let completion!: ReturnType<VerificationEventRepository['completeCaptchaVerification']>;
+    let settled = false;
+    await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`select guild_id from servers where guild_id=${verification.server_id} for update`;
+      completion = new VerificationEventRepository(prisma)
+        .completeCaptchaVerification({
+          challengeId: challenge.id,
+          generation: 1,
+          id: verification.id,
+          expectedCaseRevision: verification.case_revision,
+          serverId: verification.server_id,
+          userId: verification.user_id,
+          resolvedAt: new Date(),
+          resolvedBy: 'drasil:captcha',
+        })
+        .finally(() => {
+          settled = true;
+        });
+      void completion.catch(() => undefined);
+      // Observe a real blocked resolver before committing the settings update.
+      let waiting = false;
+      for (let i = 0; i < 100 && !waiting; i++) {
+        await tx.$queryRaw`select pg_stat_clear_snapshot()::text`;
+        const rows = await tx.$queryRaw<
+          Array<{ waiting: boolean }>
+        >`select exists(select 1 from pg_stat_activity where datname=current_database() and pid<>pg_backend_pid() and wait_event_type='Lock' and query like '%FROM servers AS server%') as waiting`;
+        waiting = rows[0].waiting;
+        if (!waiting) await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(waiting).toBe(true);
+      expect(settled).toBe(false);
+      await tx.$executeRaw`update servers set settings=settings || '{"captcha_method":"turnstile","captcha_method_revision":2}'::jsonb where guild_id=${verification.server_id}`;
+    });
+    await expect(completion).resolves.toBeNull();
+    expect(await new VerificationEventRepository(prisma).findById(verification.id)).toMatchObject({
+      status: VerificationStatus.PENDING,
+    });
   });
 
   it('fences CAPTCHA pass presentation against moderator terminal actions', async () => {

@@ -113,3 +113,24 @@ it('rejects invalid readiness before saving or cancelling', async () => {
     ).rowCount
   ).toBe(1);
 });
+
+it('preserves None issuance preferences and activates manually unless suspicious join is explicit', async () => {
+  vi.stubEnv('DRASIL_CAPTCHA_IMAGE_ANSWER_SECRET', Buffer.alloc(32, 7).toString('base64'));
+  await adapter.updateGuildSetup({ guildId, captchaMode: 'suspicious_join' });
+  expect(
+    (await adapter.updateGuildSetup({ guildId, captchaMethod: 'none' })).settings
+  ).toMatchObject({ captcha_method: 'none', captcha_mode: 'suspicious_join' });
+  expect(
+    (await adapter.updateGuildSetup({ guildId, captchaMethod: 'discord_image' })).settings
+  ).toMatchObject({ captcha_method: 'discord_image', captcha_mode: 'manual' });
+  await adapter.updateGuildSetup({ guildId, captchaMethod: 'none' });
+  expect(
+    (
+      await adapter.updateGuildSetup({
+        guildId,
+        captchaMethod: 'discord_image',
+        captchaMode: 'suspicious_join',
+      })
+    ).settings
+  ).toMatchObject({ captcha_method: 'discord_image', captcha_mode: 'suspicious_join' });
+});

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import {
   createCaptchaCompletionStore,
+  createContainmentResources,
   persistSetupChange,
   type DelegationDatabase,
 } from '../../../packages/application/src/postgres';
@@ -140,6 +141,17 @@ describeIntegration('CaptchaMethodConfiguration (integration)', () => {
     };
     return { prisma, guildId, userId, challenge, context, input };
   }
+  it('shared containment reads None with retained issuance as disabled', async () => {
+    const f = await fixture('turnstile');
+    const resources = createContainmentResources(database);
+    await expect(resources.loadPolicy(f.guildId)).resolves.toMatchObject({ captchaEnabled: true });
+    await f.prisma.servers.update({
+      where: { guild_id: f.guildId },
+      data: { settings: { captcha_method: 'none', captcha_mode: 'suspicious_join' } },
+    });
+    await expect(resources.loadPolicy(f.guildId)).resolves.toMatchObject({ captchaEnabled: false });
+  });
+
   async function start(
     f: Awaited<ReturnType<typeof fixture>>,
     state: 'passed' | 'invalid' | 'provider_error' = 'passed'

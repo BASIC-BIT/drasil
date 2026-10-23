@@ -431,6 +431,9 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
             AND verification.status = ${VerificationStatus.PENDING}::verification_status
             AND verification.case_kind = ${CaseKind.STANDARD}::case_kind
             AND verification.case_revision = ${input.caseRevision}
+            AND case when server.settings ? 'captcha_method' then server.settings->>'captcha_method'
+              when server.settings->>'captcha_mode' in ('manual', 'suspicious_join') then 'turnstile' else 'none' end = ${input.provider}
+            AND coalesce(server.settings->>'captcha_method_revision', '0') = ${String(input.methodRevision)}
             AND (
               (
                 ${input.requestSource}::captcha_challenge_request_source = ${CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN}::captcha_challenge_request_source
@@ -521,6 +524,9 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
           AND verification.status = ${VerificationStatus.PENDING}::verification_status
           AND verification.case_kind = ${CaseKind.STANDARD}::case_kind
           AND verification.case_revision = ${input.caseRevision}
+          AND case when server.settings ? 'captcha_method' then server.settings->>'captcha_method'
+              when server.settings->>'captcha_mode' in ('manual', 'suspicious_join') then 'turnstile' else 'none' end = ${input.provider}
+          AND coalesce(server.settings->>'captcha_method_revision', '0') = ${String(input.methodRevision)}
           AND (
             (
               ${input.requestSource}::captcha_challenge_request_source = ${CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN}::captcha_challenge_request_source
@@ -673,6 +679,8 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
         and verification.case_kind = ${CaseKind.STANDARD}::case_kind
         and server.guild_id = challenge.server_id
         and coalesce(server.settings->>'captcha_mode', 'off') in ('manual', 'suspicious_join')
+        and case when server.settings ? 'captcha_method' then server.settings->>'captcha_method' else 'turnstile' end = challenge.provider::text
+        and coalesce(server.settings->>'captcha_method_revision', '0') = challenge.method_revision::text
       returning challenge.id::text
     `;
     return delivered.length === 1;
@@ -708,6 +716,13 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
           where verification.id = challenge.verification_event_id
             and verification.status = ${VerificationStatus.PENDING}::verification_status
         )
+        and exists (
+          select 1 from servers as server
+          where server.guild_id = challenge.server_id
+            and server.settings->>'captcha_mode' in ('manual', 'suspicious_join')
+            and case when server.settings ? 'captcha_method' then server.settings->>'captcha_method' else 'turnstile' end = challenge.provider::text
+            and coalesce(server.settings->>'captcha_method_revision', '0') = challenge.method_revision::text
+        )
       returning challenge.id::text
     `;
     return touched.length === 1;
@@ -718,20 +733,23 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
     generation: number,
     code: string
   ): Promise<boolean> {
-    const result = await this.prisma.captcha_challenges.updateMany({
-      where: {
-        id,
-        generation,
-        status: CaptchaChallengeStatus.PENDING,
-        OR: [{ delivery_error_code: null }, { delivery_error_code: { not: 'image_key_rotated' } }],
-      },
-      data: {
-        delivered_at: null,
-        delivery_error_code: code.slice(0, 100),
-        updated_at: new Date(),
-      },
-    });
-    return result.count === 1;
+    const result = await this.prisma.$queryRaw<Array<{ id: string }>>`
+      update captcha_challenges as challenge
+      set delivered_at = null, delivery_error_code = ${code.slice(0, 100)}, updated_at = now()
+      from servers as server, verification_events as verification
+      where challenge.id = ${id}::uuid and challenge.generation = ${generation}
+        and challenge.status = 'pending'::captcha_challenge_status
+        and challenge.delivery_error_code is distinct from 'image_key_rotated'
+        and verification.id = challenge.verification_event_id
+        and verification.status = 'pending'::verification_status
+        and verification.case_kind = 'standard'::case_kind
+        and server.guild_id = challenge.server_id
+        and server.settings->>'captcha_mode' in ('manual', 'suspicious_join')
+        and case when server.settings ? 'captcha_method' then server.settings->>'captcha_method' else 'turnstile' end = challenge.provider::text
+        and coalesce(server.settings->>'captcha_method_revision', '0') = challenge.method_revision::text
+      returning challenge.id::text
+    `;
+    return result.length === 1;
   }
 
   public async bypass(
@@ -744,7 +762,7 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
   ): Promise<CaptchaChallenge | null> {
     const normalizedReason = reason.trim();
     if (!normalizedReason) {
-      throw new Error('A reason is required to continue without the browser check.');
+      throw new Error('A reason is required to continue without the security check.');
     }
     const boundedReason = normalizedReason.slice(0, 1000);
     const bypassedAt = new Date();
@@ -873,9 +891,9 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
         where challenge.status = ${CaptchaChallengeStatus.PENDING}::captcha_challenge_status
           and (
             coalesce(server.settings->>'captcha_mode', 'off') = 'off'
-            or coalesce(server.settings->>'captcha_method',
-              case when server.settings->>'captcha_mode' in ('manual', 'suspicious_join') then 'turnstile' else 'none' end
-            ) <> challenge.provider::text
+            or case when server.settings ? 'captcha_method' then server.settings->>'captcha_method'
+              when server.settings->>'captcha_mode' in ('manual', 'suspicious_join') then 'turnstile' else 'none' end
+              is distinct from challenge.provider::text
             or coalesce(server.settings->>'captcha_method_revision', '0') <> challenge.method_revision::text
           )
         order by challenge.requested_at asc
@@ -964,7 +982,9 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
           and challenge.expires_at <= ${now}
           and verification.status = ${VerificationStatus.PENDING}::verification_status
           and verification.case_kind <> ${CaseKind.COMPROMISED_ACCOUNT}::case_kind
-          and coalesce(server.settings->>'captcha_mode', 'off') <> 'off'
+          and server.settings->>'captcha_mode' in ('manual', 'suspicious_join')
+          and case when server.settings ? 'captcha_method' then server.settings->>'captcha_method' else 'turnstile' end = challenge.provider::text
+          and coalesce(server.settings->>'captcha_method_revision', '0') = challenge.method_revision::text
         order by challenge.expires_at asc
         limit ${Math.max(1, Math.min(limit, 100))}
         for update of challenge, verification, server skip locked
@@ -1007,22 +1027,26 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
     });
     const interrupted: CaptchaChallenge[] = [];
     for (const candidate of candidates) {
-      const result = await this.prisma.captcha_challenges.updateMany({
-        where: {
-          id: candidate.id,
-          generation: candidate.generation,
-          status: CaptchaChallengeStatus.PENDING,
-          delivered_at: null,
-          delivery_error_code: null,
-          updated_at: candidate.updated_at,
-          expires_at: { gt: now },
-        },
-        data: {
-          delivery_error_code: 'delivery_interrupted',
-          updated_at: new Date(),
-        },
-      });
-      if (result.count === 1) {
+      const result = await this.prisma.$queryRaw<Array<{ id: string }>>`
+        update captcha_challenges as challenge
+        set delivery_error_code = 'delivery_interrupted', updated_at = now()
+        from servers as server, verification_events as verification
+        where challenge.id = ${candidate.id}::uuid
+          and challenge.generation = ${candidate.generation}
+          and challenge.status = 'pending'::captcha_challenge_status
+          and challenge.delivered_at is null and challenge.delivery_error_code is null
+          and challenge.updated_at = ${candidate.updated_at}
+          and challenge.expires_at > ${now}
+          and verification.id = challenge.verification_event_id
+          and verification.status = 'pending'::verification_status
+          and verification.case_kind = 'standard'::case_kind
+          and server.guild_id = challenge.server_id
+          and server.settings->>'captcha_mode' in ('manual', 'suspicious_join')
+          and case when server.settings ? 'captcha_method' then server.settings->>'captcha_method' else 'turnstile' end = challenge.provider::text
+          and coalesce(server.settings->>'captcha_method_revision', '0') = challenge.method_revision::text
+        returning challenge.id::text
+      `;
+      if (result.length === 1) {
         const refreshed = await this.findById(candidate.id);
         if (refreshed) {
           interrupted.push(refreshed);

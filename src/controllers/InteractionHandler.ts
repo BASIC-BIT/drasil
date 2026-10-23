@@ -750,7 +750,6 @@ export class InteractionHandler implements IInteractionHandler {
           );
           if (
             this.captchaChallengeService &&
-            captchaSettings.mode !== 'off' &&
             captchaCase?.case_kind !== CaseKind.COMPROMISED_ACCOUNT
           ) {
             const captchaChallenge = captchaCase
@@ -759,7 +758,11 @@ export class InteractionHandler implements IInteractionHandler {
             const captchaParsed = captchaCase
               ? { ...parsed, verificationEventId: captchaCase.id }
               : parsed;
-            if (!alreadyBanned) {
+            if (
+              !alreadyBanned &&
+              captchaSettings.method !== 'none' &&
+              captchaSettings.mode !== 'off'
+            ) {
               if (captchaCase && !captchaChallenge) {
                 actionButtons.push(
                   this.adminActionButton(

@@ -345,6 +345,10 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     ]);
     const settings = getCaptchaSettings(server.settings);
     return evaluateCaptchaAutoResolution({
+      currentMethod: settings.method,
+      issuedMethod: challenge.provider,
+      currentMethodRevision: settings.methodRevision,
+      issuedMethodRevision: challenge.method_revision,
       currentMode: settings.mode,
       requestSource: challenge.request_source,
       issuedPassEffect: challenge.pass_effect,
@@ -566,6 +570,7 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     const settings = getCaptchaSettings(server.settings);
     if (
       !canRequestCaptcha({
+        method: settings.method,
         mode: settings.mode,
         requestSource: input.requestSource,
         caseKind: verificationEvent.case_kind ?? CaseKind.STANDARD,

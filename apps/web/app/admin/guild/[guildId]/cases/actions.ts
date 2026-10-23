@@ -240,7 +240,7 @@ async function assertCanQueueCaseAction(
     }
     const reason = action === 'bypass_captcha' ? readFormString(formData, 'reason') : null;
     if (action === 'bypass_captcha' && !reason) {
-      throw new Error('A reason is required to continue without the browser check.');
+      throw new Error('A reason is required to continue without the security check.');
     }
     const requiresDisplayedChallenge = action === 'retry_captcha' || action === 'bypass_captcha';
     const expectedCaptchaChallengeId = requiresDisplayedChallenge

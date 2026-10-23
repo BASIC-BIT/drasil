@@ -1445,7 +1445,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     }
   ): Promise<CaptchaCaseResolutionResult> {
     const actorId = 'drasil:captcha';
-    const actorLabel = 'Drasil browser check';
+    const actorLabel = 'Drasil security check';
     const verificationEvent = await this.verificationEventRepository.findById(
       input.verificationEventId
     );

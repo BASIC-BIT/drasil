@@ -1,3 +1,4 @@
+import type { CaptchaAutoResolutionDecision } from '../../services/CaptchaChallengePolicy';
 import type { ObservedBanResult } from '@drasil/application';
 import { MessageCleanupService } from '../../services/MessageCleanupService';
 import { createBotApplication } from '../../application/createBotApplication';
@@ -1137,7 +1138,9 @@ describe('ModerationActionRequestService', () => {
     };
     const captchaChallengeService = {
       bypassChallenge: jest.fn(async () => ({ generation: 1, id: 'challenge-1' })),
-      evaluatePassedChallenge: jest.fn(async () => ({ status: 'eligible' as const })),
+      evaluatePassedChallenge: jest.fn(
+        async (): Promise<CaptchaAutoResolutionDecision> => ({ status: 'eligible' })
+      ),
       findById: jest.fn(async () => ({
         generation: 1,
         id: 'challenge-1',
@@ -2458,6 +2461,34 @@ describe('ModerationActionRequestService', () => {
         error: 'CAPTCHA case ver-1 was resolved, but the member is unavailable for finalization.',
       },
     ]);
+  });
+
+  it('records a policy-held pass without claiming member verification', async () => {
+    const {
+      captchaChallengeService,
+      notificationManager,
+      repository,
+      service,
+      userModerationService,
+    } = buildService([applyCaptchaPassRequest]);
+    captchaChallengeService.evaluatePassedChallenge.mockResolvedValueOnce({
+      status: 'held',
+      reason: 'policy_changed',
+    });
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+    expect(userModerationService.resolveCaptchaCase).not.toHaveBeenCalled();
+    expect(notificationManager.notifyCaptchaAttention).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'ver-1' }),
+      'automatic_resolution_held'
+    );
+    expect(repository.completed[0]).toEqual({
+      id: 'captcha-pass-request-1',
+      result: expect.objectContaining({
+        effect: 'held',
+        held_reason: 'policy_changed',
+        resolved: false,
+      }),
+    });
   });
 
   it('records a moderator-issued CAPTCHA pass as evidence without resolving the case', async () => {

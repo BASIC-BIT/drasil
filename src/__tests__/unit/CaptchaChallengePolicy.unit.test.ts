@@ -1,4 +1,5 @@
 import {
+  evaluateCaptchaAutoResolution,
   canAutomaticallyResolveCaptchaCase,
   canRequestCaptcha,
   selectCaptchaPassEffect,
@@ -15,6 +16,7 @@ describe('CaptchaChallengePolicy', () => {
   it('allows moderator challenges for pending standard cases in manual mode', () => {
     expect(
       canRequestCaptcha({
+        method: 'turnstile',
         mode: 'manual',
         requestSource: CaptchaChallengeRequestSource.MODERATOR,
         caseKind: CaseKind.STANDARD,
@@ -36,6 +38,7 @@ describe('CaptchaChallengePolicy', () => {
   ])('rejects moderator challenges for %s', (_label, mode, caseKind, caseStatus) => {
     expect(
       canRequestCaptcha({
+        method: 'turnstile',
         mode,
         requestSource: CaptchaChallengeRequestSource.MODERATOR,
         caseKind,
@@ -47,6 +50,7 @@ describe('CaptchaChallengePolicy', () => {
 
   it('requires automatic mode and creation by a suspicious join', () => {
     const base = {
+      method: 'turnstile' as const,
       requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
       caseKind: CaseKind.STANDARD,
       caseStatus: VerificationStatus.PENDING,
@@ -80,6 +84,10 @@ describe('CaptchaChallengePolicy', () => {
   it('allows automatic resolution only for an unchanged join-only case', () => {
     expect(
       canAutomaticallyResolveCaptchaCase({
+        currentMethod: 'turnstile',
+        issuedMethod: 'turnstile',
+        currentMethodRevision: 0,
+        issuedMethodRevision: 0,
         currentMode: 'suspicious_join',
         requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
         issuedPassEffect: CaptchaChallengePassEffect.VERIFY_JOIN_ONLY,
@@ -106,6 +114,10 @@ describe('CaptchaChallengePolicy', () => {
   ])('holds automatic resolution for %s', (_label, override) => {
     expect(
       canAutomaticallyResolveCaptchaCase({
+        currentMethod: 'turnstile',
+        issuedMethod: 'turnstile',
+        currentMethodRevision: 0,
+        issuedMethodRevision: 0,
         currentMode: 'suspicious_join',
         requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
         issuedPassEffect: CaptchaChallengePassEffect.VERIFY_JOIN_ONLY,
@@ -119,5 +131,37 @@ describe('CaptchaChallengePolicy', () => {
         ...override,
       })
     ).toBe(false);
+  });
+});
+
+describe('method-bound resolution evidence', () => {
+  const eligible = {
+    currentMethod: 'discord_image' as const,
+    issuedMethod: 'discord_image' as const,
+    currentMethodRevision: 2,
+    issuedMethodRevision: 2,
+    currentMode: 'suspicious_join' as const,
+    requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
+    issuedPassEffect: CaptchaChallengePassEffect.VERIFY_JOIN_ONLY,
+    currentPassAction: 'verify_join_only' as const,
+    caseKind: CaseKind.STANDARD,
+    caseStatus: VerificationStatus.PENDING,
+    caseRevision: 1,
+    issuedCaseRevision: 1,
+    linkedDetectionTypes: [DetectionType.NEW_ACCOUNT],
+    otherPendingCaseCount: 0,
+  };
+  it('allows an explicitly configured image check under the existing join-only policy', () => {
+    expect(evaluateCaptchaAutoResolution(eligible)).toEqual({ status: 'eligible' });
+  });
+  it.each([
+    { currentMethod: 'none' as const },
+    { currentMethod: 'turnstile' as const },
+    { currentMethodRevision: 4 },
+  ])('holds passed evidence when current method metadata changes: %j', (change) => {
+    expect(evaluateCaptchaAutoResolution({ ...eligible, ...change })).toEqual({
+      status: 'held',
+      reason: 'policy_changed',
+    });
   });
 });

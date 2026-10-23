@@ -169,7 +169,11 @@ describe('CAPTCHA web transport boundary', () => {
     expect(await completeCaptchaAttempt(context, completion)).toBe('passed');
     expect(runtime.complete).toHaveBeenCalledWith(context, completion);
     expect(
-      await completeCaptchaAttempt(context, { ...completion, provider: 'discord_image' })
+      await completeCaptchaAttempt(context, {
+        ...completion,
+        provider: 'discord_image',
+        imageIssuance: { keyVersion: 'test-key', answerDigest: 'a'.repeat(64) },
+      })
     ).toBe('stale');
     expect(runtime.complete).toHaveBeenCalledTimes(1);
   });

@@ -8,6 +8,8 @@ export {
   caseResponderRoutingModeSchema,
   verificationAiMaxActionSchema,
   roleQuarantineModeSchema,
+  captchaMethodSchema,
+  getEffectiveCaptchaMethod,
   captchaModeSchema,
   captchaPassActionSchema,
   CAPTCHA_DEFAULT_MODE,
@@ -98,6 +100,7 @@ export {
   guildSetupUpdateSchema,
 } from '@drasil/application/setup-settings';
 export type {
+  CaptchaMethod,
   MessageDeletionDefaultWatchlistEntry,
   DeriveSetupReadinessInput,
   DetectionResponseMode,

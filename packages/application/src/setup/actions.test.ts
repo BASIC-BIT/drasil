@@ -1,3 +1,4 @@
+import { materializeSetupStoredChange } from './persistence';
 import { createSetupActions, type SetupActions } from './actions';
 import type { SetupDependencies } from './ports';
 import type { ActionContext } from '../context';
@@ -395,4 +396,59 @@ test('None saves without secrets and unrelated edits survive provider outages', 
       })
     ).kind
   ).toBe('outcome');
+});
+
+test.each(['turnstile', 'discord_image'] as const)(
+  'activating %s from None uses manual unless explicitly suspicious join',
+  (method) => {
+    const state = arrange();
+    Object.assign(state.server().settings, {
+      captcha_method: 'none',
+      captcha_mode: 'suspicious_join',
+    });
+    expect(
+      materializeSetupStoredChange(state.server(), { settings: { captcha_method: method } })
+        .settings
+    ).toMatchObject({ captcha_method: method, captcha_mode: 'manual' });
+    expect(
+      materializeSetupStoredChange(state.server(), {
+        settings: { captcha_method: method, captcha_mode: 'suspicious_join' },
+      }).settings
+    ).toMatchObject({ captcha_mode: 'suspicious_join' });
+    state.server().settings.captcha_method = 'turnstile';
+    expect(
+      materializeSetupStoredChange(state.server(), {
+        settings: { captcha_method: 'discord_image' },
+      }).settings
+    ).not.toHaveProperty('captcha_mode');
+  }
+);
+
+test.each(['none', 'turnstile', 'discord_image'] as const)(
+  'members cannot select %s',
+  async (method) => {
+    const state = arrange();
+    state.setPermissions(0n);
+    expect(
+      await state.actions.execute(context, {
+        kind: 'update_setup',
+        changes: { captchaMethod: method },
+      })
+    ).toEqual({ kind: 'denied', code: 'permission_denied' });
+    expect(state.server().settings).not.toHaveProperty('captcha_method');
+  }
+);
+
+test('same-method Off resaves cannot activate checks during unrelated setup saves', () => {
+  const state = arrange();
+  Object.assign(state.server().settings, { captcha_method: 'turnstile', captcha_mode: 'off' });
+  expect(
+    materializeSetupStoredChange(state.server(), {
+      settings: { captcha_method: 'turnstile', captcha_mode: 'off' },
+    }).settings
+  ).toMatchObject({ captcha_method: 'turnstile', captcha_mode: 'off' });
+  expect(
+    materializeSetupStoredChange(state.server(), { settings: { captcha_method: 'discord_image' } })
+      .settings
+  ).toMatchObject({ captcha_method: 'discord_image', captcha_mode: 'manual' });
 });
