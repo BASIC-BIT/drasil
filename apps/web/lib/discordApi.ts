@@ -1,4 +1,4 @@
-import { recordReadDependency, type ReadDependencyEvent } from './readDiagnostics';
+import { fetchDiscordRead } from './discordReadRecovery';
 import { readOptionalEnv, requireEnv } from './env';
 import { fixtureGuildResources, fixtureGuilds, isWebE2eFixtureMode } from './e2eFixtures';
 
@@ -134,11 +134,11 @@ export async function exchangeDiscordCode(args: {
 }
 
 export async function fetchDiscordUser(accessToken: string): Promise<DiscordUser> {
-  const response = await fetch(`${discordApiBaseUrl()}/users/@me`, {
-    headers: { authorization: `Bearer ${accessToken}` },
-    cache: 'no-store',
-  });
-  return readDiscordJson<DiscordUser>(response);
+  return fetchDiscordRead(
+    new URL(`${discordApiBaseUrl()}/users/@me`),
+    { headers: { authorization: `Bearer ${accessToken}` }, cache: 'no-store' },
+    readDiscordJson<DiscordUser>
+  );
 }
 
 export async function fetchDiscordGuilds(accessToken: string): Promise<DiscordGuildSummary[]> {
@@ -156,11 +156,11 @@ export async function fetchDiscordGuilds(accessToken: string): Promise<DiscordGu
       url.searchParams.set('after', after);
     }
 
-    const response = await fetch(url, {
-      headers: { authorization: `Bearer ${accessToken}` },
-      cache: 'no-store',
-    });
-    const page = await readDiscordJson<DiscordGuildSummary[]>(response);
+    const page = await fetchDiscordRead(
+      url,
+      { headers: { authorization: `Bearer ${accessToken}` }, cache: 'no-store' },
+      readDiscordJson<DiscordGuildSummary[]>
+    );
     guilds.push(...page);
     if (page.length < DISCORD_GUILD_PAGE_LIMIT) {
       return guilds;
@@ -179,45 +179,11 @@ async function fetchBotJson<T>(path: string): Promise<T> {
       'DRASIL_WEB_BOT_TOKEN or DISCORD_TOKEN is required for live setup diagnostics.'
     );
   }
-  const started = performance.now();
-  let status: number | null = null;
-  let category: ReadDependencyEvent['category'] = 'unknown';
-  try {
-    const response = await fetch(`${discordApiBaseUrl()}${path}`, {
-      headers: { authorization: `Bot ${botToken}` },
-      cache: 'no-store',
-    });
-    status = response.status;
-    category =
-      status === 429
-        ? 'http_rate_limited'
-        : status >= 500
-          ? 'http_server_error'
-          : status >= 400
-            ? 'http_client_error'
-            : 'invalid_response';
-    const result = await readDiscordJson<T>(response);
-    category = 'success';
-    return result;
-  } catch (error) {
-    if (status === null)
-      category =
-        error instanceof Error && error.name === 'AbortError'
-          ? 'aborted'
-          : error instanceof TypeError
-            ? 'network'
-            : 'unknown';
-    throw error;
-  } finally {
-    recordReadDependency({
-      dependency: 'discord',
-      category,
-      status,
-      boundary: 'discord_get',
-      latencyMs: performance.now() - started,
-      attempt: 1,
-    });
-  }
+  return fetchDiscordRead(
+    new URL(`${discordApiBaseUrl()}${path}`),
+    { headers: { authorization: `Bot ${botToken}` }, cache: 'no-store' },
+    readDiscordJson<T>
+  );
 }
 
 export async function fetchDiscordBotUser(): Promise<DiscordUser> {
