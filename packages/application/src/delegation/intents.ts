@@ -73,7 +73,10 @@ export function setupFingerprintState(record: SetupServerRecord): unknown {
     heuristic_message_timeframe_seconds: record.heuristic_message_timeframe_seconds,
     heuristic_suspicious_keywords: record.heuristic_suspicious_keywords,
     is_active: record.is_active,
-    settings: Object.fromEntries(editableSettings.map((key) => [key, record.settings[key]])),
+    settings: {
+      ...Object.fromEntries(editableSettings.map((key) => [key, record.settings[key]])),
+      captcha_method_revision: record.settings.captcha_method_revision ?? 0,
+    },
   };
 }
 export function assertIntentBinding(

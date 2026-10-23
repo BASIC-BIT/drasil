@@ -17,7 +17,7 @@ import {
 } from './settings';
 import { operationCommandSchema } from '../operations/commands';
 import { setupChangesSchema, setupCommandSchema } from './commands';
-import { setupStoredChange } from './persistence';
+import { setupStoredChange, setupStateMatches } from './persistence';
 import { confirmationRequirement } from '../delegation/confirmationPolicy';
 import { workflowDefinitions } from '../delegation/commands';
 import type { DelegatedPrincipal, IntentResolver } from '../delegation/types';
@@ -547,3 +547,25 @@ test.each(['discord_image', 'none', 'turnstile', undefined] as const)(
     }
   }
 );
+
+test('private method revision participates in approved-state fingerprints and is not editable', () => {
+  const approved = { ...state, settings: { captcha_method_revision: 1 } };
+  expect(
+    setupStateMatches(
+      { ...state, settings: { captcha_method_revision: 2 } },
+      { approvedState: approved }
+    )
+  ).toBe(false);
+  expect(setupChangesSchema.safeParse({ captchaMethodRevision: 2 }).success).toBe(false);
+  expect(
+    setupCommandSchema.safeParse({
+      kind: 'update_settings',
+      section: 'verification',
+      changes: { captcha_method_revision: 2 },
+    }).success
+  ).toBe(false);
+  expect(
+    setupCommandSchema.safeParse({ kind: 'update_setup', changes: { captchaMethod: 'invalid' } })
+      .success
+  ).toBe(false);
+});

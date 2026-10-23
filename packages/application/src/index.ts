@@ -88,3 +88,5 @@ export * from './delegation/direct';
 export * from './delegation/operations';
 
 export type { CaptchaCompletionStore } from './postgres/captchaCompletion';
+
+export * from './setup/captchaReadiness';

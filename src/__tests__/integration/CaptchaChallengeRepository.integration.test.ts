@@ -43,7 +43,10 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     const detections = new DetectionEventsRepository(prisma);
     const verifications = new VerificationEventRepository(prisma);
     await servers.getOrCreateServer(serverId);
-    await servers.updateSettings(serverId, { captcha_mode: 'manual' });
+    await prisma.servers.update({
+      where: { guild_id: serverId },
+      data: { settings: { captcha_mode: 'manual' } },
+    });
     await users.getOrCreateUser(userId, 'captcha-target');
     const detection = await detections.create({
       server_id: serverId,
@@ -1491,7 +1494,6 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
 
   it('cancels pending challenges exactly once after the server disables the feature', async () => {
     const { verification } = await createCase('guild-captcha-disabled', 'user-captcha-disabled');
-    const servers = new ServerRepository(prisma);
     const challenges = new CaptchaChallengeRepository(prisma);
     const requests = new ModerationActionRequestRepository(prisma);
     await enableManualCaptcha(verification.server_id);
@@ -1508,7 +1510,10 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       expiresAt: new Date(Date.now() - 60_000),
       requestedBy: 'moderator-1',
     });
-    await servers.updateSettings(verification.server_id, { captcha_mode: 'off' });
+    await prisma.servers.update({
+      where: { guild_id: verification.server_id },
+      data: { settings: { captcha_mode: 'off' } },
+    });
 
     await expect(challenges.expirePending(new Date(), 10)).resolves.toEqual([]);
     await expect(challenges.cancelPendingForDisabledServers(10)).resolves.toEqual([

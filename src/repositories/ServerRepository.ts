@@ -279,6 +279,12 @@ export class ServerRepository implements IServerRepository {
    * Update specific settings for a server
    */
   async updateSettings(guildId: string, settings: Partial<ServerSettings>): Promise<Server | null> {
+    if (
+      'captcha_method' in settings ||
+      'captcha_mode' in settings ||
+      'captcha_method_revision' in settings
+    )
+      return this.updateSetupIfUnchanged(guildId, undefined, { settings });
     try {
       const settingsPatch = JSON.stringify(settings);
       const rows = await this.prisma.$queryRaw<ServerDatabaseRecord[]>(Prisma.sql`

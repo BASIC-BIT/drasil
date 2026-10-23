@@ -3,7 +3,7 @@ import type { ActionContext } from '../context';
 import type { ActionDenialCode } from '../results';
 import type { SetupCommand } from './commands';
 import type { SetupDependencies, SetupConfigurationState } from './ports';
-import type { SettingsChanges } from './settings';
+import { getEffectiveCaptchaMethod, type SettingsChanges } from './settings';
 type SetupAuthority = { readonly owner: boolean } | ActionDenialCode;
 
 export async function authorizeSetup(
@@ -39,9 +39,9 @@ export function validateSetupPolicy(
     return 'permission_denied';
   }
   if (
-    'captcha_mode' in changes &&
-    changes.captcha_mode &&
-    changes.captcha_mode !== 'off' &&
+    ('captcha_method' in changes ||
+      ('captcha_mode' in changes && changes.captcha_mode !== 'off')) &&
+    getEffectiveCaptchaMethod({ ...current?.settings, ...changes }) !== 'none' &&
     !providerConfigured
   ) {
     return 'policy_disabled';

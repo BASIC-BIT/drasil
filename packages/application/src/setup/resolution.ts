@@ -9,10 +9,12 @@ import { ActionDeniedError } from '../results';
 import { workflowDefinitions, type HumanCommand } from '../delegation/commands';
 import type { IntentResolver, IntentResolution, IntentPreconditions } from '../delegation/types';
 import { canonicalDigest } from '../delegation/intents';
+import type { SetupDependencies } from './ports';
 import type { AuthorityPort } from '../authorization';
 import { setupCommandSchema, type SetupCommand, type HeuristicChanges } from './commands';
 import {
   buildSetupSettingsPatch,
+  getEffectiveCaptchaMethod,
   settingsSectionSchemas,
   type SetupServerRecord,
 } from './settings';
@@ -30,7 +32,7 @@ export interface SetupResolutionResources {
   loadServer(guildId: string): Promise<SetupServerRecord | null>;
   loadGuildResources(guildId: string): Promise<SetupSelectionResources>;
   readonly authority: AuthorityPort;
-  readonly provider: { isConfigured(): boolean };
+  readonly provider: SetupDependencies['provider'];
   loadHeuristicDefaults(scope: 'all' | 'keywords'): Promise<HeuristicChanges>;
 }
 export function shippedResetChanges(scope: 'all' | 'keywords'): HeuristicChanges {
@@ -234,12 +236,13 @@ export function createSetupIntentResolver(resources: SetupResolutionResources): 
           facts.userId !== principal.userId
         )
           throw new ActionDeniedError('permission_denied');
+        const method = getEffectiveCaptchaMethod({ ...state.settings, ...change.settings });
         const policy = validateSetupPolicy(
           setup,
           change.settings ?? {},
           state,
           facts.owner,
-          resources.provider.isConfigured()
+          method === 'none' || resources.provider.isConfigured(method)
         );
         if (policy) throw new ActionDeniedError(policy);
         summary = `${invocation.workflowId}\n${setupChangeSummary(state, change)}`;
@@ -279,7 +282,10 @@ export function createSetupIntentResolver(resources: SetupResolutionResources): 
         },
         relevantState: {
           state: setupApprovedState(state),
-          providerConfigured: resources.provider.isConfigured(),
+          providerConfigured: {
+            turnstile: resources.provider.isConfigured('turnstile'),
+            discord_image: resources.provider.isConfigured('discord_image'),
+          },
           defaults,
           provisioning,
         },

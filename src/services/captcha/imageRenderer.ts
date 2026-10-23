@@ -218,3 +218,14 @@ const renderer: CaptchaImageRenderer = new WorkerPool();
 export function createCaptchaImageRenderer(): CaptchaImageRenderer {
   return renderer;
 }
+
+/** Load native dependencies and fonts without starting workers or rendering a challenge. */
+export function isCaptchaImageRendererReady(): boolean {
+  try {
+    require('captcha-canvas');
+    const { FontLibrary } = require('skia-canvas');
+    return FontLibrary.has('Liberation Sans') === true;
+  } catch {
+    return false;
+  }
+}

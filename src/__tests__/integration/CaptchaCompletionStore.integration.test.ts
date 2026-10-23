@@ -72,7 +72,12 @@ describeIntegration('CaptchaCompletionStore (integration)', () => {
     const userId = `user-${randomUUID()}`;
     const servers = new ServerRepository(prisma);
     await servers.getOrCreateServer(guildId);
-    await servers.updateSettings(guildId, { captcha_mode: 'manual', captcha_method: provider });
+    await prisma.servers.update({
+      where: { guild_id: guildId },
+      data: {
+        settings: { captcha_mode: 'manual', captcha_method: provider, captcha_method_revision: 0 },
+      },
+    });
     await new UserRepository(prisma).getOrCreateUser(userId, 'captcha-target');
     const detection = await new DetectionEventsRepository(prisma).create({
       server_id: guildId,

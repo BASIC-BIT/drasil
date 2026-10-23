@@ -361,3 +361,38 @@ test('an explicit setup method selection still updates the selected method', asy
     captcha_mode: 'manual',
   });
 });
+
+test('method readiness uses the selected method even without a mode edit', async () => {
+  const state = arrange();
+  state.setProvider(false);
+  expect(
+    await state.actions.execute(context, {
+      kind: 'update_setup',
+      changes: { captchaMethod: 'turnstile' },
+    })
+  ).toEqual({ kind: 'denied', code: 'policy_disabled' });
+  expect(state.server().settings.captcha_method).toBeUndefined();
+});
+
+test('None saves without secrets and unrelated edits survive provider outages', async () => {
+  const state = arrange();
+  state.setProvider(false);
+  state.server().settings.captcha_method = 'turnstile';
+  state.server().settings.captcha_mode = 'manual';
+  expect(
+    (
+      await state.actions.execute(context, {
+        kind: 'update_setup',
+        changes: { captchaMethod: 'none' },
+      })
+    ).kind
+  ).toBe('outcome');
+  expect(
+    (
+      await state.actions.execute(context, {
+        kind: 'update_setup',
+        changes: { captchaMaxSubmissions: 7 },
+      })
+    ).kind
+  ).toBe('outcome');
+});

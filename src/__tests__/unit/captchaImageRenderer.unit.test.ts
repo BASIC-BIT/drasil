@@ -167,3 +167,30 @@ it('preserves the enqueue deadline when a queued job starts', async () => {
     jest.useRealTimers();
   }
 });
+
+it.each(['dependency', 'font', 'initialization'] as const)(
+  'reports image readiness false on %s failure without starting workers',
+  (failure) => {
+    jest.doMock('captcha-canvas', () => {
+      if (failure === 'dependency') throw new Error('Synthetic dependency failure');
+      return {};
+    });
+    jest.doMock('skia-canvas', () => ({
+      FontLibrary: {
+        has() {
+          if (failure === 'initialization') throw new Error('Synthetic initialization failure');
+          return false;
+        },
+      },
+    }));
+    try {
+      jest.isolateModules(() => {
+        const api: typeof import('../../services/captcha/imageRenderer') = require('../../services/captcha/imageRenderer');
+        expect(api.isCaptchaImageRendererReady()).toBe(false);
+      });
+    } finally {
+      jest.dontMock('captcha-canvas');
+      jest.dontMock('skia-canvas');
+    }
+  }
+);

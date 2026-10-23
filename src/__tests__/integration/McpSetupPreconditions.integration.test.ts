@@ -104,6 +104,8 @@ integration('MCP setup approved writes', () => {
       verification_context: 'context',
       user_report_reason_required: false,
       captcha_mode: 'off',
+      captcha_method: 'none',
+      captcha_method_revision: 0,
     });
     expect(config.getCachedServerConfig('guild')).toEqual(updated);
   });

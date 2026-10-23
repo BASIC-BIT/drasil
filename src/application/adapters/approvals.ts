@@ -1,3 +1,4 @@
+import { isBotCaptchaMethodConfigured } from '../../services/captcha/readiness';
 import {
   createMcpAudit,
   isMcpEnabled,
@@ -13,7 +14,6 @@ import {
   ActionDeniedError,
   parseSetupStoredRecord,
   shippedResetChanges,
-  setupCaptchaProviderIssues,
   memberContextFor,
   workflowDefinitions,
   type AttentionActions,
@@ -174,17 +174,7 @@ export function createBotMcpApprovals(
     setup: createSetupIntentResolver({
       authority,
       loadGuildResources,
-      provider: {
-        isConfigured: () =>
-          setupCaptchaProviderIssues({
-            siteKeyConfigured: Boolean(process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY?.trim()),
-            secretKeyConfigured: Boolean(process.env.TURNSTILE_SECRET_KEY?.trim()),
-            bindingSecretConfigured: Boolean(process.env.DRASIL_CAPTCHA_BINDING_SECRET?.trim()),
-            expectedHostname: process.env.TURNSTILE_EXPECTED_HOSTNAME?.trim(),
-            publicUrl:
-              process.env.NEXT_PUBLIC_APP_URL?.trim() || process.env.DRASIL_WEB_PUBLIC_URL?.trim(),
-          }).length === 0,
-      },
+      provider: { isConfigured: isBotCaptchaMethodConfigured },
       loadHeuristicDefaults: async (scope) => shippedResetChanges(scope),
       async loadServer(guildId): ReturnType<SetupResolutionResources['loadServer']> {
         const { rows } = await database.query('select * from servers where guild_id=$1', [guildId]);

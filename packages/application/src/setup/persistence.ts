@@ -1,11 +1,19 @@
+import { ActionDeniedError } from '../results';
 import { canonicalDigest, setupFingerprintState } from '../delegation/intents';
-import { setupServerRecordSchema, normalizeOptionalId, type SetupServerRecord } from './settings';
+import {
+  setupServerRecordSchema,
+  normalizeOptionalId,
+  getEffectiveCaptchaMethod,
+  captchaMethodSchema,
+  type SetupServerRecord,
+} from './settings';
 import type { SetupPersistenceChange } from './ports';
 
 export interface SetupWritePrecondition {
   readonly approvedState: SetupServerRecord;
 }
 export interface SetupStoredChange {
+  readonly captchaReadiness?: { readonly turnstile: boolean; readonly discord_image: boolean };
   readonly normalizeHeuristicKeywords?: true;
   readonly lockdownAllowlist?: {
     readonly operation: 'add' | 'remove';
@@ -99,6 +107,19 @@ export function materializeSetupStoredChange(
 ): SetupStoredChange {
   const columns = { ...change.columns };
   const settings = { ...change.settings };
+  if ('captcha_method_revision' in settings) throw new Error('CAPTCHA method revision is private');
+  if ('captcha_method' in settings) captchaMethodSchema.parse(settings.captcha_method);
+  if ('captcha_method' in settings || 'captcha_mode' in settings) {
+    const method = getEffectiveCaptchaMethod({ ...current.settings, ...settings });
+    settings.captcha_method = method;
+    if (
+      change.captchaReadiness &&
+      method !== 'none' &&
+      ('captcha_method' in (change.settings ?? {}) || settings.captcha_mode !== 'off') &&
+      !change.captchaReadiness[method]
+    )
+      throw new ActionDeniedError('policy_disabled');
+  }
   if (change.normalizeHeuristicKeywords)
     columns.heuristic_suspicious_keywords = normalizeHeuristicKeywords(
       columns.heuristic_suspicious_keywords ?? current.heuristic_suspicious_keywords

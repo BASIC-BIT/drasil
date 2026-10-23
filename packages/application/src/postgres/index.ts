@@ -18,3 +18,5 @@ export { settleMcpQueue, recordMcpQueueObservation } from './delegation';
 
 export { createCaptchaCompletionStore } from './captchaCompletion';
 export type { CaptchaCompletionStore } from './captchaCompletion';
+
+export { applyCaptchaMethodChange } from './captchaConfiguration';

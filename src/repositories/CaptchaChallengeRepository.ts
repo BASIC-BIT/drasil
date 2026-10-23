@@ -794,7 +794,13 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
         from captcha_challenges as challenge
         join servers as server on server.guild_id = challenge.server_id
         where challenge.status = ${CaptchaChallengeStatus.PENDING}::captcha_challenge_status
-          and coalesce(server.settings->>'captcha_mode', 'off') = 'off'
+          and (
+            coalesce(server.settings->>'captcha_mode', 'off') = 'off'
+            or coalesce(server.settings->>'captcha_method',
+              case when server.settings->>'captcha_mode' in ('manual', 'suspicious_join') then 'turnstile' else 'none' end
+            ) <> challenge.provider::text
+            or coalesce(server.settings->>'captcha_method_revision', '0') <> challenge.method_revision::text
+          )
         order by challenge.requested_at asc
         limit ${Math.max(1, Math.min(limit, 100))}
         for update of challenge, server skip locked

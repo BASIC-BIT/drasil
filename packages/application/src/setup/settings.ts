@@ -524,6 +524,7 @@ export const guildSetupUpdateSchema = z
     messageDeletionWatchlistDisabledDefaultIds: messageDeletionWatchlistDefaultIdsSchema.optional(),
     messageDeletionWatchlistCustomTerms: messageDeletionWatchlistCustomTermsSchema.optional(),
   })
+  .strict()
   .superRefine((update, context) => {
     if (update.manualIntakeEnabled === true && update.manualIntakeRoleId === null) {
       context.addIssue({
@@ -799,4 +800,21 @@ export function setupCaptchaProviderIssues(configuration: CaptchaProviderConfigu
     issues.push('public web URL must be a valid URL');
   }
   return issues;
+}
+
+export interface CaptchaMethodReadiness extends CaptchaProviderConfiguration {
+  readonly imageReady: boolean;
+}
+export function setupCaptchaMethodIssues(
+  method: CaptchaMethod,
+  readiness: CaptchaMethodReadiness
+): readonly string[] {
+  switch (method) {
+    case 'none':
+      return [];
+    case 'discord_image':
+      return readiness.imageReady ? [] : ['Discord image CAPTCHA is not ready'];
+    case 'turnstile':
+      return setupCaptchaProviderIssues(readiness);
+  }
 }

@@ -125,4 +125,48 @@ describe('web setup execution', () => {
       { guildId: 'guild', updatedBy: 'admin', captchaMode: 'manual', adminChannelId: 'channel' },
     ]);
   });
+  it('saves image without Turnstile or public origin using only a valid server key', async () => {
+    const runtime = fixture();
+    state.provider = false;
+    vi.stubEnv('DRASIL_CAPTCHA_IMAGE_ANSWER_SECRET', Buffer.alloc(32, 7).toString('base64'));
+    expect(
+      (
+        await runtime.actions.execute(context, {
+          kind: 'update_setup',
+          changes: { captchaMethod: 'discord_image' },
+        })
+      ).kind
+    ).toBe('outcome');
+    expect(runtime.saved).toEqual([
+      { guildId: 'guild', updatedBy: 'admin', captchaMethod: 'discord_image' },
+    ]);
+    vi.stubEnv('DRASIL_CAPTCHA_IMAGE_ANSWER_SECRET', 'invalid');
+    expect(
+      await runtime.actions.execute(context, {
+        kind: 'update_setup',
+        changes: { captchaMethod: 'discord_image' },
+      })
+    ).toEqual({ kind: 'denied', code: 'policy_disabled' });
+    vi.unstubAllEnvs();
+  });
+  it('saves None and unrelated settings during a provider outage', async () => {
+    const runtime = fixture();
+    state.provider = false;
+    expect(
+      (
+        await runtime.actions.execute(context, {
+          kind: 'update_setup',
+          changes: { captchaMethod: 'none' },
+        })
+      ).kind
+    ).toBe('outcome');
+    expect(
+      (
+        await runtime.actions.execute(context, {
+          kind: 'update_setup',
+          changes: { captchaMaxSubmissions: 7 },
+        })
+      ).kind
+    ).toBe('outcome');
+  });
 });
