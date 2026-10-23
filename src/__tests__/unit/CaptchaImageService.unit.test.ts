@@ -4,6 +4,7 @@ import {
   type CaptchaImageDependencies,
 } from '../../services/CaptchaImageService';
 import { createBotCaptchaImageActions } from '../../application/adapters/captchaImage';
+import { digestImageAnswer, imageAnswerKeyVersion } from '../../services/captcha/imageAnswer';
 import {
   CaptchaChallengePassEffect,
   CaptchaChallengeRequestSource,
@@ -71,6 +72,106 @@ function harness(secret: string | undefined) {
   };
   return { dependencies, service: new CaptchaImageService(dependencies), challenge };
 }
+
+function submissionHarness() {
+  const key = Buffer.alloc(32, 7);
+  const fixture = harness(key.toString('base64'));
+  fixture.dependencies.challenges.findImageMaterial = jest.fn(async () => ({
+    captcha_challenge_id: reference.challengeId,
+    generation: reference.generation,
+    png: Buffer.from('image'),
+    answer_digest: Uint8Array.from(
+      digestImageAnswer(
+        {
+          serverId: 'guild',
+          userId: 'member',
+          caseId: 'case',
+          ...reference,
+        },
+        'AB2CDE',
+        key
+      )
+    ),
+    key_version: imageAnswerKeyVersion(key),
+    created_at: fixture.challenge.created_at,
+  }));
+  fixture.dependencies.completion.beginAttempt = jest.fn(async () => ({
+    state: 'ready' as const,
+    attemptId: 'attempt',
+  }));
+  return {
+    ...fixture,
+    submit: () =>
+      fixture.service.submit(context, {
+        ...reference,
+        interactionId: context.requestId,
+        answer: 'WR2NG3',
+      }),
+  };
+}
+
+describe('image CAPTCHA submission feedback', () => {
+  it.each([
+    { before: 10, after: 5, remaining: 2 },
+    { before: 5, after: 10, remaining: 7 },
+  ])('uses the limit changed from $before to $after during completion', async (limits) => {
+    const { dependencies, challenge, submit } = submissionHarness();
+    let maxSubmissions = limits.before;
+    dependencies.maxSubmissions = async () => maxSubmissions;
+    dependencies.completion.completeAttempt = jest.fn(async () => {
+      maxSubmissions = limits.after;
+      challenge.submission_count = 3;
+      return 'invalid';
+    });
+
+    expect(await submit()).toEqual({ kind: 'invalid', remainingAttempts: limits.remaining });
+  });
+
+  it.each([
+    CaptchaChallengeStatus.PASSED,
+    CaptchaChallengeStatus.FAILED,
+    CaptchaChallengeStatus.EXPIRED,
+    CaptchaChallengeStatus.BYPASSED,
+    CaptchaChallengeStatus.CANCELLED,
+  ])('does not report retryable feedback after the challenge becomes %s', async (status) => {
+    const { dependencies, challenge, submit } = submissionHarness();
+    dependencies.completion.completeAttempt = jest.fn(async () => {
+      challenge.status = status;
+      challenge.submission_count = 3;
+      return 'invalid';
+    });
+
+    expect(await submit()).toEqual({ kind: 'stale' });
+  });
+
+  it.each(['missing', 'new_generation'] as const)(
+    'returns stale when the completed generation is %s',
+    async (change) => {
+      const { dependencies, challenge, submit } = submissionHarness();
+      dependencies.completion.completeAttempt = jest.fn(async () => {
+        if (change === 'missing') dependencies.challenges.findById = jest.fn(async () => null);
+        else challenge.generation += 1;
+        return 'invalid';
+      });
+
+      expect(await submit()).toEqual({ kind: 'stale' });
+    }
+  );
+
+  it.each(['passed', 'failed', 'stale'] as const)(
+    'returns %s without loading remaining-attempt settings',
+    async (completed) => {
+      const { dependencies, submit } = submissionHarness();
+      dependencies.maxSubmissions = async () => {
+        throw new Error('settings unavailable');
+      };
+      dependencies.completion.completeAttempt = jest.fn(async () => completed);
+
+      expect(await submit()).toEqual({ kind: completed });
+    }
+  );
+});
+
 describe('native image application boundary', () => {
   it.each([undefined, Buffer.alloc(31, 3).toString('base64'), 'private-invalid-key'])(
     'rejects unavailable secret without logging it',

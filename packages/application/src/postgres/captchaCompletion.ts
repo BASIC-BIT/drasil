@@ -207,10 +207,13 @@ const completionIsStale = (challenge: CaptchaChallengeRow, attempt: CaptchaAttem
     challenge.case_status !== 'pending' ||
     challenge.case_kind !== 'standard' ||
     !currentMethodMatches(challenge) ||
-    challenge.submission_count >= readCaptchaMaxSubmissions(challenge.server_settings) ||
     attempt.generation !== challenge.generation ||
     challenge.expires_at.getTime() <= Date.now()
   );
+};
+
+const submissionLimitReached = (challenge: CaptchaChallengeRow): boolean => {
+  return challenge.submission_count >= readCaptchaMaxSubmissions(challenge.server_settings);
 };
 
 async function currentImageIssuanceMatches(
@@ -531,7 +534,10 @@ export function createCaptchaCompletionStore(database: DelegationDatabase): Capt
       const currentChallenge = toPublicChallenge(challenge);
       if (currentChallenge.status !== 'pending')
         return { state: 'stale', challenge: currentChallenge };
-      if (limits.generationCount >= CAPTCHA_CHALLENGE_ATTEMPT_LIMIT) {
+      if (
+        submissionLimitReached(challenge) ||
+        limits.generationCount >= CAPTCHA_CHALLENGE_ATTEMPT_LIMIT
+      ) {
         await failExhaustedGeneration(client, challenge);
         return { state: 'stale', challenge: { ...publicChallenge, status: 'failed' } };
       }
@@ -596,14 +602,17 @@ export function createCaptchaCompletionStore(database: DelegationDatabase): Capt
         return stateForExistingAttempt(attempt.validation_state);
       }
       const nativeIssuanceMatches = await currentImageIssuanceMatches(client, row, input);
-      if (!nativeIssuanceMatches || completionIsStale(row, attempt)) {
+      const stale = !nativeIssuanceMatches || completionIsStale(row, attempt);
+      if (stale || submissionLimitReached(row)) {
         await client.query(
           `update captcha_challenge_attempts
          set validation_state = 'stale', validated_at = now()
          where id = $1::uuid and validation_state = 'started'`,
           [input.attemptId]
         );
-        return 'stale';
+        if (stale) return 'stale';
+        await failExhaustedGeneration(client, row);
+        return 'failed';
       }
 
       await client.query(

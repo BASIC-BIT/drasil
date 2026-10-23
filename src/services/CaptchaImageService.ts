@@ -176,7 +176,6 @@ export class CaptchaImageService implements ICaptchaImageService {
       }
       if (!input.interactionId || input.interactionId !== context.requestId)
         return { kind: 'denied' };
-      const maxSubmissions = await this.deps.maxSubmissions(context.guildId);
       const attempt = await this.deps.completion.beginAttempt(context, {
         challengeId: input.challengeId,
         generation: input.generation,
@@ -214,8 +213,12 @@ export class CaptchaImageService implements ICaptchaImageService {
       });
       if (completed === 'provider_error') return { kind: 'unavailable' };
       if (completed !== 'invalid') return { kind: completed };
-      const current = await this.deps.challenges.findById(input.challengeId);
-      if (!current || current.generation !== input.generation) return { kind: 'stale' };
+      const [current, maxSubmissions] = await Promise.all([
+        this.deps.challenges.findById(input.challengeId),
+        this.deps.maxSubmissions(context.guildId),
+      ]);
+      if (!current || current.generation !== input.generation || current.status !== 'pending')
+        return { kind: 'stale' };
       return {
         kind: 'invalid',
         remainingAttempts: Math.max(0, maxSubmissions - current.submission_count),

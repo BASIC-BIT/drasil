@@ -59,6 +59,7 @@ function harness(
     challenge?: Partial<Omit<typeof row, 'server_settings'>> & { server_settings?: unknown };
     attempt?: Partial<typeof attempt>;
     imageAvailable?: boolean;
+    existingAttempt?: boolean;
   } = {}
 ): { query: jest.Mock; store: ReturnType<typeof createCaptchaCompletionStore> } {
   const query = jest.fn();
@@ -69,7 +70,8 @@ function harness(
       return { rows: [{ ...attempt, ...options.attempt }] };
     if (statement.includes('from captcha_challenge_images'))
       return { rows: options.imageAvailable ? [{ generation: 1 }] : [] };
-    if (statement.includes('where idempotency_key =')) return { rows: [] };
+    if (statement.includes('where idempotency_key ='))
+      return { rows: options.existingAttempt ? [{ ...attempt, ...options.attempt }] : [] };
     if (statement.includes('generation_count'))
       return {
         rows: [
@@ -198,7 +200,14 @@ describe('shared CAPTCHA completion store', () => {
   ])(
     'rejects completion with a mismatched binding %# without recording validation',
     async (change) => {
-      const { store, query } = harness(change);
+      const { store, query } = harness({
+        ...change,
+        challenge: {
+          submission_count: 2,
+          server_settings: { captcha_mode: 'manual', captcha_max_submissions: 2 },
+          ...change.challenge,
+        },
+      });
       expect(
         await store.completeAttempt(change.context ?? context, change.input ?? completion)
       ).toBe('stale');
@@ -213,15 +222,11 @@ describe('shared CAPTCHA completion store', () => {
     { method_revision: 1 },
     { server_settings: { captcha_mode: 'off' } },
     { server_settings: { captcha_mode: 'manual', captcha_method: 'discord_image' } },
-    {
-      server_settings: { captcha_mode: 'manual', captcha_max_submissions: 1 },
-      submission_count: 1,
-    },
     { expires_at: new Date(0) },
   ])(
     'marks a no longer eligible completion stale %# without charging a submission',
     async (challenge) => {
-      const { store, query } = harness({ challenge });
+      const { store, query } = harness({ challenge: { submission_count: 20, ...challenge } });
       expect(await store.completeAttempt(context, completion)).toBe('stale');
       const writes = query.mock.calls.filter(([sql]) => sql.startsWith('update '));
       expect(writes).toHaveLength(1);
@@ -266,7 +271,12 @@ describe('shared CAPTCHA completion store', () => {
     const { store, query } = harness({
       challenge: {
         provider: 'discord_image',
-        server_settings: { captcha_mode: 'manual', captcha_method: 'discord_image' },
+        submission_count: 2,
+        server_settings: {
+          captcha_mode: 'manual',
+          captcha_method: 'discord_image',
+          captcha_max_submissions: 2,
+        },
       },
     });
     expect(
@@ -281,4 +291,82 @@ describe('shared CAPTCHA completion store', () => {
       query.mock.calls.some(([sql]) => sql.includes('insert into moderation_action_requests'))
     ).toBe(false);
   });
+  describe.each(['turnstile', 'discord_image'] as const)(
+    'lowered %s submission cap',
+    (provider) => {
+      const cappedChallenge = {
+        provider,
+        submission_count: 2,
+        server_settings: {
+          captcha_mode: 'manual',
+          captcha_method: provider,
+          captcha_max_submissions: 2,
+        },
+      };
+      const cappedCompletion: CaptchaCompletionInput = {
+        ...completion,
+        ...(provider === 'discord_image'
+          ? {
+              provider,
+              imageIssuance: { keyVersion: 'a'.repeat(64), answerDigest: 'b'.repeat(64) },
+            }
+          : { provider }),
+      };
+      it('fails an exhausted pending challenge before starting more provider work', async () => {
+        const { store, query } = harness({ challenge: cappedChallenge });
+        expect(await store.beginAttempt(context, { ...input, provider })).toMatchObject({
+          state: 'stale',
+          challenge: { status: 'failed' },
+        });
+        expect(
+          query.mock.calls.some(([sql]) => sql.includes('insert into captcha_challenge_attempts'))
+        ).toBe(false);
+        expect(
+          query.mock.calls.find(([sql]) =>
+            sql.includes('insert into moderation_action_requests')
+          )?.[1]
+        ).toEqual(
+          expect.arrayContaining([
+            'notify_captcha_attention',
+            `captcha:attention:${row.id}:1:submission-limit`,
+          ])
+        );
+      });
+      it('fails a valid completion without accepting its proof or charging a submission', async () => {
+        const { store, query } = harness({ challenge: cappedChallenge, imageAvailable: true });
+        expect(await store.completeAttempt(context, cappedCompletion)).toBe('failed');
+        expect(
+          query.mock.calls.some(([sql]) => sql.includes("set validation_state = 'stale'"))
+        ).toBe(true);
+        expect(query.mock.calls.some(([sql]) => sql.includes('provider_success ='))).toBe(false);
+        expect(query.mock.calls.some(([sql]) => sql.includes("set status = 'failed'"))).toBe(true);
+        expect(
+          query.mock.calls.find(([sql]) =>
+            sql.includes('insert into moderation_action_requests')
+          )?.[1]
+        ).toEqual(
+          expect.arrayContaining([
+            'notify_captcha_attention',
+            `captcha:attention:${row.id}:1:submission-limit`,
+          ])
+        );
+      });
+      it('preserves the stored outcome for duplicate completions', async () => {
+        const { store, query } = harness({
+          challenge: cappedChallenge,
+          attempt: { validation_state: 'invalid' },
+        });
+        expect(await store.completeAttempt(context, cappedCompletion)).toBe('invalid');
+        expect(query.mock.calls.some(([sql]) => sql.startsWith('update '))).toBe(false);
+      });
+      it('preserves a bound duplicate start without creating more work', async () => {
+        const { store, query } = harness({ challenge: cappedChallenge, existingAttempt: true });
+        expect(await store.beginAttempt(context, { ...input, provider })).toMatchObject({
+          state: 'duplicate',
+          attemptId: attempt.id,
+        });
+        expect(query.mock.calls.some(([sql]) => sql.startsWith('update '))).toBe(false);
+      });
+    }
+  );
 });

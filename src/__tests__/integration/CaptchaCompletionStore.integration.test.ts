@@ -369,30 +369,228 @@ describeIntegration('CaptchaCompletionStore (integration)', () => {
     });
     expect(await store.completeAttempt(f.context, completion)).toBe('stale');
   });
-  it('honors a lowered current submission budget after provider work', async () => {
-    const f = await fixture();
-    const completion = await start(f);
-    await f.prisma.captcha_challenges.update({
-      where: { id: f.challenge.id },
-      data: { submission_count: 2 },
+  async function lowerSubmissionCap(f: Awaited<ReturnType<typeof fixture>>): Promise<void> {
+    await database.transaction((client) =>
+      persistSetupChange(client, f.guildId, { settings: { captcha_max_submissions: 2 } })
+    );
+  }
+  async function useTwoSubmissions(f: Awaited<ReturnType<typeof fixture>>): Promise<void> {
+    for (let index = 0; index < 2; index++)
+      expect(await store.completeAttempt(f.context, await start(f, 'invalid'))).toBe('invalid');
+  }
+  async function expectOneLimitReceipt(f: Awaited<ReturnType<typeof fixture>>): Promise<void> {
+    const receipts = await f.prisma.moderation_action_requests.findMany({
+      where: { server_id: f.guildId },
     });
-    await f.prisma.servers.update({
-      where: { guild_id: f.guildId },
-      data: {
-        settings: {
-          captcha_mode: 'manual',
-          captcha_method: 'discord_image',
-          captcha_max_submissions: 2,
+    expect(receipts).toEqual([
+      expect.objectContaining({
+        action_type: 'notify_captcha_attention',
+        idempotency_key: `captcha:attention:${f.challenge.id}:1:submission-limit`,
+      }),
+    ]);
+  }
+  it.each(['turnstile', 'discord_image'] as const)(
+    'fails lowered %s submission caps before accepting new starts exactly once',
+    async (provider) => {
+      const f = await fixture(provider);
+      await useTwoSubmissions(f);
+      await lowerSubmissionCap(f);
+      const results = await Promise.all([
+        store.beginAttempt(f.context, f.input),
+        store.beginAttempt(f.context, { ...f.input, idempotencyKey: randomUUID() }),
+      ]);
+      for (const result of results)
+        expect(result).toMatchObject({ state: 'stale', challenge: { status: 'failed' } });
+      expect(await store.beginAttempt(f.context, f.input)).toMatchObject({
+        state: 'stale',
+        challenge: { status: 'failed' },
+      });
+      expect(
+        await f.prisma.captcha_challenges.findUnique({ where: { id: f.challenge.id } })
+      ).toMatchObject({ status: 'failed', submission_count: 2 });
+      expect(
+        await f.prisma.captcha_challenge_attempts.count({
+          where: { captcha_challenge_id: f.challenge.id },
+        })
+      ).toBe(2);
+      await expectOneLimitReceipt(f);
+    }
+  );
+  it.each(['turnstile', 'discord_image'] as const)(
+    'fails lowered %s submission caps after provider work without accepting or charging competing completions',
+    async (provider) => {
+      const f = await fixture(provider);
+      await useTwoSubmissions(f);
+      const first = await start(f);
+      const second = await start(f, 'invalid');
+      await lowerSubmissionCap(f);
+      const outcomes = await Promise.all([
+        store.completeAttempt(f.context, first),
+        store.completeAttempt(f.context, second),
+      ]);
+      expect([...outcomes].sort()).toEqual(['failed', 'stale']);
+      expect(await store.completeAttempt(f.context, first)).toBe('stale');
+      expect(await store.completeAttempt(f.context, second)).toBe('stale');
+      expect(
+        await f.prisma.captcha_challenges.findUnique({ where: { id: f.challenge.id } })
+      ).toMatchObject({ status: 'failed', submission_count: 2, passed_at: null });
+      expect(
+        await f.prisma.captcha_challenge_attempts.findMany({
+          where: { id: { in: [first.attemptId, second.attemptId] } },
+        })
+      ).toEqual([
+        expect.objectContaining({
+          validation_state: 'stale',
+          consumes_submission: false,
+          provider_success: null,
+        }),
+        expect.objectContaining({
+          validation_state: 'stale',
+          consumes_submission: false,
+          provider_success: null,
+        }),
+      ]);
+      await expectOneLimitReceipt(f);
+    }
+  );
+  it.each(['begin', 'complete'] as const)(
+    'rolls back lowered-cap failure and image cleanup when the %s attention receipt fails',
+    async (operation) => {
+      const f = await fixture();
+      await useTwoSubmissions(f);
+      const completion = await start(f);
+      await lowerSubmissionCap(f);
+      const failing = createCaptchaCompletionStore({
+        ...database,
+        transaction(operation) {
+          return database.transaction((client) =>
+            operation({
+              async query(text, values) {
+                if (text.includes('insert into moderation_action_requests'))
+                  throw new Error('queue unavailable');
+                return client.query(text, values);
+              },
+            })
+          );
         },
-      },
-    });
-    expect(await store.completeAttempt(f.context, completion)).toBe('stale');
-    expect(
-      await f.prisma.captcha_challenges.findUnique({ where: { id: f.challenge.id } })
-    ).toMatchObject({ status: 'pending', submission_count: 2 });
-    expect(
-      await f.prisma.moderation_action_requests.count({ where: { server_id: f.guildId } })
-    ).toBe(0);
+      });
+      await expect(
+        operation === 'begin'
+          ? failing.beginAttempt(f.context, f.input)
+          : failing.completeAttempt(f.context, completion)
+      ).rejects.toThrow('queue unavailable');
+      expect(
+        await f.prisma.captcha_challenges.findUnique({ where: { id: f.challenge.id } })
+      ).toMatchObject({ status: 'pending', submission_count: 2, passed_at: null });
+      expect(
+        await f.prisma.captcha_challenge_attempts.findUnique({
+          where: { id: completion.attemptId },
+        })
+      ).toMatchObject({
+        validation_state: 'started',
+        consumes_submission: false,
+        provider_success: null,
+      });
+      expect(
+        await f.prisma.captcha_challenge_attempts.count({
+          where: { captcha_challenge_id: f.challenge.id },
+        })
+      ).toBe(3);
+      expect(
+        await f.prisma.captcha_challenge_images.count({
+          where: { captcha_challenge_id: f.challenge.id },
+        })
+      ).toBe(1);
+      expect(
+        await f.prisma.moderation_action_requests.count({ where: { server_id: f.guildId } })
+      ).toBe(0);
+    }
+  );
+  it.each(['proof', 'expiry', 'revision', 'actor', 'generation'] as const)(
+    'keeps exhausted challenges without effects when the %s completion fence fails',
+    async (fence) => {
+      const f = await fixture();
+      await useTwoSubmissions(f);
+      const completion = await start(f);
+      await lowerSubmissionCap(f);
+      if (fence === 'expiry')
+        await f.prisma.captcha_challenges.update({
+          where: { id: f.challenge.id },
+          data: { expires_at: new Date(0) },
+        });
+      if (fence === 'revision')
+        await database.transaction((client) =>
+          persistSetupChange(client, f.guildId, { settings: { captcha_method: 'turnstile' } })
+        );
+      const boundContext: ActionContext =
+        fence === 'actor'
+          ? { ...f.context, actor: { kind: 'user', userId: 'wrong-user' } }
+          : f.context;
+      const boundCompletion: CaptchaCompletionInput =
+        fence === 'proof'
+          ? {
+              ...completion,
+              provider: 'discord_image',
+              imageIssuance: { ...f.imageIssuance, answerDigest: '0'.repeat(64) },
+            }
+          : { ...completion, generation: fence === 'generation' ? 2 : 1 };
+      expect(await store.completeAttempt(boundContext, boundCompletion)).toBe('stale');
+      if (fence !== 'proof')
+        expect(
+          (
+            await store.beginAttempt(boundContext, {
+              ...f.input,
+              generation: boundCompletion.generation,
+            })
+          ).state
+        ).not.toBe('ready');
+      expect(
+        await f.prisma.captcha_challenges.findUnique({ where: { id: f.challenge.id } })
+      ).toMatchObject({
+        status: fence === 'revision' ? 'cancelled' : 'pending',
+        submission_count: 2,
+        passed_at: null,
+      });
+      expect(
+        await f.prisma.moderation_action_requests.count({ where: { server_id: f.guildId } })
+      ).toBe(0);
+    }
+  );
+  it('rereads a lowered cap committed while completion waits on the server lock', async () => {
+    const f = await fixture();
+    await useTwoSubmissions(f);
+    const completion = await start(f);
+    const blocker = await pool.connect();
+    try {
+      await blocker.query('begin');
+      await blocker.query('select guild_id from servers where guild_id=$1 for update', [f.guildId]);
+      let reached: () => void = () => undefined;
+      const waiting = new Promise<void>((resolve) => {
+        reached = resolve;
+      });
+      observeQuery = (sql) => {
+        if (sql.includes('from servers') && sql.includes('for update')) reached();
+      };
+      const pending = store.completeAttempt(f.context, completion);
+      await waiting;
+      await persistSetupChange(
+        { query: (text, values) => blocker.query(text, values ? [...values] : undefined) },
+        f.guildId,
+        { settings: { captcha_max_submissions: 2 } }
+      );
+      await blocker.query('commit');
+      expect(await pending).toBe('failed');
+      expect(
+        await f.prisma.captcha_challenges.findUnique({ where: { id: f.challenge.id } })
+      ).toMatchObject({ status: 'failed', submission_count: 2 });
+      await expectOneLimitReceipt(f);
+    } finally {
+      observeQuery = (text) => {
+        statements.push(text);
+      };
+      await blocker.query('rollback');
+      blocker.release();
+    }
   });
   it('rolls back pass acceptance and private material cleanup if queue insertion fails', async () => {
     const f = await fixture();
