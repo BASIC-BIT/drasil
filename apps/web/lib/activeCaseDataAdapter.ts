@@ -559,6 +559,17 @@ export function parseCaseSummaryRow(row: CaseSummaryRow, now = new Date()): Case
   });
 }
 
+function appendCaptchaBypassAction(row: CaseSummaryRow, actions: CaseAction[]): CaseAction[] {
+  if (
+    row.captcha_status === 'pending' ||
+    row.captcha_status === 'failed' ||
+    row.captcha_status === 'expired'
+  ) {
+    actions.push('bypass_captcha');
+  }
+  return actions;
+}
+
 function appendCaptchaActions(
   row: CaseSummaryRow,
   actions: CaseAction[],
@@ -570,23 +581,10 @@ function appendCaptchaActions(
   const settings = metadataToRecord(row.server_settings);
   const mode = getEffectiveCaptchaMethod(settings) === 'none' ? 'off' : settings.captcha_mode;
   if (mode !== 'manual' && mode !== 'suspicious_join') {
-    if (
-      row.captcha_status === 'pending' ||
-      row.captcha_status === 'failed' ||
-      row.captcha_status === 'expired'
-    )
-      actions.push('bypass_captcha');
-    return actions;
+    return appendCaptchaBypassAction(row, actions);
   }
   if (presenceState !== 'in_server') {
-    if (
-      row.captcha_status === 'pending' ||
-      row.captcha_status === 'failed' ||
-      row.captcha_status === 'expired'
-    ) {
-      actions.push('bypass_captcha');
-    }
-    return actions;
+    return appendCaptchaBypassAction(row, actions);
   }
   if (!row.captcha_status) {
     actions.push('challenge_user');

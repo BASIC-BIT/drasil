@@ -56,14 +56,19 @@ function harness(
     service?: number;
     queueEmpty?: boolean;
     passUpdate?: boolean;
+    challenge?: Partial<Omit<typeof row, 'server_settings'>> & { server_settings?: unknown };
+    attempt?: Partial<typeof attempt>;
+    imageAvailable?: boolean;
   } = {}
 ): { query: jest.Mock; store: ReturnType<typeof createCaptchaCompletionStore> } {
   const query = jest.fn();
   query.mockImplementation(async (statement: string) => {
     if (statement.startsWith('select server_id') || statement.includes('from captcha_challenges c'))
-      return { rows: [row] };
+      return { rows: [{ ...row, ...options.challenge }] };
     if (statement.includes('from captcha_challenge_attempts where id ='))
-      return { rows: [attempt] };
+      return { rows: [{ ...attempt, ...options.attempt }] };
+    if (statement.includes('from captcha_challenge_images'))
+      return { rows: options.imageAvailable ? [{ generation: 1 }] : [] };
     if (statement.includes('where idempotency_key =')) return { rows: [] };
     if (statement.includes('generation_count'))
       return {
@@ -175,5 +180,105 @@ describe('shared CAPTCHA completion store', () => {
     expect(limits).toContain(
       "validation_state <> 'provider_error'::captcha_attempt_validation_state"
     );
+  });
+  it.each([
+    { context: { ...context, guildId: 'another-guild' } },
+    { context: { ...context, actor: { kind: 'user' as const, userId: 'another-user' } } },
+    {
+      context: {
+        ...context,
+        actor: { kind: 'system' as const, purpose: 'captcha_pass' as const },
+      },
+    },
+    { attempt: { discord_user_id: 'another-user' } },
+    { attempt: { captcha_challenge_id: '00000000-0000-4000-8000-000000000099' } },
+    { attempt: { generation: 2 } },
+    { input: { ...completion, generation: 2 } },
+    { challenge: { provider: 'discord_image' } },
+  ])(
+    'rejects completion with a mismatched binding %# without recording validation',
+    async (change) => {
+      const { store, query } = harness(change);
+      expect(
+        await store.completeAttempt(change.context ?? context, change.input ?? completion)
+      ).toBe('stale');
+      expect(query.mock.calls.some(([sql]) => sql.startsWith('update '))).toBe(false);
+    }
+  );
+
+  it.each([
+    { status: 'cancelled' },
+    { case_status: 'verified' },
+    { case_kind: 'observation' },
+    { method_revision: 1 },
+    { server_settings: { captcha_mode: 'off' } },
+    { server_settings: { captcha_mode: 'manual', captcha_method: 'discord_image' } },
+    {
+      server_settings: { captcha_mode: 'manual', captcha_max_submissions: 1 },
+      submission_count: 1,
+    },
+    { expires_at: new Date(0) },
+  ])(
+    'marks a no longer eligible completion stale %# without charging a submission',
+    async (challenge) => {
+      const { store, query } = harness({ challenge });
+      expect(await store.completeAttempt(context, completion)).toBe('stale');
+      const writes = query.mock.calls.filter(([sql]) => sql.startsWith('update '));
+      expect(writes).toHaveLength(1);
+      expect(writes[0][0]).toContain("set validation_state = 'stale'");
+      expect(
+        query.mock.calls.some(([sql]) => sql.includes('insert into moderation_action_requests'))
+      ).toBe(false);
+    }
+  );
+
+  it.each(['passed', 'invalid'] as const)(
+    'locks the exact image issuance after the attempt before accepting %s',
+    async (state) => {
+      const { store, query } = harness({
+        challenge: {
+          provider: 'discord_image',
+          server_settings: { captcha_mode: 'manual', captcha_method: 'discord_image' },
+        },
+        imageAvailable: true,
+      });
+      const proof = { keyVersion: 'a'.repeat(64), answerDigest: 'b'.repeat(64) };
+      expect(
+        await store.completeAttempt(context, {
+          ...completion,
+          provider: 'discord_image',
+          imageIssuance: proof,
+          validation: { ...completion.validation, state, success: state === 'passed' },
+        })
+      ).toBe(state);
+      const locks = query.mock.calls.filter(([sql]) => sql.includes('for update'));
+      expect(locks[3][0]).toContain('from captcha_challenge_attempts');
+      expect(locks[4][0]).toContain('from captcha_challenge_images');
+      expect(locks[4][1]).toEqual([row.id, row.generation, proof.keyVersion, proof.answerDigest]);
+    }
+  );
+
+  it.each([
+    { keyVersion: 'a'.repeat(64), answerDigest: 'b'.repeat(64) },
+    { keyVersion: 'invalid-key', answerDigest: 'b'.repeat(64) },
+    { keyVersion: 'a'.repeat(64), answerDigest: 'invalid-digest' },
+  ])('rejects an unbound or malformed image issuance %#', async (proof) => {
+    const { store, query } = harness({
+      challenge: {
+        provider: 'discord_image',
+        server_settings: { captcha_mode: 'manual', captcha_method: 'discord_image' },
+      },
+    });
+    expect(
+      await store.completeAttempt(context, {
+        ...completion,
+        provider: 'discord_image',
+        imageIssuance: proof,
+      })
+    ).toBe('stale');
+    expect(query.mock.calls.some(([sql]) => sql.includes('provider_success ='))).toBe(false);
+    expect(
+      query.mock.calls.some(([sql]) => sql.includes('insert into moderation_action_requests'))
+    ).toBe(false);
   });
 });

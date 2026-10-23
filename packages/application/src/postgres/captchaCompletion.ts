@@ -52,7 +52,7 @@ interface CaptchaAttemptRow extends Record<string, unknown> {
     | 'stale';
 }
 
-function toPublicChallenge(row: CaptchaChallengeRow): CaptchaPublicChallenge {
+const toPublicChallenge = (row: CaptchaChallengeRow): CaptchaPublicChallenge => {
   const expired = row.status === 'pending' && row.expires_at.getTime() <= Date.now();
   const featureDisabled = row.status === 'pending' && !currentMethodMatches(row);
   const caseUnavailable =
@@ -68,7 +68,7 @@ function toPublicChallenge(row: CaptchaChallengeRow): CaptchaPublicChallenge {
     caseRevision: row.case_revision_at_issue,
     expiresAt: row.expires_at,
   };
-}
+};
 
 function readCaptchaMode(settings: unknown): 'off' | 'manual' | 'suspicious_join' {
   if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
@@ -182,6 +182,62 @@ async function selectChallenge(
     ? row
     : null;
 }
+const completionBindingMatches = (
+  context: ActionContext,
+  input: CaptchaCompletionInput,
+  challenge: CaptchaChallengeRow,
+  attempt: CaptchaAttemptRow
+): boolean => {
+  return (
+    context.actor.kind === 'user' &&
+    context.actor.userId === challenge.user_id &&
+    attempt.discord_user_id === context.actor.userId &&
+    attempt.captcha_challenge_id === challenge.id &&
+    input.provider === challenge.provider &&
+    context.guildId === challenge.server_id &&
+    input.challengeId === challenge.id &&
+    input.generation === challenge.generation &&
+    input.generation === attempt.generation
+  );
+};
+
+const completionIsStale = (challenge: CaptchaChallengeRow, attempt: CaptchaAttemptRow): boolean => {
+  return (
+    challenge.status !== 'pending' ||
+    challenge.case_status !== 'pending' ||
+    challenge.case_kind !== 'standard' ||
+    !currentMethodMatches(challenge) ||
+    challenge.submission_count >= readCaptchaMaxSubmissions(challenge.server_settings) ||
+    attempt.generation !== challenge.generation ||
+    challenge.expires_at.getTime() <= Date.now()
+  );
+};
+
+async function currentImageIssuanceMatches(
+  client: DelegationQueryClient,
+  challenge: CaptchaChallengeRow,
+  input: CaptchaCompletionInput
+): Promise<boolean> {
+  if (input.provider !== 'discord_image') return true;
+  const proof = input.imageIssuance;
+  if (
+    !proof ||
+    !/^[a-f0-9]{64}$/.test(proof.keyVersion) ||
+    !/^[a-f0-9]{64}$/.test(proof.answerDigest)
+  )
+    return false;
+  // Verification happens outside the transaction. Lock and recheck that exact
+  // issuance before accepting either a pass or an invalid-answer charge.
+  const material = await client.query<{ generation: number }>(
+    `select generation from captcha_challenge_images
+             where captcha_challenge_id = $1::uuid and generation = $2
+               and key_version = $3 and answer_digest = decode($4, 'hex')
+             for update`,
+    [challenge.id, challenge.generation, proof.keyVersion, proof.answerDigest]
+  );
+  return !!material.rows[0];
+}
+
 export interface CaptchaCompletionStore {
   beginAttempt(
     context: ActionContext,
@@ -526,71 +582,21 @@ export function createCaptchaCompletionStore(database: DelegationDatabase): Capt
     input: CaptchaCompletionInput
   ): Promise<CaptchaAttemptCompletion> {
     return database.transaction(async (client) => {
-      const challenge = await selectChallenge(client, input.challengeId);
-      if (!challenge) return 'stale';
+      const row = await selectChallenge(client, input.challengeId);
+      if (!row) return 'stale';
       const result = await client.query<CaptchaAttemptRow>(
         'select id::text, captcha_challenge_id::text, generation, discord_user_id, validation_state::text as validation_state from captcha_challenge_attempts where id = $1::uuid for update',
         [input.attemptId]
       );
       const attempt = result.rows[0];
-      const row = attempt
-        ? {
-            ...challenge,
-            validation_state: attempt.validation_state,
-            attempt_generation: attempt.generation,
-            discord_user_id: attempt.discord_user_id,
-          }
-        : null;
-      if (!row) {
+      if (!attempt || !completionBindingMatches(context, input, row, attempt)) {
         return 'stale';
       }
-      if (
-        context.actor.kind !== 'user' ||
-        context.actor.userId !== row.user_id ||
-        row.discord_user_id !== context.actor.userId ||
-        attempt?.captcha_challenge_id !== row.id ||
-        input.provider !== row.provider ||
-        context.guildId !== row.server_id ||
-        input.challengeId !== row.id ||
-        input.generation !== row.generation ||
-        input.generation !== row.attempt_generation
-      ) {
-        return 'stale';
+      if (attempt.validation_state !== 'started') {
+        return stateForExistingAttempt(attempt.validation_state);
       }
-      if (row.validation_state !== 'started') {
-        return stateForExistingAttempt(row.validation_state);
-      }
-      // Verification happens outside the transaction. Lock and recheck that exact
-      // issuance before accepting either a pass or an invalid-answer charge.
-      let nativeIssuanceMatches = true;
-      if (input.provider === 'discord_image') {
-        const proof = input.imageIssuance;
-        nativeIssuanceMatches = false;
-        if (
-          proof &&
-          /^[a-f0-9]{64}$/.test(proof.keyVersion) &&
-          /^[a-f0-9]{64}$/.test(proof.answerDigest)
-        ) {
-          const material = await client.query<{ generation: number }>(
-            `select generation from captcha_challenge_images
-             where captcha_challenge_id = $1::uuid and generation = $2
-               and key_version = $3 and answer_digest = decode($4, 'hex')
-             for update`,
-            [row.id, row.generation, proof.keyVersion, proof.answerDigest]
-          );
-          nativeIssuanceMatches = !!material.rows[0];
-        }
-      }
-      if (
-        !nativeIssuanceMatches ||
-        row.status !== 'pending' ||
-        row.case_status !== 'pending' ||
-        row.case_kind !== 'standard' ||
-        !currentMethodMatches(row) ||
-        row.submission_count >= readCaptchaMaxSubmissions(row.server_settings) ||
-        row.attempt_generation !== row.generation ||
-        row.expires_at.getTime() <= Date.now()
-      ) {
+      const nativeIssuanceMatches = await currentImageIssuanceMatches(client, row, input);
+      if (!nativeIssuanceMatches || completionIsStale(row, attempt)) {
         await client.query(
           `update captcha_challenge_attempts
          set validation_state = 'stale', validated_at = now()

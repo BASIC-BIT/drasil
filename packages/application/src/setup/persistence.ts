@@ -100,12 +100,10 @@ export function setupStoredChange(change: SetupPersistenceChange): SetupStoredCh
 export function normalizeHeuristicKeywords(values: readonly string[]): string[] {
   return [...new Set(values.map((value) => value.trim().toLowerCase()).filter(Boolean))];
 }
-/** Materialize only semantic edits that must use the locked current row, never a cached read. */
-export function materializeSetupStoredChange(
+function materializeCaptchaSettings(
   current: SetupServerRecord,
   change: SetupStoredChange
-): SetupStoredChange {
-  const columns = { ...change.columns };
+): Record<string, unknown> {
   const settings = { ...change.settings };
   if ('captcha_method_revision' in settings) throw new Error('CAPTCHA method revision is private');
   if ('captcha_method' in settings) captchaMethodSchema.parse(settings.captcha_method);
@@ -132,6 +130,16 @@ export function materializeSetupStoredChange(
     )
       throw new ActionDeniedError('policy_disabled');
   }
+  return settings;
+}
+
+/** Materialize only semantic edits that must use the locked current row, never a cached read. */
+export function materializeSetupStoredChange(
+  current: SetupServerRecord,
+  change: SetupStoredChange
+): SetupStoredChange {
+  const columns = { ...change.columns };
+  const settings = materializeCaptchaSettings(current, change);
   if (change.normalizeHeuristicKeywords)
     columns.heuristic_suspicious_keywords = normalizeHeuristicKeywords(
       columns.heuristic_suspicious_keywords ?? current.heuristic_suspicious_keywords
