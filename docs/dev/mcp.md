@@ -28,6 +28,16 @@ Public dynamic registration has combined limits of 10 per verified IP/hour and 1
 
 Respect returned `Retry-After`, `retryAfterSeconds` or `retryAfterMs`. Back off; do not loop retries with new intent keys. Default list size is 25, maximum 100. Continue with the returned cursor, even when the requested row count is clipped by the result-size budget. Results have a 64 KiB budget. Request bodies use the SDK's separate maintained 4 MiB default, enforced before the handler's JSON pre-parser, including streamed byte accounting.
 
+## Temporary read failures
+
+Safe Discord GETs make at most two attempts per GET. The first attempt times out after 2,000 ms, including response decoding. The first recoverable failure starts one 3,000 ms recovery budget shared by all HTTP helpers in that logical MCP read. This is additional recovery time, not an end-to-end latency promise. Overlapping queries have independent budgets and cancellation signals. Completed authorization results are not cached; each later read checks the current grant, roles and channel visibility.
+
+Discord HTTP 429 uses the longest valid numeric delay from `retry_after`, `Retry-After` and `X-RateLimit-Reset-After`. Missing or excessive delays end recovery. HTTP 502/503/504, recognized temporary fetch transport errors and attempt timeouts permit one 100–250 ms jittered delay. Caller cancellation, permission failures, arbitrary exceptions and malformed successful JSON do not trigger replay. Recovery never replays a tool handler, mutation, moderation command or OAuth exchange.
+
+Exhausted known temporary failures return `kind: denied`, `reason: unavailable`, with `retryAfterSeconds` only when justified by provider delay metadata. `rate_limited` remains the application admission-limit result; a real permission denial remains `permission_denied`. Clients receive identical text and structured envelopes and unchanged read-only tool schemas.
+
+Correlate sanitized `read_dependency` events by `correlationId` and logical `operation`. Each actual Discord GET attempt records its attempt number, status, category and latency at `discord_get`; authority, visibility and query events identify higher-level failures. Multiple helpers can each have attempt 1 under the same correlation ID. These identifiers describe one logical request, not a durable authorization decision. Never add provider response bodies, message/evidence text, credentials, raw SQL or connection strings to diagnostic logs.
+
 ## Queue outcomes and audit
 
 The worker normally polls about every five seconds; MCP waits at most five seconds within the request budget. A queued receipt is normal. Poll `get_action_status` with its execution ID. Public outcomes distinguish queued, running, completed, denied, failed, partial and uncertain. There is no exactly-once promise for external Discord effects.
