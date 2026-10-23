@@ -146,15 +146,13 @@ describeIntegration('CaptchaCompletionStore (integration)', () => {
       const f = await fixture(provider);
       const first = await start(f);
       const second = await start(f);
-      expect(
-        (
-          await Promise.all([
-            store.completeAttempt(f.context, first),
-            store.completeAttempt(f.context, second),
-          ])
-        ).sort()
-      ).toEqual(['passed', 'stale']);
-      expect(await store.completeAttempt(f.context, first)).toBe('passed');
+      const outcomes = await Promise.all([
+        store.completeAttempt(f.context, first),
+        store.completeAttempt(f.context, second),
+      ]);
+      expect([...outcomes].sort()).toEqual(['passed', 'stale']);
+      const winner = outcomes[0] === 'passed' ? first : second;
+      expect(await store.completeAttempt(f.context, winner)).toBe('passed');
       const receipts = await f.prisma.moderation_action_requests.findMany({
         where: { server_id: f.guildId, action_type: 'apply_captcha_pass' },
       });

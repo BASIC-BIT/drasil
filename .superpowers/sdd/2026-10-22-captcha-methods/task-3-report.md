@@ -178,3 +178,32 @@ Two dependency fixture cardinalities were corrected with controller approval, pr
 ## Self-review and limits
 
 Read the complete shared implementation, web transport diff, public exports, setup cancellation, and new tests. Verified that no old web transaction implementation/encoder remains, queue keys and expected case revision retain their prior values, all internal completion callers supply provider explicitly, and no provider/Discord work occurs in the shared transactions. No unresolved implementation concerns were identified. Native answer proof and live browser/Discord/provider validation are outside this task; the automated results do not claim those journeys were exercised. Final clean-container validation remains Task 8 as directed by the controller.
+
+## Review fix round 1
+
+Fix base: `0097f7d`. Read `task-3-review.md` and the controller's ledger ruling in `progress.md`. The controller classified the simultaneous-pass replay assumption as an Important verification defect. Either provider completion can acquire the server lock first, so an unordered result assertion cannot establish that the first submitted attempt won.
+
+Changed only that test assertion: retain `Promise.all` outcomes in input order, sort a copy when asserting one `passed` and one `stale`, then identify and replay the actual passed attempt. The one-receipt and pending-case assertions remain intact. Product behavior and acceptance code are unchanged.
+
+Covering verification used the exclusively owned disposable DB, with identical guarded URLs and additional loopback network permission:
+
+```sh
+JEST_INTEGRATION=1 TEST_DATABASE_URL='postgresql://postgres:postgres@127.0.0.1:55433/drasil_mcp_test?schema=public' DATABASE_URL='postgresql://postgres:postgres@127.0.0.1:55433/drasil_mcp_test?schema=public' POSTGRES_DB_URL='postgresql://postgres:postgres@127.0.0.1:55433/drasil_mcp_test?schema=public' npx jest --runInBand --runTestsByPath src/__tests__/integration/CaptchaCompletionStore.integration.test.ts
+```
+
+```text
+44 migrations found in prisma/migrations
+No pending migrations to apply.
+PASS src/__tests__/integration/CaptchaCompletionStore.integration.test.ts (17.13 s)
+Test Suites: 1 passed, 1 total
+Tests:       26 passed, 26 total
+Snapshots:   0 total
+Time:        17.47 s, estimated 19 s
+```
+
+```sh
+npx prettier --check src/__tests__/integration/CaptchaCompletionStore.integration.test.ts
+git diff --check
+```
+
+Prettier reports `All matched files use Prettier code style!`; the diff check exits 0. Self-review confirms that winner selection uses the ordered result associated with each attempt and no first-winner assumption remains. No unresolved concerns in this fix.
