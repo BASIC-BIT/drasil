@@ -1,3 +1,4 @@
+import { classifyReadFailure, recordReadDependency } from '../../readDiagnostics';
 import {
   memberContextFor,
   workflowDefinitions,
@@ -90,6 +91,7 @@ async function checkVisibility(
   api: VisibilityApi
 ): Promise<AccessDecision> {
   const denied = { kind: 'denied', reason: 'permission_denied' } as const;
+  const started = performance.now();
   try {
     const [guild, roles, actor, bot, channel] = await Promise.all([
       api.guild(guildId),
@@ -163,7 +165,13 @@ async function checkVisibility(
       }
     }
     return binding;
-  } catch {
+  } catch (error) {
+    recordReadDependency({
+      ...classifyReadFailure(error),
+      boundary: 'visibility',
+      latencyMs: performance.now() - started,
+      attempt: 1,
+    });
     return denied;
   }
 }

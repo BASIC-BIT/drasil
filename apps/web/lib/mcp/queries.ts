@@ -1,3 +1,4 @@
+import { classifyReadFailure, recordReadDependency } from '../readDiagnostics';
 import { MCP_RESULT_METADATA_BYTES } from './protocol';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
@@ -426,6 +427,7 @@ export function createMcpQueries(deps: McpQueryDependencies): {
       }
       const sign = (key: PageKey) =>
         encodeSignedJson({ v: 1, binding: bindingHash, key }, deps.cursorSecret);
+      const started = performance.now();
       try {
         if (query.kind === 'get_capabilities') {
           const decision = await deps.access.getCapabilities(principal, query.guildId);
@@ -526,7 +528,13 @@ export function createMcpQueries(deps: McpQueryDependencies): {
           admit
         );
         return authorized.kind === 'denied' ? authorized : authorized.value;
-      } catch {
+      } catch (error) {
+        recordReadDependency({
+          ...classifyReadFailure(error),
+          boundary: 'query',
+          latencyMs: performance.now() - started,
+          attempt: 1,
+        });
         return { kind: 'denied', reason: 'unavailable' };
       }
     },

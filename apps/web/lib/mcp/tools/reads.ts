@@ -1,3 +1,4 @@
+import { withReadRequestContext } from '../../readRequestContext';
 import { checkMcpLimit } from '../limits';
 import { recordMcpAudit } from '../audit';
 import type {
@@ -78,43 +79,45 @@ export function createMcpReadTools(
         openWorldHint: false,
       },
       async handler(principal, input) {
-        const parsed = inputSchema.safeParse(input);
-        async function observed(result: QueryResult): Promise<QueryResult> {
-          await audit?.({
-            event: 'observation',
-            ...principal,
-            guildId: parsed.success && 'guildId' in parsed.data ? parsed.data.guildId : undefined,
-            outcome:
-              result.kind === 'allowed'
-                ? 'completed'
-                : result.reason === 'rate_limited'
-                  ? 'limited'
-                  : 'denied',
-          }).catch(() => undefined);
-          return result;
-        }
-        if (!parsed.success) return observed({ kind: 'denied', reason: 'invalid_page' });
-        const query = { ...parsed.data, kind };
-        let charged = false;
-        async function admit(guildId?: string): Promise<AccessDenial | undefined> {
-          charged = true;
-          if (guildId && (!('guildId' in query) || query.guildId !== guildId))
-            return { kind: 'denied', reason: 'binding_mismatch' };
-          const decision = await limit!({ ...principal, guildId }, 'read');
-          return decision.kind === 'limited'
-            ? {
-                kind: 'denied',
-                reason: 'rate_limited',
-                retryAfterSeconds: decision.retryAfterSeconds,
-              }
-            : undefined;
-        }
-        const result = await queries.execute(principal, query, limit ? admit : undefined);
-        if (limit && !charged) {
-          const denied = await admit();
-          if (denied) return observed(denied);
-        }
-        return observed(result);
+        return withReadRequestContext({ operation: kind }, async () => {
+          const parsed = inputSchema.safeParse(input);
+          async function observed(result: QueryResult): Promise<QueryResult> {
+            await audit?.({
+              event: 'observation',
+              ...principal,
+              guildId: parsed.success && 'guildId' in parsed.data ? parsed.data.guildId : undefined,
+              outcome:
+                result.kind === 'allowed'
+                  ? 'completed'
+                  : result.reason === 'rate_limited'
+                    ? 'limited'
+                    : 'denied',
+            }).catch(() => undefined);
+            return result;
+          }
+          if (!parsed.success) return observed({ kind: 'denied', reason: 'invalid_page' });
+          const query = { ...parsed.data, kind };
+          let charged = false;
+          async function admit(guildId?: string): Promise<AccessDenial | undefined> {
+            charged = true;
+            if (guildId && (!('guildId' in query) || query.guildId !== guildId))
+              return { kind: 'denied', reason: 'binding_mismatch' };
+            const decision = await limit!({ ...principal, guildId }, 'read');
+            return decision.kind === 'limited'
+              ? {
+                  kind: 'denied',
+                  reason: 'rate_limited',
+                  retryAfterSeconds: decision.retryAfterSeconds,
+                }
+              : undefined;
+          }
+          const result = await queries.execute(principal, query, limit ? admit : undefined);
+          if (limit && !charged) {
+            const denied = await admit();
+            if (denied) return observed(denied);
+          }
+          return observed(result);
+        });
       },
     };
   });

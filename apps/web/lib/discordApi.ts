@@ -1,3 +1,4 @@
+import { recordReadDependency, type ReadDependencyEvent } from './readDiagnostics';
 import { readOptionalEnv, requireEnv } from './env';
 import { fixtureGuildResources, fixtureGuilds, isWebE2eFixtureMode } from './e2eFixtures';
 
@@ -178,11 +179,45 @@ async function fetchBotJson<T>(path: string): Promise<T> {
       'DRASIL_WEB_BOT_TOKEN or DISCORD_TOKEN is required for live setup diagnostics.'
     );
   }
-  const response = await fetch(`${discordApiBaseUrl()}${path}`, {
-    headers: { authorization: `Bot ${botToken}` },
-    cache: 'no-store',
-  });
-  return readDiscordJson<T>(response);
+  const started = performance.now();
+  let status: number | null = null;
+  let category: ReadDependencyEvent['category'] = 'unknown';
+  try {
+    const response = await fetch(`${discordApiBaseUrl()}${path}`, {
+      headers: { authorization: `Bot ${botToken}` },
+      cache: 'no-store',
+    });
+    status = response.status;
+    category =
+      status === 429
+        ? 'http_rate_limited'
+        : status >= 500
+          ? 'http_server_error'
+          : status >= 400
+            ? 'http_client_error'
+            : 'invalid_response';
+    const result = await readDiscordJson<T>(response);
+    category = 'success';
+    return result;
+  } catch (error) {
+    if (status === null)
+      category =
+        error instanceof Error && error.name === 'AbortError'
+          ? 'aborted'
+          : error instanceof TypeError
+            ? 'network'
+            : 'unknown';
+    throw error;
+  } finally {
+    recordReadDependency({
+      dependency: 'discord',
+      category,
+      status,
+      boundary: 'discord_get',
+      latencyMs: performance.now() - started,
+      attempt: 1,
+    });
+  }
 }
 
 export async function fetchDiscordBotUser(): Promise<DiscordUser> {

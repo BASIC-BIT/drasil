@@ -1,3 +1,4 @@
+import { currentReadRequestContext, type ReadRequestContext } from '../readRequestContext';
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -787,4 +788,39 @@ it('keeps concurrent verified principals request-local and denies a receipt afte
     arguments: { executionId: data(done).executionId },
   });
   expect(data(result).state).toBe('denied');
+});
+
+it('binds the actual HTTP Request.signal to fresh query contexts', async () => {
+  const h = await fixture();
+  const cancelled = new AbortController();
+  const sibling = new AbortController();
+  const client = await h.client();
+  await client.callTool({ name: 'drasil_list_guilds', arguments: {} });
+  const call = h.wire.find((entry) => entry.body.method === 'tools/call')!;
+  const requests = [cancelled, sibling].map(
+    (controller) =>
+      new Request('https://127.0.0.1/api/mcp', {
+        method: 'POST',
+        signal: controller.signal,
+        headers: { ...call.headers, host: '127.0.0.1' },
+        body: JSON.stringify(call.body),
+      })
+  );
+  const contexts: ReadRequestContext[] = [];
+  h.queries.execute.mockImplementation(async () => {
+    contexts.push(currentReadRequestContext()!);
+    await Promise.resolve();
+    return h.query;
+  });
+  const responses = await Promise.all(requests.map((request) => h.handler(request)));
+  expect(responses.map((response) => response.status)).toEqual([200, 200]);
+  expect(contexts).toHaveLength(2);
+  expect(new Set(contexts.map((context) => context.correlationId)).size).toBe(2);
+  expect(contexts.map((context) => context.operation)).toEqual(['list_guilds', 'list_guilds']);
+  expect(contexts.map((context) => context.signal)).toEqual(
+    requests.map((request) => request.signal)
+  );
+  cancelled.abort();
+  expect(contexts[0].signal!.aborted).toBe(true);
+  expect(contexts[1].signal!.aborted).toBe(false);
 });

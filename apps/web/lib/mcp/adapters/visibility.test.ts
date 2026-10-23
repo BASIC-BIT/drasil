@@ -1,4 +1,5 @@
-import { it, expect } from 'vitest';
+import { withReadRequestContext } from '../../readRequestContext';
+import { it, expect, vi } from 'vitest';
 import {
   createDiscordContentAuthorizer,
   createWorkflowContentAuthorizer,
@@ -217,4 +218,31 @@ it('refreshes workflow scope, role, actor overwrites and private-thread membersh
   h.state.parent = { ...h.state.parent, permission_overwrites: [] };
   h.grant.scopes = ['drasil:moderate'];
   expect(await read()).toMatchObject({ kind: 'denied' });
+});
+
+it('records discarded visibility dependency failures without changing denial behavior', async () => {
+  const h = harness();
+  h.api.channel = async () => {
+    throw Object.assign(new Error('SQL_SENTINEL'), { code: '08006' });
+  };
+  const lines: string[] = [];
+  const log = vi.spyOn(console, 'info').mockImplementation((line: string) => lines.push(line));
+  try {
+    await withReadRequestContext({ operation: 'get_message_context' }, async () => {
+      expect(await h.read(principal, guildId, channelId)).toEqual({
+        kind: 'denied',
+        reason: 'permission_denied',
+      });
+    });
+    expect(lines.map((line) => JSON.parse(line))).toEqual([
+      expect.objectContaining({
+        boundary: 'visibility',
+        dependency: 'postgres',
+        sqlState: '08006',
+      }),
+    ]);
+    expect(lines.join('\n')).not.toContain('SQL_SENTINEL');
+  } finally {
+    log.mockRestore();
+  }
 });

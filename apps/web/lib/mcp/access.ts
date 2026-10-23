@@ -1,3 +1,4 @@
+import { classifyReadFailure, recordReadDependency } from '../readDiagnostics';
 import {
   createDelegatedAccess,
   type AccessBinding,
@@ -38,14 +39,24 @@ export function createWebGuildDirectory(): DelegatedGuildDirectory {
   };
 }
 export function createWebDelegatedAccess(deps?: DelegatedAccessDependencies): DelegatedAccess {
-  return createDelegatedAccess(
-    deps ?? {
-      store: createDelegationStore(createWebDelegationDatabase()),
-      authority: createWebAuthority(),
-      staffRoles: createWebStaffRoles(),
-      guilds: createWebGuildDirectory(),
-    }
-  );
+  const sources = deps ?? {
+    store: createDelegationStore(createWebDelegationDatabase()),
+    authority: createWebAuthority(),
+    staffRoles: createWebStaffRoles(),
+    guilds: createWebGuildDirectory(),
+  };
+  return createDelegatedAccess({
+    ...sources,
+    onDependencyFailure(error) {
+      recordReadDependency({
+        ...classifyReadFailure(error),
+        boundary: 'authority',
+        latencyMs: null,
+        attempt: 1,
+      });
+      return sources.onDependencyFailure?.(error);
+    },
+  });
 }
 /** The callback must use this binding for every repository predicate, including reporter ownership. */
 export async function withAuthorizedRead<T>(
