@@ -255,7 +255,7 @@ describe('shared CAPTCHA completion store', () => {
           imageIssuance: proof,
           validation: { ...completion.validation, state, success: state === 'passed' },
         })
-      ).toBe(state);
+      ).toEqual(state === 'invalid' ? { state: 'invalid', remainingAttempts: 4 } : state);
       const locks = query.mock.calls.filter(([sql]) => sql.includes('for update'));
       expect(locks[3][0]).toContain('from captcha_challenge_attempts');
       expect(locks[4][0]).toContain('from captcha_challenge_images');
@@ -356,7 +356,10 @@ describe('shared CAPTCHA completion store', () => {
           challenge: cappedChallenge,
           attempt: { validation_state: 'invalid' },
         });
-        expect(await store.completeAttempt(context, cappedCompletion)).toBe('invalid');
+        expect(await store.completeAttempt(context, cappedCompletion)).toEqual({
+          state: 'invalid',
+          remainingAttempts: null,
+        });
         expect(query.mock.calls.some(([sql]) => sql.startsWith('update '))).toBe(false);
       });
       it('preserves a bound duplicate start without creating more work', async () => {
@@ -369,4 +372,77 @@ describe('shared CAPTCHA completion store', () => {
       });
     }
   );
+  it('returns the remaining invalid-answer allowance from the locked settings and count', async () => {
+    const { store } = harness({
+      challenge: {
+        submission_count: 3,
+        server_settings: { captcha_mode: 'manual', captcha_max_submissions: 10 },
+      },
+    });
+    expect(
+      await store.completeAttempt(context, {
+        ...completion,
+        validation: { ...completion.validation, state: 'invalid', success: false },
+      })
+    ).toEqual({ state: 'invalid', remainingAttempts: 6 });
+  });
+  it('returns the current locked allowance for a duplicate invalid completion without another charge', async () => {
+    const { store, query } = harness({
+      challenge: {
+        submission_count: 4,
+        server_settings: { captcha_mode: 'manual', captcha_max_submissions: 10 },
+      },
+      attempt: { validation_state: 'invalid' },
+    });
+    expect(await store.completeAttempt(context, completion)).toEqual({
+      state: 'invalid',
+      remainingAttempts: 6,
+    });
+    expect(query.mock.calls.some(([sql]) => sql.startsWith('update '))).toBe(false);
+  });
+  it.each([
+    { status: 'failed' },
+    { case_status: 'verified' },
+    { case_kind: 'observation' },
+    { method_revision: 1 },
+    { expires_at: new Date(0) },
+    { submission_count: 5 },
+    { server_settings: { captcha_mode: 'off' } },
+  ])(
+    'withholds duplicate invalid allowance when the challenge is no longer eligible %#',
+    async (challenge) => {
+      const { store, query } = harness({ challenge, attempt: { validation_state: 'invalid' } });
+      expect(await store.completeAttempt(context, completion)).toEqual({
+        state: 'invalid',
+        remainingAttempts: null,
+      });
+      expect(query.mock.calls.some(([sql]) => sql.startsWith('update '))).toBe(false);
+    }
+  );
+  it.each([
+    { generation: 2 },
+    { provider: 'discord_image' },
+    { id: '00000000-0000-4000-8000-000000000099' },
+  ])(
+    'returns stale when the bound challenge changed before an attempt starts %#',
+    async (challenge) => {
+      const { store, query } = harness({ challenge });
+      expect(await store.beginAttempt(context, input)).toMatchObject({ state: 'stale' });
+      expect(
+        query.mock.calls.some(([sql]) => sql.startsWith('update ') || sql.startsWith('insert '))
+      ).toBe(false);
+    }
+  );
+  it.each([
+    { ...context, guildId: 'wrong-guild' },
+    { ...context, actor: { kind: 'user' as const, userId: 'wrong-user' } },
+  ])('retains identity mismatch for a different actor or guild %#', async (wrongContext) => {
+    const { store, query } = harness();
+    expect(await store.beginAttempt(wrongContext, input)).toMatchObject({
+      state: 'identity_mismatch',
+    });
+    expect(
+      query.mock.calls.some(([sql]) => sql.startsWith('update ') || sql.startsWith('insert '))
+    ).toBe(false);
+  });
 });

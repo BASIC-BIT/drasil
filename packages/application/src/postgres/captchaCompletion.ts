@@ -89,15 +89,21 @@ function readCaptchaMaxSubmissions(settings: unknown): number {
     : CAPTCHA_DEFAULT_MAX_SUBMISSIONS;
 }
 
+/** Invalid feedback uses the locked policy and challenge; null withholds stale retry guidance. */
+export type CaptchaStoredAttemptCompletion =
+  | Exclude<CaptchaAttemptCompletion, 'invalid'>
+  | { readonly state: 'invalid'; readonly remainingAttempts: number | null };
+
 function stateForExistingAttempt(
-  state: CaptchaAttemptRow['validation_state']
-): CaptchaAttemptCompletion {
+  state: CaptchaAttemptRow['validation_state'],
+  challenge: CaptchaChallengeRow
+): CaptchaStoredAttemptCompletion {
   switch (state) {
     case 'passed':
       return 'passed';
     case 'invalid':
     case 'identity_mismatch':
-      return 'invalid';
+      return { state: 'invalid', remainingAttempts: currentInvalidAllowance(challenge) };
     case 'provider_error':
       return 'provider_error';
     case 'stale':
@@ -216,6 +222,12 @@ const submissionLimitReached = (challenge: CaptchaChallengeRow): boolean => {
   return challenge.submission_count >= readCaptchaMaxSubmissions(challenge.server_settings);
 };
 
+const currentInvalidAllowance = (challenge: CaptchaChallengeRow): number | null => {
+  if (toPublicChallenge(challenge).status !== 'pending' || submissionLimitReached(challenge))
+    return null;
+  return readCaptchaMaxSubmissions(challenge.server_settings) - challenge.submission_count;
+};
+
 async function currentImageIssuanceMatches(
   client: DelegationQueryClient,
   challenge: CaptchaChallengeRow,
@@ -249,7 +261,7 @@ export interface CaptchaCompletionStore {
   completeAttempt(
     context: ActionContext,
     input: CaptchaCompletionInput
-  ): Promise<CaptchaAttemptCompletion>;
+  ): Promise<CaptchaStoredAttemptCompletion>;
   recordIdentityMismatch(context: ActionContext, input: CaptchaBoundAttemptInput): Promise<void>;
   requeuePassEffect(context: ActionContext, input: CaptchaPassReference): Promise<void>;
 }
@@ -503,14 +515,16 @@ export function createCaptchaCompletionStore(database: DelegationDatabase): Capt
       if (
         context.actor.kind !== 'user' ||
         context.guildId !== challenge.server_id ||
-        input.provider !== challenge.provider ||
-        input.challengeId !== challenge.id ||
-        input.generation !== challenge.generation ||
         actorId(context) !== challenge.user_id
       ) {
         return { state: 'identity_mismatch', challenge: publicChallenge };
       }
-      if (publicChallenge.status !== 'pending') {
+      if (
+        input.provider !== challenge.provider ||
+        input.challengeId !== challenge.id ||
+        input.generation !== challenge.generation ||
+        publicChallenge.status !== 'pending'
+      ) {
         return { state: 'stale', challenge: publicChallenge };
       }
       const existing = await findAttemptByIdempotencyKey(client, input.idempotencyKey);
@@ -586,8 +600,8 @@ export function createCaptchaCompletionStore(database: DelegationDatabase): Capt
   async function completeAttemptTransaction(
     context: ActionContext,
     input: CaptchaCompletionInput
-  ): Promise<CaptchaAttemptCompletion> {
-    return database.transaction(async (client) => {
+  ): Promise<CaptchaStoredAttemptCompletion> {
+    return database.transaction(async (client): Promise<CaptchaStoredAttemptCompletion> => {
       const row = await selectChallenge(client, input.challengeId);
       if (!row) return 'stale';
       const result = await client.query<CaptchaAttemptRow>(
@@ -599,7 +613,7 @@ export function createCaptchaCompletionStore(database: DelegationDatabase): Capt
         return 'stale';
       }
       if (attempt.validation_state !== 'started') {
-        return stateForExistingAttempt(attempt.validation_state);
+        return stateForExistingAttempt(attempt.validation_state, row);
       }
       const nativeIssuanceMatches = await currentImageIssuanceMatches(client, row, input);
       const stale = !nativeIssuanceMatches || completionIsStale(row, attempt);
@@ -641,7 +655,8 @@ export function createCaptchaCompletionStore(database: DelegationDatabase): Capt
       }
       if (input.validation.state === 'invalid') {
         const nextSubmissionCount = row.submission_count + 1;
-        const failed = nextSubmissionCount >= readCaptchaMaxSubmissions(row.server_settings);
+        const maxSubmissions = readCaptchaMaxSubmissions(row.server_settings);
+        const failed = nextSubmissionCount >= maxSubmissions;
         await client.query(
           `update captcha_challenges
          set submission_count = $2,
@@ -663,7 +678,9 @@ export function createCaptchaCompletionStore(database: DelegationDatabase): Capt
             })
           );
         }
-        return failed ? 'failed' : 'invalid';
+        return failed
+          ? 'failed'
+          : { state: 'invalid', remainingAttempts: maxSubmissions - nextSubmissionCount };
       }
 
       const passed = await client.query<{ id: string }>(

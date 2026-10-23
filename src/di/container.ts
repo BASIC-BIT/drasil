@@ -2,7 +2,6 @@ import { createCaptchaCompletionStore } from '@drasil/application/postgres';
 import { createBotDelegationDatabase } from '../application/adapters/delegationDatabase';
 import { CaptchaImageService, type ICaptchaImageService } from '../services/CaptchaImageService';
 import { createCaptchaImageRenderer } from '../services/captcha/imageRenderer';
-import { getCaptchaSettings } from '../utils/captchaSettings';
 import { createBotDelegatedRuntime } from '../application/adapters/delegation';
 import { createBotApplication, type BotApplication } from '../application/createBotApplication';
 import { ModerationEvidenceService } from '../services/ModerationEvidenceService';
@@ -497,14 +496,6 @@ function configureServices(container: Container): void {
           ),
           renderer: createCaptchaImageRenderer(),
           secret: (): string | undefined => process.env.DRASIL_CAPTCHA_IMAGE_ANSWER_SECRET,
-          maxSubmissions: async (serverId): Promise<number> =>
-            getCaptchaSettings(
-              (
-                await context
-                  .get<IConfigService>(TYPES.ConfigService)
-                  .getServerConfig(serverId, { forceRefresh: true, failOnReadError: true })
-              ).settings
-            ).maxSubmissions,
         })
     )
     .inSingletonScope();

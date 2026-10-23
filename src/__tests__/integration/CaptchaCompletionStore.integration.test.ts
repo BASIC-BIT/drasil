@@ -247,8 +247,8 @@ describeIntegration('CaptchaCompletionStore (integration)', () => {
       'provider_error'
     );
     for (let index = 0; index < 5; index++)
-      expect(await store.completeAttempt(f.context, await start(f, 'invalid'))).toBe(
-        index === 4 ? 'failed' : 'invalid'
+      expect(await store.completeAttempt(f.context, await start(f, 'invalid'))).toEqual(
+        index === 4 ? 'failed' : { state: 'invalid', remainingAttempts: 4 - index }
       );
     expect(
       await f.prisma.captcha_challenges.findUnique({ where: { id: f.challenge.id } })
@@ -376,7 +376,10 @@ describeIntegration('CaptchaCompletionStore (integration)', () => {
   }
   async function useTwoSubmissions(f: Awaited<ReturnType<typeof fixture>>): Promise<void> {
     for (let index = 0; index < 2; index++)
-      expect(await store.completeAttempt(f.context, await start(f, 'invalid'))).toBe('invalid');
+      expect(await store.completeAttempt(f.context, await start(f, 'invalid'))).toEqual({
+        state: 'invalid',
+        remainingAttempts: 4 - index,
+      });
   }
   async function expectOneLimitReceipt(f: Awaited<ReturnType<typeof fixture>>): Promise<void> {
     const receipts = await f.prisma.moderation_action_requests.findMany({
@@ -772,4 +775,105 @@ describeIntegration('CaptchaCompletionStore (integration)', () => {
       blocker.release();
     }
   });
+  it.each(['turnstile', 'discord_image'] as const)(
+    'returns a coherent locked %s allowance despite a later cap raise and competing invalid answer',
+    async (provider) => {
+      const f = await fixture(provider);
+      await useTwoSubmissions(f);
+      const first = await start(f, 'invalid');
+      const competing = await start(f, 'invalid');
+      let competingResult: Awaited<ReturnType<typeof store.completeAttempt>> | undefined;
+      const pausedAfterCommit = createCaptchaCompletionStore({
+        ...database,
+        async transaction(operation) {
+          const result = await database.transaction(operation);
+          await database.transaction((client) =>
+            persistSetupChange(client, f.guildId, { settings: { captcha_max_submissions: 10 } })
+          );
+          competingResult = await store.completeAttempt(f.context, competing);
+          return result;
+        },
+      });
+      expect(await pausedAfterCommit.completeAttempt(f.context, first)).toEqual({
+        state: 'invalid',
+        remainingAttempts: 2,
+      });
+      expect(competingResult).toEqual({ state: 'invalid', remainingAttempts: 6 });
+      expect(await store.completeAttempt(f.context, first)).toEqual({
+        state: 'invalid',
+        remainingAttempts: 6,
+      });
+      expect(
+        await f.prisma.captcha_challenges.findUnique({ where: { id: f.challenge.id } })
+      ).toMatchObject({ status: 'pending', submission_count: 4 });
+      expect(
+        await f.prisma.captcha_challenge_attempts.count({
+          where: { captcha_challenge_id: f.challenge.id, consumes_submission: true },
+        })
+      ).toBe(4);
+    }
+  );
+  it.each(['generation', 'provider'] as const)(
+    'classifies a replaced %s as stale before attempt creation',
+    async (change) => {
+      const f = await fixture();
+      await f.prisma.captcha_challenges.update({
+        where: { id: f.challenge.id },
+        data: change === 'generation' ? { generation: 2 } : { provider: CaptchaProvider.TURNSTILE },
+      });
+      expect(await store.beginAttempt(f.context, f.input)).toMatchObject({ state: 'stale' });
+      expect(
+        await f.prisma.captcha_challenge_attempts.count({
+          where: { captcha_challenge_id: f.challenge.id },
+        })
+      ).toBe(0);
+      expect(
+        await f.prisma.moderation_action_requests.count({ where: { server_id: f.guildId } })
+      ).toBe(0);
+    }
+  );
+  it.each(['turnstile', 'discord_image'] as const)(
+    'withholds a duplicate %s invalid allowance after capping or expiry without charging again',
+    async (provider) => {
+      const f = await fixture(provider);
+      const completion = await start(f, 'invalid');
+      expect(await store.completeAttempt(f.context, completion)).toEqual({
+        state: 'invalid',
+        remainingAttempts: 4,
+      });
+      await database.transaction((client) =>
+        persistSetupChange(client, f.guildId, { settings: { captcha_max_submissions: 1 } })
+      );
+      expect(await store.completeAttempt(f.context, completion)).toEqual({
+        state: 'invalid',
+        remainingAttempts: null,
+      });
+      await database.transaction((client) =>
+        persistSetupChange(client, f.guildId, { settings: { captcha_max_submissions: 10 } })
+      );
+      expect(await store.completeAttempt(f.context, completion)).toEqual({
+        state: 'invalid',
+        remainingAttempts: 9,
+      });
+      await f.prisma.captcha_challenges.update({
+        where: { id: f.challenge.id },
+        data: { expires_at: new Date(0) },
+      });
+      expect(await store.completeAttempt(f.context, completion)).toEqual({
+        state: 'invalid',
+        remainingAttempts: null,
+      });
+      expect(
+        await f.prisma.captcha_challenges.findUnique({ where: { id: f.challenge.id } })
+      ).toMatchObject({ status: 'pending', submission_count: 1 });
+      expect(
+        await f.prisma.captcha_challenge_attempts.count({
+          where: { captcha_challenge_id: f.challenge.id, consumes_submission: true },
+        })
+      ).toBe(1);
+      expect(
+        await f.prisma.moderation_action_requests.count({ where: { server_id: f.guildId } })
+      ).toBe(0);
+    }
+  );
 });

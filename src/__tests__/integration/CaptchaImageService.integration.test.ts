@@ -57,7 +57,6 @@ describeIntegration('native CAPTCHA image service', () => {
       completion,
       renderer: { render },
       secret: () => activeSecret,
-      maxSubmissions: async () => 5,
     };
     const service = new CaptchaImageService(dependencies);
     const reference = { challengeId: challenge.id, generation: 1 };
@@ -457,7 +456,6 @@ describeIntegration('native CAPTCHA image service', () => {
         },
       },
     });
-    f.dependencies.maxSubmissions = async () => 20;
     await f.service.open(f.context, f.reference);
     for (let i = 0; i < 10; i++)
       expect(await f.submit('!!!!!!')).toEqual({ kind: 'invalid', remainingAttempts: 19 - i });

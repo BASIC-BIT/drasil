@@ -177,6 +177,18 @@ describe('CAPTCHA web transport boundary', () => {
     ).toBe('stale');
     expect(runtime.complete).toHaveBeenCalledTimes(1);
   });
+  it.each([2, null])(
+    'preserves the public invalid state for locked remainder %s',
+    async (remainingAttempts) => {
+      runtime.complete.mockResolvedValue({ state: 'invalid', remainingAttempts });
+      expect(
+        await completeCaptchaAttempt(context, {
+          ...completion,
+          validation: { ...completion.validation, state: 'invalid', success: false },
+        })
+      ).toBe('invalid');
+    }
+  );
   it('requeues a pass through the system-only exact-case reference', async () => {
     await requeueCaptchaPassEffect({
       id: row.id,

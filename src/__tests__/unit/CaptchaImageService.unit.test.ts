@@ -68,7 +68,6 @@ function harness(secret: string | undefined) {
       }),
     },
     secret: () => secret,
-    maxSubmissions: async () => 5,
   };
   return { dependencies, service: new CaptchaImageService(dependencies), challenge };
 }
@@ -111,63 +110,55 @@ function submissionHarness() {
 }
 
 describe('image CAPTCHA submission feedback', () => {
-  it.each([
-    { before: 10, after: 5, remaining: 2 },
-    { before: 5, after: 10, remaining: 7 },
-  ])('uses the limit changed from $before to $after during completion', async (limits) => {
-    const { dependencies, challenge, submit } = submissionHarness();
-    let maxSubmissions = limits.before;
-    dependencies.maxSubmissions = async () => maxSubmissions;
-    dependencies.completion.completeAttempt = jest.fn(async () => {
-      maxSubmissions = limits.after;
-      challenge.submission_count = 3;
-      return 'invalid';
-    });
+  it.each([2, 7])(
+    'returns the locked remainder of %i without rereading mutable state',
+    async (remainingAttempts) => {
+      const { dependencies, challenge, submit } = submissionHarness();
+      dependencies.completion.completeAttempt = jest.fn(async () => {
+        // A competing completion can change the count after this transaction commits.
+        challenge.submission_count = 4;
+        dependencies.challenges.findById = jest.fn(async () => {
+          throw new Error('post-completion state is unavailable');
+        });
+        return { state: 'invalid' as const, remainingAttempts };
+      });
 
-    expect(await submit()).toEqual({ kind: 'invalid', remainingAttempts: limits.remaining });
-  });
+      expect(await submit()).toEqual({ kind: 'invalid', remainingAttempts });
+    }
+  );
 
-  it.each([
-    CaptchaChallengeStatus.PASSED,
-    CaptchaChallengeStatus.FAILED,
-    CaptchaChallengeStatus.EXPIRED,
-    CaptchaChallengeStatus.BYPASSED,
-    CaptchaChallengeStatus.CANCELLED,
-  ])('does not report retryable feedback after the challenge becomes %s', async (status) => {
-    const { dependencies, challenge, submit } = submissionHarness();
-    dependencies.completion.completeAttempt = jest.fn(async () => {
-      challenge.status = status;
-      challenge.submission_count = 3;
-      return 'invalid';
-    });
+  it('returns stale for a duplicate invalid answer with no current allowance', async () => {
+    const { dependencies, submit } = submissionHarness();
+    dependencies.completion.beginAttempt = jest.fn(async () => ({
+      state: 'duplicate' as const,
+      previousState: 'invalid' as const,
+      attemptId: 'attempt',
+    }));
+    dependencies.completion.completeAttempt = jest.fn(async () => ({
+      state: 'invalid' as const,
+      remainingAttempts: null,
+    }));
 
     expect(await submit()).toEqual({ kind: 'stale' });
   });
 
-  it.each(['missing', 'new_generation'] as const)(
-    'returns stale when the completed generation is %s',
-    async (change) => {
-      const { dependencies, challenge, submit } = submissionHarness();
+  it.each([
+    { completed: 'passed', kind: 'passed' },
+    { completed: 'failed', kind: 'failed' },
+    { completed: 'stale', kind: 'stale' },
+    { completed: 'provider_error', kind: 'unavailable' },
+  ] as const)(
+    'returns $kind for $completed without post-completion queries',
+    async ({ completed, kind }) => {
+      const { dependencies, submit } = submissionHarness();
       dependencies.completion.completeAttempt = jest.fn(async () => {
-        if (change === 'missing') dependencies.challenges.findById = jest.fn(async () => null);
-        else challenge.generation += 1;
-        return 'invalid';
+        dependencies.challenges.findById = jest.fn(async () => {
+          throw new Error('post-completion state is unavailable');
+        });
+        return completed;
       });
 
-      expect(await submit()).toEqual({ kind: 'stale' });
-    }
-  );
-
-  it.each(['passed', 'failed', 'stale'] as const)(
-    'returns %s without loading remaining-attempt settings',
-    async (completed) => {
-      const { dependencies, submit } = submissionHarness();
-      dependencies.maxSubmissions = async () => {
-        throw new Error('settings unavailable');
-      };
-      dependencies.completion.completeAttempt = jest.fn(async () => completed);
-
-      expect(await submit()).toEqual({ kind: completed });
+      expect(await submit()).toEqual({ kind });
     }
   );
 });

@@ -50,7 +50,6 @@ export interface CaptchaImageDependencies {
   completion: Pick<CaptchaCompletionStore, 'beginAttempt' | 'completeAttempt'>;
   renderer: CaptchaImageRenderer;
   secret(): string | undefined;
-  maxSubmissions(serverId: string): Promise<number>;
 }
 function bindingFor(challenge: CaptchaChallenge): CaptchaImageBinding {
   return {
@@ -212,16 +211,11 @@ export class CaptchaImageService implements ICaptchaImageService {
         },
       });
       if (completed === 'provider_error') return { kind: 'unavailable' };
-      if (completed !== 'invalid') return { kind: completed };
-      const [current, maxSubmissions] = await Promise.all([
-        this.deps.challenges.findById(input.challengeId),
-        this.deps.maxSubmissions(context.guildId),
-      ]);
-      if (!current || current.generation !== input.generation || current.status !== 'pending')
-        return { kind: 'stale' };
+      if (typeof completed === 'string') return { kind: completed };
+      if (completed.remainingAttempts === null) return { kind: 'stale' };
       return {
         kind: 'invalid',
-        remainingAttempts: Math.max(0, maxSubmissions - current.submission_count),
+        remainingAttempts: completed.remainingAttempts,
       };
     } catch {
       return { kind: 'unavailable' };

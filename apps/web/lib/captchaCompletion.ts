@@ -180,7 +180,10 @@ function browserActions(token: string): CaptchaBrowserActions {
       if (await matchesToken(input))
         await store.recordIdentityMismatch(context, { ...input, provider: 'turnstile' });
     },
-    completeAttempt: (context, input) => store.completeAttempt(context, input),
+    async completeAttempt(context, input) {
+      const completed = await store.completeAttempt(context, input);
+      return typeof completed === 'string' ? completed : completed.state;
+    },
     requeuePassEffect: (context, input) => store.requeuePassEffect(context, input),
   }).captcha;
 }
