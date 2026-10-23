@@ -1,6 +1,7 @@
 # Server-selected CAPTCHA methods
 
-Status: proposed for written review. Product implementation has not started.
+Status: approved by the user on October 22, 2026. Implementation planning is next;
+product implementation has not started.
 
 Tracking: [issue #261](https://github.com/BASIC-BIT/drasil/issues/261).
 
