@@ -145,7 +145,13 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     });
     const settings = getCaptchaSettings(server.settings);
     const token = randomBytes(TOKEN_BYTES).toString('base64url');
+    // Image delivery is introduced separately; never send an image generation to the browser flow.
+    if (settings.method !== 'turnstile') {
+      throw new Error('This security-check method is not available for delivery.');
+    }
     const challengeInput: CaptchaChallengeIssueInput = {
+      provider: settings.method,
+      methodRevision: settings.methodRevision,
       actionRequestId: input.actionRequestId,
       verificationEventId: verificationEvent.id,
       serverId: verificationEvent.server_id,
@@ -295,6 +301,7 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
   }
 
   public async expireChallenges(limit = 50): Promise<CaptchaChallenge[]> {
+    await this.challenges.cleanupImageMaterial(new Date(), limit);
     const disabled = await this.challenges.cancelPendingForDisabledServers(limit);
     const terminal = await this.challenges.cancelPendingForTerminalCases(limit);
     const expired = await this.challenges.expirePending(new Date(), limit);

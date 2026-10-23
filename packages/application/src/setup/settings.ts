@@ -28,6 +28,22 @@ export const verificationAiMaxActionSchema = z.preprocess(
 );
 export const roleQuarantineModeSchema = z.enum(['off', 'on']);
 export const captchaModeSchema = z.enum(['off', 'manual', 'suspicious_join']);
+export const captchaMethodSchema = z.enum(['none', 'discord_image', 'turnstile']);
+export type CaptchaMethod = z.infer<typeof captchaMethodSchema>;
+
+/** Preserve shipped legacy settings without rewriting unrelated saves. */
+export function getEffectiveCaptchaMethod(settings: unknown): CaptchaMethod {
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return 'none';
+  if ('captcha_method' in settings) {
+    const parsed = captchaMethodSchema.safeParse(settings.captcha_method);
+    return parsed.success ? parsed.data : 'none';
+  }
+  return 'captcha_mode' in settings &&
+    (settings.captcha_mode === 'manual' || settings.captcha_mode === 'suspicious_join')
+    ? 'turnstile'
+    : 'none';
+}
+
 export const captchaPassActionSchema = z.enum(['evidence_only', 'verify_join_only']);
 export const CAPTCHA_DEFAULT_MODE = 'off';
 export const CAPTCHA_DEFAULT_PASS_ACTION = 'evidence_only';
@@ -232,6 +248,8 @@ export const serverSettingsSchema = z
     role_quarantine_mode: roleQuarantineModeSchema.optional(),
     role_quarantine_exempt_role_ids: z.array(z.string()).optional(),
     account_quarantine_enabled: z.boolean().optional(),
+    captcha_method: captchaMethodSchema.optional(),
+    captcha_method_revision: z.number().int().min(0).max(2147483647).optional(),
     captcha_mode: captchaModeSchema.optional(),
     captcha_pass_action: captchaPassActionSchema.optional(),
     captcha_challenge_lifetime_hours: z
@@ -456,6 +474,7 @@ export const guildSetupUpdateSchema = z
     roleQuarantineMode: roleQuarantineModeSchema.optional(),
     roleQuarantineExemptRoleIds: z.array(z.string()).optional(),
     accountQuarantineEnabled: z.boolean().optional(),
+    captchaMethod: captchaMethodSchema.optional(),
     captchaMode: captchaModeSchema.optional(),
     captchaPassAction: captchaPassActionSchema.optional(),
     captchaChallengeLifetimeHours: z
@@ -606,6 +625,7 @@ export const settingsSectionSchemas = {
     .pick({
       verification_prompt_template: true,
       verification_context: true,
+      captcha_method: true,
       captcha_mode: true,
       captcha_pass_action: true,
       captcha_challenge_lifetime_hours: true,
@@ -724,6 +744,11 @@ export function buildSetupSettingsPatch(update: GuildSetupUpdate): SettingsChang
       role_quarantine_mode: update.roleQuarantineMode,
       role_quarantine_exempt_role_ids: update.roleQuarantineExemptRoleIds,
       account_quarantine_enabled: update.accountQuarantineEnabled,
+      captcha_method:
+        update.captchaMethod ??
+        (update.captchaMode === undefined
+          ? undefined
+          : getEffectiveCaptchaMethod({ captcha_mode: update.captchaMode })),
       captcha_mode: update.captchaMode,
       captcha_pass_action: update.captchaPassAction,
       captcha_challenge_lifetime_hours: update.captchaChallengeLifetimeHours,

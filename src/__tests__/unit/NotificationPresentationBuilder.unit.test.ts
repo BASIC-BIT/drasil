@@ -89,6 +89,7 @@ const buildCaptchaChallenge = (overrides: Partial<CaptchaChallenge> = {}): Captc
   server_id: overrides.server_id ?? 'guild-1',
   user_id: overrides.user_id ?? 'user-1',
   provider: overrides.provider ?? CaptchaProvider.TURNSTILE,
+  method_revision: overrides.method_revision ?? 0,
   status: overrides.status ?? CaptchaChallengeStatus.PENDING,
   request_source: overrides.request_source ?? CaptchaChallengeRequestSource.MODERATOR,
   pass_effect: overrides.pass_effect ?? CaptchaChallengePassEffect.EVIDENCE_ONLY,
@@ -570,6 +571,8 @@ describe('NotificationPresentationBuilder (unit)', () => {
         history: [
           {
             generation: 1,
+            provider: CaptchaProvider.TURNSTILE,
+            method_revision: 0,
             request_source: CaptchaChallengeRequestSource.MODERATOR,
             pass_effect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
             case_revision_at_issue: 0,
@@ -585,6 +588,8 @@ describe('NotificationPresentationBuilder (unit)', () => {
           },
           {
             generation: 2,
+            provider: CaptchaProvider.TURNSTILE,
+            method_revision: 0,
             request_source: CaptchaChallengeRequestSource.MODERATOR,
             pass_effect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
             case_revision_at_issue: 0,

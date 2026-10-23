@@ -54,6 +54,7 @@ function buildChallenge(overrides: Partial<CaptchaChallenge> = {}): CaptchaChall
     server_id: 'guild-1',
     user_id: 'user-1',
     provider: CaptchaProvider.TURNSTILE,
+    method_revision: 0,
     status: CaptchaChallengeStatus.PENDING,
     request_source: CaptchaChallengeRequestSource.MODERATOR,
     pass_effect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
@@ -80,10 +81,16 @@ function buildChallenge(overrides: Partial<CaptchaChallenge> = {}): CaptchaChall
 function createHarness(settings: Record<string, unknown> = { captcha_mode: 'manual' }) {
   const challenge = buildChallenge();
   const challenges: jest.Mocked<ICaptchaChallengeRepository> = {
+    storeImageMaterial: jest.fn().mockResolvedValue(false),
+    findImageMaterial: jest.fn().mockResolvedValue(null),
+    deleteImageMaterial: jest.fn().mockResolvedValue(undefined),
+    cleanupImageMaterial: jest.fn().mockResolvedValue(0),
     findById: jest.fn().mockResolvedValue(challenge),
     findByCaseId: jest.fn().mockResolvedValue(null),
     create: jest.fn().mockImplementation(async (input: CaptchaChallengeIssueInput) => ({
       ...challenge,
+      provider: input.provider,
+      method_revision: input.methodRevision,
       link_token_hash: input.tokenHash,
       expires_at: input.expiresAt,
       request_source: input.requestSource,
