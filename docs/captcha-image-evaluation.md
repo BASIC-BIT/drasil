@@ -29,18 +29,18 @@ The first unprivileged container install could not read the default root-only CA
 
 The standalone probe runs 30 serial renders, including cold startup, then 22 simultaneous submissions through the two-worker pool. Each run uses 52 synthetic cryptographically generated answers. It prints aggregate measurements only. RSS is sampled every five milliseconds and includes both workers and retained evaluation PNGs; it is an observation, not a native-memory guarantee. Latencies include queue waiting.
 
-| Run                                                       | Samples | Largest PNG | Cold / p50 / p95 / max milliseconds | Initial / peak / final RSS bytes       |
-| --------------------------------------------------------- | ------- | ----------- | ----------------------------------- | -------------------------------------- |
-| Final host, Linux x64, Node v24.19.0                      | 52      | 15,107 B    | 690.16 / 9.98 / 83.64 / 690.16      | 32,899,072 / 105,111,552 / 105,111,552 |
-| Final runtime overlay, Linux x64, Node v24.22.1, uid 1000 | 52      | 16,545 B    | 172.63 / 10.14 / 167.04 / 181.44    | 55,074,816 / 120,315,904 / 120,315,904 |
+| Run                                                        | Samples | Largest PNG | Cold / p50 / p95 / max milliseconds | Initial / peak / final RSS bytes       |
+| ---------------------------------------------------------- | ------- | ----------- | ----------------------------------- | -------------------------------------- |
+| Task 1 host, Linux x64, Node v24.19.0                      | 52      | 15,107 B    | 690.16 / 9.98 / 83.64 / 690.16      | 32,899,072 / 105,111,552 / 105,111,552 |
+| Task 1 runtime overlay, Linux x64, Node v24.22.1, uid 1000 | 52      | 16,545 B    | 172.63 / 10.14 / 167.04 / 181.44    | 55,074,816 / 120,315,904 / 120,315,904 |
 
-Both final runs completed all 52 renders within the five-second enqueue deadline. The runtime probe verified Liberation Sans availability, uid 1000, and no gcc, g++, make, or rustc in their standard executable paths.
+Both Task 1 runs completed all 52 renders within the five-second enqueue deadline. The runtime probe verified Liberation Sans availability, uid 1000, and no gcc, g++, make, or rustc in their standard executable paths.
 
 ## Runtime artifact verification
 
 The complete repository Dockerfile successfully built its runtime target, including the exact renderer dependency, the measured font package, production dependency pruning, and the application import boundary check. Its image ID was `sha256:0e1ac31f3e99b192e92f34adb589c256f8354426d6404bac97475323ddcfd432`.
 
-A fresh full rebuild after the opaque-background fix and OCR configuration change failed because the managed daemon's vfs storage exhausted the 32 GiB disk. Removing unused task build cache recovered 13 GiB free and preserved every image, container, and volume. A controller-approved overlay copies only the final compiled renderer and final probe into the previously built runtime. This verifies the final executable artifact; it is not a successful fresh full build of the final source snapshot. A clean full branch build remains a later gate.
+A fresh full rebuild after the opaque-background fix and OCR configuration change failed because the managed daemon's vfs storage exhausted the 32 GiB disk. Removing unused task build cache recovered 13 GiB free and preserved every image, container, and volume. A controller-approved overlay copies only the final compiled renderer and final probe into the previously built runtime. This verifies the final executable artifact; it is not a successful fresh full build of the final source snapshot. A clean full branch build remained pending at that stage; the Task 8 build below completes that runtime gate.
 
 The final overlay image is `sha256:db87bd9396204541974639a6e610ef4e49637e756ffc8493205314d86fbac2ca`. SHA-256 manifests covered 40,314 regular files and symlinks under `/app` in each artifact. Exactly two entries differed, with no additions or removals. Their final hashes match the local compiled renderer and probe:
 
@@ -48,6 +48,47 @@ The final overlay image is `sha256:db87bd9396204541974639a6e610ef4e49637e756ffc8
 | ------------------------------------------------- | ------------------------------------------------------------------ |
 | `/app/dist/src/services/captcha/imageRenderer.js` | `8923eb06f0d06ed5069aeec1e5a971b9d6e1a6420d1b46961607b5f1a44f312a` |
 | `/app/scripts/probe-captcha-image.mjs`            | `aec20d7cc3cfdc150185e2a5aaf02ea04a3a25c7936b6fb6f1ff7693272c1a58` |
+
+## Final full-source runtime build
+
+Task 8 built the complete repository Dockerfile runtime target from the final
+methods implementation plus its build-stage consolidation, rather than using an
+overlay. Image ID:
+`sha256:317111c3f9ddead2aaa99c1960c2975ea4c616e8ee6dd8aa08395de7eb66a5f4`.
+Prisma generation, application/native compilation, production dependency pruning
+and the CommonJS/ES application import check all passed. The same import
+check also passed inside the final production-pruned runtime image. The consolidated build
+RUN preserves that order with `&&`; it avoids retaining a full dependency snapshot
+for each step on vfs builders.
+
+The first Task 8 attempt passed those checks but exhausted the 32 GiB vfs disk
+during final runtime assembly. Cleanup removed only identified superseded
+CAPTCHA images and failed task build cache, preserving the disposable PostgreSQL
+container/image and all volumes. The consolidated full rebuild succeeded. TLS
+verification stayed enabled and the session public CA used a build-only secret
+mount. No environment CA was copied into the runtime.
+
+The fresh image's standalone probe completed all 52 renders as uid 1000 on Linux
+x64/glibc, Node v24.22.1, using the same bounded worker/queue configuration:
+
+| Samples | Largest PNG | Cold / p50 / p95 / max milliseconds | Initial / peak / final RSS bytes       |
+| ------- | ----------- | ----------------------------------- | -------------------------------------- |
+| 52      | 15,547 B    | 156.35 / 6.79 / 83.11 / 156.35      | 54,808,576 / 119,394,304 / 119,394,304 |
+
+Runtime metadata confirms npm 11.19.1, `captcha-canvas@3.4.0`,
+`skia-canvas@3.0.8`, and `fonts-liberation` version `1:1.07.4-11`.
+Liberation Sans and renderer readiness passed. No gcc, g++, make or rustc was
+present in the standard checked executable paths, the root Jest package was
+absent after production pruning, and `/run/secrets/proxy_ca` was absent at runtime.
+
+RSS remains an observation, not a native-memory cap. This run did not repeat OCR
+or add human evaluation samples.
+
+The final production web build also passed. A scan of all 34 Next.js production
+dependency traces and all 26 browser JavaScript chunks found no renderer/native
+asset dependency paths or browser references matching `captcha-canvas`,
+`skia-canvas`, `imageRenderer`, `libskia` or `skia.node`. Web readiness uses the
+server-only key decoder and does not load the renderer.
 
 ## Readability and OCR
 
@@ -76,7 +117,10 @@ The lockfile pins the following resolved renderer graph. License identifiers com
 
 Debian's `fonts-liberation` copyright file specifies GPL v2 with font exceptions. Preserve the distributed copyright/license files. This record identifies the licenses; it is not a legal determination.
 
-The disposable candidate audit reported zero vulnerabilities. The repository production audit reported 32 advisories, including one critical, across its wider existing dependency graph. None named the ten renderer packages above. No audit fixes or unrelated dependency updates were applied. Audit results are time-specific and do not replace future review.
+The disposable candidate audit reported zero vulnerabilities. The repository production audit reported 32 advisories, including one critical, across its wider existing dependency graph. None named the ten renderer packages above. Task 8's final production prune reported 16 advisories, four moderate, 11 high and
+one critical, for the current wider production tree. It did not perform a fresh
+package-level attribution audit. The earlier audit counts above are historical.
+No audit fixes or unrelated dependency updates were applied. Audit results are time-specific and do not replace future review.
 
 ## Reproduction
 
