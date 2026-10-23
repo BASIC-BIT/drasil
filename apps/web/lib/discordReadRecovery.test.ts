@@ -46,6 +46,7 @@ async function runTimers<T>(promise: Promise<T>): Promise<T> {
 beforeEach(() => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] }));
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   vi.useRealTimers();
 });
 
@@ -220,6 +221,132 @@ describe('Discord read recovery', () => {
       runTimers(fetchDiscordRead(url, {}, decode, { ...deps, random: () => 1 }))
     ).resolves.toEqual({ id: 'test-user' });
     expect(starts).toEqual([0, 250]);
+  });
+
+  it.each([502, 503, 504])('waits for HTTP %i provider backoff before retrying', async (status) => {
+    const { deps, starts } = setup([
+      async () => new Response(null, { status, headers: { 'retry-after': '1.5' } }),
+      async () => ok(),
+    ]);
+    const outcome = settled(fetchDiscordRead(url, {}, decode, deps));
+    await vi.advanceTimersByTimeAsync(1499);
+    expect(starts).toEqual([0]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await outcome).toEqual({ value: { id: 'test-user' } });
+    expect(starts).toEqual([0, 1500]);
+  });
+
+  it.each(['3', '10'])(
+    'returns HTTP 503 provider advice %s without retrying at or beyond the budget',
+    async (delay) => {
+      const { deps, starts } = setup([
+        async () => new Response(null, { status: 503, headers: { 'retry-after': delay } }),
+        async () => ok(),
+      ]);
+      await expect(runTimers(fetchDiscordRead(url, {}, decode, deps))).rejects.toMatchObject({
+        name: 'ReadDependencyUnavailableError',
+        retryAfterSeconds: Number(delay),
+      });
+      expect(starts).toEqual([0]);
+      expect(performance.now()).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+    }
+  );
+
+  it('returns the second HTTP 503 provider advice without a third attempt', async () => {
+    const { deps, starts } = setup([
+      async () => new Response(null, { status: 503, headers: { 'retry-after': '1' } }),
+      async () => new Response(null, { status: 503, headers: { 'retry-after': '1.5' } }),
+    ]);
+    await expect(runTimers(fetchDiscordRead(url, {}, decode, deps))).rejects.toMatchObject({
+      retryAfterSeconds: 2,
+    });
+    expect(starts).toEqual([0, 1000]);
+    expect(performance.now()).toBe(1000);
+  });
+
+  it('compares HTTP 503 provider backoff with the remaining shared budget', async () => {
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const { deps, starts } = setup([
+      async () => limited(2),
+      async () => ok(),
+      async () => new Response(null, { status: 503, headers: { 'retry-after': '1.5' } }),
+      async () => ok(),
+    ]);
+    const result = withReadRequestContext({ operation: 'get_message_context' }, async () => {
+      await fetchDiscordRead(url, {}, decode, deps);
+      return fetchDiscordRead(url, {}, decode, deps);
+    });
+    await expect(runTimers(result)).rejects.toMatchObject({ retryAfterSeconds: 2 });
+    expect(starts).toEqual([0, 2000, 2000]);
+    expect(performance.now()).toBe(2000);
+  });
+
+  it.each([
+    ['Retry-After is longest', { 'retry-after': '2', 'x-ratelimit-reset-after': '1' }, 2000],
+    ['reset header is longest', { 'retry-after': '1', 'x-ratelimit-reset-after': '2' }, 2000],
+    ['zero provider delay', { 'retry-after': '0' }, 0],
+    ['malformed date metadata', { 'retry-after': 'Fri, -1' }, 100],
+    ['unusable metadata', { 'retry-after': '-1', 'x-ratelimit-reset-after': 'Infinity' }, 100],
+  ])('handles HTTP 503 headers: %s', async (_name, headers, retryAt) => {
+    const { deps, starts } = setup([
+      async () => new Response(null, { status: 503, headers }),
+      async () => ok(),
+    ]);
+    await expect(runTimers(fetchDiscordRead(url, {}, decode, deps))).resolves.toEqual({
+      id: 'test-user',
+    });
+    expect(starts).toEqual([0, retryAt]);
+  });
+
+  it.each([
+    ['Fri, 23 Oct 2026 00:00:02 GMT', 2000],
+    ['Friday, 23-Oct-26 00:00:02 GMT', 2000],
+    ['Fri Oct 23 00:00:02 2026', 2000],
+  ])('honors HTTP-date Retry-After %s', async (retryAfter, retryAt) => {
+    vi.stubEnv('TZ', 'Etc/GMT-2');
+    vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2026, 9, 23));
+    const { deps, starts } = setup([
+      async () => new Response(null, { status: 503, headers: { 'retry-after': retryAfter } }),
+      async () => ok(),
+    ]);
+    await expect(runTimers(fetchDiscordRead(url, {}, decode, deps))).resolves.toEqual({
+      id: 'test-user',
+    });
+    expect(starts).toEqual([0, retryAt]);
+  });
+
+  it('applies the HTTP rolling-century rule to obsolete Retry-After dates', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2026, 9, 23));
+    const { deps, starts } = setup([
+      async () =>
+        new Response(null, {
+          status: 503,
+          headers: { 'retry-after': 'Thursday, 23-Oct-70 00:00:02 GMT' },
+        }),
+      async () => ok(),
+    ]);
+    await expect(runTimers(fetchDiscordRead(url, {}, decode, deps))).rejects.toMatchObject({
+      retryAfterSeconds: 1_388_534_402,
+    });
+    expect(starts).toEqual([0]);
+  });
+
+  it('returns HTTP-date provider advice beyond the budget without retrying', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2026, 9, 23));
+    const { deps, starts } = setup([
+      async () =>
+        new Response(null, {
+          status: 503,
+          headers: { 'retry-after': 'Fri, 23 Oct 2026 00:00:10 GMT' },
+        }),
+      async () => ok(),
+    ]);
+    await expect(runTimers(fetchDiscordRead(url, {}, decode, deps))).rejects.toMatchObject({
+      retryAfterSeconds: 10,
+    });
+    expect(starts).toEqual([0]);
+    expect(performance.now()).toBe(0);
   });
 
   it('recognizes fetch transport provenance', async () => {

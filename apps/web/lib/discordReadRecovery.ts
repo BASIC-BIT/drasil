@@ -55,11 +55,35 @@ function secondsDelay(value: unknown): number | undefined {
   return value * 1000;
 }
 
+function httpDateDelay(raw: string): number | undefined {
+  // Do not let Date.parse reinterpret invalid numeric advice such as '-1'
+  // as a date and allow an early retry.
+  const dated =
+    /^[A-Za-z]+, (?:\d{2} [A-Za-z]{3} \d{4}|\d{2}-[A-Za-z]{3}-\d{2}) \d{2}:\d{2}:\d{2} GMT$/;
+  const asctime = /^[A-Za-z]{3} [A-Za-z]{3} [ \d]\d \d{2}:\d{2}:\d{2} \d{4}$/;
+  if (!dated.test(raw) && !asctime.test(raw)) return undefined;
+  const now = Date.now();
+  // Obsolete HTTP dates use the most recent matching year no more than 50 years
+  // ahead, rather than Date.parse's fixed two-digit-year cutoff.
+  const latestYear = new Date(now).getUTCFullYear() + 50;
+  const expanded = raw.replace(
+    /-(\d{2})(?= \d{2}:\d{2}:\d{2} GMT$)/,
+    (_match: string, year: string) => `-${latestYear - ((latestYear - Number(year)) % 100)}`
+  );
+  // The asctime HTTP-date form omits GMT but still means UTC.
+  const date = Date.parse(expanded.endsWith('GMT') ? expanded : `${expanded} GMT`);
+  return Number.isFinite(date) ? Math.max(0, date - now) : undefined;
+}
+
 function headerDelay(response: Response): number | undefined {
   const delays = ['retry-after', 'x-ratelimit-reset-after'].flatMap((name) => {
     const raw = response.headers.get(name)?.trim();
-    if (!raw || !/^\d+(?:\.\d+)?$/.test(raw)) return [];
-    const delay = secondsDelay(Number(raw));
+    if (!raw) return [];
+    const delay = /^\d+(?:\.\d+)?$/.test(raw)
+      ? secondsDelay(Number(raw))
+      : name === 'retry-after'
+        ? httpDateDelay(raw)
+        : undefined;
     return delay === undefined ? [] : [delay];
   });
   return delays.length ? Math.max(...delays) : undefined;
@@ -167,7 +191,7 @@ async function attempt<T>(args: {
       }
       if (TRANSIENT_HTTP_STATUSES.has(status)) {
         budget.startReadRecovery();
-        return { kind: 'recoverable', delayMs: 100 + 150 * args.random() };
+        return { kind: 'recoverable', delayMs: headerDelay(response) ?? 100 + 150 * args.random() };
       }
       const value = await args.decode(response);
       category = 'success';
