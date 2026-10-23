@@ -1,6 +1,6 @@
 # Reliable concurrent MCP reads
 
-Status: proposed for approval. Scope: one focused follow-up PR.
+Status: approved by the user on 2026-10-23. Scope: one focused follow-up PR.
 
 ## Intent
 
