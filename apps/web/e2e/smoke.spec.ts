@@ -120,6 +120,19 @@ test('guild setup exposes moderation, report, role gate, and review policy contr
 }) => {
   await page.goto('/admin/guild/guild-1/setup');
 
+  await expect(page.getByLabel('Security check method')).toHaveValue('none');
+  await expect(page.getByLabel('Security check issuance')).toHaveCount(0);
+  await page.getByLabel('Security check method').selectOption('discord_image');
+  await expect(page.getByLabel('Security check issuance')).toHaveValue('manual');
+  await page.getByLabel('Security check issuance').selectOption('suspicious_join');
+  await page.getByLabel('Security check method').selectOption('turnstile');
+  await expect(page.getByLabel('Security check issuance')).toHaveValue('suspicious_join');
+  await expect(page.getByLabel('Challenge lifetime hours')).toHaveValue('24');
+  await page.getByLabel('Security check method').selectOption('none');
+  await expect(page.getByLabel('Security check issuance')).toHaveCount(0);
+  await page.getByLabel('Security check method').selectOption('discord_image');
+  await expect(page.getByLabel('Security check issuance')).toHaveValue('manual');
+  await page.getByLabel('Security check method').selectOption('none');
   await expect(page.getByRole('heading', { name: /fixture guild/i })).toBeVisible();
   await expect(page.getByLabel('Message burst threshold')).toHaveValue('5');
   await expect(page.getByLabel('Message burst seconds')).toHaveValue('10');

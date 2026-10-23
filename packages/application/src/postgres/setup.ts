@@ -1,3 +1,4 @@
+import { applyCaptchaMethodChange } from './captchaConfiguration';
 import {
   materializeSetupStoredChange,
   parseSetupStoredRecord,
@@ -29,9 +30,12 @@ export async function persistSetupChange(
   const current = parseSetupStoredRecord(row);
   if (precondition && !setupStateMatches(current, precondition)) return null;
   change = materializeSetupStoredChange(current, change);
+  const nextSettings = { ...current.settings, ...change.settings };
+  const revision = await applyCaptchaMethodChange(client, guildId, current.settings, nextSettings);
+  const settings = { ...change.settings, captcha_method_revision: revision };
   const values: DelegationSqlValue[] = [
     guildId,
-    JSON.stringify(change.settings ?? {}),
+    JSON.stringify(settings),
     [...(change.resetSettings ?? [])],
   ];
   const assignments = [
@@ -60,10 +64,5 @@ export async function persistSetupChange(
     `update servers set ${assignments.join(', ')} where guild_id=$1 returning *`,
     values
   );
-  if (change.settings?.captcha_mode === 'off')
-    await client.query(
-      "update captcha_challenges set status='cancelled'::captcha_challenge_status, cancelled_at=now(), updated_at=now() where server_id=$1 and status='pending'::captcha_challenge_status returning id",
-      [guildId]
-    );
   return parseSetupStoredRecord(result.rows[0]);
 }

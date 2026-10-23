@@ -2,7 +2,7 @@ import type { AuthorityPort } from '../authorization';
 import type { ActionContext } from '../context';
 import type { ConfirmationPort } from '../confirmation';
 import type { SetupCommand, SetupChanges, HeuristicChanges } from './commands';
-import type { SetupServerRecord, SettingsChanges } from './settings';
+import type { CaptchaMethod, SetupServerRecord, SettingsChanges } from './settings';
 export interface SetupDiagnosticReportData {
   readonly guildId: string;
   readonly checkedAt: Date;
@@ -78,7 +78,7 @@ export interface ReportInstructionsOutcome {
 export interface SetupDependencies {
   readonly authority: AuthorityPort;
   readonly confirmations: ConfirmationPort;
-  readonly provider: { isConfigured(): boolean };
+  readonly provider: { isConfigured(method: Exclude<CaptchaMethod, 'none'>): boolean };
   readonly configuration: {
     loadFresh(guildId: string): Promise<SetupConfigurationState | null>;
     save(context: ActionContext, change: SetupPersistenceChange): Promise<SetupConfigurationState>;

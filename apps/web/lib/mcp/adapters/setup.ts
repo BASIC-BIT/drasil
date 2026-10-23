@@ -8,6 +8,7 @@ import {
   type AuthorityPort,
   type SetupWritePrecondition,
   createSetupIntentResolver,
+  captchaImageSecretConfigured,
   parseSetupStoredRecord,
   shippedResetChanges,
 } from '@drasil/application';
@@ -43,7 +44,10 @@ export function createApprovedSetupExecutor(
       const result = await createSetupUpdateActions({
         authority: deps.authority ?? createWebAuthority(),
         provider: deps.provider ?? {
-          isConfigured: () => captchaProviderConfigurationIssues().length === 0,
+          isConfigured: (method) =>
+            method === 'discord_image'
+              ? captchaImageSecretConfigured(process.env.DRASIL_CAPTCHA_IMAGE_ANSWER_SECRET)
+              : captchaProviderConfigurationIssues().length === 0,
         },
         configuration: {
           loadFresh: (guildId) => adapter.getServer(guildId),
@@ -68,7 +72,12 @@ export function createApprovedSetupExecutor(
 export function createWebSetupIntentResolver() {
   return createSetupIntentResolver({
     authority: createWebAuthority(),
-    provider: { isConfigured: () => captchaProviderConfigurationIssues().length === 0 },
+    provider: {
+      isConfigured: (method) =>
+        method === 'discord_image'
+          ? captchaImageSecretConfigured(process.env.DRASIL_CAPTCHA_IMAGE_ANSWER_SECRET)
+          : captchaProviderConfigurationIssues().length === 0,
+    },
     loadGuildResources: loadWebSetupGuildResources,
     loadHeuristicDefaults: async (scope) => shippedResetChanges(scope),
     async loadServer(guildId) {

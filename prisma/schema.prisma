@@ -491,6 +491,7 @@ model captcha_challenges {
   server_id              String
   user_id                String
   provider               captcha_provider                 @default(turnstile)
+  method_revision        Int                              @default(0)
   status                 captcha_challenge_status         @default(pending)
   request_source         captcha_challenge_request_source
   pass_effect            captcha_challenge_pass_effect
@@ -513,6 +514,7 @@ model captcha_challenges {
   attempts               captcha_challenge_attempts[]
   bypasses               captcha_challenge_bypasses[]
   requests               captcha_challenge_requests[]
+  images                 captcha_challenge_images[]
   servers                servers                          @relation(fields: [server_id], references: [guild_id], onDelete: Cascade, onUpdate: NoAction)
   users                  users                            @relation(fields: [user_id], references: [discord_id], onDelete: Cascade, onUpdate: NoAction)
   verification_events    verification_events              @relation(fields: [verification_event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
@@ -521,10 +523,24 @@ model captcha_challenges {
   @@index([user_id, server_id], map: "idx_captcha_challenges_user_server")
 }
 
+model captcha_challenge_images {
+  captcha_challenge_id String             @db.Uuid
+  generation           Int
+  png                  Bytes
+  answer_digest        Bytes
+  key_version          String
+  created_at           DateTime           @default(now()) @db.Timestamptz(6)
+  captcha_challenges   captcha_challenges @relation(fields: [captcha_challenge_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([captcha_challenge_id, generation])
+}
+
 model captcha_challenge_requests {
   id                     String                             @id @default(dbgenerated("extensions.uuid_generate_v4()")) @db.Uuid
   captcha_challenge_id   String                             @db.Uuid
   generation             Int
+  provider               captcha_provider                   @default(turnstile)
+  method_revision        Int                                @default(0)
   request_source         captcha_challenge_request_source
   pass_effect            captcha_challenge_pass_effect
   case_revision_at_issue Int
@@ -693,6 +709,7 @@ enum moderation_action_request_type {
 
 enum captcha_provider {
   turnstile
+  discord_image
 }
 
 enum captcha_challenge_status {

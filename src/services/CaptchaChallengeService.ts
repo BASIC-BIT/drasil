@@ -145,7 +145,12 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     });
     const settings = getCaptchaSettings(server.settings);
     const token = randomBytes(TOKEN_BYTES).toString('base64url');
+    if (settings.method === 'none') {
+      throw new Error('This security-check method is not available for delivery.');
+    }
     const challengeInput: CaptchaChallengeIssueInput = {
+      provider: settings.method,
+      methodRevision: settings.methodRevision,
       actionRequestId: input.actionRequestId,
       verificationEventId: verificationEvent.id,
       serverId: verificationEvent.server_id,
@@ -187,8 +192,11 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
         throw new ActionDeniedError('stale_state');
       throw error;
     }
-    const url = buildCaptchaChallengeUrl(token);
-    if (!url) {
+    const destination =
+      challenge.provider === 'discord_image'
+        ? { challengeId: challenge.id, generation: challenge.generation }
+        : buildCaptchaChallengeUrl(token);
+    if (!destination) {
       const recorded = await this.challenges.recordDeliveryFailure(
         challenge.id,
         challenge.generation,
@@ -202,7 +210,10 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     }
 
     try {
-      const deliveryMessageId = await this.threads.sendCaptchaChallenge(verificationEvent, url);
+      const deliveryMessageId = await this.threads.sendCaptchaChallenge(
+        verificationEvent,
+        destination
+      );
       if (!deliveryMessageId) {
         const recorded = await this.challenges.recordDeliveryFailure(
           challenge.id,
@@ -295,6 +306,7 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
   }
 
   public async expireChallenges(limit = 50): Promise<CaptchaChallenge[]> {
+    await this.challenges.cleanupImageMaterial(new Date(), limit);
     const disabled = await this.challenges.cancelPendingForDisabledServers(limit);
     const terminal = await this.challenges.cancelPendingForTerminalCases(limit);
     const expired = await this.challenges.expirePending(new Date(), limit);
@@ -333,6 +345,10 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     ]);
     const settings = getCaptchaSettings(server.settings);
     return evaluateCaptchaAutoResolution({
+      currentMethod: settings.method,
+      issuedMethod: challenge.provider,
+      currentMethodRevision: settings.methodRevision,
+      issuedMethodRevision: challenge.method_revision,
       currentMode: settings.mode,
       requestSource: challenge.request_source,
       issuedPassEffect: challenge.pass_effect,
@@ -554,6 +570,7 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     const settings = getCaptchaSettings(server.settings);
     if (
       !canRequestCaptcha({
+        method: settings.method,
         mode: settings.mode,
         requestSource: input.requestSource,
         caseKind: verificationEvent.case_kind ?? CaseKind.STANDARD,

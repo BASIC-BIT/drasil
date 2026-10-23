@@ -168,7 +168,7 @@ describe('createSetupDataAdapter', () => {
       created_at: new Date(),
       updated_at: new Date(),
       updated_by: 'moderator-1',
-      settings: { captcha_mode: 'off' },
+      settings: { captcha_mode: 'manual' },
       is_active: true,
     };
     mocked.clientQuery.mockImplementation(async (statement: string) => ({
@@ -185,13 +185,14 @@ describe('createSetupDataAdapter', () => {
       'begin',
       expect.stringContaining('on conflict(guild_id) do nothing'),
       expect.stringContaining('for update'),
-      expect.stringContaining('insert into servers'),
+      expect.stringContaining('order by v.id for update of v'),
       expect.stringContaining('update captcha_challenges'),
+      expect.stringContaining('insert into servers'),
       'commit',
     ]);
     const [cancelStatement, cancelParameters] = mocked.clientQuery.mock.calls[4] ?? [];
-    expect(cancelStatement).toContain("status = 'cancelled'::captcha_challenge_status");
-    expect(cancelStatement).toContain("status = 'pending'::captcha_challenge_status");
+    expect(cancelStatement).toContain("status='cancelled'::captcha_challenge_status");
+    expect(cancelStatement).toContain("status='pending'::captcha_challenge_status");
     expect(cancelParameters).toEqual(['guild-1']);
     expect(mocked.query).not.toHaveBeenCalled();
     expect(mocked.release).toHaveBeenCalledTimes(1);

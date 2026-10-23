@@ -104,6 +104,8 @@ integration('MCP setup approved writes', () => {
       verification_context: 'context',
       user_report_reason_required: false,
       captcha_mode: 'off',
+      captcha_method: 'none',
+      captcha_method_revision: 0,
     });
     expect(config.getCachedServerConfig('guild')).toEqual(updated);
   });
@@ -224,7 +226,7 @@ integration('MCP setup approved writes', () => {
       ...fixtures.fields.map((f) => ({ location: f.location, value: f.value })),
       ...fixtures.sectionOnly.map((f) => ({ location: `settings.${f.key}`, value: f.value })),
     ];
-    expect(cases).toHaveLength(82);
+    expect(cases).toHaveLength(83);
     for (const field of cases) {
       await pool.query(
         "update servers set settings='{}', case_role_id='initial', admin_channel_id='initial', verification_channel_id='initial', admin_notification_role_id='initial', heuristic_message_threshold=9, heuristic_message_timeframe_seconds=9, heuristic_suspicious_keywords=array['initial'] where guild_id='guild'"

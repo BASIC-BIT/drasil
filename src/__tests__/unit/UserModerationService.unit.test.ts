@@ -346,7 +346,7 @@ describe('UserModerationService (unit)', () => {
     expect(threadManager.resolveVerificationThread).toHaveBeenCalledWith(
       expect.objectContaining({ id: verificationEvent.id }),
       VerificationStatus.VERIFIED,
-      'Drasil browser check'
+      'Drasil security check'
     );
     const actions = await adminActionRepository.findByUserAndServer(userId, guildId);
     expect(actions).toEqual([
@@ -770,7 +770,7 @@ describe('UserModerationService (unit)', () => {
     expect(threadManager.resolveVerificationThread).toHaveBeenCalledWith(
       expect.objectContaining({ id: verificationEvent.id }),
       VerificationStatus.VERIFIED,
-      'Drasil browser check'
+      'Drasil security check'
     );
     await expect(adminActionRepository.findByUserAndServer(userId, guildId)).resolves.toHaveLength(
       1
@@ -866,7 +866,7 @@ describe('UserModerationService (unit)', () => {
     expect(threadManager.resolveVerificationThread).toHaveBeenCalledWith(
       expect.objectContaining({ id: verificationEvent.id }),
       VerificationStatus.VERIFIED,
-      'Drasil browser check'
+      'Drasil security check'
     );
     await expect(adminActionRepository.findByUserAndServer(userId, guildId)).resolves.toHaveLength(
       1

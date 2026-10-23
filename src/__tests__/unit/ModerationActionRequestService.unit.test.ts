@@ -1,3 +1,4 @@
+import type { CaptchaAutoResolutionDecision } from '../../services/CaptchaChallengePolicy';
 import type { ObservedBanResult } from '@drasil/application';
 import { MessageCleanupService } from '../../services/MessageCleanupService';
 import { createBotApplication } from '../../application/createBotApplication';
@@ -1137,7 +1138,9 @@ describe('ModerationActionRequestService', () => {
     };
     const captchaChallengeService = {
       bypassChallenge: jest.fn(async () => ({ generation: 1, id: 'challenge-1' })),
-      evaluatePassedChallenge: jest.fn(async () => ({ status: 'eligible' as const })),
+      evaluatePassedChallenge: jest.fn(
+        async (): Promise<CaptchaAutoResolutionDecision> => ({ status: 'eligible' })
+      ),
       findById: jest.fn(async () => ({
         generation: 1,
         id: 'challenge-1',
@@ -2460,6 +2463,34 @@ describe('ModerationActionRequestService', () => {
     ]);
   });
 
+  it('records a policy-held pass without claiming member verification', async () => {
+    const {
+      captchaChallengeService,
+      notificationManager,
+      repository,
+      service,
+      userModerationService,
+    } = buildService([applyCaptchaPassRequest]);
+    captchaChallengeService.evaluatePassedChallenge.mockResolvedValueOnce({
+      status: 'held',
+      reason: 'policy_changed',
+    });
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+    expect(userModerationService.resolveCaptchaCase).not.toHaveBeenCalled();
+    expect(notificationManager.notifyCaptchaAttention).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'ver-1' }),
+      'automatic_resolution_held'
+    );
+    expect(repository.completed[0]).toEqual({
+      id: 'captcha-pass-request-1',
+      result: expect.objectContaining({
+        effect: 'held',
+        held_reason: 'policy_changed',
+        resolved: false,
+      }),
+    });
+  });
+
   it('records a moderator-issued CAPTCHA pass as evidence without resolving the case', async () => {
     const {
       captchaChallengeService,
@@ -2542,6 +2573,33 @@ describe('ModerationActionRequestService', () => {
     expect(repository.failed).toEqual([
       { id: 'captcha-pass-request-1', error: 'Security-check completion request is invalid.' },
     ]);
+  });
+
+  it('delivers member assistance once through existing attention without a terminal thread message', async () => {
+    const request = {
+      ...notifyCaptchaAttentionRequest,
+      metadata: { challenge_id: 'challenge-1', generation: 1, reason: 'member_assistance' },
+    };
+    const { notificationManager, repository, service, threadManager, captchaChallengeService } =
+      buildService([request]);
+    const challenge = await captchaChallengeService.findByCaseId();
+    captchaChallengeService.findByCaseId.mockResolvedValue(
+      Object.assign({}, challenge, {
+        provider: 'discord_image',
+        status: 'pending',
+      })
+    );
+    await expect(service.processPendingRequests()).resolves.toBe(1);
+    expect(notificationManager.notifyCaptchaAttention).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'ver-1' }),
+      'member_assistance'
+    );
+    expect(threadManager.sendCaptchaStatus).not.toHaveBeenCalled();
+    expect(repository.completed[0]).toEqual({
+      id: request.id,
+      result: expect.objectContaining({ notified: true, reason: 'member_assistance' }),
+    });
+    expect(repository.failed).toEqual([]);
   });
 
   it('delivers submission-limit attention through the system-only CAPTCHA action', async () => {
@@ -2749,7 +2807,7 @@ describe('ModerationActionRequestService', () => {
 
     expect(threadManager.sendCaptchaStatus).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'ver-1' }),
-      'This security check link could not be delivered. Ask a moderator to retry.'
+      'This security check could not be delivered. Ask a moderator to retry.'
     );
     expect(notificationManager.notifyCaptchaAttention).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'ver-1' }),

@@ -25,7 +25,8 @@ it('preserves canonical defaults and rejects authority injection', async () => {
     mcpWorkflowManifest.flatMap((entry) => entry.settingsFields)
   );
   expect(publicTools).not.toContain('drasil_apply_captcha_pass');
-  expect(settingsFieldCoverage.size).toBe(73);
+  expect(settingsFieldCoverage.size).toBe(74);
+  expect(settingsFieldCoverage).toContain('captchaMethod');
   expect(await bridge['~standard'].validate({ ...validInput, userId: 999 })).toHaveProperty(
     'issues'
   );

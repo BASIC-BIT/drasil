@@ -1,3 +1,4 @@
+import type { ImageChallengeReference } from './CaptchaImageService';
 import type { ResolvedThreadClosureResult } from '@drasil/application';
 export type { ResolvedThreadClosureResult } from '@drasil/application';
 import { injectable, inject } from 'inversify';
@@ -104,7 +105,10 @@ export interface IThreadManager {
     verificationEvent: VerificationEvent
   ): Promise<ThreadChannel | null>;
 
-  sendCaptchaChallenge(verificationEvent: VerificationEvent, url: string): Promise<string | null>;
+  sendCaptchaChallenge(
+    verificationEvent: VerificationEvent,
+    destination: string | ImageChallengeReference
+  ): Promise<string | null>;
 
   retractCaptchaChallenge(
     verificationEvent: VerificationEvent,
@@ -266,7 +270,7 @@ export class ThreadManager implements IThreadManager {
 
   public async sendCaptchaChallenge(
     verificationEvent: VerificationEvent,
-    url: string
+    destination: string | ImageChallengeReference
   ): Promise<string | null> {
     if (!verificationEvent.thread_id) {
       return null;
@@ -280,16 +284,18 @@ export class ThreadManager implements IThreadManager {
       if (channel.archived) {
         await channel.setArchived(false, 'Deliver CAPTCHA case challenge');
       }
+      const button = new ButtonBuilder().setLabel('Open security check');
+      if (typeof destination === 'string') button.setStyle(ButtonStyle.Link).setURL(destination);
+      else
+        button
+          .setStyle(ButtonStyle.Primary)
+          .setCustomId(`captcha:image:open:${destination.challengeId}:${destination.generation}`);
       const message = await channel.send({
-        content: 'Complete this browser check to confirm access to your Discord account.',
-        components: [
-          new ActionRowBuilder<ButtonBuilder>().addComponents(
-            new ButtonBuilder()
-              .setStyle(ButtonStyle.Link)
-              .setLabel('Open security check')
-              .setURL(url)
-          ),
-        ],
+        content:
+          typeof destination === 'string'
+            ? 'Complete this browser check to confirm access to your Discord account.'
+            : 'Complete this security check in Discord. Completing this check does not itself verify your account.',
+        components: [new ActionRowBuilder<ButtonBuilder>().addComponents(button)],
       });
       return message.id;
     } catch (error) {

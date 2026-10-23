@@ -1313,17 +1313,26 @@ describe('InteractionHandler (unit)', () => {
     expect(buttons.map((button: { label?: string }) => button.label)).toEqual(['Kick User']);
   });
 
-  it('binds CAPTCHA controls to the case notification the moderator selected', async () => {
+  it.each([
+    { captcha_mode: 'manual' as const },
+    { captcha_method: 'none' as const, captcha_mode: 'suspicious_join' as const },
+  ])('binds CAPTCHA controls to the selected case while disabled=%j', async (settings) => {
     const selectedCase = buildVerificationEvent('ver-selected', 'user-1');
     const newestCase = buildVerificationEvent('ver-newest', 'user-1');
     verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(newestCase);
     verificationEventRepository.findById.mockResolvedValue(selectedCase);
     verificationEventRepository.findByUserAndServer.mockResolvedValue([newestCase, selectedCase]);
     (configService.getServerConfig as jest.Mock).mockResolvedValue({
-      settings: { captcha_mode: 'manual' },
+      settings,
     });
     const captchaChallengeService = {
-      findByCaseId: jest.fn().mockResolvedValue(null),
+      findByCaseId: jest
+        .fn()
+        .mockResolvedValue(
+          settings.captcha_method === 'none'
+            ? { id: 'challenge-1', generation: 1, status: 'pending' }
+            : null
+        ),
     } as any;
     const handler = buildHandler(
       client,
@@ -1359,9 +1368,21 @@ describe('InteractionHandler (unit)', () => {
     const buttons = response.components.flatMap(
       (row: { toJSON(): { components: any[] } }) => row.toJSON().components
     );
-    expect(
-      buttons.find((button: { label?: string }) => button.label === 'Challenge User')?.custom_id
-    ).toBe('admin_actions:cp:c:user-1:_:ver-selected');
+    if (settings.captcha_method === 'none') {
+      expect(buttons.map((button: { label?: string }) => button.label)).not.toContain(
+        'Challenge User'
+      );
+      expect(buttons.map((button: { label?: string }) => button.label)).not.toContain(
+        'Retry Security Check'
+      );
+      expect(buttons.map((button: { label?: string }) => button.label)).toContain(
+        'Continue Without Check...'
+      );
+    } else {
+      expect(
+        buttons.find((button: { label?: string }) => button.label === 'Challenge User')?.custom_id
+      ).toBe('admin_actions:cp:c:user-1:_:ver-selected');
+    }
   });
 
   it('refuses a confirmed CAPTCHA action when the target has left the server', async () => {

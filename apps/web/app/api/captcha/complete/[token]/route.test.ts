@@ -80,7 +80,13 @@ it('uses authenticated target context and only a verified provider outcome for c
   );
   expect(runtime.complete).toHaveBeenCalledWith(
     expect.objectContaining({ actor: { kind: 'user', userId: 'target' } }),
-    { challengeId: challenge.id, generation: 1, attemptId: 'attempt', validation }
+    {
+      challengeId: challenge.id,
+      generation: 1,
+      provider: 'turnstile',
+      attemptId: 'attempt',
+      validation,
+    }
   );
   expect(response.headers.get('set-cookie')).toContain('Max-Age=0');
 });

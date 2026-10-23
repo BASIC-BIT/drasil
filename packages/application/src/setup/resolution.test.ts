@@ -17,7 +17,7 @@ import {
 } from './settings';
 import { operationCommandSchema } from '../operations/commands';
 import { setupChangesSchema, setupCommandSchema } from './commands';
-import { setupStoredChange } from './persistence';
+import { setupStoredChange, setupStateMatches } from './persistence';
 import { confirmationRequirement } from '../delegation/confirmationPolicy';
 import { workflowDefinitions } from '../delegation/commands';
 import type { DelegatedPrincipal, IntentResolver } from '../delegation/types';
@@ -67,10 +67,10 @@ function resolver(
     loadHeuristicDefaults: async (scope) => shippedResetChanges(scope),
   });
 }
-test('covers all 73 mapped inputs and all 75 keys in 11 strict sections', () => {
-  expect(fixtures.fields).toHaveLength(73);
+test('covers all 74 mapped inputs and all 76 keys in 11 strict sections', () => {
+  expect(fixtures.fields).toHaveLength(74);
   expect(Object.keys(settingsSectionSchemas)).toEqual(Object.keys(fixtures.sections));
-  expect(Object.values(fixtures.sections).flat()).toHaveLength(75);
+  expect(Object.values(fixtures.sections).flat()).toHaveLength(76);
   expect(Object.keys(setupChangesSchema.shape).sort()).toEqual(
     fixtures.fields.map((f) => f.input).sort()
   );
@@ -520,5 +520,52 @@ test('reset delivery cannot add fields outside its exact approved scope', () => 
       },
       precondition
     )
+  ).toBe(false);
+});
+
+test.each(['discord_image', 'none', 'turnstile', undefined] as const)(
+  'mode-only setup previews do not propose a replacement for the stored %s method',
+  async (method) => {
+    const current = {
+      ...state,
+      settings: {
+        captcha_mode: 'manual' as const,
+        ...(method === undefined ? {} : { captcha_method: method }),
+        captcha_method_revision: 4,
+      },
+    };
+    for (const captchaMode of ['suspicious_join', 'off'] as const) {
+      const result = await resolver(true, true, current).resolve(principal, {
+        workflowId: 'update_setup',
+        guildId: 'guild',
+        idempotencyKey: `mode-${captchaMode}`,
+        input: { changes: { captchaMode } },
+      });
+      expect(result.summary).toContain(`captcha_mode: "manual" -> "${captchaMode}"`);
+      expect(result.summary).not.toContain('captcha_method:');
+      expect(result.preconditions).toEqual({ kind: 'setup', approvedState: current });
+    }
+  }
+);
+
+test('private method revision participates in approved-state fingerprints and is not editable', () => {
+  const approved = { ...state, settings: { captcha_method_revision: 1 } };
+  expect(
+    setupStateMatches(
+      { ...state, settings: { captcha_method_revision: 2 } },
+      { approvedState: approved }
+    )
+  ).toBe(false);
+  expect(setupChangesSchema.safeParse({ captchaMethodRevision: 2 }).success).toBe(false);
+  expect(
+    setupCommandSchema.safeParse({
+      kind: 'update_settings',
+      section: 'verification',
+      changes: { captcha_method_revision: 2 },
+    }).success
+  ).toBe(false);
+  expect(
+    setupCommandSchema.safeParse({ kind: 'update_setup', changes: { captchaMethod: 'invalid' } })
+      .success
   ).toBe(false);
 });

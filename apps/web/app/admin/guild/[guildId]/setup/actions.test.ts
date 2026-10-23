@@ -94,3 +94,34 @@ afterEach(async () => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
+
+it.each(['none', 'discord_image', 'turnstile'])(
+  'maps the administrator method choice %s',
+  async (method) => {
+    vi.stubEnv('NODE_ENV', 'test');
+    vi.stubEnv('DRASIL_WEB_E2E_FIXTURE_MODE', 'true');
+    vi.stubEnv('DRASIL_CAPTCHA_IMAGE_ANSWER_SECRET', Buffer.alloc(32, 1).toString('base64'));
+    vi.stubEnv('NEXT_PUBLIC_TURNSTILE_SITE_KEY', 'test-site');
+    vi.stubEnv('TURNSTILE_SECRET_KEY', 'test-secret');
+    vi.stubEnv('DRASIL_CAPTCHA_BINDING_SECRET', 'test-binding');
+    vi.stubEnv('TURNSTILE_EXPECTED_HOSTNAME', 'example.test');
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://example.test');
+    mocks.session.mockResolvedValue({ userId: 'fixture-admin' });
+    mocks.token.mockResolvedValue({ accessToken: 'fixture-token' });
+    const form = new FormData();
+    form.set('captchaMethod', method);
+    await saveGuildSetup('guild-1', form);
+    const { fixtureServerRecord } = await import('@/lib/e2eFixtures');
+    expect(fixtureServerRecord().settings.captcha_method).toBe(method);
+  }
+);
+
+it('rejects a member method selection before saving', async () => {
+  vi.stubEnv('NODE_ENV', 'test');
+  vi.stubEnv('DRASIL_WEB_E2E_FIXTURE_MODE', 'true');
+  mocks.session.mockResolvedValue({ userId: 'member' });
+  mocks.token.mockResolvedValue({ accessToken: 'fixture-token' });
+  const form = new FormData();
+  form.set('captchaMethod', 'none');
+  await expect(saveGuildSetup('guild-1', form)).rejects.toThrow(/actor_unavailable|Administrator/);
+});

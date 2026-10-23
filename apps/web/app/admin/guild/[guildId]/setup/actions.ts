@@ -1,6 +1,7 @@
 'use server';
 
 import { assertCaptchaProviderConfigured } from '@/lib/turnstile';
+import { captchaImageSecretConfigured } from '@drasil/application';
 
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
@@ -418,7 +419,16 @@ export async function saveGuildSetup(guildId: string, formData: FormData): Promi
           : 'You need Administrator permission to change setup.'
       );
     if (result.code === 'policy_disabled') {
-      assertCaptchaProviderConfigured(update.captchaMode);
+      if (
+        update.captchaMethod === 'discord_image' &&
+        !captchaImageSecretConfigured(process.env.DRASIL_CAPTCHA_IMAGE_ANSWER_SECRET)
+      )
+        throw new Error(
+          'Configure DRASIL_CAPTCHA_IMAGE_ANSWER_SECRET before enabling Discord image CAPTCHA.'
+        );
+      if (update.captchaMethod === 'turnstile') assertCaptchaProviderConfigured('manual');
+      else if (update.captchaMethod === undefined)
+        assertCaptchaProviderConfigured(update.captchaMode);
       throw new Error('Manual intake requires a separate trigger role before it can be enabled.');
     }
     throw new Error(`Setup action denied: ${result.code}`);
@@ -428,6 +438,7 @@ export async function saveGuildSetup(guildId: string, formData: FormData): Promi
 
 function readCaptchaSettingsFormValues(formData: FormData) {
   return {
+    captchaMethod: readOptionalFormValue(formData, 'captchaMethod'),
     captchaMode: readOptionalFormValue(formData, 'captchaMode'),
     captchaPassAction: readOptionalFormValue(formData, 'captchaPassAction'),
     captchaChallengeLifetimeHours: readOptionalIntegerFormValue(

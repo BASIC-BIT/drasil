@@ -1,3 +1,4 @@
+import { materializeSetupStoredChange } from './persistence';
 import { createSetupActions, type SetupActions } from './actions';
 import type { SetupDependencies } from './ports';
 import type { ActionContext } from '../context';
@@ -303,4 +304,151 @@ test('an unrelated patch can repair a server with a stale manual-intake role', a
       })
     ).kind
   ).toBe('outcome');
+});
+
+test.each(['discord_image', 'none', 'turnstile'] as const)(
+  'mode-only setup saves preserve the explicit %s method and its revision',
+  async (method) => {
+    const state = arrange();
+    Object.assign(state.server().settings, {
+      captcha_method: method,
+      captcha_mode: 'manual',
+      captcha_method_revision: 4,
+    });
+    for (const captchaMode of ['suspicious_join', 'off', 'manual'] as const) {
+      const result = await state.actions.execute(context, {
+        kind: 'update_setup',
+        changes: { captchaMode },
+      });
+      expect(result.kind).toBe('outcome');
+      expect(state.server().settings).toEqual({
+        unrelated_setting: 'preserved',
+        captcha_method: method,
+        captcha_mode: captchaMode,
+        captcha_method_revision: 4,
+      });
+    }
+  }
+);
+
+test('mode-only setup saves leave legacy method metadata absent', async () => {
+  const state = arrange();
+  state.server().settings.captcha_mode = 'manual';
+  const result = await state.actions.execute(context, {
+    kind: 'update_setup',
+    changes: { captchaMode: 'suspicious_join' },
+  });
+  expect(result.kind).toBe('outcome');
+  expect(state.server().settings).toEqual({
+    unrelated_setting: 'preserved',
+    captcha_mode: 'suspicious_join',
+  });
+});
+
+test('an explicit setup method selection still updates the selected method', async () => {
+  const state = arrange();
+  Object.assign(state.server().settings, {
+    captcha_method: 'discord_image',
+    captcha_mode: 'manual',
+  });
+  const result = await state.actions.execute(context, {
+    kind: 'update_setup',
+    changes: { captchaMethod: 'none' },
+  });
+  expect(result.kind).toBe('outcome');
+  expect(state.server().settings).toEqual({
+    unrelated_setting: 'preserved',
+    captcha_method: 'none',
+    captcha_mode: 'manual',
+  });
+});
+
+test('method readiness uses the selected method even without a mode edit', async () => {
+  const state = arrange();
+  state.setProvider(false);
+  expect(
+    await state.actions.execute(context, {
+      kind: 'update_setup',
+      changes: { captchaMethod: 'turnstile' },
+    })
+  ).toEqual({ kind: 'denied', code: 'policy_disabled' });
+  expect(state.server().settings.captcha_method).toBeUndefined();
+});
+
+test('None saves without secrets and unrelated edits survive provider outages', async () => {
+  const state = arrange();
+  state.setProvider(false);
+  state.server().settings.captcha_method = 'turnstile';
+  state.server().settings.captcha_mode = 'manual';
+  expect(
+    (
+      await state.actions.execute(context, {
+        kind: 'update_setup',
+        changes: { captchaMethod: 'none' },
+      })
+    ).kind
+  ).toBe('outcome');
+  expect(
+    (
+      await state.actions.execute(context, {
+        kind: 'update_setup',
+        changes: { captchaMaxSubmissions: 7 },
+      })
+    ).kind
+  ).toBe('outcome');
+});
+
+test.each(['turnstile', 'discord_image'] as const)(
+  'activating %s from None uses manual unless explicitly suspicious join',
+  (method) => {
+    const state = arrange();
+    Object.assign(state.server().settings, {
+      captcha_method: 'none',
+      captcha_mode: 'suspicious_join',
+    });
+    expect(
+      materializeSetupStoredChange(state.server(), { settings: { captcha_method: method } })
+        .settings
+    ).toMatchObject({ captcha_method: method, captcha_mode: 'manual' });
+    expect(
+      materializeSetupStoredChange(state.server(), {
+        settings: { captcha_method: method, captcha_mode: 'suspicious_join' },
+      }).settings
+    ).toMatchObject({ captcha_mode: 'suspicious_join' });
+    state.server().settings.captcha_method = 'turnstile';
+    expect(
+      materializeSetupStoredChange(state.server(), {
+        settings: { captcha_method: 'discord_image' },
+      }).settings
+    ).not.toHaveProperty('captcha_mode');
+  }
+);
+
+test.each(['none', 'turnstile', 'discord_image'] as const)(
+  'members cannot select %s',
+  async (method) => {
+    const state = arrange();
+    state.setPermissions(0n);
+    expect(
+      await state.actions.execute(context, {
+        kind: 'update_setup',
+        changes: { captchaMethod: method },
+      })
+    ).toEqual({ kind: 'denied', code: 'permission_denied' });
+    expect(state.server().settings).not.toHaveProperty('captcha_method');
+  }
+);
+
+test('same-method Off resaves cannot activate checks during unrelated setup saves', () => {
+  const state = arrange();
+  Object.assign(state.server().settings, { captcha_method: 'turnstile', captcha_mode: 'off' });
+  expect(
+    materializeSetupStoredChange(state.server(), {
+      settings: { captcha_method: 'turnstile', captcha_mode: 'off' },
+    }).settings
+  ).toMatchObject({ captcha_method: 'turnstile', captcha_mode: 'off' });
+  expect(
+    materializeSetupStoredChange(state.server(), { settings: { captcha_method: 'discord_image' } })
+      .settings
+  ).toMatchObject({ captcha_method: 'discord_image', captcha_mode: 'manual' });
 });

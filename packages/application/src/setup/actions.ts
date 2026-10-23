@@ -10,7 +10,11 @@ import type {
   SetupPersistenceChange,
   SetupConfigurationState,
 } from './ports';
-import { buildSetupSettingsPatch, type SettingsChanges } from './settings';
+import {
+  buildSetupSettingsPatch,
+  getEffectiveCaptchaMethod,
+  type SettingsChanges,
+} from './settings';
 export type SetupOutcome =
   | { readonly kind: 'complete_setup_verification'; readonly result: SetupProvisioningOutcome }
   | { readonly kind: 'upsert_report_instructions'; readonly result: ReportInstructionsOutcome }
@@ -62,7 +66,7 @@ async function executeSetup(
     changes,
     current,
     authority.owner,
-    deps.provider.isConfigured()
+    methodConfigured(deps, current, changes)
   );
   if (denied) {
     return { kind: 'denied', code: denied };
@@ -75,6 +79,15 @@ async function executeSetup(
   }
   const outcome = await run(deps, context, command, changes, current);
   return { kind: 'outcome', outcome };
+}
+
+function methodConfigured(
+  deps: Pick<SetupDependencies, 'provider'>,
+  current: SetupConfigurationState | null,
+  changes: SettingsChanges
+): boolean {
+  const method = getEffectiveCaptchaMethod({ ...current?.settings, ...changes });
+  return method === 'none' || deps.provider.isConfigured(method);
 }
 
 function mutationChanges(context: ActionContext, command: SetupCommand): SettingsChanges {
@@ -203,7 +216,7 @@ export function createSetupUpdateActions(deps: SetupUpdateDependencies): SetupUp
         settings,
         current,
         authority.owner,
-        deps.provider.isConfigured()
+        methodConfigured(deps, current, settings)
       );
       if (denial) {
         return { kind: 'denied', code: denial };

@@ -1,3 +1,7 @@
+import { createCaptchaCompletionStore } from '@drasil/application/postgres';
+import { createBotDelegationDatabase } from '../application/adapters/delegationDatabase';
+import { CaptchaImageService, type ICaptchaImageService } from '../services/CaptchaImageService';
+import { createCaptchaImageRenderer } from '../services/captcha/imageRenderer';
 import { createBotDelegatedRuntime } from '../application/adapters/delegation';
 import { createBotApplication, type BotApplication } from '../application/createBotApplication';
 import { ModerationEvidenceService } from '../services/ModerationEvidenceService';
@@ -310,6 +314,7 @@ function configureServices(container: Container): void {
           TYPES.MessageDeletionJobRepository
         ),
         messageCleanupService: context.get<MessageCleanupService>(TYPES.MessageCleanupService),
+        captchaImageService: context.get<ICaptchaImageService>(TYPES.CaptchaImageService),
         captchaChallengeService: context.get<ICaptchaChallengeService>(
           TYPES.CaptchaChallengeService
         ),
@@ -480,6 +485,21 @@ function configureServices(container: Container): void {
     .bind<ICaseThreadClosureSweepService>(TYPES.CaseThreadClosureSweepService)
     .to(CaseThreadClosureSweepService)
     .inSingletonScope();
+  container
+    .bind<ICaptchaImageService>(TYPES.CaptchaImageService)
+    .toDynamicValue(
+      (context) =>
+        new CaptchaImageService({
+          challenges: context.get<ICaptchaChallengeRepository>(TYPES.CaptchaChallengeRepository),
+          completion: createCaptchaCompletionStore(
+            createBotDelegationDatabase(context.get<PrismaClient>(TYPES.PrismaClient))
+          ),
+          renderer: createCaptchaImageRenderer(),
+          secret: (): string | undefined => process.env.DRASIL_CAPTCHA_IMAGE_ANSWER_SECRET,
+        })
+    )
+    .inSingletonScope();
+
   container
     .bind<ICaptchaChallengeService>(TYPES.CaptchaChallengeService)
     .to(CaptchaChallengeService)

@@ -42,6 +42,7 @@ export const TYPES = {
   CaseThreadClosureSweepService: Symbol.for('CaseThreadClosureSweepService'),
   CaseRoleReleaseReconciliationService: Symbol.for('CaseRoleReleaseReconciliationService'),
   CaptchaChallengeService: Symbol.for('CaptchaChallengeService'),
+  CaptchaImageService: Symbol.for('CaptchaImageService'),
 
   // Repositories
   BaseRepository: Symbol.for('BaseRepository'),

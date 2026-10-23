@@ -1,3 +1,5 @@
+import { createBotCaptchaImageActions, type BotCaptchaImageActions } from './adapters/captchaImage';
+import type { ICaptchaImageService } from '../services/CaptchaImageService';
 import { createBotMcpApprovals } from './adapters/approvals';
 import type { PrismaClient } from '../db/prisma';
 import { createDelegatedCaseActions } from './adapters/delegatedCases';
@@ -58,6 +60,7 @@ export interface BotApplication {
   readonly messageCleanupRuntime: BotMessageCleanupRuntime;
   readonly captcha: BotCaptchaRuntime['actions'];
   readonly captchaRuntime: BotCaptchaRuntime;
+  readonly captchaImage: BotCaptchaImageActions;
   readonly quarantine: BotQuarantineRuntime['actions'];
   readonly quarantineRuntime: BotQuarantineRuntime;
   readonly detections: BotDetectionRuntime['actions'];
@@ -79,6 +82,7 @@ export function createBotApplication(
       'captchaChallengeService' | 'threadManager' | 'notificationManager'
     > & {
       readonly prisma?: PrismaClient;
+      readonly captchaImageService?: ICaptchaImageService;
       readonly client: Client;
       readonly delegation?: DelegatedWorkerRuntime;
       readonly accountQuarantineService: BotQuarantineDependencies['accountQuarantineService'];
@@ -122,6 +126,7 @@ export function createBotApplication(
     messageCleanupRuntime,
     captcha: captchaRuntime.actions,
     captchaRuntime,
+    captchaImage: createBotCaptchaImageActions(deps.captchaImageService ?? null),
     quarantine: quarantineRuntime.actions,
     quarantineRuntime,
     detections: detectionRuntime.actions,
