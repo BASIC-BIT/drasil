@@ -284,7 +284,7 @@ export function requireCaptchaOutcome<T>(result: ActionResult<T>): T {
     binding_mismatch: 'Security-check request does not match its case subject.',
     stale_state: 'The security check changed. Refresh the case and try again.',
     policy_disabled: 'Security checks are disabled for this server.',
-    reason_required: 'A reason is required to continue without the browser check.',
+    reason_required: 'A reason is required to continue without the security check.',
     confirmation_required: 'Security-check confirmation is missing or expired.',
   };
   throw new ActionDeniedError(result.code, messages[result.code]);

@@ -3,6 +3,7 @@ import { createWebActionContext } from './application/context';
 import { submitQueuedAction } from './application/queuedSubmission';
 import { evaluateCasePolicy, readCasePolicy } from '@drasil/application';
 import {
+  getEffectiveCaptchaMethod,
   caseDetailSchema,
   caseSummarySchema,
   sortCaseSummariesForQueue,
@@ -130,6 +131,8 @@ interface CaseSummaryRow {
   user_username: string | null;
   user_metadata: unknown;
   member_user_id: string | null;
+  captcha_method?: 'turnstile' | 'discord_image' | null;
+  captcha_method_revision?: number | null;
   captcha_id?: string | null;
   captcha_status?: 'pending' | 'passed' | 'failed' | 'expired' | 'bypassed' | 'cancelled' | null;
   captcha_request_source?: 'moderator' | 'automatic_suspicious_join' | null;
@@ -535,6 +538,8 @@ export function parseCaseSummaryRow(row: CaseSummaryRow, now = new Date()): Case
     captchaChallenge: row.captcha_status
       ? {
           id: row.captcha_id,
+          method: row.captcha_method ?? 'turnstile',
+          methodRevision: row.captcha_method_revision ?? 0,
           status: row.captcha_status,
           requestSource: row.captcha_request_source,
           passEffect: row.captcha_pass_effect,
@@ -554,6 +559,17 @@ export function parseCaseSummaryRow(row: CaseSummaryRow, now = new Date()): Case
   });
 }
 
+function appendCaptchaBypassAction(row: CaseSummaryRow, actions: CaseAction[]): CaseAction[] {
+  if (
+    row.captcha_status === 'pending' ||
+    row.captcha_status === 'failed' ||
+    row.captcha_status === 'expired'
+  ) {
+    actions.push('bypass_captcha');
+  }
+  return actions;
+}
+
 function appendCaptchaActions(
   row: CaseSummaryRow,
   actions: CaseAction[],
@@ -562,19 +578,13 @@ function appendCaptchaActions(
   if (row.case_kind === 'compromised_account' || row.status !== 'pending') {
     return actions;
   }
-  const mode = metadataToRecord(row.server_settings).captcha_mode;
+  const settings = metadataToRecord(row.server_settings);
+  const mode = getEffectiveCaptchaMethod(settings) === 'none' ? 'off' : settings.captcha_mode;
   if (mode !== 'manual' && mode !== 'suspicious_join') {
-    return actions;
+    return appendCaptchaBypassAction(row, actions);
   }
   if (presenceState !== 'in_server') {
-    if (
-      row.captcha_status === 'pending' ||
-      row.captcha_status === 'failed' ||
-      row.captcha_status === 'expired'
-    ) {
-      actions.push('bypass_captcha');
-    }
-    return actions;
+    return appendCaptchaBypassAction(row, actions);
   }
   if (!row.captcha_status) {
     actions.push('challenge_user');
@@ -697,6 +707,8 @@ const SUMMARY_QUERY = `
     u.username as user_username,
     u.metadata as user_metadata,
     sm.user_id as member_user_id,
+    cc.provider as captcha_method,
+    cc.method_revision as captcha_method_revision,
     cc.id::text as captcha_id,
     cc.status as captcha_status,
     cc.request_source as captcha_request_source,
@@ -720,6 +732,8 @@ const SUMMARY_QUERY = `
   left join lateral (
     select jsonb_agg(
       jsonb_build_object(
+        'method', captcha_request.provider,
+        'methodRevision', captcha_request.method_revision,
         'generation', captcha_request.generation,
         'requestSource', captcha_request.request_source,
         'passEffect', captcha_request.pass_effect,

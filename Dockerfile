@@ -8,7 +8,7 @@ ENV NPM_CONFIG_UPDATE_NOTIFIER=false
 
 # Prisma engine generation during npm postinstall needs OpenSSL available.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends openssl \
+  && apt-get install -y --no-install-recommends openssl fonts-liberation \
   && rm -rf /var/lib/apt/lists/*
 
 
@@ -24,7 +24,9 @@ COPY packages/application/package.json ./packages/application/package.json
 COPY prisma ./prisma
 COPY scripts ./scripts
 
-RUN PRISMA_SKIP_POSTINSTALL_GENERATE=1 npm ci
+RUN --mount=type=secret,id=proxy_ca \
+    [ ! -f /run/secrets/proxy_ca ] || export NODE_EXTRA_CA_CERTS=/run/secrets/proxy_ca; \
+    PRISMA_SKIP_POSTINSTALL_GENERATE=1 npm ci
 
 
 FROM base AS build
@@ -32,12 +34,14 @@ FROM base AS build
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-RUN npm run prisma:generate
-RUN npm run build
-
-# Produce a production-only node_modules for runtime.
-RUN npm prune --omit=dev
-RUN node scripts/check-application-imports.mjs
+# Keep generation, compilation, production pruning and import verification in one
+# snapshot so vfs builders do not retain a full dependency tree for every step.
+RUN --mount=type=secret,id=proxy_ca \
+    [ ! -f /run/secrets/proxy_ca ] || export NODE_EXTRA_CA_CERTS=/run/secrets/proxy_ca; \
+    npm run prisma:generate \
+    && npm run build \
+    && npm prune --omit=dev \
+    && node scripts/check-application-imports.mjs
 
 
 FROM base AS runtime

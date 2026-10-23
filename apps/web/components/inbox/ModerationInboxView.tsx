@@ -164,7 +164,7 @@ const actionLabels: Record<ModerationInboxAction, string> = {
   view_report: 'View Report',
   challenge_user: 'Challenge User',
   retry_captcha: 'Retry Security Check',
-  bypass_captcha: 'Continue Without Browser Check',
+  bypass_captcha: 'Continue Without Security Check',
 };
 
 const reportClosureActionSet = new Set<ModerationInboxAction>([

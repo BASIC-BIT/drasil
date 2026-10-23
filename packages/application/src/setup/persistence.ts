@@ -1,11 +1,19 @@
+import { ActionDeniedError } from '../results';
 import { canonicalDigest, setupFingerprintState } from '../delegation/intents';
-import { setupServerRecordSchema, normalizeOptionalId, type SetupServerRecord } from './settings';
+import {
+  setupServerRecordSchema,
+  normalizeOptionalId,
+  getEffectiveCaptchaMethod,
+  captchaMethodSchema,
+  type SetupServerRecord,
+} from './settings';
 import type { SetupPersistenceChange } from './ports';
 
 export interface SetupWritePrecondition {
   readonly approvedState: SetupServerRecord;
 }
 export interface SetupStoredChange {
+  readonly captchaReadiness?: { readonly turnstile: boolean; readonly discord_image: boolean };
   readonly normalizeHeuristicKeywords?: true;
   readonly lockdownAllowlist?: {
     readonly operation: 'add' | 'remove';
@@ -92,13 +100,46 @@ export function setupStoredChange(change: SetupPersistenceChange): SetupStoredCh
 export function normalizeHeuristicKeywords(values: readonly string[]): string[] {
   return [...new Set(values.map((value) => value.trim().toLowerCase()).filter(Boolean))];
 }
+function materializeCaptchaSettings(
+  current: SetupServerRecord,
+  change: SetupStoredChange
+): Record<string, unknown> {
+  const settings = { ...change.settings };
+  if ('captcha_method_revision' in settings) throw new Error('CAPTCHA method revision is private');
+  if ('captcha_method' in settings) captchaMethodSchema.parse(settings.captcha_method);
+  if ('captcha_method' in settings || 'captcha_mode' in settings) {
+    const previousMethod = getEffectiveCaptchaMethod(current.settings);
+    const method = getEffectiveCaptchaMethod({ ...current.settings, ...settings });
+    settings.captcha_method = method;
+    if (
+      'captcha_method' in (change.settings ?? {}) &&
+      method !== 'none' &&
+      (previousMethod === 'none' ||
+        (previousMethod !== method &&
+          !['manual', 'suspicious_join'].includes(String(current.settings.captcha_mode)))) &&
+      settings.captcha_mode !== 'suspicious_join'
+    ) {
+      // A hidden retained preference must not reactivate automatic issuance.
+      settings.captcha_mode = 'manual';
+    }
+    if (
+      change.captchaReadiness &&
+      method !== 'none' &&
+      ('captcha_method' in (change.settings ?? {}) || settings.captcha_mode !== 'off') &&
+      !change.captchaReadiness[method]
+    )
+      throw new ActionDeniedError('policy_disabled');
+  }
+  return settings;
+}
+
 /** Materialize only semantic edits that must use the locked current row, never a cached read. */
 export function materializeSetupStoredChange(
   current: SetupServerRecord,
   change: SetupStoredChange
 ): SetupStoredChange {
   const columns = { ...change.columns };
-  const settings = { ...change.settings };
+  const settings = materializeCaptchaSettings(current, change);
   if (change.normalizeHeuristicKeywords)
     columns.heuristic_suspicious_keywords = normalizeHeuristicKeywords(
       columns.heuristic_suspicious_keywords ?? current.heuristic_suspicious_keywords

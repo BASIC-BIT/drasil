@@ -104,6 +104,8 @@ describe('moderationInboxDataAdapter', () => {
       ...baseCase,
       caseKind: 'compromised_account',
       captchaChallenge: {
+        method: 'turnstile',
+        methodRevision: 0,
         id: '11111111-1111-4111-8111-111111111111',
         status: 'pending',
         requestSource: 'moderator',

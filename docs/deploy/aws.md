@@ -90,9 +90,13 @@ The stack creates Vercel DNS defaults by default:
 - `www.drasilbot.com` CNAME -> `cname.vercel-dns.com`
 
 When Vercel is configured for the custom domain, also set `NEXT_PUBLIC_APP_URL=https://drasilbot.com`.
-The managed ECS task sets `DRASIL_WEB_PUBLIC_URL` from the Terraform
+The Terraform-managed ECS task definition declares `DRASIL_WEB_PUBLIC_URL` from the Terraform
 `drasil_web_public_url` variable so bot-authored CAPTCHA and dashboard links use the same public
 origin.
+Verify this value in the running task before browser-check rollout. The image deploy
+workflow copies a task definition and changes its image/release marker; it does not
+reconcile missing environment configuration. IaC validation alone does not apply it.
+
 Add both web callback URLs to the Discord OAuth redirect list:
 
 - `https://drasilbot.com/api/auth/discord/callback`
@@ -153,6 +157,23 @@ aws secretsmanager put-secret-value \
 ```
 
 Repeat for the other secrets.
+
+CAPTCHA method configuration is an explicit, separate rollout. The secret list
+above does not provision the image-answer key. Follow
+[CAPTCHA methods rollout](../captcha-methods-rollout.md) for secret-manager delivery
+to the bot and web runtimes, canonical base64 validation, rotation invalidation,
+readiness and the owned disposable live checklist. Do not enable a server method
+until its target release and configuration are verified. Apply the additive image
+migration and deploy compatible readers before enabling image issuance. No server
+switches methods automatically.
+
+Image readiness needs `DRASIL_CAPTCHA_IMAGE_ANSWER_SECRET` plus the bot's native
+renderer and Liberation Sans. Web readiness validates the server-only key without
+loading native rendering. Turnstile instead requires its public site key, private
+provider secret, separate binding secret, expected hostname and canonical public
+origin. Keep development and production Discord apps, redirects and provider
+configuration separate. Selecting None cancels pending checks without resolving
+cases and is the operational rollback; keep the additive schema in place.
 
 Set `TYPESAFE_API_KEY` before deploying the Jev-enabled bot task. Without it, Jev reports
 unavailable and the existing GPT check still runs.

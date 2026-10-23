@@ -1,4 +1,8 @@
 import {
+  isBotCaptchaMethodConfigured,
+  botCaptchaReadiness,
+} from '../../services/captcha/readiness';
+import {
   createApprovedSetupConfiguration,
   type ApprovedSetupConfiguration,
   type SetupWorkflowConfig,
@@ -14,7 +18,6 @@ import {
   type SetupProvisioningSelection,
   type ExecutionRecord,
   createSetupActions,
-  setupCaptchaProviderIssues,
   setupCommandSchema,
   decodeQueuedAction,
   serverSettingsSchema,
@@ -168,7 +171,12 @@ function createConfiguration(
         return projectServer(saved);
       }
       if (approved)
-        return projectServer(await approved.save(context.guildId, setupStoredChange(change)));
+        return projectServer(
+          await approved.save(context.guildId, {
+            ...setupStoredChange(change),
+            captchaReadiness: botCaptchaReadiness(),
+          })
+        );
       return saveConfiguration(config, context, change);
     },
     async updateHeuristics(context, changes): Promise<SetupHeuristics> {
@@ -208,10 +216,11 @@ async function saveConfiguration(
   if (
     !change.columns &&
     !change.resetSettings?.length &&
-    !('captcha_mode' in change.settings && change.settings.captcha_mode === 'off')
+    !('captcha_mode' in change.settings) &&
+    !('captcha_method' in change.settings)
   )
     return projectServer(await config.updateServerSettings(context.guildId, change.settings));
-  const stored = setupStoredChange(change);
+  const stored = { ...setupStoredChange(change), captchaReadiness: botCaptchaReadiness() };
   const heuristicsChanged =
     stored.columns?.heuristic_suspicious_keywords !== undefined ||
     stored.columns?.heuristic_message_threshold !== undefined ||
@@ -309,18 +318,7 @@ export function createBotSetupRuntime(
             ? confirmations.confirmations
             : runtimeConfirmations.confirmations,
         configuration: createConfiguration(deps.configService, command, approved),
-        provider: {
-          isConfigured: () =>
-            setupCaptchaProviderIssues({
-              siteKeyConfigured: Boolean(process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY?.trim()),
-              secretKeyConfigured: Boolean(process.env.TURNSTILE_SECRET_KEY?.trim()),
-              bindingSecretConfigured: Boolean(process.env.DRASIL_CAPTCHA_BINDING_SECRET?.trim()),
-              expectedHostname: process.env.TURNSTILE_EXPECTED_HOSTNAME?.trim(),
-              publicUrl:
-                process.env.NEXT_PUBLIC_APP_URL?.trim() ||
-                process.env.DRASIL_WEB_PUBLIC_URL?.trim(),
-            }).length === 0,
-        },
+        provider: { isConfigured: isBotCaptchaMethodConfigured },
         panels: {
           async upsert(actionContext, panel) {
             approved?.startEffects();

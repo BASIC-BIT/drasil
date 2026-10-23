@@ -5,7 +5,7 @@ import { createWebActionContext, createWebConfirmationPort } from '@/lib/applica
 import { randomUUID } from 'node:crypto';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { caseActionSchema, type CaseAction } from '@drasil/contracts';
+import { caseActionSchema, getEffectiveCaptchaMethod, type CaseAction } from '@drasil/contracts';
 import {
   createActiveCaseDataAdapter,
   type CaseActionQueueResult,
@@ -52,6 +52,10 @@ const queueCaseActionErrorMessages = {
 } as const;
 
 type DestructiveCaseAction = Extract<WebCaseAction, 'kick_user' | 'ban_user' | 'ban_by_id'>;
+type CaptchaCaseAction = Extract<
+  WebCaseAction,
+  'challenge_user' | 'retry_captcha' | 'bypass_captcha'
+>;
 
 interface CaseActionOptions {
   readonly attemptId: string | null;
@@ -169,6 +173,46 @@ async function assertBotCanRunDestructiveAction(
   }
 }
 
+async function readCaptchaActionOptions(
+  action: CaptchaCaseAction,
+  guildId: string,
+  formData: FormData | undefined
+): Promise<CaseActionOptions> {
+  if (formData?.get('confirmAction') !== 'on') {
+    throw new Error('Confirm the security-check action before queueing it.');
+  }
+  if (action !== 'bypass_captcha') {
+    const server = await createSetupDataAdapter().getServer(guildId);
+    const method = getEffectiveCaptchaMethod(server?.settings);
+    const mode = server?.settings.captcha_mode;
+    if (method === 'none' || (mode !== 'manual' && mode !== 'suspicious_join')) {
+      throw new Error('Browser security checks are disabled for this server.');
+    }
+  }
+  const reason = action === 'bypass_captcha' ? readFormString(formData, 'reason') : null;
+  if (action === 'bypass_captcha' && !reason) {
+    throw new Error('A reason is required to continue without the security check.');
+  }
+  const requiresDisplayedChallenge = action === 'retry_captcha' || action === 'bypass_captcha';
+  const expectedCaptchaChallengeId = requiresDisplayedChallenge
+    ? readFormString(formData, 'expectedCaptchaChallengeId')
+    : null;
+  const expectedCaptchaGeneration = requiresDisplayedChallenge
+    ? readFormPositiveInteger(formData, 'expectedCaptchaGeneration')
+    : null;
+  if (requiresDisplayedChallenge && (!expectedCaptchaChallengeId || !expectedCaptchaGeneration)) {
+    throw new Error('The displayed security check is no longer available. Refresh and try again.');
+  }
+  return {
+    attemptId: action === 'retry_captcha' || action === 'bypass_captcha' ? randomUUID() : null,
+    expectedCaptchaChallengeId,
+    expectedCaptchaGeneration,
+    quarantinePhase: null,
+    previewRequestId: null,
+    reason,
+  };
+}
+
 async function assertCanQueueCaseAction(
   action: WebCaseAction,
   guild: { readonly id: string; readonly owner: boolean; readonly permissions: string },
@@ -229,39 +273,7 @@ async function assertCanQueueCaseAction(
   }
 
   if (action === 'challenge_user' || action === 'retry_captcha' || action === 'bypass_captcha') {
-    if (formData?.get('confirmAction') !== 'on') {
-      throw new Error('Confirm the security-check action before queueing it.');
-    }
-    const setupAdapter = createSetupDataAdapter();
-    const server = await setupAdapter.getServer(guild.id);
-    const mode = server?.settings.captcha_mode;
-    if (mode !== 'manual' && mode !== 'suspicious_join') {
-      throw new Error('Browser security checks are disabled for this server.');
-    }
-    const reason = action === 'bypass_captcha' ? readFormString(formData, 'reason') : null;
-    if (action === 'bypass_captcha' && !reason) {
-      throw new Error('A reason is required to continue without the browser check.');
-    }
-    const requiresDisplayedChallenge = action === 'retry_captcha' || action === 'bypass_captcha';
-    const expectedCaptchaChallengeId = requiresDisplayedChallenge
-      ? readFormString(formData, 'expectedCaptchaChallengeId')
-      : null;
-    const expectedCaptchaGeneration = requiresDisplayedChallenge
-      ? readFormPositiveInteger(formData, 'expectedCaptchaGeneration')
-      : null;
-    if (requiresDisplayedChallenge && (!expectedCaptchaChallengeId || !expectedCaptchaGeneration)) {
-      throw new Error(
-        'The displayed security check is no longer available. Refresh and try again.'
-      );
-    }
-    return {
-      attemptId: action === 'retry_captcha' || action === 'bypass_captcha' ? randomUUID() : null,
-      expectedCaptchaChallengeId,
-      expectedCaptchaGeneration,
-      quarantinePhase: null,
-      previewRequestId: null,
-      reason,
-    };
+    return readCaptchaActionOptions(action, guild.id, formData);
   }
 
   const destructiveContext = destructiveActionContext(action);

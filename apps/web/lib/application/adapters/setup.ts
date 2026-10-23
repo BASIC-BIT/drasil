@@ -1,5 +1,6 @@
 import {
   createSetupUpdateActions,
+  captchaImageSecretConfigured,
   type AuthorityPort,
   type SetupUpdateActions,
 } from '@drasil/application';
@@ -31,7 +32,12 @@ export function createWebSetupActions(
 ): SetupUpdateActions {
   return createSetupUpdateActions({
     authority: createSetupAuthority(),
-    provider: { isConfigured: () => captchaProviderConfigurationIssues().length === 0 },
+    provider: {
+      isConfigured: (method) =>
+        method === 'discord_image'
+          ? captchaImageSecretConfigured(process.env.DRASIL_CAPTCHA_IMAGE_ANSWER_SECRET)
+          : captchaProviderConfigurationIssues().length === 0,
+    },
     configuration: {
       loadFresh: (guildId) => adapter.getServer(guildId),
       save(context, change) {

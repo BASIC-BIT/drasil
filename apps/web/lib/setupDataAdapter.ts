@@ -1,3 +1,6 @@
+import { captchaProviderConfigurationIssues } from './turnstile';
+import { applyCaptchaMethodChange } from '@drasil/application/postgres';
+import { captchaImageSecretConfigured, materializeSetupStoredChange } from '@drasil/application';
 import {
   ActionDeniedError,
   type SetupWritePrecondition,
@@ -237,6 +240,21 @@ export class PostgresSetupDataAdapter implements SetupDataAdapter {
         : null;
       if (precondition && (!current || !setupStateMatches(current, precondition)))
         throw new ActionDeniedError('stale_state');
+      if (!current) throw new Error('Server configuration is unavailable.');
+      const materialized = materializeSetupStoredChange(current, {
+        settings: settingsPatch,
+        captchaReadiness: {
+          turnstile: captchaProviderConfigurationIssues().length === 0,
+          discord_image: captchaImageSecretConfigured(
+            process.env.DRASIL_CAPTCHA_IMAGE_ANSWER_SECRET
+          ),
+        },
+      });
+      const revision = await applyCaptchaMethodChange(client, update.guildId, current.settings, {
+        ...current.settings,
+        ...materialized.settings,
+      });
+      const storedSettingsPatch = { ...materialized.settings, captcha_method_revision: revision };
       const updatedBy = update.updatedBy ?? current?.updated_by ?? null;
       let result = await client.query(
         `insert into servers (
@@ -269,22 +287,10 @@ export class PostgresSetupDataAdapter implements SetupDataAdapter {
           nextOptionalId(update.adminChannelId, current?.admin_channel_id),
           nextOptionalId(update.verificationChannelId, current?.verification_channel_id),
           nextOptionalId(update.adminNotificationRoleId, current?.admin_notification_role_id),
-          JSON.stringify(settingsPatch),
+          JSON.stringify(storedSettingsPatch),
           updatedBy,
         ]
       );
-
-      if (update.captchaMode === 'off') {
-        await client.query(
-          `update captcha_challenges
-           set status = 'cancelled'::captcha_challenge_status,
-               cancelled_at = now(),
-               updated_at = now()
-           where server_id = $1
-             and status = 'pending'::captcha_challenge_status`,
-          [update.guildId]
-        );
-      }
 
       if (hasHeuristicColumnsPatch(update)) {
         result = await client.query(

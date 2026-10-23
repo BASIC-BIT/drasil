@@ -142,3 +142,32 @@ test('member profile story visual baseline @storybook-visual', async ({ page }) 
   await expect(page.getByRole('heading', { name: 'Banned User' })).toBeVisible();
   await expectVisualSchemes(page, 'storybook-member-profile-banned');
 });
+
+test('Turnstile script failure offers retry and moderator assistance @storybook-visual', async ({
+  page,
+}) => {
+  let scriptLoads = 0;
+  await page.route('https://challenges.cloudflare.com/**', (route) => {
+    scriptLoads++;
+    return route.abort();
+  });
+  await gotoStory(page, 'security-checks-turnstile--script-failure');
+  await expect(page.getByText(/ask a moderator in your case thread/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Retry browser check' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Complete security check' })).toBeDisabled();
+  await expect(page.getByText('Discord image CAPTCHA')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Retry browser check' }).click();
+  await expect.poll(() => scriptLoads).toBeGreaterThan(1);
+  await expect(page.getByText(/ask a moderator in your case thread/)).toBeVisible();
+  await expectVisualSchemes(page, 'storybook-turnstile-script-failure');
+});
+
+test('case diagnostics retain current image method and earlier Turnstile history @storybook-visual', async ({
+  page,
+}) => {
+  await gotoStory(page, 'active-triage-case-detail--image-check-with-history');
+  await expect(page.getByText('Discord image CAPTCHA. Method revision 1.')).toBeVisible();
+  await page.getByText('Security check history', { exact: true }).click();
+  await expect(page.getByText(/Cloudflare Turnstile. Method revision 0/)).toBeVisible();
+  await expectVisualSchemes(page, 'storybook-case-detail-image-check-history');
+});

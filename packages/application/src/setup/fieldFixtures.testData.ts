@@ -372,6 +372,13 @@ export const fixtures = {
       value: false,
     },
     {
+      input: 'captchaMethod',
+      location: 'settings.captcha_method',
+      normalizer: null,
+      section: 'verification',
+      value: 'turnstile',
+    },
+    {
       input: 'captchaMode',
       location: 'settings.captcha_mode',
       normalizer: null,
@@ -559,6 +566,7 @@ export const fixtures = {
     verification: [
       'verification_prompt_template',
       'verification_context',
+      'captcha_method',
       'captcha_mode',
       'captcha_pass_action',
       'captcha_challenge_lifetime_hours',

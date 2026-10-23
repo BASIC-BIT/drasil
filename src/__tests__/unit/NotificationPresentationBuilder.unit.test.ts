@@ -89,6 +89,7 @@ const buildCaptchaChallenge = (overrides: Partial<CaptchaChallenge> = {}): Captc
   server_id: overrides.server_id ?? 'guild-1',
   user_id: overrides.user_id ?? 'user-1',
   provider: overrides.provider ?? CaptchaProvider.TURNSTILE,
+  method_revision: overrides.method_revision ?? 0,
   status: overrides.status ?? CaptchaChallengeStatus.PENDING,
   request_source: overrides.request_source ?? CaptchaChallengeRequestSource.MODERATOR,
   pass_effect: overrides.pass_effect ?? CaptchaChallengePassEffect.EVIDENCE_ONLY,
@@ -519,6 +520,18 @@ describe('NotificationPresentationBuilder (unit)', () => {
     ).toContain('The member answered the questions directly.');
   });
 
+  it('retains the selected native method in case diagnostics without answer material', () => {
+    const embed = new EmbedBuilder();
+    builder.upsertCaptchaChallengePresentation(
+      embed,
+      buildCaptchaChallenge({ provider: CaptchaProvider.DISCORD_IMAGE })
+    );
+    const value = getField(embed, NotificationPresentationBuilder.CAPTCHA_FIELD_NAME);
+    expect(value).toContain('Method: Discord image CAPTCHA');
+    expect(value).not.toContain('Link delivery');
+    expect(value).not.toContain('digest');
+  });
+
   it('replaces the typed browser security-check field as the challenge advances', () => {
     const embed = new EmbedBuilder().setTitle('Suspicious User');
     builder.upsertCaptchaChallengePresentation(
@@ -570,6 +583,8 @@ describe('NotificationPresentationBuilder (unit)', () => {
         history: [
           {
             generation: 1,
+            provider: CaptchaProvider.TURNSTILE,
+            method_revision: 0,
             request_source: CaptchaChallengeRequestSource.MODERATOR,
             pass_effect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
             case_revision_at_issue: 0,
@@ -585,6 +600,8 @@ describe('NotificationPresentationBuilder (unit)', () => {
           },
           {
             generation: 2,
+            provider: CaptchaProvider.TURNSTILE,
+            method_revision: 0,
             request_source: CaptchaChallengeRequestSource.MODERATOR,
             pass_effect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
             case_revision_at_issue: 0,
@@ -604,9 +621,11 @@ describe('NotificationPresentationBuilder (unit)', () => {
 
     const field = getField(embed, NotificationPresentationBuilder.CAPTCHA_FIELD_NAME);
     expect(field).toContain('Previous generations:');
-    expect(field).toContain('• 1: no outcome recorded, delivery failed (discord delivery failed)');
     expect(field).toContain(
-      '• 2: bypassed, no delivery failure recorded, bypass: Identity confirmed'
+      '• 1: Cloudflare Turnstile, no outcome recorded, delivery failed (discord delivery failed)'
+    );
+    expect(field).toContain(
+      '• 2: Cloudflare Turnstile, bypassed, no delivery failure recorded, bypass: Identity confirmed'
     );
   });
 

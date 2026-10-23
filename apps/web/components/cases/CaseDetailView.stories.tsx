@@ -67,3 +67,48 @@ export const ResolvedReopenCase: Story = {
     detail: fixtureResolvedCaseDetails[1],
   },
 };
+
+export const ImageCheckWithHistory: Story = {
+  args: {
+    detail: {
+      ...fixtureCaseDetails[0],
+      captchaChallenge: {
+        id: '11111111-1111-4111-8111-111111111111',
+        method: 'discord_image',
+        methodRevision: 1,
+        status: 'pending',
+        requestSource: 'moderator',
+        passEffect: 'evidence_only',
+        generation: 2,
+        submissionCount: 0,
+        expiresAt: '2026-06-04T00:00:00.000Z',
+        requestedAt: '2026-06-03T00:00:00.000Z',
+        deliveredAt: null,
+        deliveryErrorCode: null,
+        passedAt: null,
+        bypassedAt: null,
+        bypassedBy: null,
+        bypassReason: null,
+        history: [
+          {
+            method: 'turnstile',
+            methodRevision: 0,
+            generation: 1,
+            requestSource: 'moderator',
+            passEffect: 'evidence_only',
+            caseRevisionAtIssue: 0,
+            requestedBy: 'moderator-1',
+            requestedAt: '2026-06-02T00:00:00.000Z',
+            presentedAt: null,
+            outcome: 'cancelled',
+            outcomeAt: '2026-06-03T00:00:00.000Z',
+            deliveryErrorCode: null,
+            bypassedBy: null,
+            bypassedAt: null,
+            bypassReason: null,
+          },
+        ],
+      },
+    },
+  },
+};

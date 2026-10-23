@@ -1,5 +1,7 @@
+import { botCaptchaReadiness } from '../services/captcha/readiness';
 import {
   materializeSetupStoredChange,
+  getEffectiveCaptchaMethod,
   normalizeHeuristicKeywords,
   setupStateMatches,
   parseSetupStoredRecord,
@@ -432,6 +434,11 @@ export class ConfigService implements IConfigService {
         change
       );
       const settings = { ...current.settings, ...change.settings };
+      settings.captcha_method_revision =
+        (current.settings.captcha_method_revision ?? 0) +
+        (getEffectiveCaptchaMethod(current.settings) === getEffectiveCaptchaMethod(settings)
+          ? 0
+          : 1);
       for (const key of change.resetSettings ?? []) delete settings[key];
       const updated: Server = {
         ...current,
@@ -714,6 +721,18 @@ export class ConfigService implements IConfigService {
    * @returns The updated server configuration
    */
   async updateServerSettings(guildId: string, settings: Partial<ServerSettings>): Promise<Server> {
+    if (
+      'captcha_method' in settings ||
+      'captcha_mode' in settings ||
+      'captcha_method_revision' in settings
+    ) {
+      const updated = await this.updateSetupIfUnchanged(guildId, undefined, {
+        settings,
+        captchaReadiness: botCaptchaReadiness(),
+      });
+      if (!updated) throw new Error('Server configuration is unavailable.');
+      return updated;
+    }
     if (process.env.DATABASE_URL) {
       try {
         let server = await this.serverRepository.updateSettings(guildId, settings);

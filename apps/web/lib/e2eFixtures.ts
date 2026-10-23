@@ -317,6 +317,7 @@ function applyFixtureServerSettingsUpdate(
   setIfDefined(settings, 'role_quarantine_mode', update.roleQuarantineMode);
   setIfDefined(settings, 'role_quarantine_exempt_role_ids', update.roleQuarantineExemptRoleIds);
   setIfDefined(settings, 'account_quarantine_enabled', update.accountQuarantineEnabled);
+  setIfDefined(settings, 'captcha_method', update.captchaMethod);
   setIfDefined(settings, 'captcha_mode', update.captchaMode);
   setIfDefined(settings, 'captcha_pass_action', update.captchaPassAction);
   setIfDefined(settings, 'captcha_challenge_lifetime_hours', update.captchaChallengeLifetimeHours);

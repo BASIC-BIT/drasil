@@ -1,12 +1,9 @@
 import {
   createCaptchaBrowserActions,
-  encodeQueuedAction,
   type ActionContext,
   type ActionResult,
   type CaptchaBrowserDependencies,
   type CaptchaBrowserActions,
-  type CaptchaSystemCommand,
-  type EnqueueInput,
 } from '@drasil/application';
 
 export function createWebCaptchaActions(ports: CaptchaBrowserDependencies): CaptchaBrowserActions {
@@ -28,21 +25,4 @@ export function createCaptchaPassContext(challenge: {
     source: 'captcha',
     actor: { kind: 'system', purpose: 'captcha_pass' },
   };
-}
-export function encodeWebCaptchaEffect(
-  guildId: string,
-  command: CaptchaSystemCommand
-): EnqueueInput {
-  return encodeQueuedAction(
-    {
-      guildId,
-      requestId: `${command.challengeId}:${command.generation}`,
-      source: 'captcha',
-      actor: {
-        kind: 'system',
-        purpose: command.kind === 'apply_captcha_pass' ? 'captcha_pass' : 'captcha_attention',
-      },
-    },
-    command
-  );
 }

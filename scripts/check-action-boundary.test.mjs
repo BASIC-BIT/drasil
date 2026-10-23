@@ -242,7 +242,7 @@ test('canonical_setup_leaf_supports_commonjs_and_es_imports', async () => {
     const commonjs = createRequire(import.meta.url)('@drasil/application/setup-settings');
     assert.deepEqual(Object.keys(browser).sort(), Object.keys(commonjs).sort());
     assert.deepEqual(browser.guildSetupUpdateSchema.parse({guildId:'g', captchaMode:'manual'}), commonjs.guildSetupUpdateSchema.parse({guildId:'g', captchaMode:'manual'}));
-    assert.equal(Object.keys(browser.guildSetupUpdateSchema.innerType().shape).filter(key => !['guildId', 'updatedBy'].includes(key)).length, 73);
+    assert.equal(Object.keys(browser.guildSetupUpdateSchema.innerType().shape).filter(key => !['guildId', 'updatedBy'].includes(key)).length, 74);
   `,
     ],
     { encoding: 'utf8' }

@@ -27,6 +27,8 @@ export const caseActionSchema = z.enum([
 ]);
 
 export const captchaChallengeGenerationHistorySchema = z.object({
+  method: z.enum(['turnstile', 'discord_image']).default('turnstile'),
+  methodRevision: z.number().int().min(0).default(0),
   generation: z.number().int().positive(),
   requestSource: z.enum(['moderator', 'automatic_suspicious_join']),
   passEffect: z.enum(['evidence_only', 'verify_join_only']),
@@ -47,6 +49,8 @@ export const captchaChallengeSummarySchema = z.object({
   status: z.enum(['pending', 'passed', 'failed', 'expired', 'bypassed', 'cancelled']),
   requestSource: z.enum(['moderator', 'automatic_suspicious_join']),
   passEffect: z.enum(['evidence_only', 'verify_join_only']),
+  method: z.enum(['turnstile', 'discord_image']).default('turnstile'),
+  methodRevision: z.number().int().min(0).default(0),
   generation: z.number().int().positive(),
   submissionCount: z.number().int().min(0),
   expiresAt: z.string(),

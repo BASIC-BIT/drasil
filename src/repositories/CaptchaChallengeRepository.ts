@@ -1,8 +1,12 @@
+import { encodeQueuedAction } from '@drasil/application';
+import { buildEnqueueStatement } from '@drasil/application/postgres';
 import { inject, injectable } from 'inversify';
 import { Prisma, PrismaClient } from '../db/prisma';
 import { TYPES } from '../di/symbols';
+import { getCaptchaSettings } from '../utils/captchaSettings';
 import {
   CaptchaChallenge,
+  CaptchaProvider,
   CaptchaChallengeGenerationHistory,
   CaptchaChallengePassEffect,
   CaptchaChallengeRequestOutcome,
@@ -24,6 +28,8 @@ export interface CaptchaChallengeIssueInput {
   requestSource: CaptchaChallengeRequestSource;
   passEffect: CaptchaChallengePassEffect;
   caseRevision: number;
+  provider: 'turnstile' | 'discord_image';
+  methodRevision: number;
   tokenHash: string;
   expiresAt: Date;
   requestedBy?: string | null;
@@ -33,6 +39,24 @@ export interface CaptchaChallengeRetryInput extends CaptchaChallengeIssueInput {
   expectedChallengeId: string;
   expectedGeneration: number;
 }
+
+export interface CaptchaImageBinding {
+  challengeId: string;
+  generation: number;
+  verificationEventId: string;
+  serverId: string;
+  userId: string;
+  caseRevision: number;
+  methodRevision: number;
+}
+
+export interface CaptchaImageMaterialInput extends CaptchaImageBinding {
+  png: Uint8Array;
+  answerDigest: Uint8Array;
+  keyVersion: string;
+}
+
+export type CaptchaImageMaterial = Prisma.captcha_challenge_imagesGetPayload<Record<string, never>>;
 
 interface CaptchaChallengeRetryState {
   activePresentationRequestKey: string | null;
@@ -53,6 +77,8 @@ interface CaptchaChallengeRetryRecord {
 }
 
 interface CaptchaChallengeRequestHistoryRecord {
+  provider: CaptchaProvider;
+  method_revision: number;
   generation: number;
   request_source: CaptchaChallengeRequestSource;
   pass_effect: CaptchaChallengePassEffect;
@@ -132,6 +158,13 @@ function getCaptchaChallengeRetryState(
 }
 
 export interface ICaptchaChallengeRepository {
+  requestImageAssistance(binding: CaptchaImageBinding): Promise<boolean>;
+  isImageBindingEligible(binding: CaptchaImageBinding): Promise<boolean>;
+  invalidateImageMaterial(binding: CaptchaImageBinding, activeKeyVersion: string): Promise<boolean>;
+  storeImageMaterial(input: CaptchaImageMaterialInput): Promise<boolean>;
+  findImageMaterial(binding: CaptchaImageBinding): Promise<CaptchaImageMaterial | null>;
+  deleteImageMaterial(challengeId: string, generation: number): Promise<void>;
+  cleanupImageMaterial(now: Date, limit: number): Promise<number>;
   findById(id: string): Promise<CaptchaChallenge | null>;
   findByCaseId(verificationEventId: string): Promise<CaptchaChallenge | null>;
   create(input: CaptchaChallengeIssueInput): Promise<CaptchaChallenge>;
@@ -166,6 +199,196 @@ export interface ICaptchaChallengeRepository {
 export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
   public constructor(@inject(TYPES.PrismaClient) private readonly prisma: PrismaClient) {}
 
+  private async lockCaseRows(
+    transaction: Prisma.TransactionClient,
+    serverId: string,
+    verificationEventId: string
+  ): Promise<void> {
+    await transaction.$queryRaw`select guild_id from servers where guild_id = ${serverId} for update`;
+    await transaction.$queryRaw`
+      select id from verification_events
+      where id = ${verificationEventId}::uuid and server_id = ${serverId}
+      for update
+    `;
+  }
+
+  private assertIssueMethod(settings: unknown, input: CaptchaChallengeIssueInput): void {
+    const current = getCaptchaSettings(settings);
+    if (current.method !== input.provider || current.methodRevision !== input.methodRevision) {
+      throw new CaptchaChallengeCaseChangedError(
+        'The security-check method changed before issuance.'
+      );
+    }
+  }
+
+  /** Lock the lifecycle and settings rows before reading or storing private material. */
+  private async lockImageBinding(
+    transaction: Prisma.TransactionClient,
+    binding: CaptchaImageBinding
+  ): Promise<boolean> {
+    // Match setup/completion writers: server -> case -> challenge. Separate statements
+    // make the order explicit; each query observes the row after any lock wait.
+    const servers = await transaction.$queryRaw<Array<{ settings: Prisma.JsonValue }>>`
+      select settings from servers where guild_id = ${binding.serverId} for update
+    `;
+    if (!servers[0]) return false;
+    const settings = getCaptchaSettings(servers[0].settings);
+    if (
+      settings.method !== 'discord_image' ||
+      settings.mode === 'off' ||
+      settings.methodRevision !== binding.methodRevision
+    )
+      return false;
+
+    const cases = await transaction.$queryRaw<Array<{ id: string }>>`
+      select id::text from verification_events
+      where id = ${binding.verificationEventId}::uuid
+        and server_id = ${binding.serverId} and user_id = ${binding.userId}
+        and status = 'pending'::verification_status and case_kind = 'standard'::case_kind
+      for update
+    `;
+    if (!cases[0]) return false;
+
+    const challenges = await transaction.$queryRaw<Array<{ expires_at: Date }>>`
+      select expires_at from captcha_challenges
+      where id = ${binding.challengeId}::uuid
+        and generation = ${binding.generation}
+        and verification_event_id = ${binding.verificationEventId}::uuid
+        and server_id = ${binding.serverId} and user_id = ${binding.userId}
+        and case_revision_at_issue = ${binding.caseRevision}
+        and method_revision = ${binding.methodRevision}
+        and provider = 'discord_image'::captcha_provider
+        and status = 'pending'::captcha_challenge_status
+        and delivery_error_code is distinct from 'image_key_rotated'
+      for update
+    `;
+    // Expiry can elapse while waiting even when the locked row itself is unchanged.
+    return !!challenges[0] && challenges[0].expires_at.getTime() > Date.now();
+  }
+
+  public async requestImageAssistance(binding: CaptchaImageBinding): Promise<boolean> {
+    return this.prisma.$transaction(async (transaction) => {
+      if (!(await this.lockImageBinding(transaction, binding))) return false;
+      const statement = buildEnqueueStatement(
+        encodeQueuedAction(
+          {
+            guildId: binding.serverId,
+            requestId: `${binding.challengeId}:${binding.generation}`,
+            source: 'captcha',
+            actor: { kind: 'system', purpose: 'captcha_attention' },
+          },
+          {
+            kind: 'notify_captcha_attention',
+            caseId: binding.verificationEventId,
+            targetUserId: binding.userId,
+            challengeId: binding.challengeId,
+            generation: binding.generation,
+            reason: 'member_assistance',
+          }
+        )
+      );
+      const receipts = await transaction.$queryRawUnsafe<Array<{ id: string }>>(
+        statement.text,
+        ...statement.values
+      );
+      if (!receipts[0]) throw new Error('Security-check assistance could not be queued.');
+      return true;
+    });
+  }
+
+  public async isImageBindingEligible(binding: CaptchaImageBinding): Promise<boolean> {
+    return this.prisma.$transaction((transaction) => this.lockImageBinding(transaction, binding));
+  }
+
+  /** Rotation invalidates this generation until a moderator retries it. Never regenerate in place. */
+  public async invalidateImageMaterial(
+    binding: CaptchaImageBinding,
+    activeKeyVersion: string
+  ): Promise<boolean> {
+    return this.prisma.$transaction(async (transaction) => {
+      if (!(await this.lockImageBinding(transaction, binding))) return false;
+      const material = await transaction.captcha_challenge_images.findUnique({
+        where: {
+          captcha_challenge_id_generation: {
+            captcha_challenge_id: binding.challengeId,
+            generation: binding.generation,
+          },
+        },
+      });
+      if (!material || material.key_version === activeKeyVersion) return false;
+      await transaction.captcha_challenge_images.deleteMany({
+        where: { captcha_challenge_id: binding.challengeId, generation: binding.generation },
+      });
+      await transaction.captcha_challenges.update({
+        where: { id: binding.challengeId },
+        data: {
+          delivery_error_code: 'image_key_rotated',
+          delivered_at: null,
+          updated_at: new Date(),
+        },
+      });
+      return true;
+    });
+  }
+
+  public async storeImageMaterial(input: CaptchaImageMaterialInput): Promise<boolean> {
+    return this.prisma.$transaction(async (transaction) => {
+      if (!(await this.lockImageBinding(transaction, input))) return false;
+      const stored = await transaction.captcha_challenge_images.createMany({
+        data: {
+          captcha_challenge_id: input.challengeId,
+          generation: input.generation,
+          png: new Uint8Array(input.png),
+          answer_digest: new Uint8Array(input.answerDigest),
+          key_version: input.keyVersion,
+        },
+        skipDuplicates: true,
+      });
+      return stored.count === 1;
+    });
+  }
+
+  public async findImageMaterial(
+    binding: CaptchaImageBinding
+  ): Promise<CaptchaImageMaterial | null> {
+    return this.prisma.$transaction(async (transaction) => {
+      if (!(await this.lockImageBinding(transaction, binding))) return null;
+      return transaction.captcha_challenge_images.findUnique({
+        where: {
+          captcha_challenge_id_generation: {
+            captcha_challenge_id: binding.challengeId,
+            generation: binding.generation,
+          },
+        },
+      });
+    });
+  }
+
+  public async deleteImageMaterial(challengeId: string, generation: number): Promise<void> {
+    await this.prisma.captcha_challenge_images.deleteMany({
+      where: { captcha_challenge_id: challengeId, generation },
+    });
+  }
+
+  /** Sweep only a bounded batch; concurrent lifecycle writers retain their row locks. */
+  public async cleanupImageMaterial(now: Date, limit: number): Promise<number> {
+    return this.prisma.$executeRaw`
+      with stale as (
+        select image.captcha_challenge_id, image.generation
+        from captcha_challenge_images as image
+        join captcha_challenges as challenge on challenge.id = image.captcha_challenge_id
+        where challenge.status <> 'pending'::captcha_challenge_status
+          or challenge.expires_at <= ${now}
+          or challenge.generation <> image.generation
+        order by image.created_at, image.captcha_challenge_id, image.generation
+        limit ${Math.max(1, Math.min(limit, 100))}
+        for update of challenge, image skip locked
+      )
+      delete from captcha_challenge_images as image using stale
+      where image.captcha_challenge_id = stale.captcha_challenge_id and image.generation = stale.generation
+    `;
+  }
+
   public async findById(id: string): Promise<CaptchaChallenge | null> {
     const record = await this.prisma.captcha_challenges.findUnique({
       where: { id },
@@ -189,10 +412,11 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
   public async create(input: CaptchaChallengeIssueInput): Promise<CaptchaChallenge> {
     try {
       return (await this.prisma.$transaction(async (transaction) => {
+        await this.lockCaseRows(transaction, input.serverId, input.verificationEventId);
         const pendingCase = await transaction.$queryRaw<
-          Array<{ id: string; pass_effect: CaptchaChallengePassEffect }>
+          Array<{ id: string; pass_effect: CaptchaChallengePassEffect; settings: Prisma.JsonValue }>
         >`
-          SELECT verification.id::text,
+          SELECT verification.id::text, server.settings,
             case
               when ${input.requestSource}::captcha_challenge_request_source = ${CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN}::captcha_challenge_request_source
                 and coalesce(server.settings->>'captcha_pass_action', 'evidence_only') = 'verify_join_only'
@@ -207,6 +431,9 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
             AND verification.status = ${VerificationStatus.PENDING}::verification_status
             AND verification.case_kind = ${CaseKind.STANDARD}::case_kind
             AND verification.case_revision = ${input.caseRevision}
+            AND case when server.settings ? 'captcha_method' then server.settings->>'captcha_method'
+              when server.settings->>'captcha_mode' in ('manual', 'suspicious_join') then 'turnstile' else 'none' end = ${input.provider}
+            AND coalesce(server.settings->>'captcha_method_revision', '0') = ${String(input.methodRevision)}
             AND (
               (
                 ${input.requestSource}::captcha_challenge_request_source = ${CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN}::captcha_challenge_request_source
@@ -217,15 +444,17 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
                 AND coalesce(server.settings->>'captcha_mode', 'off') in ('manual', 'suspicious_join')
               )
             )
-          FOR UPDATE OF verification, server
         `;
         if (!pendingCase[0]) {
           throw new CaptchaChallengeCaseChangedError(
             'The case changed before the security check could be created.'
           );
         }
+        this.assertIssueMethod(pendingCase[0].settings, input);
         const challenge = await transaction.captcha_challenges.create({
           data: {
+            provider: input.provider,
+            method_revision: input.methodRevision,
             verification_event_id: input.verificationEventId,
             server_id: input.serverId,
             user_id: input.userId,
@@ -241,6 +470,8 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
           data: {
             captcha_challenge_id: challenge.id,
             generation: challenge.generation,
+            provider: challenge.provider,
+            method_revision: challenge.method_revision,
             request_source: challenge.request_source,
             pass_effect: challenge.pass_effect,
             case_revision_at_issue: challenge.case_revision_at_issue,
@@ -274,10 +505,11 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
 
   public async retry(input: CaptchaChallengeRetryInput): Promise<CaptchaChallenge> {
     return (await this.prisma.$transaction(async (transaction) => {
+      await this.lockCaseRows(transaction, input.serverId, input.verificationEventId);
       const pendingCase = await transaction.$queryRaw<
-        Array<{ id: string; pass_effect: CaptchaChallengePassEffect }>
+        Array<{ id: string; pass_effect: CaptchaChallengePassEffect; settings: Prisma.JsonValue }>
       >`
-        SELECT verification.id::text,
+        SELECT verification.id::text, server.settings,
           case
             when ${input.requestSource}::captcha_challenge_request_source = ${CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN}::captcha_challenge_request_source
               and coalesce(server.settings->>'captcha_pass_action', 'evidence_only') = 'verify_join_only'
@@ -292,6 +524,9 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
           AND verification.status = ${VerificationStatus.PENDING}::verification_status
           AND verification.case_kind = ${CaseKind.STANDARD}::case_kind
           AND verification.case_revision = ${input.caseRevision}
+          AND case when server.settings ? 'captcha_method' then server.settings->>'captcha_method'
+              when server.settings->>'captcha_mode' in ('manual', 'suspicious_join') then 'turnstile' else 'none' end = ${input.provider}
+          AND coalesce(server.settings->>'captcha_method_revision', '0') = ${String(input.methodRevision)}
           AND (
             (
               ${input.requestSource}::captcha_challenge_request_source = ${CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN}::captcha_challenge_request_source
@@ -302,13 +537,19 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
               AND coalesce(server.settings->>'captcha_mode', 'off') in ('manual', 'suspicious_join')
             )
           )
-        FOR UPDATE OF verification, server
       `;
       if (!pendingCase[0]) {
         throw new CaptchaChallengeCaseChangedError(
           'The case changed before the security check could be retried.'
         );
       }
+      this.assertIssueMethod(pendingCase[0].settings, input);
+      await transaction.$queryRaw`
+        select id from captcha_challenges where id = ${input.expectedChallengeId}::uuid
+          and verification_event_id = ${input.verificationEventId}::uuid
+          and server_id = ${input.serverId} and user_id = ${input.userId}
+        for update
+      `;
       const existing = await transaction.captcha_challenges.findUnique({
         where: { id: input.expectedChallengeId },
       });
@@ -373,6 +614,8 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
         },
         data: {
           status: CaptchaChallengeStatus.PENDING,
+          provider: input.provider,
+          method_revision: input.methodRevision,
           request_source: input.requestSource,
           pass_effect: pendingCase[0].pass_effect,
           generation: { increment: 1 },
@@ -401,6 +644,8 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
         data: {
           captcha_challenge_id: retried.id,
           generation: retried.generation,
+          provider: retried.provider,
+          method_revision: retried.method_revision,
           request_source: retried.request_source,
           pass_effect: retried.pass_effect,
           case_revision_at_issue: retried.case_revision_at_issue,
@@ -428,11 +673,14 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
       where challenge.id = ${id}::uuid
         and challenge.generation = ${generation}
         and challenge.status = ${CaptchaChallengeStatus.PENDING}::captcha_challenge_status
+        and challenge.delivery_error_code is distinct from 'image_key_rotated'
         and verification.id = challenge.verification_event_id
         and verification.status = ${VerificationStatus.PENDING}::verification_status
         and verification.case_kind = ${CaseKind.STANDARD}::case_kind
         and server.guild_id = challenge.server_id
         and coalesce(server.settings->>'captcha_mode', 'off') in ('manual', 'suspicious_join')
+        and case when server.settings ? 'captcha_method' then server.settings->>'captcha_method' else 'turnstile' end = challenge.provider::text
+        and coalesce(server.settings->>'captcha_method_revision', '0') = challenge.method_revision::text
       returning challenge.id::text
     `;
     return delivered.length === 1;
@@ -468,6 +716,13 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
           where verification.id = challenge.verification_event_id
             and verification.status = ${VerificationStatus.PENDING}::verification_status
         )
+        and exists (
+          select 1 from servers as server
+          where server.guild_id = challenge.server_id
+            and server.settings->>'captcha_mode' in ('manual', 'suspicious_join')
+            and case when server.settings ? 'captcha_method' then server.settings->>'captcha_method' else 'turnstile' end = challenge.provider::text
+            and coalesce(server.settings->>'captcha_method_revision', '0') = challenge.method_revision::text
+        )
       returning challenge.id::text
     `;
     return touched.length === 1;
@@ -478,15 +733,23 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
     generation: number,
     code: string
   ): Promise<boolean> {
-    const result = await this.prisma.captcha_challenges.updateMany({
-      where: { id, generation, status: CaptchaChallengeStatus.PENDING },
-      data: {
-        delivered_at: null,
-        delivery_error_code: code.slice(0, 100),
-        updated_at: new Date(),
-      },
-    });
-    return result.count === 1;
+    const result = await this.prisma.$queryRaw<Array<{ id: string }>>`
+      update captcha_challenges as challenge
+      set delivered_at = null, delivery_error_code = ${code.slice(0, 100)}, updated_at = now()
+      from servers as server, verification_events as verification
+      where challenge.id = ${id}::uuid and challenge.generation = ${generation}
+        and challenge.status = 'pending'::captcha_challenge_status
+        and challenge.delivery_error_code is distinct from 'image_key_rotated'
+        and verification.id = challenge.verification_event_id
+        and verification.status = 'pending'::verification_status
+        and verification.case_kind = 'standard'::case_kind
+        and server.guild_id = challenge.server_id
+        and server.settings->>'captcha_mode' in ('manual', 'suspicious_join')
+        and case when server.settings ? 'captcha_method' then server.settings->>'captcha_method' else 'turnstile' end = challenge.provider::text
+        and coalesce(server.settings->>'captcha_method_revision', '0') = challenge.method_revision::text
+      returning challenge.id::text
+    `;
+    return result.length === 1;
   }
 
   public async bypass(
@@ -499,11 +762,17 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
   ): Promise<CaptchaChallenge | null> {
     const normalizedReason = reason.trim();
     if (!normalizedReason) {
-      throw new Error('A reason is required to continue without the browser check.');
+      throw new Error('A reason is required to continue without the security check.');
     }
     const boundedReason = normalizedReason.slice(0, 1000);
     const bypassedAt = new Date();
     return (await this.prisma.$transaction(async (transaction) => {
+      const binding = await transaction.captcha_challenges.findUnique({
+        where: { id },
+        select: { server_id: true, verification_event_id: true },
+      });
+      if (!binding) return null;
+      await this.lockCaseRows(transaction, binding.server_id, binding.verification_event_id);
       const eligible = await transaction.$queryRaw<
         Array<{
           delivery_error_code: string | null;
@@ -518,6 +787,8 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
         join servers as server
           on server.guild_id = challenge.server_id
         where challenge.id = ${id}::uuid
+          and challenge.server_id = ${binding.server_id}
+          and challenge.verification_event_id = ${binding.verification_event_id}::uuid
           and challenge.generation = ${generation}
           and challenge.status in (
             ${CaptchaChallengeStatus.PENDING}::captcha_challenge_status,
@@ -527,7 +798,7 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
           and verification.status = ${VerificationStatus.PENDING}::verification_status
           and verification.case_kind = ${CaseKind.STANDARD}::case_kind
           and (${expectedCaseRevision ?? null}::int is null or verification.case_revision = ${expectedCaseRevision ?? null}::int)
-        for update of verification, challenge, server
+        for update of challenge
       `;
       if (!eligible[0]) {
         return null;
@@ -618,7 +889,13 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
         from captcha_challenges as challenge
         join servers as server on server.guild_id = challenge.server_id
         where challenge.status = ${CaptchaChallengeStatus.PENDING}::captcha_challenge_status
-          and coalesce(server.settings->>'captcha_mode', 'off') = 'off'
+          and (
+            coalesce(server.settings->>'captcha_mode', 'off') = 'off'
+            or case when server.settings ? 'captcha_method' then server.settings->>'captcha_method'
+              when server.settings->>'captcha_mode' in ('manual', 'suspicious_join') then 'turnstile' else 'none' end
+              is distinct from challenge.provider::text
+            or coalesce(server.settings->>'captcha_method_revision', '0') <> challenge.method_revision::text
+          )
         order by challenge.requested_at asc
         limit ${Math.max(1, Math.min(limit, 100))}
         for update of challenge, server skip locked
@@ -705,7 +982,9 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
           and challenge.expires_at <= ${now}
           and verification.status = ${VerificationStatus.PENDING}::verification_status
           and verification.case_kind <> ${CaseKind.COMPROMISED_ACCOUNT}::case_kind
-          and coalesce(server.settings->>'captcha_mode', 'off') <> 'off'
+          and server.settings->>'captcha_mode' in ('manual', 'suspicious_join')
+          and case when server.settings ? 'captcha_method' then server.settings->>'captcha_method' else 'turnstile' end = challenge.provider::text
+          and coalesce(server.settings->>'captcha_method_revision', '0') = challenge.method_revision::text
         order by challenge.expires_at asc
         limit ${Math.max(1, Math.min(limit, 100))}
         for update of challenge, verification, server skip locked
@@ -748,22 +1027,26 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
     });
     const interrupted: CaptchaChallenge[] = [];
     for (const candidate of candidates) {
-      const result = await this.prisma.captcha_challenges.updateMany({
-        where: {
-          id: candidate.id,
-          generation: candidate.generation,
-          status: CaptchaChallengeStatus.PENDING,
-          delivered_at: null,
-          delivery_error_code: null,
-          updated_at: candidate.updated_at,
-          expires_at: { gt: now },
-        },
-        data: {
-          delivery_error_code: 'delivery_interrupted',
-          updated_at: new Date(),
-        },
-      });
-      if (result.count === 1) {
+      const result = await this.prisma.$queryRaw<Array<{ id: string }>>`
+        update captcha_challenges as challenge
+        set delivery_error_code = 'delivery_interrupted', updated_at = now()
+        from servers as server, verification_events as verification
+        where challenge.id = ${candidate.id}::uuid
+          and challenge.generation = ${candidate.generation}
+          and challenge.status = 'pending'::captcha_challenge_status
+          and challenge.delivered_at is null and challenge.delivery_error_code is null
+          and challenge.updated_at = ${candidate.updated_at}
+          and challenge.expires_at > ${now}
+          and verification.id = challenge.verification_event_id
+          and verification.status = 'pending'::verification_status
+          and verification.case_kind = 'standard'::case_kind
+          and server.guild_id = challenge.server_id
+          and server.settings->>'captcha_mode' in ('manual', 'suspicious_join')
+          and case when server.settings ? 'captcha_method' then server.settings->>'captcha_method' else 'turnstile' end = challenge.provider::text
+          and coalesce(server.settings->>'captcha_method_revision', '0') = challenge.method_revision::text
+        returning challenge.id::text
+      `;
+      if (result.length === 1) {
         const refreshed = await this.findById(candidate.id);
         if (refreshed) {
           interrupted.push(refreshed);
@@ -992,6 +1275,8 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
       const bypass = bypassByGeneration.get(request.generation);
       return {
         generation: request.generation,
+        provider: request.provider,
+        method_revision: request.method_revision,
         request_source: request.request_source,
         pass_effect: request.pass_effect,
         case_revision_at_issue: request.case_revision_at_issue,

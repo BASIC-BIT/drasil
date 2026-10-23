@@ -26,6 +26,8 @@ export interface Server {
  * Flexible server settings stored as JSON
  */
 export interface ServerSettings {
+  captcha_method?: 'none' | 'discord_image' | 'turnstile';
+  captcha_method_revision?: number;
   captcha_mode?: 'off' | 'manual' | 'suspicious_join';
   captcha_pass_action?: 'evidence_only' | 'verify_join_only';
   captcha_challenge_lifetime_hours?: number;
@@ -522,6 +524,7 @@ export interface VerificationEvent {
 
 export enum CaptchaProvider {
   TURNSTILE = 'turnstile',
+  DISCORD_IMAGE = 'discord_image',
 }
 
 export enum CaptchaChallengeStatus {
@@ -566,6 +569,7 @@ export interface CaptchaChallenge {
   server_id: string;
   user_id: string;
   provider: CaptchaProvider;
+  method_revision: number;
   status: CaptchaChallengeStatus;
   request_source: CaptchaChallengeRequestSource;
   pass_effect: CaptchaChallengePassEffect;
@@ -589,6 +593,8 @@ export interface CaptchaChallenge {
 }
 
 export interface CaptchaChallengeGenerationHistory {
+  provider: CaptchaProvider;
+  method_revision: number;
   generation: number;
   request_source: CaptchaChallengeRequestSource;
   pass_effect: CaptchaChallengePassEffect;

@@ -9,6 +9,7 @@ const target = { caseId: id, targetUserId: id };
 const generation = z.number().int().positive();
 const expected = { expectedChallengeId: id, expectedGeneration: generation };
 export const captchaAttentionReasonSchema = z.enum([
+  'member_assistance',
   'delivery_failed',
   'submission_limit',
   'expired',

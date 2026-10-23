@@ -93,6 +93,7 @@ export async function POST(
     const completed = await completeCaptchaAttempt(context, {
       challengeId: started.challenge.id,
       generation: started.challenge.generation,
+      provider: 'turnstile',
       attemptId: started.attemptId,
       validation,
     });

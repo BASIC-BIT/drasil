@@ -45,6 +45,14 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
+      - name: Use Ubuntu archive mirror
+        run: |
+          # Azure mirror downloads can stall before Chromium installation.
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            sudo sed -i -E \
+              's#https?://azure\.archive\.ubuntu\.com/ubuntu([/[:space:]]|$)#https://archive.ubuntu.com/ubuntu\1#g' \
+              /etc/apt/apt-mirrors.txt
+          fi
       - name: Install Playwright browsers
         timeout-minutes: 10
         run: npx playwright install --with-deps chromium
