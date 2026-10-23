@@ -5,7 +5,7 @@ import { createWebActionContext, createWebConfirmationPort } from '@/lib/applica
 import { randomUUID } from 'node:crypto';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { caseActionSchema, type CaseAction } from '@drasil/contracts';
+import { caseActionSchema, getEffectiveCaptchaMethod, type CaseAction } from '@drasil/contracts';
 import {
   createActiveCaseDataAdapter,
   type CaseActionQueueResult,
@@ -232,11 +232,13 @@ async function assertCanQueueCaseAction(
     if (formData?.get('confirmAction') !== 'on') {
       throw new Error('Confirm the security-check action before queueing it.');
     }
-    const setupAdapter = createSetupDataAdapter();
-    const server = await setupAdapter.getServer(guild.id);
-    const mode = server?.settings.captcha_mode;
-    if (mode !== 'manual' && mode !== 'suspicious_join') {
-      throw new Error('Browser security checks are disabled for this server.');
+    if (action !== 'bypass_captcha') {
+      const server = await createSetupDataAdapter().getServer(guild.id);
+      const method = getEffectiveCaptchaMethod(server?.settings);
+      const mode = server?.settings.captcha_mode;
+      if (method === 'none' || (mode !== 'manual' && mode !== 'suspicious_join')) {
+        throw new Error('Browser security checks are disabled for this server.');
+      }
     }
     const reason = action === 'bypass_captcha' ? readFormString(formData, 'reason') : null;
     if (action === 'bypass_captcha' && !reason) {
