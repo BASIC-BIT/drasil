@@ -1,0 +1,29 @@
+# Everyday report inbox in Storybook
+
+The first working slice follows an ordinary report: select it, read the submitted evidence, dismiss it, see the decision receipt, then choose the next report. It uses the approved flat charcoal direction and commissioned transparent tree. This is a component exploration; production routes and moderation endpoints are not connected.
+
+Run `npm --workspace apps/web run storybook` and open **Design foundation → Report inbox → Everyday review**. The Light story and theme control expose the alternate theme. Reload the story to reset simulated decisions.
+
+The adjacent Report queue, Report evidence and Report actions stories isolate the reusable parts. Their implementation is in `apps/web/components/inbox/foundation/`; styles and semantic tokens stay scoped there. The composition consumes `ReportDetail` and injects its action callback. Fixtures adapt the existing report fixtures without changing source quotations. Open case demonstrates its real role/thread consequence and a queued receipt; it does not pretend the bot has completed a case.
+
+Review shows the reporter statement and substantive submitted evidence together. Screenshot/attachment items are single native links covering their heading and file information, with a keyboard focus outline and hover treatment. They open in a new tab; missing URLs remain non-interactive. Statements and messages stay fully expanded regardless of length. Evidence retains the complete record, including reporter identification; Full evidence record switches to it. A compact member-context strip keeps the member ID, history link and any linked case near the name across all tabs. Supplied `MemberProfile` data can add known presence, case-role state, join date and the most recent recorded review preceding this report. Missing profile facts are omitted. Case-role state does not imply other restrictions, and a linked case does not imply an active case. The juniper fixture demonstrates this context using the existing member-profile fixture; prior false-positive decisions are not presented as violations.
+
+Queue, report, evidence, activity, prior-review and record timestamps use the shared Timestamp component: the absolute UTC date/time plus relative age. Join dates retain day precision. One clock per Foundation updates visible ages once a minute, with stable initial hydration and timer cleanup. Timestamp stories isolate date/time and date-only variants.
+
+Below 700px, the community button opens the shared workspace navigation. Escape closes it and restores the trigger; outside clicks close it. Inbox returns to the queue and restores visible focus, including when the queue was already open. Search and the selected evidence tab survive the return. The navigation links retain existing destination URLs; this isolated Storybook slice does not implement those route pages.
+
+Every moderation action opens an inline confirmation before its callback runs, including Open case, Dismiss report, Mark false positive and Mark handled. Each names its effect and displays the member and report identifier beside the confirmation; the focused heading describes that context for assistive technology. Cancel preserves the report and returns focus to its trigger. Navigation and evidence controls do not request confirmation. The receipt stays in the completed report detail until the moderator leaves it. It is not pinned to the inbox after Next report or Back to inbox. An empty queue shows one full-width state, without a second detail-pane message. Continuation follows the selected row, wraps and respects search. On narrow screens, selection opens the detail pane; Back to inbox restores focus to the originating row. Known request results appear consistently in the queue, receipt and Activity, including queued and processing states, without inventing completion or server timestamps. The page count covers all pending reports; search matches are counted separately in the queue header.
+
+## Verification
+
+`npm --workspace apps/web run test:storybook:visual -- report-inbox.spec.ts` exercises the everyday flow, search, queue order, keyboard tabs/focus, mobile navigation and return, empty inbox, confirmation context for all four actions, pending queue/Activity visibility, total versus filtered counts, evidence availability in Review and supplied member context. The same suite runs axe against both themes at 320px and 1440px before and after the report decision, audits the open mobile navigation and asserts horizontal reflow. It uses a declared `axe-core` development dependency; the Storybook addon configuration alone is not the test runner.
+
+Typecheck, lint, web unit tests and the static Storybook build also apply. Review screenshots at 1440, 1024, 390 and 320px. Automated accessibility checks supplement keyboard and visual inspection; they do not establish full WCAG conformance.
+
+## Assets and next iteration
+
+`public/brand/drasil-tree.png` preserves the recovered transparent commissioned artwork described in the foundation spec. Local Manrope regular, medium and semibold fonts include their OFL license. Original files under `docs/icons/` remain untouched.
+
+The [case workspace exploration](storybook-case-workspace.md) continues this foundation into an ordinary opened case and a denser saved-evidence case. Shared protection signals and richer histories still need source-backed design work. Route adoption, complete request lifecycle handling, live refresh and authorization integration remain separate work.
+
+The UX reviewer rechecked mobile navigation, the Review/Evidence hierarchy and supplied member context in the exported React preview. Comparing an inline context strip with a separate rail favored the strip: it preserves evidence reading width and avoids another column. Richer histories, shared protection signals and dense case evidence still need separate design exploration.

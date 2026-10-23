@@ -1,0 +1,126 @@
+@font-face {
+  font-family: 'Drasil Manrope';
+  src: url('/fonts/manrope/regular.ttf') format('truetype');
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Drasil Manrope';
+  src: url('/fonts/manrope/medium.ttf') format('truetype');
+  font-weight: 500;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Drasil Manrope';
+  src: url('/fonts/manrope/semibold.ttf') format('truetype');
+  font-weight: 600;
+  font-display: swap;
+}
+.root {
+  --dr-canvas: light-dark(#f5f5f7, #141416);
+  --dr-surface: light-dark(#fff, #1a1a1d);
+  --dr-raised: light-dark(#ededf1, #222225);
+  --dr-selected: light-dark(#e3e3e8, #2b2b2f);
+  --dr-text: light-dark(#202024, #f1f1f3);
+  --dr-muted: light-dark(#606068, #b2b2bc);
+  --dr-line: light-dark(#bdbdc7, #3c3c43);
+  --dr-boundary: light-dark(#93939e, #676771);
+  --dr-positive: light-dark(#286446, #a5d2b4);
+  --dr-warning: light-dark(#78500c, #ebc889);
+  --dr-danger: light-dark(#a12632, #f2a0a0);
+  background: var(--dr-canvas);
+  color: var(--dr-text);
+  font:
+    400 14px/1.6 'Drasil Manrope',
+    system-ui,
+    sans-serif;
+  min-height: 100vh;
+  isolation: isolate;
+}
+.root[data-foundation-theme='light'] {
+  color-scheme: light;
+}
+.root[data-foundation-theme='dark'] {
+  color-scheme: dark;
+}
+.root :where(h1, h2, h3, p, ul, ol, dl, dd, blockquote) {
+  margin: 0;
+}
+.root :where(button, input, select, textarea) {
+  font: inherit;
+}
+.root :where(button, a, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--dr-positive);
+  outline-offset: 4px;
+}
+.root :where(a) {
+  color: var(--dr-positive);
+  text-underline-offset: 4px;
+}
+.root :where(button) {
+  cursor: pointer;
+}
+.root :where(button:disabled) {
+  cursor: default;
+}
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--dr-text) !important;
+  font-size: 21px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.brand img {
+  object-fit: contain;
+  flex: 0 0 auto;
+}
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 9px 15px;
+  border: 1px solid var(--dr-boundary);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--dr-text);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+}
+.button:hover:not(:disabled) {
+  background: var(--dr-raised);
+}
+.button:disabled {
+  opacity: 0.55;
+}
+.button[data-tone='positive'] {
+  color: var(--dr-positive);
+  border-color: var(--dr-positive);
+}
+.button[data-tone='warning'] {
+  color: var(--dr-warning);
+  border-color: var(--dr-warning);
+}
+.button[data-tone='danger'] {
+  color: var(--dr-danger);
+  border-color: var(--dr-danger);
+}
+@media (prefers-reduced-motion: reduce) {
+  .root *,
+  .root *::before,
+  .root *::after {
+    scroll-behavior: auto !important;
+  }
+}
+.root,
+.root *,
+.root *::before,
+.root *::after {
+  box-sizing: border-box;
+}
+.root [hidden] {
+  display: none !important;
+}

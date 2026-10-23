@@ -1,0 +1,329 @@
+.desk {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 24px;
+  padding-top: 20px;
+}
+.index {
+  border-right: 1px solid var(--dr-line);
+  padding-right: 0;
+  min-width: 0;
+  align-self: start;
+  position: sticky;
+  top: var(--case-command-offset, 88px);
+}
+.index > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding: 0 14px 14px 0;
+  border-bottom: 1px solid var(--dr-line);
+}
+.index h2 {
+  font-size: 13px;
+  font-weight: 600;
+}
+.index header span {
+  font-size: 10px;
+  color: var(--dr-muted);
+}
+.index a {
+  display: block;
+  padding: 10px 14px;
+  min-height: 44px;
+  border-left: 2px solid transparent;
+  color: var(--dr-muted);
+  text-decoration: none;
+  font-size: 11px;
+}
+.index a:hover {
+  color: var(--dr-text);
+  background: var(--dr-raised);
+}
+.index a[aria-current] {
+  color: var(--dr-positive);
+  border-left-color: var(--dr-positive);
+  background: color-mix(in srgb, var(--dr-positive) 7%, var(--dr-surface));
+}
+.index strong {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+}
+.index > a {
+  border-bottom: 1px solid var(--dr-line);
+}
+.index > a time {
+  display: block;
+  margin-top: 3px;
+  font-size: 10px;
+}
+.index a > span {
+  display: block;
+  margin-top: 3px;
+}
+.contextJumps {
+  display: none;
+}
+.reader {
+  min-width: 0;
+}
+.reader > section {
+  padding-bottom: 24px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--dr-line);
+}
+.sourceHeading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  min-height: 36px;
+  margin-bottom: 12px;
+}
+.sourceHeading h3 {
+  font-size: 14px;
+  font-weight: 600;
+  scroll-margin-top: var(--case-command-offset, 88px);
+}
+.sourceHeading p,
+.sourceHeading > span {
+  font-size: 10px;
+  color: var(--dr-muted);
+}
+.sourceHeading a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.sourceLinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  justify-content: flex-end;
+}
+.sourceLinks > span {
+  align-self: center;
+  color: var(--dr-muted);
+  font-size: 10px;
+}
+.message {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px;
+  background: var(--dr-raised);
+  border-radius: 3px;
+}
+.message + .message {
+  margin-top: 6px;
+}
+.mark {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  flex: 0 0 36px;
+  height: 36px;
+  border-radius: 50%;
+  color: light-dark(#45515b, #d2dae0);
+  background: light-dark(#e0e5e9, #3e4851);
+}
+.mark[data-kind='report'] {
+  color: light-dark(#514b58, #dedbe3);
+  background: light-dark(#e6e1eb, #514c59);
+}
+.mark svg {
+  width: 20px;
+  height: 20px;
+}
+.messageBody {
+  min-width: 0;
+  flex: 1;
+}
+.message header {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 3px 10px;
+  margin-bottom: 5px;
+}
+.message h4 {
+  font-weight: 600;
+  font-size: 12px;
+  margin: 0;
+}
+.message time,
+.message header > span {
+  font-size: 10px;
+  color: var(--dr-muted);
+  font-variant-numeric: tabular-nums;
+}
+.message blockquote {
+  font-size: 14px;
+  line-height: 1.65;
+  max-width: 62ch;
+  white-space: pre-wrap;
+}
+.messageLink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 24px;
+  height: 24px;
+  margin-left: auto;
+  color: var(--dr-muted) !important;
+}
+.messageLink:hover {
+  color: var(--dr-text) !important;
+}
+.conversation {
+  border-left: 1px solid var(--dr-line);
+}
+.conversation .message {
+  background: transparent;
+  border-radius: 0;
+  padding: 12px 14px;
+  border-left: 2px solid transparent;
+}
+.conversation .message[data-source-message] {
+  background: color-mix(in srgb, var(--dr-positive) 6%, var(--dr-raised));
+  border-left-color: var(--dr-positive);
+}
+.contextTarget {
+  scroll-margin-top: calc(
+    var(--case-command-offset, 88px) + var(--conversation-heading-space, 0px)
+  );
+}
+.history {
+  border-bottom: 1px solid var(--dr-line);
+  padding: 22px 0;
+}
+.history > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.history h2 {
+  font-size: 14px;
+  font-weight: 600;
+  scroll-margin-top: var(--case-command-offset, 88px);
+}
+.history header > span {
+  color: var(--dr-muted);
+  font-size: 11px;
+}
+.history ol {
+  padding: 0;
+  list-style: none;
+}
+.history li {
+  padding-left: 14px;
+  border-left: 2px solid var(--dr-boundary);
+}
+.history li + li {
+  margin-top: 20px;
+}
+.history h3 {
+  font-size: 13px;
+  font-weight: 500;
+}
+.history time,
+.history p {
+  color: var(--dr-muted);
+  font-size: 11px;
+  margin-top: 4px;
+}
+.history .reason {
+  color: var(--dr-text);
+  font-size: 12px;
+  margin-top: 8px;
+}
+.empty {
+  color: var(--dr-muted);
+  padding-block: 20px;
+}
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+@media (max-width: 1250px) {
+  .desk {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .index {
+    position: static;
+    border-right: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 16px;
+    border-bottom: 1px solid var(--dr-line);
+  }
+  .index > header {
+    flex-basis: 100%;
+    border: 0;
+  }
+  .index > a {
+    border-bottom: 0;
+  }
+}
+@media (max-width: 999px) {
+  .contextJumps {
+    display: flex;
+    flex-basis: 100%;
+    gap: 8px;
+    border-top: 1px solid var(--dr-line);
+  }
+  .contextJumps a {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .contextJumps a > span {
+    margin: 0;
+    color: var(--dr-muted);
+    font-variant-numeric: tabular-nums;
+  }
+}
+@media (max-width: 699px) {
+  .message {
+    padding: 12px;
+    gap: 10px;
+  }
+  .mark {
+    flex-basis: 30px;
+    height: 30px;
+  }
+  .sourceHeading {
+    flex-wrap: wrap;
+  }
+  .sourceHeading h3 {
+    scroll-margin-top: var(--case-command-offset, 140px);
+  }
+  .contextTarget {
+    scroll-margin-top: calc(
+      var(--case-command-offset, 140px) + var(--conversation-heading-space, 0px)
+    );
+  }
+  .index > a {
+    padding-inline: 8px;
+  }
+  .message blockquote {
+    font-size: 13px;
+  }
+  .conversation .message {
+    padding-inline: 10px;
+  }
+}

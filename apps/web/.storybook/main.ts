@@ -7,6 +7,7 @@ const navigationMock = resolve(appRoot, '.storybook/next-navigation.mock.ts');
 
 const config: StorybookConfig = {
   stories: ['../components/**/*.stories.@(ts|tsx)'],
+  staticDirs: ['../public'],
   addons: ['@storybook/addon-a11y'],
   framework: {
     name: '@storybook/react-vite',
@@ -18,6 +19,20 @@ const config: StorybookConfig = {
     config.optimizeDeps = {
       ...config.optimizeDeps,
       include: [...(config.optimizeDeps?.include ?? []), 'react', 'react-dom', 'react/jsx-runtime'],
+    };
+    const ignored = config.server?.watch?.ignored;
+    config.server = {
+      ...config.server,
+      watch: {
+        ...config.server?.watch,
+        // Generated HTML must not reload stories while browser tests are running.
+        ignored: [
+          ...(Array.isArray(ignored) ? ignored : ignored ? [ignored] : []),
+          '**/storybook-static/**',
+          '**/storybook-playwright-report/**',
+          '**/test-results/**',
+        ],
+      },
     };
     config.resolve = {
       ...config.resolve,
