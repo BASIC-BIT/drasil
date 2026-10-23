@@ -107,6 +107,20 @@ describeIntegration('CaptchaCompletionStore (integration)', () => {
       expiresAt: new Date(Date.now() + 60_000),
       requestedBy: 'moderator',
     });
+    const imageIssuance = {
+      keyVersion: 'a'.repeat(64),
+      answerDigest: Buffer.alloc(32, 7).toString('hex'),
+    };
+    if (provider === 'discord_image')
+      await prisma.captcha_challenge_images.create({
+        data: {
+          captcha_challenge_id: challenge.id,
+          generation: 1,
+          png: Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(40)]),
+          answer_digest: Buffer.alloc(32, 7),
+          key_version: imageIssuance.keyVersion,
+        },
+      });
     const context: ActionContext = {
       guildId,
       requestId: randomUUID(),
@@ -119,7 +133,7 @@ describeIntegration('CaptchaCompletionStore (integration)', () => {
       idempotencyKey: `discord-image:${randomUUID()}`,
       provider,
     };
-    return { prisma, guildId, userId, challenge, context, input };
+    return { prisma, guildId, userId, challenge, context, input, imageIssuance };
   }
   async function start(
     f: Awaited<ReturnType<typeof fixture>>,
@@ -134,7 +148,9 @@ describeIntegration('CaptchaCompletionStore (integration)', () => {
     return {
       challengeId: f.challenge.id,
       generation: 1,
-      provider: f.input.provider,
+      ...(f.input.provider === 'discord_image'
+        ? { provider: 'discord_image', imageIssuance: f.imageIssuance }
+        : { provider: 'turnstile' }),
       attemptId: result.attemptId,
       validation: {
         state,
@@ -381,15 +397,6 @@ describeIntegration('CaptchaCompletionStore (integration)', () => {
   it('rolls back pass acceptance and private material cleanup if queue insertion fails', async () => {
     const f = await fixture();
     const completion = await start(f);
-    await f.prisma.captcha_challenge_images.create({
-      data: {
-        captcha_challenge_id: f.challenge.id,
-        generation: 1,
-        png: Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(40)]),
-        answer_digest: Buffer.alloc(32),
-        key_version: 'test',
-      },
-    });
     const failing = createCaptchaCompletionStore({
       ...database,
       transaction(operation) {

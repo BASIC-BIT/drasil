@@ -293,6 +293,30 @@ describe('ThreadManager (unit)', () => {
     );
   });
 
+  it('delivers a generation-bound native image entry button', async () => {
+    const client = { channels: { fetch: jest.fn().mockResolvedValue(thread) } };
+    const manager = new ThreadManager(
+      client as unknown as Client,
+      configService,
+      verificationEventRepository,
+      userRepository,
+      serverRepository,
+      serverMemberRepository
+    );
+    await expect(
+      manager.sendCaptchaChallenge(buildVerificationEvent({ thread_id: thread.id }), {
+        challengeId: '00000000-0000-4000-8000-000000000001',
+        generation: 3,
+      })
+    ).resolves.toBe('message-1');
+    const payload = thread.send.mock.calls[0][0];
+    if (typeof payload !== 'object' || !('components' in payload))
+      throw new Error('Missing entry components');
+    expect(extractComponentCustomIds([...(payload.components ?? [])])).toEqual([
+      'captcha:image:open:00000000-0000-4000-8000-000000000001:3',
+    ]);
+  });
+
   it('does not deliver a CAPTCHA challenge when the subject cannot access the case thread', async () => {
     (thread.members.fetch as jest.Mock).mockRejectedValueOnce(new Error('Unknown thread member'));
     const client = {

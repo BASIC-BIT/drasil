@@ -123,7 +123,7 @@ describeIntegration('CaptchaMethodConfiguration (integration)', () => {
         methodRevision: 0,
         png: Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(40)]),
         answerDigest: Buffer.alloc(32),
-        keyVersion: 'v1',
+        keyVersion: 'a'.repeat(64),
       });
     }
     const context: ActionContext = {
@@ -153,7 +153,15 @@ describeIntegration('CaptchaMethodConfiguration (integration)', () => {
     return {
       challengeId: f.challenge.id,
       generation: 1,
-      provider: f.input.provider,
+      ...(f.input.provider === 'discord_image'
+        ? {
+            provider: 'discord_image',
+            imageIssuance: {
+              keyVersion: 'a'.repeat(64),
+              answerDigest: Buffer.alloc(32).toString('hex'),
+            },
+          }
+        : { provider: 'turnstile' }),
       attemptId: result.attemptId,
       validation: {
         state,

@@ -352,11 +352,13 @@ export function createCaptchaCompletionStore(database: DelegationDatabase): Capt
     client: DelegationQueryClient,
     discordUserId: string
   ): Promise<void> {
-    await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [discordUserId]);
+    await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))::text', [
+      discordUserId,
+    ]);
   }
 
   async function lockCaptchaProviderBudget(client: DelegationQueryClient): Promise<void> {
-    await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+    await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))::text', [
       'drasil:captcha:provider-budget',
     ]);
   }
@@ -558,7 +560,29 @@ export function createCaptchaCompletionStore(database: DelegationDatabase): Capt
       if (row.validation_state !== 'started') {
         return stateForExistingAttempt(row.validation_state);
       }
+      // Verification happens outside the transaction. Lock and recheck that exact
+      // issuance before accepting either a pass or an invalid-answer charge.
+      let nativeIssuanceMatches = true;
+      if (input.provider === 'discord_image') {
+        const proof = input.imageIssuance;
+        nativeIssuanceMatches = false;
+        if (
+          proof &&
+          /^[a-f0-9]{64}$/.test(proof.keyVersion) &&
+          /^[a-f0-9]{64}$/.test(proof.answerDigest)
+        ) {
+          const material = await client.query<{ generation: number }>(
+            `select generation from captcha_challenge_images
+             where captcha_challenge_id = $1::uuid and generation = $2
+               and key_version = $3 and answer_digest = decode($4, 'hex')
+             for update`,
+            [row.id, row.generation, proof.keyVersion, proof.answerDigest]
+          );
+          nativeIssuanceMatches = !!material.rows[0];
+        }
+      }
       if (
+        !nativeIssuanceMatches ||
         row.status !== 'pending' ||
         row.case_status !== 'pending' ||
         row.case_kind !== 'standard' ||

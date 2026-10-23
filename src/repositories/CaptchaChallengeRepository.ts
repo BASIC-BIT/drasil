@@ -156,6 +156,8 @@ function getCaptchaChallengeRetryState(
 }
 
 export interface ICaptchaChallengeRepository {
+  isImageBindingEligible(binding: CaptchaImageBinding): Promise<boolean>;
+  invalidateImageMaterial(binding: CaptchaImageBinding, activeKeyVersion: string): Promise<boolean>;
   storeImageMaterial(input: CaptchaImageMaterialInput): Promise<boolean>;
   findImageMaterial(binding: CaptchaImageBinding): Promise<CaptchaImageMaterial | null>;
   deleteImageMaterial(challengeId: string, generation: number): Promise<void>;
@@ -254,10 +256,46 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
         and method_revision = ${binding.methodRevision}
         and provider = 'discord_image'::captcha_provider
         and status = 'pending'::captcha_challenge_status
+        and delivery_error_code is distinct from 'image_key_rotated'
       for update
     `;
     // Expiry can elapse while waiting even when the locked row itself is unchanged.
     return !!challenges[0] && challenges[0].expires_at.getTime() > Date.now();
+  }
+
+  public async isImageBindingEligible(binding: CaptchaImageBinding): Promise<boolean> {
+    return this.prisma.$transaction((transaction) => this.lockImageBinding(transaction, binding));
+  }
+
+  /** Rotation invalidates this generation until a moderator retries it. Never regenerate in place. */
+  public async invalidateImageMaterial(
+    binding: CaptchaImageBinding,
+    activeKeyVersion: string
+  ): Promise<boolean> {
+    return this.prisma.$transaction(async (transaction) => {
+      if (!(await this.lockImageBinding(transaction, binding))) return false;
+      const material = await transaction.captcha_challenge_images.findUnique({
+        where: {
+          captcha_challenge_id_generation: {
+            captcha_challenge_id: binding.challengeId,
+            generation: binding.generation,
+          },
+        },
+      });
+      if (!material || material.key_version === activeKeyVersion) return false;
+      await transaction.captcha_challenge_images.deleteMany({
+        where: { captcha_challenge_id: binding.challengeId, generation: binding.generation },
+      });
+      await transaction.captcha_challenges.update({
+        where: { id: binding.challengeId },
+        data: {
+          delivery_error_code: 'image_key_rotated',
+          delivered_at: null,
+          updated_at: new Date(),
+        },
+      });
+      return true;
+    });
   }
 
   public async storeImageMaterial(input: CaptchaImageMaterialInput): Promise<boolean> {
@@ -596,6 +634,7 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
       where challenge.id = ${id}::uuid
         and challenge.generation = ${generation}
         and challenge.status = ${CaptchaChallengeStatus.PENDING}::captcha_challenge_status
+        and challenge.delivery_error_code is distinct from 'image_key_rotated'
         and verification.id = challenge.verification_event_id
         and verification.status = ${VerificationStatus.PENDING}::verification_status
         and verification.case_kind = ${CaseKind.STANDARD}::case_kind
@@ -647,7 +686,12 @@ export class CaptchaChallengeRepository implements ICaptchaChallengeRepository {
     code: string
   ): Promise<boolean> {
     const result = await this.prisma.captcha_challenges.updateMany({
-      where: { id, generation, status: CaptchaChallengeStatus.PENDING },
+      where: {
+        id,
+        generation,
+        status: CaptchaChallengeStatus.PENDING,
+        OR: [{ delivery_error_code: null }, { delivery_error_code: { not: 'image_key_rotated' } }],
+      },
       data: {
         delivered_at: null,
         delivery_error_code: code.slice(0, 100),

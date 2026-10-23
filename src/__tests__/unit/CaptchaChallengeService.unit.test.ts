@@ -81,6 +81,8 @@ function buildChallenge(overrides: Partial<CaptchaChallenge> = {}): CaptchaChall
 function createHarness(settings: Record<string, unknown> = { captcha_mode: 'manual' }) {
   const challenge = buildChallenge();
   const challenges: jest.Mocked<ICaptchaChallengeRepository> = {
+    isImageBindingEligible: jest.fn().mockResolvedValue(true),
+    invalidateImageMaterial: jest.fn().mockResolvedValue(false),
     storeImageMaterial: jest.fn().mockResolvedValue(false),
     findImageMaterial: jest.fn().mockResolvedValue(null),
     deleteImageMaterial: jest.fn().mockResolvedValue(undefined),
@@ -217,6 +219,25 @@ describe('CaptchaChallengeService', () => {
     expect(threads.sendCaptchaChallenge).not.toHaveBeenCalled();
   });
 
+  it('delivers image generation controls without a public origin and dispatches persisted provider', async () => {
+    delete process.env.DRASIL_WEB_PUBLIC_URL;
+    const { service, challenges, threads } = createHarness({
+      captcha_method: 'discord_image',
+      captcha_mode: 'manual',
+    });
+    const result = await service.requestChallenge({
+      verificationEventId: 'case-1',
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+    });
+    expect(result.delivered).toBe(true);
+    expect(challenges.create.mock.calls[0][0]).toMatchObject({ provider: 'discord_image' });
+    expect(threads.sendCaptchaChallenge).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'case-1' }),
+      { challengeId: 'challenge-1', generation: 1 }
+    );
+    expect(challenges.recordDeliveryFailure).not.toHaveBeenCalled();
+  });
+
   it('creates a case-scoped challenge and stores only the link token hash', async () => {
     const { challenges, notifications, service, threads } = createHarness();
 
@@ -230,6 +251,7 @@ describe('CaptchaChallengeService', () => {
 
     const input = challenges.create.mock.calls[0][0];
     const deliveredUrl = threads.sendCaptchaChallenge.mock.calls[0][1];
+    if (typeof deliveredUrl !== 'string') throw new Error('Expected Turnstile URL');
     const token = new URL(deliveredUrl).pathname.split('/').at(-1) as string;
     expect(input.verificationEventId).toBe('case-1');
     expect(input.caseRevision).toBe(2);

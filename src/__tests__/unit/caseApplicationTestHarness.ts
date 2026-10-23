@@ -1,3 +1,4 @@
+import { createBotCaptchaImageActions } from '../../application/adapters/captchaImage';
 import { createBotSetupRuntime, type BotSetupDependencies } from '../../application/adapters/setup';
 import { buildReportActions } from './reportApplicationTestHarness';
 import { mock } from 'jest-mock-extended';
@@ -163,6 +164,7 @@ export function buildCaseApplication(
     },
     captcha: captchaRuntime.actions,
     captchaRuntime,
+    captchaImage: createBotCaptchaImageActions(null),
     quarantine: quarantineRuntime.actions,
     quarantineRuntime,
     detections: detectionRuntime.actions,

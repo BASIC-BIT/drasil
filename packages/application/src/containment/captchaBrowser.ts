@@ -17,11 +17,20 @@ export interface VerifiedCaptchaOutcome {
   readonly hostname: string | null;
   readonly errorCodes: readonly string[];
 }
-export interface CaptchaCompletionInput extends CaptchaBrowserReference {
-  readonly provider: 'turnstile' | 'discord_image';
+/** Server-only proof, derived from stored native material after answer verification. */
+export interface CaptchaImageIssuanceProof {
+  readonly keyVersion: string;
+  readonly answerDigest: string;
+}
+interface CaptchaCompletionFields extends CaptchaBrowserReference {
   readonly attemptId: string;
   readonly validation: VerifiedCaptchaOutcome;
 }
+export type CaptchaCompletionInput = CaptchaCompletionFields &
+  (
+    | { readonly provider: 'turnstile' }
+    | { readonly provider: 'discord_image'; readonly imageIssuance: CaptchaImageIssuanceProof }
+  );
 export interface CaptchaPassReference extends CaptchaBrowserReference {
   readonly caseId: string;
   readonly targetUserId: string;

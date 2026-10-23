@@ -145,8 +145,7 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     });
     const settings = getCaptchaSettings(server.settings);
     const token = randomBytes(TOKEN_BYTES).toString('base64url');
-    // Image delivery is introduced separately; never send an image generation to the browser flow.
-    if (settings.method !== 'turnstile') {
+    if (settings.method === 'none') {
       throw new Error('This security-check method is not available for delivery.');
     }
     const challengeInput: CaptchaChallengeIssueInput = {
@@ -193,8 +192,11 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
         throw new ActionDeniedError('stale_state');
       throw error;
     }
-    const url = buildCaptchaChallengeUrl(token);
-    if (!url) {
+    const destination =
+      challenge.provider === 'discord_image'
+        ? { challengeId: challenge.id, generation: challenge.generation }
+        : buildCaptchaChallengeUrl(token);
+    if (!destination) {
       const recorded = await this.challenges.recordDeliveryFailure(
         challenge.id,
         challenge.generation,
@@ -208,7 +210,10 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     }
 
     try {
-      const deliveryMessageId = await this.threads.sendCaptchaChallenge(verificationEvent, url);
+      const deliveryMessageId = await this.threads.sendCaptchaChallenge(
+        verificationEvent,
+        destination
+      );
       if (!deliveryMessageId) {
         const recorded = await this.challenges.recordDeliveryFailure(
           challenge.id,
