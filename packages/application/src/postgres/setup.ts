@@ -60,10 +60,19 @@ export async function persistSetupChange(
     `update servers set ${assignments.join(', ')} where guild_id=$1 returning *`,
     values
   );
-  if (change.settings?.captcha_mode === 'off')
+  if (change.settings?.captcha_mode === 'off') {
+    // Completion and lifecycle writes lock server, then cases, then challenges.
+    await client.query(
+      `select v.id from verification_events v
+       where v.id in (select verification_event_id from captcha_challenges
+         where server_id=$1 and status='pending'::captcha_challenge_status)
+       order by v.id for update of v`,
+      [guildId]
+    );
     await client.query(
       "update captcha_challenges set status='cancelled'::captcha_challenge_status, cancelled_at=now(), updated_at=now() where server_id=$1 and status='pending'::captcha_challenge_status returning id",
       [guildId]
     );
+  }
   return parseSetupStoredRecord(result.rows[0]);
 }

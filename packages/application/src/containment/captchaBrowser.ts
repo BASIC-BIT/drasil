@@ -7,6 +7,9 @@ export interface CaptchaBrowserReference {
 export interface CaptchaAttemptInput extends CaptchaBrowserReference {
   readonly idempotencyKey: string;
 }
+export interface CaptchaBoundAttemptInput extends CaptchaAttemptInput {
+  readonly provider: 'turnstile' | 'discord_image';
+}
 export interface VerifiedCaptchaOutcome {
   readonly state: 'passed' | 'invalid' | 'provider_error';
   readonly success: boolean | null;
@@ -15,6 +18,7 @@ export interface VerifiedCaptchaOutcome {
   readonly errorCodes: readonly string[];
 }
 export interface CaptchaCompletionInput extends CaptchaBrowserReference {
+  readonly provider: 'turnstile' | 'discord_image';
   readonly attemptId: string;
   readonly validation: VerifiedCaptchaOutcome;
 }

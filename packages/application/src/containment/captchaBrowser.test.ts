@@ -32,6 +32,7 @@ test('provider_budget_and_identity_mismatch_keep_current_outcomes', async () => 
     await actions.completeAttempt(context, {
       challengeId: 'challenge',
       generation: 1,
+      provider: 'turnstile',
       attemptId: 'attempt',
       validation: {
         state: 'provider_error',

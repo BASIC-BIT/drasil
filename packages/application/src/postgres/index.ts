@@ -15,3 +15,6 @@ export { createReportClosureResources } from './reportClosure';
 export { createMcpOperationalStore } from './operations';
 
 export { settleMcpQueue, recordMcpQueueObservation } from './delegation';
+
+export { createCaptchaCompletionStore } from './captchaCompletion';
+export type { CaptchaCompletionStore } from './captchaCompletion';
