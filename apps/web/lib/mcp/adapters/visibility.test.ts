@@ -7,7 +7,8 @@ import {
 } from './visibility';
 import { DISCORD_PERMISSIONS as P } from '../../discordPermissions';
 import { accessFixture, guildId, principal } from '../queryTestFixtures';
-import type { DiscordChannel } from '../../discordApi';
+import { DiscordApiError, type DiscordChannel } from '../../discordApi';
+import { ReadDependencyUnavailableError } from '@drasil/application';
 const channelId = '200000000000000001';
 const parentId = '200000000000000002';
 const botId = '200000000000000003';
@@ -59,7 +60,7 @@ function harness() {
     bot: async () => ({ id: botId, username: 'bot' }),
     channel: async (id) => (id === channelId ? state.channel : state.parent),
     threadMember: async (id, userId) => {
-      if (!state.members.has(userId)) throw new Error('404');
+      if (!state.members.has(userId)) throw new DiscordApiError(404, 'missing membership');
       return { id, user_id: userId };
     },
   };
@@ -73,6 +74,62 @@ function harness() {
     read: createDiscordContentAuthorizer(access, api),
   };
 }
+it.each([
+  [
+    new ReadDependencyUnavailableError({ retryAfterSeconds: 2 }),
+    { kind: 'denied', reason: 'unavailable', retryAfterSeconds: 2 },
+  ],
+  [new DiscordApiError(503, 'PRIVATE_BODY'), { kind: 'denied', reason: 'unavailable' }],
+  [new DiscordApiError(429, 'PRIVATE_BODY'), { kind: 'denied', reason: 'unavailable' }],
+  [
+    Object.assign(new Error('PRIVATE_BACKEND'), { retryAfterSeconds: 2 }),
+    { kind: 'denied', reason: 'unavailable' },
+  ],
+])('provider_unavailability_is_not_permission_denied (%s)', async (error, expected) => {
+  const h = harness();
+  h.api.channel = vi.fn(async () => {
+    throw error;
+  });
+  expect(await h.read(principal, guildId, channelId)).toEqual(expected);
+  expect(h.api.channel).toHaveBeenCalledTimes(1);
+});
+it.each([403, 404])('authoritative_denial_stays_immediate (%s)', async (status) => {
+  const h = harness();
+  h.api.channel = vi.fn(async () => {
+    throw new DiscordApiError(status, 'PRIVATE_BODY');
+  });
+  expect(await h.read(principal, guildId, channelId)).toEqual({
+    kind: 'denied',
+    reason: 'permission_denied',
+  });
+  expect(h.api.channel).toHaveBeenCalledTimes(1);
+});
+it('keeps missing permissions, mismatched bindings and absent private membership as authoritative denials', async () => {
+  const h = harness();
+  h.state.permissions = P.ViewChannel;
+  expect(await h.read(principal, guildId, channelId)).toEqual({
+    kind: 'denied',
+    reason: 'permission_denied',
+  });
+  h.state.permissions |= P.ReadMessageHistory;
+  h.state.channel = { ...h.state.channel, guild_id: 'other' };
+  expect(await h.read(principal, guildId, channelId)).toEqual({
+    kind: 'denied',
+    reason: 'permission_denied',
+  });
+  h.state.channel = { ...h.state.channel, guild_id: guildId, type: 12, parent_id: parentId };
+  h.state.members.delete(principal.userId);
+  expect(await h.read(principal, guildId, channelId)).toEqual({
+    kind: 'denied',
+    reason: 'permission_denied',
+  });
+  h.state.members.add(principal.userId);
+  h.state.members.delete(botId);
+  expect(await h.read(principal, guildId, channelId)).toEqual({
+    kind: 'denied',
+    reason: 'permission_denied',
+  });
+});
 it('refreshes effective overwrites on every request, including role and member precedence', async () => {
   const h = harness();
   expect(await h.read(principal, guildId, channelId)).toMatchObject({ kind: 'allowed' });
@@ -220,7 +277,7 @@ it('refreshes workflow scope, role, actor overwrites and private-thread membersh
   expect(await read()).toMatchObject({ kind: 'denied' });
 });
 
-it('records discarded visibility dependency failures without changing denial behavior', async () => {
+it('records discarded visibility dependency failures without exposing private details', async () => {
   const h = harness();
   h.api.channel = async () => {
     throw Object.assign(new Error('SQL_SENTINEL'), { code: '08006' });
@@ -231,7 +288,7 @@ it('records discarded visibility dependency failures without changing denial beh
     await withReadRequestContext({ operation: 'get_message_context' }, async () => {
       expect(await h.read(principal, guildId, channelId)).toEqual({
         kind: 'denied',
-        reason: 'permission_denied',
+        reason: 'unavailable',
       });
     });
     expect(lines.map((line) => JSON.parse(line))).toEqual([

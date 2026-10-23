@@ -7,6 +7,7 @@ import {
 import type { AuthorityFacts } from '../authorization';
 import type { ConnectionGrant, DelegatedPrincipal } from './types';
 import { humanCommandSchema, workflowDefinitions, type WorkflowId } from './commands';
+import { ReadDependencyUnavailableError } from './readFailures';
 
 const guildId = 'guild';
 const principal: DelegatedPrincipal = {
@@ -72,6 +73,45 @@ function fixture(): {
 }
 
 describe('delegated access', () => {
+  it('preserves temporary authority failure advice and checks role changes on the next call', async () => {
+    const f = fixture();
+    f.setFacts({ roleIds: ['staff'] });
+    expect(await f.access.authorizeRead(principal, caseQuery)).toMatchObject({ kind: 'allowed' });
+    f.authority.loadFresh.mockRejectedValueOnce(
+      new ReadDependencyUnavailableError({ retryAfterSeconds: 2 })
+    );
+    expect(await f.access.authorizeRead(principal, caseQuery)).toEqual({
+      kind: 'denied',
+      reason: 'unavailable',
+      retryAfterSeconds: 2,
+    });
+    f.setFacts({ roleIds: [] });
+    expect(await f.access.authorizeRead(principal, caseQuery)).toEqual({
+      kind: 'denied',
+      reason: 'permission_denied',
+    });
+    f.setGrant({ revokedAt: new Date() });
+    expect(await f.access.authorizeRead(principal, caseQuery)).toEqual({
+      kind: 'denied',
+      reason: 'invalid_grant',
+    });
+  });
+  it('preserves temporary failures in eligible-guild authority and directory lookups', async () => {
+    const f = fixture();
+    const failure = new ReadDependencyUnavailableError({ retryAfterSeconds: 2 });
+    f.directory.listActive.mockRejectedValueOnce(failure);
+    expect(await f.access.listEligibleGuilds(principal, {})).toEqual({
+      kind: 'denied',
+      reason: 'unavailable',
+      retryAfterSeconds: 2,
+    });
+    f.authority.loadFresh.mockRejectedValueOnce(failure);
+    expect(await f.access.listEligibleGuilds(principal, {})).toEqual({
+      kind: 'denied',
+      reason: 'unavailable',
+      retryAfterSeconds: 2,
+    });
+  });
   it.each([
     ['owner', '0', true],
     ['Administrator', '8', false],

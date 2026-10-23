@@ -21,17 +21,18 @@ export function accessFixture(guildIds: readonly string[] = [guildId]) {
     createdAt: new Date(),
     revokedAt: null,
   };
+  const authority = {
+    loadFresh: async (guildId: string, userId: string) => ({
+      guildId,
+      userId,
+      ...state,
+      present: state.present && !excludedGuilds.has(guildId),
+      roleIds: [],
+    }),
+  };
   const access = createDelegatedAccess({
     store: { findConnection: async () => grant },
-    authority: {
-      loadFresh: async (guildId, userId) => ({
-        guildId,
-        userId,
-        ...state,
-        present: state.present && !excludedGuilds.has(guildId),
-        roleIds: [],
-      }),
-    },
+    authority,
     staffRoles: { loadRoleIds: async () => [] },
     guilds: {
       isActive: async () => true,
@@ -45,5 +46,5 @@ export function accessFixture(guildIds: readonly string[] = [guildId]) {
       },
     },
   });
-  return { access, state, grant, excludedGuilds };
+  return { access, state, grant, excludedGuilds, authority };
 }

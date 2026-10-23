@@ -23,6 +23,7 @@ import {
 } from './commands';
 import type { HumanCommand } from './commands';
 import type { ConnectionGrant, DelegatedPrincipal, DelegatedScope, DelegationStore } from './types';
+import { toUnavailableReadDenial } from './readFailures';
 
 export type MemberContextPurpose = 'report' | 'case' | 'ban' | 'kick' | 'configure';
 export interface MemberContextBinding {
@@ -378,7 +379,7 @@ export function createDelegatedAccess(deps: DelegatedAccessDependencies): Delega
       return { kind: 'allowed', grant, facts, guildId, scope, staffRoleIds };
     } catch (error) {
       observeFailure(error);
-      return denied('unavailable');
+      return toUnavailableReadDenial(error);
     }
   }
   async function authorizeRead(
@@ -493,7 +494,7 @@ export function createDelegatedAccess(deps: DelegatedAccessDependencies): Delega
         return { kind: 'allowed', guilds, nextCursor: entry.page.nextCursor };
       } catch (error) {
         observeFailure(error);
-        return denied('unavailable');
+        return toUnavailableReadDenial(error);
       }
     },
   };

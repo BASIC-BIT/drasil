@@ -5,6 +5,7 @@ import { z } from 'zod';
 import {
   workflowDefinitions,
   settingsSectionSchemas,
+  toUnavailableReadDenial,
   type WorkflowId,
   type AccessBinding,
   type AccessDecision,
@@ -535,7 +536,7 @@ export function createMcpQueries(deps: McpQueryDependencies): {
           latencyMs: performance.now() - started,
           attempt: 1,
         });
-        return { kind: 'denied', reason: 'unavailable' };
+        return toUnavailableReadDenial(error);
       }
     },
   };
