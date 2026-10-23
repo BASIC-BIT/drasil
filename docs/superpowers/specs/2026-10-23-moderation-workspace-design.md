@@ -4,11 +4,11 @@ Status: proposed design for review. Product implementation has not started.
 
 ## Intent and scope
 
-Build a new moderator website around the approved flat grey inbox and Source desk. The user confirmed that the existing website is unused and its UI can be replaced from the ground up. Existing page layouts, navigation and component APIs impose no compatibility requirement. Existing moderation rules, stored records and Discord effects remain authoritative.
+Build a new moderator website around the approved flat grey inbox and case detail page. The user confirmed that the existing website is unused and its UI can be replaced from the ground up. Existing page layouts, navigation and component APIs impose no compatibility requirement. Existing moderation rules, stored records and Discord effects remain authoritative.
 
 The first release replaces the moderator shell, mixed inbox and investigation experience together. It supports inbox selection, direct triage, investigation, confirmed actions, durable results and continuing review. The broader website can adopt this foundation in subsequent slices. This boundary is a proposal, not a user requirement to keep any current screen.
 
-Success means a moderator can understand what needs attention, inspect its sources and act without leaving the new workflow for routine review. Visual design should match the [approved Source desk preview](../../design/previews/source-desk.png), including the transparent commissioned logo, Manrope, neutral surfaces, flat separation and restrained severity colors.
+Success means a moderator can understand what needs attention, inspect its sources and act without leaving the new workflow for routine review. Visual design should match the [approved case detail preview](../../design/previews/source-desk.png), including the transparent commissioned logo, Manrope, neutral surfaces, flat separation and restrained severity colors.
 
 Avoid redundant case/report navigation, generic evidence disclaimers, fabricated titles or attribution, nested card stacks and extra navigation before an ordinary action. Do not add a broad new fixture campaign before integration; reuse existing stories and test the real workflow.
 
@@ -16,7 +16,7 @@ Avoid redundant case/report navigation, generic evidence disclaimers, fabricated
 
 | Approach                                                                                           | Consequence                                                                              | Decision                                                                                 |
 | -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| Adopt Source desk on the case page while retaining the current inbox                               | Smaller route change, but keeps the old interface and delays the coherent review journey | Rejected by the user. The current website is unused and can be replaced.                 |
+| Adopt the approved case detail design while retaining the current inbox                            | Smaller route change, but keeps the old interface and delays the coherent review journey | Rejected by the user. The current website is unused and can be replaced.                 |
 | Rebuild the moderator shell, inbox and case review together, reusing existing backend capabilities | More UI work in the first slice, with one consistent navigation and action model         | Selected direction. This document proposes its boundaries and interactions.              |
 | Rewrite the website and moderation backend together                                                | Changes policy and execution while also changing presentation                            | Unnecessary for this goal. Retain useful services, contracts and durable queue behavior. |
 
@@ -40,7 +40,7 @@ The existing six kinds stay semantically distinct:
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Submitted report  | Reporter statement, submitted material and confirmed target if known; dismiss, mark handled, mark false positive, open case or ban only when supplied capabilities allow it |
 | Observed alert    | Recorded detection, reasons and source; dismiss, mark false positive, open case, kick or ban only when supplied capabilities allow it                                       |
-| Active case       | Member and case state, important source material and checks; direct decisions plus Investigate for the full Source desk                                                     |
+| Active case       | Member and case state, important source material and checks; direct decisions plus Investigate to open the case detail page                                                 |
 | Report reply      | Read the linked reporter follow-up, open its thread and confirm marking the attention item reviewed                                                                         |
 | Support reply     | Read the linked support/recovery thread, preserve relevant containment status and confirm marking the attention item reviewed                                               |
 | Pending screening | Screening age/status and Discord destination; do not invent case decisions for a member who has no case                                                                     |
@@ -51,7 +51,7 @@ Load queue summaries first. Fetch full records only for the selected item, using
 
 Retain the useful existing filtering and sorting functions, but replace their presentation. Default to the existing priority order. Named views and search live above the queue; advanced filters can be a compact disclosure. Never let filtering or polling silently change the member named in an open confirmation.
 
-## Source desk investigation
+## Case detail page
 
 Retain the approved structure: member header, top action subbar, local source index, reading column and right-hand checks/history. The action subbar shows member identity after the main header scrolls away. On narrow screens Checks and History are section navigation, and source/context jumps retain a visible Back to source link.
 
@@ -117,7 +117,7 @@ Keep Next.js, React, TypeScript, CSS modules, existing contracts, Vitest, Playwr
 ## Delivery sequence and release boundary
 
 1. Promote the approved tokens, shell, evidence presentation and confirmation components. Establish the mixed inbox row/detail composition in Storybook using current contract-backed fixtures.
-2. Wire the new inbox and Source desk to authorized record loaders, including the on-demand conversation reader. Implement URL state and return navigation together.
+2. Wire the new inbox and case detail page to authorized record loaders, including the on-demand conversation reader. Implement URL state and return navigation together.
 3. Connect real actions and durable results, including relevant security, quarantine and cleanup controls. Remove superseded inbox/case renderers once all callers use the replacements.
 4. Verify the complete ordinary journey and publish updated screenshots for review. Release this coherent moderation slice when its required checks pass.
 
