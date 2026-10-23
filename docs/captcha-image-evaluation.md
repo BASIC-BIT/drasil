@@ -84,6 +84,11 @@ absent after production pruning, and `/run/secrets/proxy_ca` was absent at runti
 RSS remains an observation, not a native-memory cap. This run did not repeat OCR
 or add human evaluation samples.
 
+The later visual-validation correction changed only documentation, process-local
+test font configuration and expected screenshots. This retained image predates
+those validation-only files; its production source, Dockerfile and dependencies
+are unchanged, so the measured renderer artifact remains applicable.
+
 The final production web build also passed. A scan of all 34 Next.js production
 dependency traces and all 26 browser JavaScript chunks found no renderer/native
 asset dependency paths or browser references matching `captcha-canvas`,
@@ -120,7 +125,15 @@ Debian's `fonts-liberation` copyright file specifies GPL v2 with font exceptions
 The disposable candidate audit reported zero vulnerabilities. The repository production audit reported 32 advisories, including one critical, across its wider existing dependency graph. None named the ten renderer packages above. Task 8's final production prune reported 16 advisories, four moderate, 11 high and
 one critical, for the current wider production tree. It did not perform a fresh
 package-level attribution audit. The earlier audit counts above are historical.
-No audit fixes or unrelated dependency updates were applied. Audit results are time-specific and do not replace future review.
+A later read-only installed-workspace `npm audit --omit=dev --json` attribution
+identified the critical entry as Next 16.3.0, unchanged from original product
+BASE `599ef8622efd602b0c564d683e4dd227c4c86d85`. No affected audit node intersected
+the seven newly added lockfile nodes, and no entry named `captcha-canvas` or
+`skia-canvas`. That 32-advisory workspace graph differs from the actual pruned
+runtime's 16-advisory graph; this was not a second audit of the built image.
+This attribution does not assess exploitability or remediate advisories. No audit
+fixes or unrelated dependency updates were applied. Audit results are
+time-specific and do not replace future review.
 
 ## Reproduction
 

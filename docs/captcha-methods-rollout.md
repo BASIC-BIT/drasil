@@ -115,10 +115,11 @@ synthetic tests, not observed Discord or provider behavior. See
 security contract. Final branch validation and any remaining failures must be
 recorded with the release review before rollout.
 
-Task 7's two new CAPTCHA Storybook stories passed. Four existing case visual tests
-failed. Exact byte-identical BASE comparison establishes drift for stale-light
-only. The remaining old cases and dark schemes were not individually proven
-identical and remain validation limitations. Unrelated snapshots are preserved.
+Task 7's two new CAPTCHA Storybook stories passed and four existing case visual
+tests failed. At that stage exact byte-identical BASE comparison established
+drift for stale-light only. The remaining old cases and dark schemes were not
+individually proven identical by Task 7. The later controlled Task 8 investigation
+below extends evidence only to its explicitly compared images.
 
 The user-supplied desktop Activity probe reached SDK readiness, then Cloudflare's
 script failed at the Activity CSP. No widget or dummy token followed. Discord web
@@ -133,10 +134,12 @@ accessibility. This visual method offers moderator assistance and makes no claim
 of independent accessibility for blind members. The small OCR evaluation does
 not establish bot resistance.
 
-## Branch validation record, 2026-10-23
+## Initial validation record, 2026-10-23
 
-The single final `npm run check:ci` invocation exited 1 at the full web visual
-gate. It is not an all-green CI result or a rollout-readiness claim. Package,
+The initial `npm run check:ci` invocation exited 1 at the full web visual
+gate. This section preserves that red result and its then-unresolved attribution.
+The later font isolation, scoped controls and corrected validation are recorded
+below. Neither run is a live rollout-readiness claim. Package,
 owned-database, container and fixture-browser evidence does not verify live
 Discord delivery, OAuth or provider operation.
 
@@ -158,10 +161,11 @@ Discord delivery, OAuth or provider operation.
 | Public RLS check                                | Passed for 44 owned-fixture tables                                      |
 | Full bot runtime build and final renderer probe | Passed, 52 renders; see image evaluation                                |
 
-The web visual failures below are screenshot assertions. Their BASE identity and
-cause are unverified. Twelve full-page tests failed both light and dark. The
+The initial web visual failures below were screenshot assertions. Their BASE
+identity and cause had not yet been established. Twelve full-page tests failed both light and dark. The
 three element tests failed the first hard light assertion, so their dark schemes
-were not exercised. No snapshots were updated or skipped to make this pass.
+were not exercised. No snapshots were updated or skipped in that initial run; later exact authorized
+repairs are recorded below.
 
 | Failed web screenshot stem      | Failed schemes            |
 | ------------------------------- | ------------------------- |
@@ -216,9 +220,9 @@ Evidence paths are `/tmp/task8-storybook-visual.log`,
 `/tmp/task8-storybook-visual-evidence/`. Final stale-light was rehashed against the
 recorded BASE artifact and remains byte-identical at SHA-256
 `6b3baa783ceab5c4a817ae6b158d2e568fc3bafe2d223089ac38a391d174a489`.
-`/tmp/task8-stale-light-proof.json` records that comparison. Every other old
-Storybook case/scheme and all broader web visual failures remain unattributed.
-This preserves the Task 7 qualification without extending its proof.
+`/tmp/task8-stale-light-proof.json` records that comparison. At that point every other old Storybook case/scheme and the broader web visual
+failures remained unattributed. The new controls below establish additional
+image-specific evidence rather than extending the old proof by assumption.
 
 Resumed gate logs are `/tmp/task8-native-integration.log`,
 `/tmp/task8-web-integration.log`, `/tmp/task8-mcp-e2e.log` and
@@ -228,8 +232,164 @@ member/case action was used. Runtime and bundle evidence is retained in
 `/tmp/task8-runtime-final-build.log`, `/tmp/task8-runtime-probe.json`,
 `/tmp/task8-runtime-metadata.json`, `/tmp/task8-runtime-imports.log`,
 `/tmp/task8-runtime-source-hashes.txt` and `/tmp/task8-renderer-packaging.json`.
-The completed resumed gates do not change the failed full CI result. Live rollout
-remains unverified and requires the owner-designated target below.
+The completed resumed gates did not change that initial failed CI result. The
+later full rerun is recorded independently below. Live rollout remains
+unverified and requires the owner-designated target below.
+
+## Controlled font and baseline correction
+
+The managed host's strong OpenAI Sans alias explained the broad generic-font
+differences. The unchanged landing light and dark baselines passed with the
+process-local DejaVu Sans configuration below. Under that same immutable config,
+the full web suite improved to 12 passes and four failures; Storybook improved
+to 11 passes and seven failures. No expected images changed during that isolation.
+
+Remaining old images were compared against original product BASE
+`599ef8622efd602b0c564d683e4dd227c4c86d85`. The control temporarily restored exactly
+`CaseDetailView.tsx`, `CaseActionControls.tsx`, `ModerationInboxView.tsx` and
+`casePresentation.ts`, leaving the same HEAD fixtures, stories and styles. This
+was a scoped renderer control, not a complete old-tree checkout. All four
+remaining old web PNGs and all seven remaining old Storybook PNGs were
+byte-identical to HEAD under the same font and browser environment.
+
+CDP samples of actual visible paragraphs, buttons, action pills, code and other
+rendered text recorded platform fonts and computed family, weight and size.
+Body/action text uses DejaVu Sans or DejaVuSans-Bold; rendered code uses
+Liberation Mono. The closed export textarea's ui-monospace stack did not render
+and was not changed speculatively. Named Liberation Sans selection is preserved
+for native rendering. No host font files, product CSS or moderation behavior
+changed.
+
+The controller approved only 11 exact BASE-equal images as pre-existing snapshot
+debt, plus the six intended Task 7 setup/new CAPTCHA images originally captured
+under the host alias. The operations snapshot predates a canonical fixture
+change from queued at 01:10 to completed at 01:11; the actual completed row was
+visually checked against that unchanged fixture. Setup and both new CAPTCHA
+stories were reviewed in light and dark with the corrected font. These expected
+images were replaced from the reviewed HEAD captures, without a broad snapshot
+update command:
+
+| Expected PNG                                                | Reason                                   |
+| ----------------------------------------------------------- | ---------------------------------------- |
+| `case-detail-linux-light.png`                               | Exact BASE-equal pre-existing test debt  |
+| `moderation-inbox-mobile-linux-light.png`                   | Exact BASE-equal pre-existing test debt  |
+| `operations-linux-dark.png`                                 | Exact BASE-equal pre-existing test debt  |
+| `operations-linux-light.png`                                | Exact BASE-equal pre-existing test debt  |
+| `storybook-case-detail-stale-linux-dark.png`                | Exact BASE-equal pre-existing test debt  |
+| `storybook-case-detail-stale-linux-light.png`               | Exact BASE-equal pre-existing test debt  |
+| `storybook-case-queue-mixed-linux-dark.png`                 | Exact BASE-equal pre-existing test debt  |
+| `storybook-case-queue-mixed-linux-light.png`                | Exact BASE-equal pre-existing test debt  |
+| `storybook-moderation-inbox-mixed-linux-light.png`          | Exact BASE-equal pre-existing test debt  |
+| `storybook-report-detail-submitted-linux-light.png`         | Exact BASE-equal pre-existing test debt  |
+| `storybook-report-queue-mixed-linux-light.png`              | Exact BASE-equal pre-existing test debt  |
+| `guild-setup-linux-light.png`                               | Intentional Task 7 image, corrected font |
+| `guild-setup-linux-dark.png`                                | Intentional Task 7 image, corrected font |
+| `storybook-turnstile-script-failure-linux-light.png`        | Intentional Task 7 image, corrected font |
+| `storybook-turnstile-script-failure-linux-dark.png`         | Intentional Task 7 image, corrected font |
+| `storybook-case-detail-image-check-history-linux-light.png` | Intentional Task 7 image, corrected font |
+| `storybook-case-detail-image-check-history-linux-dark.png`  | Intentional Task 7 image, corrected font |
+
+Web images live in `apps/web/e2e/visual.spec.ts-snapshots`; Storybook images live
+in `apps/web/storybook-e2e/visual.spec.ts-snapshots`. Only these 17 of 128 tracked
+expected PNGs changed. All 111 other expected images retain their original
+bytes. This is an explicit baseline-debt repair and font correction, not a claim
+that product moderation behavior changed.
+
+Evidence includes `/tmp/task8-font-landing-proof.log`,
+`/tmp/task8-font-base-web-comparison.json`,
+`/tmp/task8-font-base-storybook-comparison.json`,
+`/tmp/task8-font-base-web-control.log`,
+`/tmp/task8-font-base-storybook-control.log`,
+`/tmp/task8-font-snapshot-updates.json` and
+`/tmp/task8-font-snapshot-preservation.json`. The renderer control and temporary
+CDP instrumentation were fully restored, with byte checks recorded in
+`/tmp/task8-font-control-restoration.json`. The first EXIT restoration used a
+relative destination after changing directories and failed; absolute-path
+restoration immediately recovered all six backed-up files before further tests.
+No temporary production/test instrumentation remains.
+
+| Corrected validation                                   | Result         |
+| ------------------------------------------------------ | -------------- |
+| Full web visual gate after exact repair                | 16 passed      |
+| Full Storybook visual gate after exact repair          | 18 passed      |
+| New complete `npm run check:ci`, same font environment | Passed, exit 0 |
+
+The complete rerun used immutable font config SHA-256
+`e741d2a0446e349fcc9f3da7bc49aacedafe9c820bce32a6b5484d3c8fac41e5`,
+the same installed browser and three identical owned-fixture URLs. The full
+required chain completed in `/tmp/task8-fix1-check-ci.log`: application 540,
+native 1,886 plus 96 snapshots, contracts 42 and web 666 tests; production web
+and Storybook builds and packaging; functional browser 44; web visual 16;
+Storybook visual 18; native integration 752 across 27 suites; web integration
+51 across three files; dedicated MCP browser 12; and public RLS across 44 tables.
+The 12 MCP cases omitted from the ordinary functional browser gate passed in
+the dedicated gate. Existing native lint warnings remain. A fresh production
+web scan again found zero native renderer references in 34 dependency traces
+and 26 browser chunks: `/tmp/task8-fix1-renderer-packaging.json`.
+
+This passing full rerun supersedes the initial red validation outcome without
+removing its history. All 111 unrelated expected PNGs remain byte-identical;
+`/tmp/task8-font-snapshot-preservation-final.json` also verifies every approved
+replacement matches its reviewed capture. Live Discord/provider operation and
+human image readability remain unverified.
+
+The previous bot runtime build and renderer probe remain valid. This correction
+changes only operator documentation, process-local test environment and expected
+screenshots. The retained runtime image predates those validation-only files;
+its production source, Dockerfile and dependencies are unchanged.
+
+## Process-local Linux browser fonts
+
+This managed host adds a strong `sans-serif` alias to OpenAI Sans in
+`/etc/fonts/conf.d/52-orbit-os.conf`. The unchanged landing Linux baseline matches DejaVu Sans metrics. A controlled unchanged landing-page test passes in light
+and dark when the browser process resolves the generic families to the already
+installed DejaVu Sans. Product CSS and host font configuration stay unchanged.
+
+Use a process-local Fontconfig file with a private temporary cache. Match generic
+families before including the system rules, which otherwise expand `system-ui`
+before a later override can match it. Named fonts such as the image renderer's
+Liberation Sans retain their normal selection. Do not refresh unrelated expected
+screenshots to accommodate a host's generic-font alias.
+
+From the repository root, after setting the three identical owned disposable DB
+URLs from `AGENTS.md` and the installed `PLAYWRIGHT_BROWSERS_PATH` if needed:
+
+```bash
+(
+  set -eu
+  drasil_visual_font_dir="$(mktemp -d /tmp/drasil-visual-fonts.XXXXXX)"
+  trap 'rm -rf "$drasil_visual_font_dir"' EXIT
+  mkdir "$drasil_visual_font_dir/cache"
+  cat > "$drasil_visual_font_dir/fonts.conf" <<EOF
+<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+<fontconfig>
+  <match target="pattern">
+    <test name="family" qual="first"><string>ui-sans-serif</string></test>
+    <edit name="family" mode="assign_replace" binding="strong"><string>DejaVu Sans</string></edit>
+  </match>
+  <match target="pattern">
+    <test name="family" qual="first"><string>system-ui</string></test>
+    <edit name="family" mode="assign_replace" binding="strong"><string>DejaVu Sans</string></edit>
+  </match>
+  <match target="pattern">
+    <test name="family" qual="first"><string>sans-serif</string></test>
+    <edit name="family" mode="assign_replace" binding="strong"><string>DejaVu Sans</string></edit>
+  </match>
+  <include ignore_missing="yes">/etc/fonts/fonts.conf</include>
+  <cachedir>$drasil_visual_font_dir/cache</cachedir>
+</fontconfig>
+EOF
+  chmod 0444 "$drasil_visual_font_dir/fonts.conf"
+  FONTCONFIG_FILE="$drasil_visual_font_dir/fonts.conf" fc-match ':family=system-ui'
+  FONTCONFIG_FILE="$drasil_visual_font_dir/fonts.conf" npm run check:ci
+)
+```
+
+The subshell exports the override only to the check and its children, then removes
+its own config/cache. It does not change global Fontconfig, product styles, TLS
+trust or browser settings. This recipe requires installed DejaVu Sans; verify
+selection with `fc-match ':family=system-ui'` under the same `FONTCONFIG_FILE`.
 
 ## Owned disposable live checklist
 
