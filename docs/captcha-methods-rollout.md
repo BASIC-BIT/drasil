@@ -345,6 +345,11 @@ This managed host adds a strong `sans-serif` alias to OpenAI Sans in
 and dark when the browser process resolves the generic families to the already
 installed DejaVu Sans. Product CSS and host font configuration stay unchanged.
 
+Font family alone is insufficient for Ubuntu CI parity. Ubuntu 24.04 enables
+RGB subpixel rendering in Fontconfig; Debian enables grayscale rendering.
+Include Ubuntu's RGB pattern rule before the host rules, as in the recipe below.
+This reproduces the CI text rasterization without changing product styles.
+
 Use a process-local Fontconfig file with a private temporary cache. Match generic
 families before including the system rules, which otherwise expand `system-ui`
 before a later override can match it. Named fonts such as the image renderer's
@@ -376,6 +381,9 @@ URLs from `AGENTS.md` and the installed `PLAYWRIGHT_BROWSERS_PATH` if needed:
     <test name="family" qual="first"><string>sans-serif</string></test>
     <edit name="family" mode="assign_replace" binding="strong"><string>DejaVu Sans</string></edit>
   </match>
+  <match target="pattern">
+    <edit name="rgba" mode="append"><const>rgb</const></edit>
+  </match>
   <include ignore_missing="yes">/etc/fonts/fonts.conf</include>
   <cachedir>$drasil_visual_font_dir/cache</cachedir>
 </fontconfig>
@@ -390,6 +398,33 @@ The subshell exports the override only to the check and its children, then remov
 its own config/cache. It does not change global Fontconfig, product styles, TLS
 trust or browser settings. This recipe requires installed DejaVu Sans; verify
 selection with `fc-match ':family=system-ui'` under the same `FONTCONFIG_FILE`.
+
+## Ubuntu CI parity follow-up
+
+The initial family-only correction above passed locally but did not reproduce
+Ubuntu's RGB subpixel rendering. CI run `39983024715` passed unit, build and
+functional browser checks, then failed four light-theme web images. Comparing
+the official Ubuntu 24.04 `fontconfig-config` package with Debian identified
+`10-sub-pixel-rgb.conf` versus `10-sub-pixel-none.conf` as the cause. A heading
+and paragraph rendered with Ubuntu's rule matched CI and original BASE crops
+with zero differing pixels. Named Liberation Sans selection stayed unchanged.
+
+Using that process-local rule reproduced all four CI web images pixel for pixel.
+Thirteen failed web/Storybook captures were reviewed: dimensions, content,
+wrapping and layout were unchanged; differences followed glyph edges. Only
+those thirteen images, all inside the earlier seventeen-image scope, were
+corrected. Nine now match original BASE bytes exactly and are restored, which
+supersedes their earlier classification as baseline debt. The final PR changes
+only eight visual baselines: setup, operations, Turnstile provider failure and
+image-check history, each in light and dark. The other 120 existing visual
+baselines remain unchanged from BASE.
+
+The Ubuntu package archive SHA-256 is
+`9df0579cd298a1f2b7a40efd519c849745aecd193a09733cf4d1032284a62bbf`.
+Evidence is recorded in `/tmp/pr262-ubuntu-font-root-cause.json`,
+`/tmp/pr262-ubuntu-candidate-review.json` and
+`/tmp/pr262-ubuntu-snapshot-preservation.json`. No product CSS, host font rules,
+browser flags, comparison thresholds or test coverage changed.
 
 ## Owned disposable live checklist
 
