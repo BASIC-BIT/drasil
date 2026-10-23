@@ -1,5 +1,9 @@
 import { persistSetupChange } from '@drasil/application/postgres';
-import { type SetupWritePrecondition, type SetupStoredChange } from '@drasil/application';
+import {
+  ActionDeniedError,
+  type SetupWritePrecondition,
+  type SetupStoredChange,
+} from '@drasil/application';
 import { injectable, inject } from 'inversify';
 import { Prisma, PrismaClient } from '../db/prisma';
 import { Server, ServerSettings } from './types'; // Keep existing domain types
@@ -46,7 +50,11 @@ export interface IServerRepository {
     guildId: string,
     update: ServerSetupConfigurationUpdate
   ): Promise<Server>;
-  updateSettings(guildId: string, settings: Partial<ServerSettings>): Promise<Server | null>;
+  updateSettings(
+    guildId: string,
+    settings: Partial<ServerSettings>,
+    captchaReadiness?: SetupStoredChange['captchaReadiness']
+  ): Promise<Server | null>;
   setActive(guildId: string, isActive: boolean): Promise<Server | null>;
   findAllActive(): Promise<Server[]>;
   getOrCreateServer(guildId: string): Promise<Server>;
@@ -278,13 +286,21 @@ export class ServerRepository implements IServerRepository {
   /**
    * Update specific settings for a server
    */
-  async updateSettings(guildId: string, settings: Partial<ServerSettings>): Promise<Server | null> {
+  async updateSettings(
+    guildId: string,
+    settings: Partial<ServerSettings>,
+    captchaReadiness?: SetupStoredChange['captchaReadiness']
+  ): Promise<Server | null> {
     if (
       'captcha_method' in settings ||
       'captcha_mode' in settings ||
       'captcha_method_revision' in settings
-    )
-      return this.updateSetupIfUnchanged(guildId, undefined, { settings });
+    ) {
+      // Public method/mode writes must carry readiness from the native composition.
+      // Trusted internal persistence remains available through updateSetupIfUnchanged.
+      if (!captchaReadiness) throw new ActionDeniedError('policy_disabled');
+      return this.updateSetupIfUnchanged(guildId, undefined, { settings, captchaReadiness });
+    }
     try {
       const settingsPatch = JSON.stringify(settings);
       const rows = await this.prisma.$queryRaw<ServerDatabaseRecord[]>(Prisma.sql`

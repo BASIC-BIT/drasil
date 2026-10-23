@@ -67,15 +67,23 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
 
   async function enableAutomaticCaptchaResolution(serverId: string): Promise<void> {
     const servers = new ServerRepository(prisma);
-    await servers.updateSettings(serverId, {
-      captcha_mode: 'suspicious_join',
-      captcha_pass_action: 'verify_join_only',
-    });
+    await servers.updateSettings(
+      serverId,
+      {
+        captcha_mode: 'suspicious_join',
+        captcha_pass_action: 'verify_join_only',
+      },
+      { turnstile: true, discord_image: true }
+    );
   }
 
   async function enableManualCaptcha(serverId: string): Promise<void> {
     const servers = new ServerRepository(prisma);
-    await servers.updateSettings(serverId, { captcha_mode: 'manual' });
+    await servers.updateSettings(
+      serverId,
+      { captcha_mode: 'manual' },
+      { turnstile: true, discord_image: true }
+    );
   }
 
   it('allows pending standard challenge bypass with mode off and preserves generation CAS', async () => {
@@ -367,10 +375,14 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     expect(initial.pass_effect).toBe(CaptchaChallengePassEffect.VERIFY_JOIN_ONLY);
 
     await challenges.expirePending(new Date(), 10);
-    await servers.updateSettings(verification.server_id, {
-      captcha_mode: 'suspicious_join',
-      captcha_pass_action: 'evidence_only',
-    });
+    await servers.updateSettings(
+      verification.server_id,
+      {
+        captcha_mode: 'suspicious_join',
+        captcha_pass_action: 'evidence_only',
+      },
+      { turnstile: true, discord_image: true }
+    );
     const retried = await challenges.retry({
       expectedChallengeId: initial.id,
       expectedGeneration: initial.generation,
@@ -602,7 +614,11 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       expiresAt: new Date(Date.now() + 60_000),
       requestedBy: 'moderator-1',
     });
-    await servers.updateSettings(verification.server_id, { captcha_mode: 'off' });
+    await servers.updateSettings(
+      verification.server_id,
+      { captcha_mode: 'off' },
+      { turnstile: true, discord_image: true }
+    );
     await challenges.cancelPendingForDisabledServers(10);
 
     await expect(
@@ -1084,7 +1100,11 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       'guild-captcha-create-disabled',
       'user-captcha-create-disabled'
     );
-    await servers.updateSettings(disabled.verification.server_id, { captcha_mode: 'off' });
+    await servers.updateSettings(
+      disabled.verification.server_id,
+      { captcha_mode: 'off' },
+      { turnstile: true, discord_image: true }
+    );
     await expect(
       challenges.create({
         verificationEventId: disabled.verification.id,
@@ -1123,7 +1143,11 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       challenge.generation,
       'discord_delivery_failed'
     );
-    await servers.updateSettings(retryCase.verification.server_id, { captcha_mode: 'off' });
+    await servers.updateSettings(
+      retryCase.verification.server_id,
+      { captcha_mode: 'off' },
+      { turnstile: true, discord_image: true }
+    );
 
     await expect(
       challenges.retry({
@@ -1932,10 +1956,14 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       captcha_pass_action: 'evidence_only',
     });
     await expect(verifications.completeCaptchaVerification(completion)).resolves.toBeNull();
-    await servers.updateSettings(verification.server_id, {
-      captcha_mode: 'off',
-      captcha_pass_action: 'verify_join_only',
-    });
+    await servers.updateSettings(
+      verification.server_id,
+      {
+        captcha_mode: 'off',
+        captcha_pass_action: 'verify_join_only',
+      },
+      { turnstile: true, discord_image: true }
+    );
     await expect(verifications.completeCaptchaVerification(completion)).resolves.toBeNull();
     await enableAutomaticCaptchaResolution(verification.server_id);
     await expect(verifications.completeCaptchaVerification(completion)).resolves.toEqual(

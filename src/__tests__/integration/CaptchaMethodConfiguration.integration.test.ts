@@ -371,4 +371,87 @@ describeIntegration('CaptchaMethodConfiguration (integration)', () => {
     expect(await f.prisma.captcha_challenge_images.count()).toBe(0);
     expect(await f.prisma.captcha_challenges.count({ where: { server_id: f.guildId } })).toBe(1);
   });
+  it('direct repository method writes require readiness before changing settings or pending material', async () => {
+    const f = await fixture();
+    const repository = new ServerRepository(f.prisma);
+    const before = await f.prisma.servers.findUniqueOrThrow({ where: { guild_id: f.guildId } });
+    const image = await f.prisma.captcha_challenge_images.findFirstOrThrow({
+      where: { captcha_challenge_id: f.challenge.id },
+    });
+    await expect(
+      repository.updateSettings(f.guildId, { captcha_method: 'turnstile' })
+    ).rejects.toMatchObject({ code: 'policy_disabled' });
+    expect(
+      (await f.prisma.servers.findUniqueOrThrow({ where: { guild_id: f.guildId } })).settings
+    ).toEqual(before.settings);
+    expect(
+      (await f.prisma.captcha_challenges.findUniqueOrThrow({ where: { id: f.challenge.id } }))
+        .status
+    ).toBe('pending');
+    expect(
+      await f.prisma.captcha_challenge_images.findFirstOrThrow({
+        where: { captcha_challenge_id: f.challenge.id },
+      })
+    ).toEqual(image);
+  });
+
+  it.each([
+    { captcha_method: 'turnstile' as const },
+    { captcha_method: 'discord_image' as const },
+    { captcha_mode: 'suspicious_join' as const },
+  ])(
+    'direct repository rejects unavailable readiness for %j without modifying stored state',
+    async (settings) => {
+      const f = await fixture();
+      const before = await f.prisma.servers.findUniqueOrThrow({ where: { guild_id: f.guildId } });
+      const image = await f.prisma.captcha_challenge_images.findFirstOrThrow({
+        where: { captcha_challenge_id: f.challenge.id },
+      });
+      await expect(
+        new ServerRepository(f.prisma).updateSettings(f.guildId, settings, {
+          turnstile: false,
+          discord_image: false,
+        })
+      ).rejects.toMatchObject({ code: 'policy_disabled' });
+      expect(await f.prisma.servers.findUniqueOrThrow({ where: { guild_id: f.guildId } })).toEqual(
+        before
+      );
+      expect(
+        (await f.prisma.captcha_challenges.findUniqueOrThrow({ where: { id: f.challenge.id } }))
+          .status
+      ).toBe('pending');
+      expect(
+        await f.prisma.captcha_challenge_images.findFirstOrThrow({
+          where: { captcha_challenge_id: f.challenge.id },
+        })
+      ).toEqual(image);
+    }
+  );
+  it('direct repository saves a ready method and cancels material atomically', async () => {
+    const f = await fixture();
+    const saved = await new ServerRepository(f.prisma).updateSettings(
+      f.guildId,
+      { captcha_method: 'turnstile' },
+      { turnstile: true, discord_image: false }
+    );
+    expect(saved?.settings).toMatchObject({
+      captcha_method: 'turnstile',
+      captcha_method_revision: 1,
+      unrelated: 'kept',
+    });
+    expect(
+      (await f.prisma.captcha_challenges.findUniqueOrThrow({ where: { id: f.challenge.id } }))
+        .status
+    ).toBe('cancelled');
+    expect(await f.prisma.captcha_challenge_images.count()).toBe(0);
+  });
+  it('direct repository saves None with an explicit unavailable readiness snapshot and no secrets', async () => {
+    const f = await fixture();
+    const saved = await new ServerRepository(f.prisma).updateSettings(
+      f.guildId,
+      { captcha_method: 'none' },
+      { turnstile: false, discord_image: false }
+    );
+    expect(saved?.settings).toMatchObject({ captcha_method: 'none', captcha_method_revision: 1 });
+  });
 });
