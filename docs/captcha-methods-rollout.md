@@ -44,10 +44,14 @@ Turnstile, session or binding key.
 
 Inject `DRASIL_CAPTCHA_IMAGE_ANSWER_SECRET` into both bot and web server runtimes,
 then restart/redeploy them through the approved configuration process. Do not
-prefix it with `NEXT_PUBLIC_`. The current Terraform secret metadata list does not
-create this key or wire it automatically. Review secret references, access policy
-and environment identity as concrete configuration before an operational apply.
-This branch does not provision secrets or change production task definitions.
+prefix it with `NEXT_PUBLIC_`. Terraform manages the AWS secret metadata,
+execution-role read permission and ECS reference, but never the key value or the
+Vercel variable. Populate the same key securely in both runtimes before deploying.
+For a secret created operationally first, follow the
+[metadata adoption procedure](deploy/aws.md#3-set-production-secrets) before a
+reviewed Terraform plan. Importing metadata must preserve the existing key.
+Review secret references, access policy and environment identity as concrete
+configuration before an operational apply.
 
 Bot setup readiness requires a valid key, loadable `captcha-canvas`/`skia-canvas`
 and Liberation Sans. Web setup readiness validates the key without loading native

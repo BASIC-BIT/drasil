@@ -146,6 +146,7 @@ Terraform creates these Secrets Manager secrets:
 - `drasil/prod/TYPESAFE_API_KEY`
 - `drasil/prod/DATABASE_URL`
 - `drasil/prod/OBSERVABILITY_HASH_KEY`
+- `drasil/prod/DRASIL_CAPTCHA_IMAGE_ANSWER_SECRET`
 - `drasil/prod/POSTHOG_PROJECT_API_KEY`
 
 Set their values (console or CLI). Example:
@@ -158,12 +159,32 @@ aws secretsmanager put-secret-value \
 
 Repeat for the other secrets.
 
-CAPTCHA method configuration is an explicit, separate rollout. The secret list
-above does not provision the image-answer key. Follow
-[CAPTCHA methods rollout](../captcha-methods-rollout.md) for secret-manager delivery
+Terraform manages the image-answer secret's metadata, scoped execution-role read
+permission and ECS reference. It does not generate its value or configure Vercel.
+Populate the key before deploying a task definition that references it, even when
+server CAPTCHA methods are None: ECS resolves every referenced secret at startup.
+Follow [CAPTCHA methods rollout](../captcha-methods-rollout.md) for secret-manager delivery
 to the bot and web runtimes, canonical base64 validation, rotation invalidation,
-readiness and the owned disposable live checklist. Do not enable a server method
-until its target release and configuration are verified. Apply the additive image
+readiness and the owned disposable live checklist.
+
+If the secret was created operationally before this Terraform resource was added,
+initialize the correct environment's remote backend and import its existing ARN
+before planning. Set `DRASIL_CAPTCHA_IMAGE_SECRET_ARN` from verified secret metadata;
+it is the ARN, not the key value:
+
+```bash
+cd infra/aws/prod
+terraform import aws_secretsmanager_secret.captcha_image_answer "$DRASIL_CAPTCHA_IMAGE_SECRET_ARN"
+terraform plan
+```
+
+Import only the metadata resource, never an `aws_secretsmanager_secret_version`.
+Preserve the existing value; replacing it is a coordinated rotation, not adoption.
+Review the complete plan with the environment's current inputs before applying;
+do not reconcile unrelated runtime configuration as part of secret adoption.
+
+CAPTCHA method configuration remains an explicit, separate rollout. Do not enable
+a server method until its target release and configuration are verified. Apply the additive image
 migration and deploy compatible readers before enabling image issuance. No server
 switches methods automatically.
 
