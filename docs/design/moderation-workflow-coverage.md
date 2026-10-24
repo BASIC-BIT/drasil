@@ -1,6 +1,6 @@
 # Moderation workflow design coverage
 
-Status: exploratory mockups for review, not production integration. The user requested all six remaining workflow areas be designed before implementation begins. This supersedes the earlier suggestion to integrate the ordinary case first and fill in these workflows later.
+Status: visual designs and workflow coverage approved by the user on October 24, 2026. The mockups remain isolated studies, not production integration. See the [implementation plan](../superpowers/plans/2026-10-24-moderation-workspace.md). The user requested all six remaining workflow areas be designed before implementation begins. This supersedes the earlier suggestion to integrate the ordinary case first and fill in these workflows later.
 
 Browse the [screenshot gallery](previews/workflows/README.md) for all six areas.
 
@@ -135,6 +135,6 @@ No new web reply composer, screening approval command, assignment system, snooze
 
 ## Review and implementation boundary
 
-All six areas now have explicit state/data/action designs, with interactive studies for their central screens and important outcomes. This is material to review together; it is not a claim that the design has been approved or production behavior implemented. Iterate these shared components and settle the flow before creating the detailed implementation plan.
+All six areas now have explicit state/data/action designs, with interactive studies for their central screens and important outcomes. The user approved this combined design pass on October 24, 2026. Production behavior remains to be implemented through the linked plan; the authored studies remain visual and interaction references.
 
 Underlying sources include `packages/contracts/src/{inbox,cases,reports,messageCleanup}.ts`, `apps/web/lib/{moderationInboxDataAdapter,activeCaseDataAdapter,inboxActionState,inboxActionReceipts,moderationActionRequestDataAdapter}.ts`, `docs/compromised-account-quarantine.md`, `docs/captcha-case-challenge-plan.md`, and the current report-review, attention, quarantine, cleanup and ban services.

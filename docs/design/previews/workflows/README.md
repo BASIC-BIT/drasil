@@ -19,6 +19,6 @@ For the interactive studies, run `npm --workspace apps/web run storybook` and op
 
 Read the [workflow decisions and data requirements](../../moderation-workflow-coverage.md) alongside the [overall workspace design](../../../superpowers/specs/2026-10-23-moderation-workspace-design.md).
 
-The fixed screenshot clock is October 23, 2026, 15:16 UTC. Independent workflow audits and UX review informed this pass. The layout is ready for user review; these mockups do not constitute design approval.
+The fixed screenshot clock is October 23, 2026, 15:16 UTC. Independent workflow audits and UX review informed this pass. The user approved these designs on October 24, 2026. The [implementation plan](../../../superpowers/plans/2026-10-24-moderation-workspace.md) connects the approved components and workflows to real data and actions.
 
 ![Mixed moderation inbox](inbox.png)

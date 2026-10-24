@@ -1,6 +1,6 @@
 # Drasil moderation workspace design
 
-Status: proposed design for review, expanded to cover all six remaining moderation workflows before implementation. Product implementation has not started.
+Status: design approved by the user on October 24, 2026, including all six moderation workflow areas. Product integration has not started. See the [implementation plan](../plans/2026-10-24-moderation-workspace.md).
 
 See [the complete workflow coverage and studies](../../design/moderation-workflow-coverage.md) for mixed inbox kinds, account recovery, browser checks, message cleanup, channel conversations and live action outcomes. The user requested these be worked through together before finalizing the design.
 
@@ -8,7 +8,7 @@ See [the complete workflow coverage and studies](../../design/moderation-workflo
 
 Build a new moderator website around the approved flat grey inbox and case detail page. The user confirmed that the existing website is unused and its UI can be replaced from the ground up. Existing page layouts, navigation and component APIs impose no compatibility requirement. Existing moderation rules, stored records and Discord effects remain authoritative.
 
-The first release replaces the moderator shell, mixed inbox and investigation experience together. It supports inbox selection, direct triage, investigation, confirmed actions, durable results and continuing review. The broader website can adopt this foundation in subsequent slices. This boundary is a proposal, not a user requirement to keep any current screen.
+The first release replaces the moderator shell, mixed inbox and investigation experience together. It supports inbox selection, direct triage, investigation, confirmed actions, durable results and continuing review. The broader website can adopt this foundation in subsequent slices. All six moderation areas are included before route integration; subsequent website slices do not constrain the replacement of current screens.
 
 Success means a moderator can understand what needs attention, inspect its sources and act without leaving the new workflow for routine review. Visual design should match the [approved case detail preview](../../design/previews/source-desk.png), including the transparent commissioned logo, Manrope, neutral surfaces, flat separation and restrained severity colors.
 
@@ -19,12 +19,12 @@ Avoid redundant case/report navigation, generic evidence disclaimers, fabricated
 | Approach                                                                                           | Consequence                                                                              | Decision                                                                                 |
 | -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | Adopt the approved case detail design while retaining the current inbox                            | Smaller route change, but keeps the old interface and delays the coherent review journey | Rejected by the user. The current website is unused and can be replaced.                 |
-| Rebuild the moderator shell, inbox and case review together, reusing existing backend capabilities | More UI work in the first slice, with one consistent navigation and action model         | Selected direction. This document proposes its boundaries and interactions.              |
+| Rebuild the moderator shell, inbox and case review together, reusing existing backend capabilities | More UI work in the first slice, with one consistent navigation and action model         | Selected direction. This document defines its boundaries and interactions.               |
 | Rewrite the website and moderation backend together                                                | Changes policy and execution while also changing presentation                            | Unnecessary for this goal. Retain useful services, contracts and durable queue behavior. |
 
 ## Information architecture
 
-The proposed primary navigation is Inbox and History. Put server selection and account controls in the shared shell. Settings and Operations are secondary destinations. Cases, Reports, Alerts, Replies and Screening become named inbox views, rather than independent top-level queue pages. This is a design recommendation for review.
+The primary navigation is Inbox and History. Put server selection and account controls in the shared shell. Settings and Operations are secondary destinations. Cases, Reports, Alerts, Replies and Screening become named inbox views, rather than independent top-level queue pages. This is the approved navigation direction.
 
 Keep a distinct canonical case URL for direct links and investigation. Retain report and member detail URLs where they are useful identities, not as reasons to keep their existing layouts. Old case/report queue URLs can redirect to the corresponding inbox view after migration. Preserve query parameters needed for explicit request tracking. Do not change public report, OAuth or security-check URLs merely to simplify navigation.
 
@@ -71,9 +71,9 @@ View conversation opens a continuous chronological stream around the source mess
 
 Fetch on demand through an authenticated server endpoint. Resolve the channel/message from a source linked to the authorized case or report, verify that the channel belongs to that guild, and use the existing bot HTTP boundary. Never accept an arbitrary client-supplied Discord URL or use bot credentials in the browser.
 
-For this new full-channel read, guild management eligibility alone is insufficient. Require the actor's effective View Channel and Read Message History permissions, respecting channel overwrites, thread parent permissions and private-thread access. Honor Discord owner/administrator semantics. Recheck access on every page request; missing or unverifiable access produces the unavailable state. The bot must also be able to read the channel. This is the author's proposed access rule for the new capability; it does not change saved-evidence access policy.
+For this new full-channel read, guild management eligibility alone is insufficient. Require the actor's effective View Channel and Read Message History permissions, respecting channel overwrites, thread parent permissions and private-thread access. Honor Discord owner/administrator semantics. Recheck access on every page request; missing or unverifiable access produces the unavailable state. The bot must also be able to read the channel. This access rule applies to the new capability; it does not change saved-evidence access policy.
 
-The proposed initial window is up to 50 messages using Discord's `around` parameter. Load older/newer messages in explicit pages of up to 50 using message-ID cursors. Preserve chronological order, deduplicate by channel/message ID, and keep the reader's position when prepending. Bound the in-memory stream to 200 messages; at the bound, provide Open in Discord for further reading rather than silently dropping the reader's context. These limits are implementation proposals for this release.
+The initial window is up to 50 messages using Discord's `around` parameter. Load older/newer messages in explicit pages of up to 50 using message-ID cursors. Preserve chronological order, deduplicate by channel/message ID, and keep the reader's position when prepending. Bound the in-memory stream to 200 messages; at the bound, provide Open in Discord for further reading rather than silently dropping the reader's context. These limits apply to this release.
 
 Use attribution actually returned by Discord. When the source is deleted, show the saved source separately and explain that it is unavailable in the current window. If access fails, preserve saved evidence, provide a concise unavailable state and retain a valid Discord link. Do not fabricate surrounding messages. Conversation reads add no database retention and do not change the existing message-context collection policy.
 
@@ -125,7 +125,7 @@ Keep Next.js, React, TypeScript, CSS modules, existing contracts, Vitest, Playwr
 
 Subsequent slices replace History and member review, then setup/onboarding and Operations, then public reporting/security-check presentation and the public landing page. Prioritize these by the next actual user journey, and design their contents before implementing them. Shared navigation must keep working destinations during this sequence. Temporary older pages may receive the shared shell, but their layout does not constrain their eventual replacement.
 
-No live moderation, deployment or merge is part of this design task. The implementation plan follows review of this document.
+No live moderation, deployment or merge is part of this design task. The linked implementation plan covers all six moderation workflow areas.
 
 ## Verification and acceptance
 
