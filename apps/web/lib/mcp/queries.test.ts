@@ -2,12 +2,13 @@ import { describe, it, expect, vi } from 'vitest';
 import { createMcpQueries, querySchema, type QueryRepository, type QueryRow } from './queries';
 import { toMcpQueryResult, MCP_RESULT_BYTES } from './results';
 import { accessFixture, guildId, principal } from './queryTestFixtures';
+import { ReadDependencyUnavailableError } from '@drasil/application';
 
 const secret = 'cursor-secret-for-tests-at-least-32-characters';
 const validListQuery = { kind: 'list_cases', guildId };
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 function harness(rows: QueryRow[] = []) {
-  const { access, state, grant } = accessFixture();
+  const { access, state, grant, authority } = accessFixture();
   const read = vi.fn<QueryRepository['read']>(async (_binding, query, after) => {
     const start = after ? rows.findIndex((row) => row.key.id === after.id) + 1 : 0;
     return rows.slice(start, start + ('limit' in query ? query.limit : 1) + 1);
@@ -21,9 +22,76 @@ function harness(rows: QueryRow[] = []) {
     authorizeDiscordContent: visibility,
     messages,
   });
-  return { service, read, state, grant, messages, visibility };
+  return { service, read, state, grant, messages, visibility, authority };
 }
 describe('authorized queries', () => {
+  it('does not read the repository after an upstream authority failure and refreshes authority afterward', async () => {
+    const h = harness();
+    vi.spyOn(h.authority, 'loadFresh').mockRejectedValueOnce(
+      new ReadDependencyUnavailableError({ retryAfterSeconds: 2 })
+    );
+    expect(await h.service.execute(principal, validListQuery)).toEqual({
+      kind: 'denied',
+      reason: 'unavailable',
+      retryAfterSeconds: 2,
+    });
+    expect(h.read).not.toHaveBeenCalled();
+    expect(await h.service.execute(principal, validListQuery)).toMatchObject({ kind: 'allowed' });
+    h.state.owner = false;
+    expect(await h.service.execute(principal, validListQuery)).toEqual({
+      kind: 'denied',
+      reason: 'permission_denied',
+    });
+    h.state.owner = true;
+    h.grant.revokedAt = new Date();
+    expect(await h.service.execute(principal, validListQuery)).toEqual({
+      kind: 'denied',
+      reason: 'invalid_grant',
+    });
+    expect(h.read).toHaveBeenCalledTimes(1);
+  });
+  it.each([
+    [
+      new ReadDependencyUnavailableError({ retryAfterSeconds: 2 }),
+      { kind: 'denied', reason: 'unavailable', retryAfterSeconds: 2 },
+    ],
+    [
+      Object.assign(new Error('PRIVATE_BACKEND'), {
+        retryAfterSeconds: 2,
+        status: 503,
+        body: 'PRIVATE_BODY',
+      }),
+      { kind: 'denied', reason: 'unavailable' },
+    ],
+    [
+      new ReadDependencyUnavailableError({ retryAfterSeconds: Infinity }),
+      { kind: 'denied', reason: 'unavailable' },
+    ],
+  ])(
+    'projects query failures into identical sanitized text and structured results (%s)',
+    async (error, expected) => {
+      const h = harness();
+      h.read.mockRejectedValueOnce(error);
+      const result = await h.service.execute(principal, validListQuery);
+      expect(result).toEqual(expected);
+      const envelope = toMcpQueryResult(result);
+      expect(envelope.isError).toBe(true);
+      expect(envelope.structuredContent).toEqual(expected);
+      expect(JSON.parse(envelope.content[0].text)).toEqual(expected);
+      expect(JSON.stringify(envelope)).not.toMatch(/PRIVATE_|status|body|stack|message/);
+    }
+  );
+  it('retains existing admission rate limits', async () => {
+    const h = harness();
+    expect(
+      await h.service.execute(principal, validListQuery, async () => ({
+        kind: 'denied',
+        reason: 'rate_limited',
+        retryAfterSeconds: 7,
+      }))
+    ).toEqual({ kind: 'denied', reason: 'rate_limited', retryAfterSeconds: 7 });
+    expect(h.read).not.toHaveBeenCalled();
+  });
   it('exposes CAPTCHA comparison fields and cleanup detection binding without browser credentials', async () => {
     const h = harness([
       {

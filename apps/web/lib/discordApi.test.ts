@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   deleteBotMessage,
+  exchangeDiscordCode,
+  fetchDiscordUser,
   fetchBotChannelMessages,
   fetchDiscordGuilds,
   type DiscordGuildSummary,
@@ -106,5 +108,65 @@ describe('Discord API helpers', () => {
         headers: { authorization: 'Bot bot-token' },
       })
     );
+  });
+});
+
+describe('Discord GET recovery integration', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it('leaves mutation and OAuth failures on their original single-attempt paths', async () => {
+    vi.stubEnv('DRASIL_WEB_BOT_TOKEN', 'bot-token');
+    vi.stubEnv('DISCORD_CLIENT_ID', 'test-client');
+    vi.stubEnv('DISCORD_CLIENT_SECRET', 'test-secret');
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => new Response('{"retry_after":1}', { status: 429 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(deleteBotMessage('channel-1', 'message-1')).rejects.toThrow('429');
+    await expect(
+      exchangeDiscordCode({ code: 'test-code', redirectUri: 'https://app.test/callback' })
+    ).rejects.toThrow('429');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(['DELETE', 'POST']);
+  });
+
+  it('recovers standalone website user GETs with the same policy', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response('{"retry_after":1}', { status: 429 }))
+      .mockResolvedValueOnce(jsonResponse({ id: 'test-user', username: 'user' }));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = fetchDiscordUser('access-token');
+    const outcome = result.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error })
+    );
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await outcome).toEqual({ value: { id: 'test-user', username: 'user' } });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1]?.[1]?.cache).toBe('no-store');
+  });
+
+  it('recovers bot reads after a provider rate limit', async () => {
+    vi.useFakeTimers();
+    vi.stubEnv('DRASIL_WEB_BOT_TOKEN', 'bot-token');
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response('{"retry_after":1}', { status: 429 }))
+      .mockResolvedValueOnce(jsonResponse([message('1')]));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = fetchBotChannelMessages('channel-1', 1);
+    const outcome = result.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error })
+    );
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await outcome).toEqual({ value: [message('1')] });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

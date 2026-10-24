@@ -23,6 +23,7 @@ import {
 } from './commands';
 import type { HumanCommand } from './commands';
 import type { ConnectionGrant, DelegatedPrincipal, DelegatedScope, DelegationStore } from './types';
+import { toUnavailableReadDenial } from './readFailures';
 
 export type MemberContextPurpose = 'report' | 'case' | 'ban' | 'kick' | 'configure';
 export interface MemberContextBinding {
@@ -116,6 +117,7 @@ export interface DelegatedAccessDependencies {
   readonly staffRoles: { loadRoleIds(guildId: string): Promise<readonly string[]> };
   readonly guilds: DelegatedGuildDirectory;
   readonly now?: () => number;
+  readonly onDependencyFailure?: (error: unknown) => void;
 }
 export interface DelegatedAccess {
   getCapabilities(
@@ -343,6 +345,13 @@ export async function loadEligibleGuildFacts(
 }
 export function createDelegatedAccess(deps: DelegatedAccessDependencies): DelegatedAccess {
   const now = deps.now ?? Date.now;
+  function observeFailure(error: unknown): void {
+    try {
+      void Promise.resolve(deps.onDependencyFailure?.(error)).catch(() => undefined);
+    } catch {
+      // Observation cannot affect an authorization decision.
+    }
+  }
   // Only bounded directory pages are cached. No grant, role or permission decisions are cached.
   const hints = new Map<
     string,
@@ -368,8 +377,9 @@ export function createDelegatedAccess(deps: DelegatedAccessDependencies): Delega
       const staffRoleIds = await deps.staffRoles.loadRoleIds(guildId);
       if (!isEligibleGuildAuthority(facts, staffRoleIds)) return denied('permission_denied');
       return { kind: 'allowed', grant, facts, guildId, scope, staffRoleIds };
-    } catch {
-      return denied('unavailable');
+    } catch (error) {
+      observeFailure(error);
+      return toUnavailableReadDenial(error);
     }
   }
   async function authorizeRead(
@@ -420,7 +430,8 @@ export function createDelegatedAccess(deps: DelegatedAccessDependencies): Delega
         return permitsWorkflow(binding, definition.authorityCommand)
           ? binding
           : denied('permission_denied');
-      } catch {
+      } catch (error) {
+        observeFailure(error);
         return denied('permission_denied');
       }
     },
@@ -435,7 +446,8 @@ export function createDelegatedAccess(deps: DelegatedAccessDependencies): Delega
       if (binding.kind === 'denied') return binding;
       try {
         return permitsWorkflow(binding, parsed.data) ? binding : denied('permission_denied');
-      } catch {
+      } catch (error) {
+        observeFailure(error);
         return denied('permission_denied');
       }
     },
@@ -480,8 +492,9 @@ export function createDelegatedAccess(deps: DelegatedAccessDependencies): Delega
           }
         }
         return { kind: 'allowed', guilds, nextCursor: entry.page.nextCursor };
-      } catch {
-        return denied('unavailable');
+      } catch (error) {
+        observeFailure(error);
+        return toUnavailableReadDenial(error);
       }
     },
   };

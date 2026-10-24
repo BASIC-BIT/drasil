@@ -1,3 +1,4 @@
+import { fetchDiscordRead } from './discordReadRecovery';
 import { readOptionalEnv, requireEnv } from './env';
 import { fixtureGuildResources, fixtureGuilds, isWebE2eFixtureMode } from './e2eFixtures';
 
@@ -133,11 +134,11 @@ export async function exchangeDiscordCode(args: {
 }
 
 export async function fetchDiscordUser(accessToken: string): Promise<DiscordUser> {
-  const response = await fetch(`${discordApiBaseUrl()}/users/@me`, {
-    headers: { authorization: `Bearer ${accessToken}` },
-    cache: 'no-store',
-  });
-  return readDiscordJson<DiscordUser>(response);
+  return fetchDiscordRead(
+    new URL(`${discordApiBaseUrl()}/users/@me`),
+    { headers: { authorization: `Bearer ${accessToken}` }, cache: 'no-store' },
+    readDiscordJson<DiscordUser>
+  );
 }
 
 export async function fetchDiscordGuilds(accessToken: string): Promise<DiscordGuildSummary[]> {
@@ -155,11 +156,11 @@ export async function fetchDiscordGuilds(accessToken: string): Promise<DiscordGu
       url.searchParams.set('after', after);
     }
 
-    const response = await fetch(url, {
-      headers: { authorization: `Bearer ${accessToken}` },
-      cache: 'no-store',
-    });
-    const page = await readDiscordJson<DiscordGuildSummary[]>(response);
+    const page = await fetchDiscordRead(
+      url,
+      { headers: { authorization: `Bearer ${accessToken}` }, cache: 'no-store' },
+      readDiscordJson<DiscordGuildSummary[]>
+    );
     guilds.push(...page);
     if (page.length < DISCORD_GUILD_PAGE_LIMIT) {
       return guilds;
@@ -178,11 +179,11 @@ async function fetchBotJson<T>(path: string): Promise<T> {
       'DRASIL_WEB_BOT_TOKEN or DISCORD_TOKEN is required for live setup diagnostics.'
     );
   }
-  const response = await fetch(`${discordApiBaseUrl()}${path}`, {
-    headers: { authorization: `Bot ${botToken}` },
-    cache: 'no-store',
-  });
-  return readDiscordJson<T>(response);
+  return fetchDiscordRead(
+    new URL(`${discordApiBaseUrl()}${path}`),
+    { headers: { authorization: `Bot ${botToken}` }, cache: 'no-store' },
+    readDiscordJson<T>
+  );
 }
 
 export async function fetchDiscordBotUser(): Promise<DiscordUser> {

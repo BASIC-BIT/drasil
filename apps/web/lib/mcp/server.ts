@@ -1,3 +1,4 @@
+import { withReadRequestContext } from '../readRequestContext';
 import { MCP_SERVER_INFO } from './protocol';
 import { createHmac } from 'node:crypto';
 import { z } from 'zod';
@@ -288,7 +289,11 @@ export function createMcpHandler(
   const bodyHandler = deps.wrapBody ? deps.wrapBody(authenticated) : authenticated;
   const hosts = [new URL(deps.config.origin).hostname];
   return async (request) =>
-    hostHeaderValidationResponse(request, hosts) ??
-    originValidationResponse(request, hosts) ??
-    bodyHandler(request);
+    withReadRequestContext(
+      { operation: 'mcp_http', signal: request.signal },
+      async () =>
+        hostHeaderValidationResponse(request, hosts) ??
+        originValidationResponse(request, hosts) ??
+        bodyHandler(request)
+    );
 }

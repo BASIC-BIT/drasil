@@ -1,12 +1,15 @@
+import { classifyReadFailure, recordReadDependency } from '../../readDiagnostics';
 import {
   memberContextFor,
   workflowDefinitions,
+  toUnavailableReadDenial,
   type WorkflowId,
   type AccessDecision,
   type DelegatedAccess,
   type DelegatedPrincipal,
 } from '@drasil/application';
 import {
+  DiscordApiError,
   fetchDiscordGuild,
   fetchDiscordGuildRoles,
   fetchDiscordGuildMember,
@@ -90,6 +93,7 @@ async function checkVisibility(
   api: VisibilityApi
 ): Promise<AccessDecision> {
   const denied = { kind: 'denied', reason: 'permission_denied' } as const;
+  const started = performance.now();
   try {
     const [guild, roles, actor, bot, channel] = await Promise.all([
       api.guild(guildId),
@@ -163,8 +167,16 @@ async function checkVisibility(
       }
     }
     return binding;
-  } catch {
-    return denied;
+  } catch (error) {
+    recordReadDependency({
+      ...classifyReadFailure(error),
+      boundary: 'visibility',
+      latencyMs: performance.now() - started,
+      attempt: 1,
+    });
+    if (error instanceof DiscordApiError && (error.status === 403 || error.status === 404))
+      return denied;
+    return toUnavailableReadDenial(error);
   }
 }
 export async function authorizeDiscordContent(
