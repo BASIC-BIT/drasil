@@ -183,6 +183,14 @@ Preserve the existing value; replacing it is a coordinated rotation, not adoptio
 Review the complete plan with the environment's current inputs before applying;
 do not reconcile unrelated runtime configuration as part of secret adoption.
 
+Coordinate operational task-definition changes with image deployments. Check for
+in-flight `Deploy (prod)` runs and wait for them to finish before changing runtime
+configuration; do not run these updates in parallel. Re-read and clone the
+service's active task definition after waiting, preserving its exact image,
+environment variables and other secret references. Add only the intended secret
+reference. After deployment, verify the running service still uses the intended
+image and includes the new reference, including after subsequent image releases.
+
 CAPTCHA method configuration remains an explicit, separate rollout. Do not enable
 a server method until its target release and configuration are verified. Apply the additive image
 migration and deploy compatible readers before enabling image issuance. No server
