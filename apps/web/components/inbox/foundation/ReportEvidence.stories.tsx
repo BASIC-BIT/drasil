@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
-import { Foundation } from './Foundation';
+import { Foundation } from '@/components/workspace/Foundation';
 import { ReportEvidence } from './ReportEvidence';
 import { everydayReports } from './ReportInbox.fixtures';
 

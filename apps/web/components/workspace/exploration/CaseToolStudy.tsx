@@ -2,8 +2,8 @@
 
 import { useState, type ReactNode } from 'react';
 import type { CaptchaChallengeSummary, MessageCleanupScope } from '@drasil/contracts';
-import { ActionButton } from '@/components/inbox/foundation/Foundation';
-import { Timestamp } from '@/components/inbox/foundation/Timestamp';
+import { ActionButton } from '@/components/workspace/Foundation';
+import { Timestamp } from '@/components/workspace/Timestamp';
 import { fixtureMessageCleanupJobDetails } from '@/lib/messageCleanupFixtures';
 import type { AccountQuarantinePreviewSummary } from '@/lib/moderationActionRequestDataAdapter';
 import type { StudyAction, ToolView } from './workflowStudyState';

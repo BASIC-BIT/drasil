@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
-import { Foundation } from '@/components/inbox/foundation/Foundation';
-import { SourceDesk, SourceDeskHistory } from './SourceDesk';
+import { Foundation } from '@/components/workspace/Foundation';
+import { SourceDesk } from './SourceDesk';
+import { CaseHistory } from '../CaseHistory';
 import { busyCase } from './CaseWorkspace.fixtures';
 
 const meta = {
@@ -26,7 +27,7 @@ export const EvidenceReader: Story = {};
 export const ModerationHistory: Story = {
   render: ({ detail }) => (
     <div style={{ maxWidth: 300 }}>
-      <SourceDeskHistory detail={detail} />
+      <CaseHistory detail={detail} />
     </div>
   ),
 };

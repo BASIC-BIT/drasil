@@ -1,5 +1,5 @@
 import type { ReportEvidenceItem, ReportEvidenceKind } from '@drasil/contracts';
-import { Timestamp } from './Timestamp';
+import { Timestamp } from '@/components/workspace/Timestamp';
 import styles from './ReportInbox.module.css';
 
 const labels: Record<ReportEvidenceKind, string> = {

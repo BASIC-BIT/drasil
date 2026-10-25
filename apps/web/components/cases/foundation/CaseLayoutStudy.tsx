@@ -2,18 +2,12 @@
 
 import { useEffect, useId, useRef, useState } from 'react';
 import type { CaseDetail } from '@drasil/contracts';
-import {
-  DrasilBrand,
-  Foundation,
-  type FoundationTheme,
-} from '@/components/inbox/foundation/Foundation';
-import {
-  MobileWorkspaceMenu,
-  WorkspaceLinks,
-} from '@/components/inbox/foundation/WorkspaceNavigation';
-import { Timestamp } from '@/components/inbox/foundation/Timestamp';
-import { CaseChecks } from './CaseSources';
-import { SourceDesk, SourceDeskHistory } from './SourceDesk';
+import { DrasilBrand, Foundation, type FoundationTheme } from '@/components/workspace/Foundation';
+import { MobileWorkspaceMenu, WorkspaceLinks } from '@/components/workspace/WorkspaceNavigation';
+import { Timestamp } from '@/components/workspace/Timestamp';
+import { CaseChecks } from '../CaseChecks';
+import { SourceDesk } from './SourceDesk';
+import { CaseHistory } from '../CaseHistory';
 import { CaseActivity } from './CaseActivity';
 import { CaseDecisions } from './CaseDecisions';
 import { CaseChronology } from './CaseChronology';
@@ -224,7 +218,7 @@ function Study({ detail, layout, theme = 'dark' }: CaseLayoutStudyProps) {
               ) : null}
               {layout === 'chronology' ? decisions : null}
               {layout === 'sources' ? (
-                <SourceDeskHistory detail={detail} headingId={`${id}-history`} />
+                <CaseHistory detail={detail} headingId={`${id}-history`} />
               ) : null}
               {layout === 'sources' && detail.notes ? (
                 <details className={styles.record}>

@@ -7,12 +7,12 @@ import {
   DrasilBrand,
   Foundation,
   type FoundationTheme,
-} from '@/components/inbox/foundation/Foundation';
-import { Timestamp } from '@/components/inbox/foundation/Timestamp';
+} from '@/components/workspace/Foundation';
+import { Timestamp } from '@/components/workspace/Timestamp';
 import { ReportEvidence } from '@/components/inbox/foundation/ReportEvidence';
 import { everydayReports } from '@/components/inbox/foundation/ReportInbox.fixtures';
-import { SourceDeskHistory } from '@/components/cases/foundation/SourceDesk';
-import { CaseChecks } from '@/components/cases/foundation/CaseSources';
+import { CaseHistory } from '@/components/cases/CaseHistory';
+import { CaseChecks } from '@/components/cases/CaseChecks';
 import { busyCase } from '@/components/cases/foundation/CaseWorkspace.fixtures';
 import { fixtureParkedCaseDetails } from '@/lib/caseFixtures';
 import { CaseToolStudy } from './CaseToolStudy';
@@ -921,7 +921,7 @@ function Study({
                         <CaseChecks detail={contextDetail} />
                       </div>
                       <div id="workflow-history" tabIndex={-1}>
-                        <SourceDeskHistory detail={contextDetail} />
+                        <CaseHistory detail={contextDetail} />
                       </div>
                       <details className={styles.section}>
                         <summary>Record details</summary>

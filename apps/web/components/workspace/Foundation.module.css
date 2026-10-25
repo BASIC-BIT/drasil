@@ -43,6 +43,12 @@
 .root[data-foundation-theme='dark'] {
   color-scheme: dark;
 }
+:global(:root[data-theme='light']) .root[data-foundation-theme='system'] {
+  color-scheme: light;
+}
+:global(:root[data-theme='dark']) .root[data-foundation-theme='system'] {
+  color-scheme: dark;
+}
 .root :where(h1, h2, h3, p, ul, ol, dl, dd, blockquote) {
   margin: 0;
 }

@@ -1,4 +1,4 @@
-import { Timestamp } from './Timestamp';
+import { Timestamp } from '@/components/workspace/Timestamp';
 import type { ReportDetail } from '@drasil/contracts';
 import { reportActionLabel, readyReport, reportName, type ReportReviewState } from './reportTriage';
 import styles from './ReportInbox.module.css';
