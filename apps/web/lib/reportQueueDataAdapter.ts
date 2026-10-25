@@ -11,6 +11,7 @@ import type {
   ReportReviewActions,
   ReportClosureAction,
   OpenSubmittedReportCaseResult,
+  CloseSubmittedReportResult,
 } from '@drasil/application';
 import { createWebApplication } from './application/createWebApplication';
 import { fixtureSubmittedReports } from './reportFixtures';
@@ -31,7 +32,7 @@ export interface ReportQueueDataAdapter {
       reportId: string;
       action: ReportClosureAction;
     }
-  ): Promise<boolean>;
+  ): Promise<CloseSubmittedReportResult>;
   openCaseFromSubmittedReport(
     context: ActionContext,
     input: {
@@ -203,14 +204,14 @@ export class PostgresReportQueueDataAdapter implements ReportQueueDataAdapter {
       reportId: string;
       action: ReportClosureAction;
     }
-  ): Promise<boolean> {
+  ): Promise<CloseSubmittedReportResult> {
     const result = await this.reportReview.close(context, {
       action: input.action,
       reportId: input.reportId,
     });
     if (result.kind === 'denied')
       throw new Error('You need moderation permissions to review reports.');
-    return result.outcome.status === 'closed';
+    return result.outcome;
   }
 
   public async openCaseFromSubmittedReport(
@@ -245,8 +246,26 @@ export class FixtureReportQueueDataAdapter implements ReportQueueDataAdapter {
     return true;
   }
 
-  public async closeSubmittedReport(): Promise<boolean> {
-    return true;
+  public async closeSubmittedReport(
+    context: ActionContext,
+    input: { reportId: string; action: ReportClosureAction }
+  ): Promise<CloseSubmittedReportResult> {
+    return {
+      actor: {
+        id: context.actor.kind === 'user' ? context.actor.userId : '',
+        surface: context.source,
+      },
+      action: input.action,
+      reportId: input.reportId,
+      reportStatus:
+        input.action === 'dismiss_no_action'
+          ? 'dismissed'
+          : input.action === 'mark_actioned'
+            ? 'actioned'
+            : 'false_positive',
+      status: 'closed',
+      queueCleanupStatus: 'skipped',
+    };
   }
 
   public async openCaseFromSubmittedReport(

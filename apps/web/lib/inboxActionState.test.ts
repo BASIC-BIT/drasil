@@ -84,3 +84,26 @@ describe('inboxActionState', () => {
     ).toBe(false);
   });
 });
+
+import { shouldUseDurableWorkspaceActionResult } from './inboxActionState';
+it('retains a local workspace receipt until its matching fresh durable snapshot arrives', () => {
+  const localResult = { kind: 'request', receipt: { id: 'retry-1', status: 'queued' } } as const;
+  const failed = { id: 'retry-1', status: 'failed', updatedAt: 'old' } as const;
+  expect(shouldUseDurableWorkspaceActionResult(localResult, failed, 'old')).toBe(false);
+  expect(
+    shouldUseDurableWorkspaceActionResult(localResult, { ...failed, id: 'other' }, 'old')
+  ).toBe(false);
+  expect(
+    shouldUseDurableWorkspaceActionResult(localResult, { ...failed, updatedAt: 'new' }, 'old')
+  ).toBe(true);
+});
+
+it('ignores a failed refresh older than the snapshot visible at retry submission', () => {
+  expect(
+    shouldUseDurableInboxActionState(
+      { status: 'queued', requestId: 'retry-1', message: null },
+      { id: 'retry-1', status: 'failed', updatedAt: '2026-10-25T12:00:00.000Z' },
+      '2026-10-25T12:01:00.000Z'
+    )
+  ).toBe(false);
+});

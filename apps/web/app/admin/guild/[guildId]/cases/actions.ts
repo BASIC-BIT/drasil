@@ -1,5 +1,7 @@
 'use server';
 
+import { assertWorkspaceConfirmation, resolveWorkspaceReturnTo } from '@/lib/workspaceConfirmation';
+import type { WorkspaceActions } from '@/lib/workspaceActionTypes';
 import { evaluateCasePolicy, readCasePolicy, type ActionContext } from '@drasil/application';
 import { createWebActionContext, createWebConfirmationPort } from '@/lib/application/context';
 import { randomUUID } from 'node:crypto';
@@ -330,7 +332,8 @@ async function performQueueCaseAction(
   caseId: string,
   action: WebCaseAction,
   formData?: FormData,
-  returnTo = `/admin/guild/${guildId}/cases/${caseId}`
+  returnTo = `/admin/guild/${guildId}/cases/${caseId}`,
+  workspaceConfirmation = false
 ): Promise<CaseActionQueueResult> {
   const [session, token] = await Promise.all([getCurrentAdminSession(), getCurrentDiscordToken()]);
   if (!session || !token) {
@@ -344,6 +347,20 @@ async function performQueueCaseAction(
 
   const setupService = createSetupDashboardService();
   const guild = await setupService.assertCanManageGuild(guildId, token.accessToken);
+  if (workspaceConfirmation) {
+    const detail = await createActiveCaseDataAdapter().getCaseDetail(guildId, caseId);
+    if (
+      !detail ||
+      detail.guildId !== guildId ||
+      detail.id !== caseId ||
+      !detail.allowedActions.includes(parsedAction)
+    )
+      throw new Error('Case action is no longer available. Refresh the case before continuing.');
+    assertWorkspaceConfirmation(formData ?? new FormData(), {
+      recordId: detail.id,
+      targetUserId: detail.userId,
+    });
+  }
   const options = await assertCanQueueCaseAction(
     parsedAction as WebCaseAction,
     guild,
@@ -369,6 +386,7 @@ async function performQueueCaseAction(
   revalidatePath(`/admin/guild/${guildId}/cases/${caseId}`);
   revalidatePath(`/admin/guild/${guildId}/history`);
 
+  if (workspaceConfirmation && result.receipt) return result;
   if (result.status === 'queued') {
     return result;
   }
@@ -408,5 +426,38 @@ export async function queueInboxCaseAction(
     return queuedInboxActionState({ id: result.requestId, status: 'queued' });
   } catch (error) {
     return failedInboxActionState(error);
+  }
+}
+
+export async function submitWorkspaceCaseAction(
+  input: Parameters<WorkspaceActions['caseAction']>[0],
+  formData: FormData
+): ReturnType<WorkspaceActions['caseAction']> {
+  try {
+    const returnTo = encodeURIComponent(
+      resolveWorkspaceReturnTo(
+        formData,
+        input.guildId,
+        `/admin/guild/${input.guildId}/cases/${input.caseId}`
+      )
+    );
+    const result = await performQueueCaseAction(
+      input.guildId,
+      input.caseId,
+      input.action,
+      formData,
+      returnTo,
+      true
+    );
+    if (!result.receipt)
+      throw new Error(
+        'Drasil did not return an action request receipt. Refresh durable state before another attempt.'
+      );
+    return { kind: 'request', receipt: result.receipt };
+  } catch (error) {
+    return {
+      kind: 'failed',
+      message: failedInboxActionState(error).message ?? 'Action response unavailable.',
+    };
   }
 }

@@ -1,0 +1,56 @@
+.confirmation {
+  width: min(480px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  padding: 24px;
+  border: 1px solid var(--dr-boundary);
+  border-radius: 6px;
+  background: var(--dr-surface);
+  color: var(--dr-text);
+}
+.confirmation::backdrop {
+  background: #0007;
+}
+.confirmation form {
+  display: grid;
+  gap: 16px;
+}
+.confirmation h2 {
+  font-size: 18px;
+}
+.field {
+  display: grid;
+  gap: 6px;
+}
+.field textarea {
+  width: 100%;
+  resize: vertical;
+  background: var(--dr-raised);
+  color: var(--dr-text);
+  border: 1px solid var(--dr-boundary);
+  padding: 8px;
+}
+.confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+.receipt {
+  margin-block: 12px !important;
+}
+.receipt[data-kind='completed'] {
+  color: var(--dr-positive);
+}
+.receipt[data-kind='failed_uncertain'],
+.receipt[data-kind='ban_outcome_unknown'] {
+  color: var(--dr-danger);
+}
+.receipt[data-kind='blocked'],
+.receipt[data-kind='banned_updates_pending'],
+.receipt[data-kind='finalization_retry'] {
+  color: var(--dr-warning);
+}

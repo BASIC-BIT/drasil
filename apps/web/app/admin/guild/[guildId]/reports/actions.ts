@@ -1,5 +1,13 @@
 'use server';
 
+import { assertWorkspaceConfirmation, resolveWorkspaceReturnTo } from '@/lib/workspaceConfirmation';
+import { deriveWorkspaceActionPresentation } from '@/lib/workspaceActionPresentation';
+import type { WorkspaceActions } from '@/lib/workspaceActionTypes';
+import type {
+  CloseSubmittedReportResult,
+  OpenSubmittedReportCaseResult,
+} from '@drasil/application';
+import type { ModerationActionRequestReceipt } from '@/lib/moderationActionRequestQueue';
 import { isReportClosureAction } from '@drasil/application';
 import { createWebActionContext } from '@/lib/application/context';
 import { createReportDetailDataAdapter } from '@/lib/reportDetailDataAdapter';
@@ -34,8 +42,9 @@ async function performCloseSubmittedReport(
   guildId: string,
   reportId: string,
   action: ReportClosureAction,
-  returnTo: string
-): Promise<void> {
+  returnTo: string,
+  workspaceForm?: FormData
+): Promise<CloseSubmittedReportResult> {
   const [session, token] = await Promise.all([getCurrentAdminSession(), getCurrentDiscordToken()]);
   if (!session || !token) {
     redirect(`/api/auth/discord?returnTo=${returnTo}`);
@@ -48,6 +57,8 @@ async function performCloseSubmittedReport(
 
   const setupService = createSetupDashboardService();
   await setupService.assertCanManageGuild(guildId, token.accessToken);
+  if (workspaceForm)
+    await assertCurrentWorkspaceReport(guildId, reportId, parsedAction, workspaceForm);
   const closed = await createReportQueueDataAdapter().closeSubmittedReport(
     createWebActionContext({ guildId, userId: session.userId }),
     {
@@ -56,13 +67,10 @@ async function performCloseSubmittedReport(
     }
   );
 
-  if (!closed) {
-    throw new Error('Report is no longer available to close. Refresh the queue and try again.');
-  }
-
   revalidatePath(`/admin/guild/${guildId}/inbox`);
   revalidatePath(`/admin/guild/${guildId}/reports`);
   revalidatePath(`/admin/guild/${guildId}/reports/${reportId}`);
+  return closed;
 }
 
 export async function closeSubmittedReport(
@@ -70,7 +78,14 @@ export async function closeSubmittedReport(
   reportId: string,
   action: ReportClosureAction
 ): Promise<void> {
-  await performCloseSubmittedReport(guildId, reportId, action, `/admin/guild/${guildId}/reports`);
+  const result = await performCloseSubmittedReport(
+    guildId,
+    reportId,
+    action,
+    `/admin/guild/${guildId}/reports`
+  );
+  if (result.status !== 'closed')
+    throw new Error('Report closure was not applied. Refresh the report before continuing.');
 }
 
 export async function closeInboxSubmittedReport(
@@ -81,8 +96,21 @@ export async function closeInboxSubmittedReport(
   _formData: FormData
 ): Promise<InboxActionState> {
   try {
-    await performCloseSubmittedReport(guildId, reportId, action, `/admin/guild/${guildId}/inbox`);
-    return completedInboxActionState('Report action completed.');
+    const result = await performCloseSubmittedReport(
+      guildId,
+      reportId,
+      action,
+      `/admin/guild/${guildId}/inbox`
+    );
+    const presentation = deriveWorkspaceActionPresentation({
+      localResult: { kind: 'report_closure', result },
+      durableRequest: null,
+      cleanupJob: null,
+      record: null,
+    });
+    return presentation.kind === 'completed'
+      ? completedInboxActionState(presentation.message)
+      : failedInboxActionState(presentation.message);
   } catch (error) {
     return failedInboxActionState(error);
   }
@@ -143,26 +171,11 @@ export async function openInboxSubmittedReportCase(
   _formData: FormData
 ): Promise<InboxActionState> {
   try {
-    const [session, token] = await Promise.all([
-      getCurrentAdminSession(),
-      getCurrentDiscordToken(),
-    ]);
-    if (!session || !token) {
-      redirect(`/api/auth/discord?returnTo=/admin/guild/${guildId}/inbox`);
-    }
-
-    await createSetupDashboardService().assertCanManageGuild(guildId, token.accessToken);
-    const result = await createReportQueueDataAdapter().openCaseFromSubmittedReport(
-      createWebActionContext({ guildId, userId: session.userId }),
-      {
-        reportId,
-      }
+    const result = await performOpenSubmittedReportCase(
+      guildId,
+      reportId,
+      `/admin/guild/${guildId}/inbox`
     );
-
-    revalidatePath(`/admin/guild/${guildId}/inbox`);
-    revalidatePath(`/admin/guild/${guildId}/cases`);
-    revalidatePath(`/admin/guild/${guildId}/reports`);
-    revalidatePath(`/admin/guild/${guildId}/reports/${reportId}`);
 
     if (result.status === 'queued' && result.requestId) {
       return queuedInboxActionState(
@@ -194,77 +207,168 @@ export async function banSubmittedReport(
   formData: FormData
 ): Promise<InboxActionState> {
   try {
-    const [session, token] = await Promise.all([
-      getCurrentAdminSession(),
-      getCurrentDiscordToken(),
-    ]);
-    if (!session || !token)
-      redirect(`/api/auth/discord?returnTo=/admin/guild/${guildId}/reports/${reportId}`);
-    const guild = await createSetupDashboardService().assertCanManageGuild(
-      guildId,
-      token.accessToken
+    return queuedInboxActionState(
+      await performBanSubmittedReport(guildId, reportId, formData),
+      'Ban queued for Drasil.'
     );
-    if (
-      !guild.owner &&
-      !hasPermission(parsePermissions(guild.permissions), DISCORD_PERMISSIONS.BanMembers)
-    ) {
-      throw new Error('You need Ban Members permission to ban from a report.');
-    }
-    const detail = await createReportDetailDataAdapter().getReportDetail(guildId, reportId);
-    if (
-      !detail ||
-      detail.guildId !== guildId ||
-      detail.status !== 'submitted' ||
-      !detail.allowedActions.includes('ban_user') ||
-      !detail.targetUserId ||
-      !detail.latestDetectionId
-    ) {
-      throw new Error('Report is no longer available for a ban. Refresh the report.');
-    }
-    if (
-      formData.get('confirmAction') !== 'on' ||
-      formData.get('confirmedTargetUserId') !== detail.targetUserId
-    ) {
-      throw new Error('Review and confirm the current report target before queueing a ban.');
-    }
-    const server = await createSetupDataAdapter().getServer(guildId);
-    if (server?.settings.moderator_ban_action_enabled === false)
-      throw new Error('Moderator ban actions are disabled for this server.');
-    const value = formData.get('reason');
-    const reason = typeof value === 'string' ? value.trim() : '';
-    if (reason.length > 500) throw new Error('Ban reason must be 500 characters or fewer.');
-    if (server?.settings.moderator_ban_action_requires_reason === true && !reason)
-      throw new Error('Ban reason is required.');
-    const resources = await fetchGuildResources(guildId);
-    const botPermissions = computeGuildPermissions({
-      guildId,
-      memberRoleIds: resources.botMember.roles,
-      roles: resources.roles,
-    });
-    if (!hasPermission(botPermissions, DISCORD_PERMISSIONS.BanMembers))
-      throw new Error('Drasil is missing Ban Members permission.');
-    const receipt = isWebE2eFixtureMode()
-      ? await queueFixtureReportBan(reportId)
-      : await submitQueuedAction({
-          context: createWebActionContext({
-            guildId,
-            userId: session.userId,
-            requestId: detail.latestDetectionId,
-            source: 'web_report',
-          }),
-          command: {
-            kind: 'ban_observed_detection',
-            targetUserId: detail.targetUserId,
-            detectionEventId: detail.latestDetectionId,
-            subject: { kind: 'report', reportId },
-            reason: reason || null,
-          },
-        });
-    revalidatePath(`/admin/guild/${guildId}/reports/${reportId}`);
-    revalidatePath(`/admin/guild/${guildId}/reports`);
-    revalidatePath(`/admin/guild/${guildId}/inbox`);
-    return queuedInboxActionState(receipt, 'Ban queued for Drasil.');
   } catch (error) {
     return failedInboxActionState(error);
+  }
+}
+async function performBanSubmittedReport(
+  guildId: string,
+  reportId: string,
+  formData: FormData,
+  workspaceConfirmation = false,
+  returnTo = `/admin/guild/${guildId}/reports/${reportId}`
+): Promise<ModerationActionRequestReceipt> {
+  const [session, token] = await Promise.all([getCurrentAdminSession(), getCurrentDiscordToken()]);
+  if (!session || !token) redirect(`/api/auth/discord?returnTo=${returnTo}`);
+  const guild = await createSetupDashboardService().assertCanManageGuild(
+    guildId,
+    token.accessToken
+  );
+  if (
+    !guild.owner &&
+    !hasPermission(parsePermissions(guild.permissions), DISCORD_PERMISSIONS.BanMembers)
+  ) {
+    throw new Error('You need Ban Members permission to ban from a report.');
+  }
+  const detail = await createReportDetailDataAdapter().getReportDetail(guildId, reportId);
+  if (
+    !detail ||
+    detail.guildId !== guildId ||
+    detail.status !== 'submitted' ||
+    !detail.allowedActions.includes('ban_user') ||
+    !detail.targetUserId ||
+    !detail.latestDetectionId
+  ) {
+    throw new Error('Report is no longer available for a ban. Refresh the report.');
+  }
+  if (workspaceConfirmation)
+    assertWorkspaceConfirmation(formData, {
+      recordId: detail.id,
+      targetUserId: detail.targetUserId,
+    });
+  if (
+    formData.get('confirmAction') !== 'on' ||
+    formData.get('confirmedTargetUserId') !== detail.targetUserId
+  ) {
+    throw new Error('Review and confirm the current report target before queueing a ban.');
+  }
+  const server = await createSetupDataAdapter().getServer(guildId);
+  if (server?.settings.moderator_ban_action_enabled === false)
+    throw new Error('Moderator ban actions are disabled for this server.');
+  const value = formData.get('reason');
+  const reason = typeof value === 'string' ? value.trim() : '';
+  if (reason.length > 500) throw new Error('Ban reason must be 500 characters or fewer.');
+  if (server?.settings.moderator_ban_action_requires_reason === true && !reason)
+    throw new Error('Ban reason is required.');
+  const resources = await fetchGuildResources(guildId);
+  const botPermissions = computeGuildPermissions({
+    guildId,
+    memberRoleIds: resources.botMember.roles,
+    roles: resources.roles,
+  });
+  if (!hasPermission(botPermissions, DISCORD_PERMISSIONS.BanMembers))
+    throw new Error('Drasil is missing Ban Members permission.');
+  const receipt = isWebE2eFixtureMode()
+    ? await queueFixtureReportBan(reportId)
+    : await submitQueuedAction({
+        context: createWebActionContext({
+          guildId,
+          userId: session.userId,
+          requestId: detail.latestDetectionId,
+          source: 'web_report',
+        }),
+        command: {
+          kind: 'ban_observed_detection',
+          targetUserId: detail.targetUserId,
+          detectionEventId: detail.latestDetectionId,
+          subject: { kind: 'report', reportId },
+          reason: reason || null,
+        },
+      });
+  revalidatePath(`/admin/guild/${guildId}/reports/${reportId}`);
+  revalidatePath(`/admin/guild/${guildId}/reports`);
+  revalidatePath(`/admin/guild/${guildId}/inbox`);
+  return receipt;
+}
+
+async function performOpenSubmittedReportCase(
+  guildId: string,
+  reportId: string,
+  returnTo: string,
+  workspaceForm?: FormData
+): Promise<OpenSubmittedReportCaseResult> {
+  const [session, token] = await Promise.all([getCurrentAdminSession(), getCurrentDiscordToken()]);
+  if (!session || !token) {
+    redirect(`/api/auth/discord?returnTo=${returnTo}`);
+  }
+
+  await createSetupDashboardService().assertCanManageGuild(guildId, token.accessToken);
+  if (workspaceForm)
+    await assertCurrentWorkspaceReport(guildId, reportId, 'open_case', workspaceForm);
+  const result = await createReportQueueDataAdapter().openCaseFromSubmittedReport(
+    createWebActionContext({ guildId, userId: session.userId }),
+    {
+      reportId,
+    }
+  );
+
+  revalidatePath(`/admin/guild/${guildId}/inbox`);
+  revalidatePath(`/admin/guild/${guildId}/cases`);
+  revalidatePath(`/admin/guild/${guildId}/reports`);
+  revalidatePath(`/admin/guild/${guildId}/reports/${reportId}`);
+
+  return result;
+}
+
+async function assertCurrentWorkspaceReport(
+  guildId: string,
+  reportId: string,
+  action: Parameters<WorkspaceActions['reportAction']>[0]['action'],
+  formData: FormData
+): Promise<void> {
+  const detail = await createReportDetailDataAdapter().getReportDetail(guildId, reportId);
+  if (
+    !detail ||
+    detail.id !== reportId ||
+    detail.guildId !== guildId ||
+    !detail.allowedActions.includes(action)
+  )
+    throw new Error('Report action is no longer available. Refresh the report before continuing.');
+  assertWorkspaceConfirmation(formData, { recordId: detail.id, targetUserId: detail.targetUserId });
+}
+export async function submitWorkspaceReportAction(
+  input: Parameters<WorkspaceActions['reportAction']>[0],
+  formData: FormData
+): ReturnType<WorkspaceActions['reportAction']> {
+  try {
+    const { guildId, reportId, action } = input;
+    const returnTo = encodeURIComponent(
+      resolveWorkspaceReturnTo(formData, guildId, `/admin/guild/${guildId}/reports/${reportId}`)
+    );
+    if (isReportClosureAction(action))
+      return {
+        kind: 'report_closure',
+        result: await performCloseSubmittedReport(guildId, reportId, action, returnTo, formData),
+      };
+    if (action === 'open_case')
+      return {
+        kind: 'report_open',
+        result: await performOpenSubmittedReportCase(guildId, reportId, returnTo, formData),
+      };
+    if (action === 'ban_user')
+      return {
+        kind: 'request',
+        receipt: await performBanSubmittedReport(guildId, reportId, formData, true, returnTo),
+      };
+    throw new Error('Unsupported report action.');
+  } catch (error) {
+    return {
+      kind: 'failed',
+      message: failedInboxActionState(error).message ?? 'Action response unavailable.',
+    };
   }
 }

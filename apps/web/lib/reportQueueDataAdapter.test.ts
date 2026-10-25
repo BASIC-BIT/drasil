@@ -135,7 +135,7 @@ describe('reportQueueDataAdapter', () => {
     const adapter = new PostgresReportQueueDataAdapter({ close, openCase: vi.fn() });
     await expect(
       adapter.closeSubmittedReport(context, { reportId: 'report-1', action: 'mark_false_positive' })
-    ).resolves.toBe(true);
+    ).resolves.toMatchObject({ status: 'closed', queueCleanupStatus: 'skipped' });
     expect(close).toHaveBeenCalledWith(context, {
       reportId: 'report-1',
       action: 'mark_false_positive',
@@ -177,7 +177,7 @@ it('keeps a claimed report busy in the SQL close and case-open paths', async () 
       reportId: 'report-1',
       action: 'dismiss_no_action',
     })
-  ).toBe(false);
+  ).toMatchObject({ status: 'busy', reportStatus: 'dismissed' });
   expect(db.query.mock.calls[0][0]).toContain(
     "coalesce(metadata->>'report_ban_operation_id', '') = ''"
   );
@@ -327,7 +327,7 @@ it('closes directly with context provenance and clears attention without a reque
       reportId: 'report-1',
       action: 'mark_false_positive',
     })
-  ).resolves.toBe(true);
+  ).resolves.toMatchObject({ status: 'closed', queueCleanupStatus: 'cleared' });
   expect(JSON.parse(db.query.mock.calls[0][1][4])).toMatchObject({
     closed_by: 'admin-1',
     closed_action: 'mark_false_positive',
@@ -354,4 +354,19 @@ it('keeps missing report queue event dates unknown and fresh', () => {
     latest_case_id: null,
   });
   expect(parsed).toMatchObject({ createdAt: null, updatedAt: null, staleHours: 0, stale: false });
+});
+
+it('preserves closed status when Discord queue notification cleanup fails', async () => {
+  db.query.mockReset();
+  db.query
+    .mockResolvedValueOnce({ rows: [{ ...baseRow, status: 'dismissed' }] })
+    .mockResolvedValueOnce({
+      rows: [{ id: 'queue-1', queue_channel_id: 'channel-1', queue_message_id: 'message-1' }],
+    });
+  discord.deleteBotMessage.mockRejectedValueOnce(new Error('Discord unavailable'));
+  const result = await new PostgresReportQueueDataAdapter().closeSubmittedReport(context, {
+    reportId: 'report-1',
+    action: 'dismiss_no_action',
+  });
+  expect(result).toMatchObject({ status: 'closed', queueCleanupStatus: 'failed' });
 });
