@@ -60,14 +60,14 @@ interface ReportQueueRow {
 
 const DEFAULT_STALE_HOURS = 24;
 
-function toIsoString(value: unknown): string {
+function toIsoString(value: unknown): string | null {
   if (value instanceof Date) {
     return value.toISOString();
   }
   if (typeof value === 'string') {
     return new Date(value).toISOString();
   }
-  return new Date(0).toISOString();
+  return null;
 }
 
 function toEvidenceCount(value: string | number | null): number {
@@ -111,8 +111,10 @@ function resolveAllowedActions(row: ReportQueueRow): ReportQueueAction[] {
 }
 
 export function parseReportQueueRow(row: ReportQueueRow, now = new Date()): ReportQueueItem {
-  const updatedAt = new Date(toIsoString(row.updated_at));
-  const staleHours = Math.max(0, Math.floor((now.getTime() - updatedAt.getTime()) / 3_600_000));
+  const updatedAt = toIsoString(row.updated_at);
+  const staleHours = updatedAt
+    ? Math.max(0, Math.floor((now.getTime() - Date.parse(updatedAt)) / 3_600_000))
+    : 0;
 
   return reportQueueItemSchema.parse({
     id: row.id,
@@ -123,7 +125,7 @@ export function parseReportQueueRow(row: ReportQueueRow, now = new Date()): Repo
     summary: row.summary,
     summarySource: resolveReportSummarySource(row.summary, row.metadata),
     createdAt: toIsoString(row.created_at),
-    updatedAt: updatedAt.toISOString(),
+    updatedAt,
     stale: staleHours >= DEFAULT_STALE_HOURS,
     staleHours,
     evidenceCount: toEvidenceCount(row.evidence_count),

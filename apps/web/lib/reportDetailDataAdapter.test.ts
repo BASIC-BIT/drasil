@@ -136,3 +136,23 @@ it('withholds a ban when the latest linked detection belongs to a different targ
   const row = { ...baseReportRow, latest_detection_user_id: 'different-user' };
   expect(parseReportDetailRows(row, []).allowedActions).not.toContain('ban_user');
 });
+it('preserves unknown report and evidence event dates', () => {
+  expect(
+    parseReportDetailRows({ ...baseReportRow, created_at: null, updated_at: null }, [
+      {
+        id: 'unknown',
+        kind: 'reporter_text',
+        source_message_id: null,
+        source_channel_id: null,
+        attachment_id: null,
+        content: 'Complete original text',
+        metadata: {},
+        created_at: null,
+      },
+    ])
+  ).toMatchObject({
+    createdAt: null,
+    updatedAt: null,
+    evidence: [{ createdAt: null, content: 'Complete original text' }],
+  });
+});

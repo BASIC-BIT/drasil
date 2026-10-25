@@ -85,6 +85,7 @@ export interface AccountQuarantinePreviewSummary {
 }
 
 export interface ModerationActionRequestDataAdapter {
+  getRequest(guildId: string, requestId: string): Promise<ModerationActionRequestSummary | null>;
   listInboxRequests(
     guildId: string,
     recentLimit?: number
@@ -440,6 +441,16 @@ export function parseModerationActionRequestRow(
 }
 
 export class PostgresModerationActionRequestDataAdapter implements ModerationActionRequestDataAdapter {
+  public async getRequest(
+    guildId: string,
+    requestId: string
+  ): Promise<ModerationActionRequestSummary | null> {
+    const result = await getPostgresPool().query<ModerationActionRequestRow>(
+      `select * from moderation_action_requests where server_id = $1 and id::text = $2 limit 1`,
+      [guildId, requestId]
+    );
+    return result.rows[0] ? parseModerationActionRequestRow(result.rows[0]) : null;
+  }
   public async getSetupRequest(
     guildId: string,
     requestId: string
@@ -579,6 +590,16 @@ export class PostgresModerationActionRequestDataAdapter implements ModerationAct
 }
 
 export class FixtureModerationActionRequestDataAdapter implements ModerationActionRequestDataAdapter {
+  public async getRequest(
+    guildId: string,
+    requestId: string
+  ): Promise<ModerationActionRequestSummary | null> {
+    if (guildId !== 'guild-1') return null;
+    return (
+      (await this.listInboxRequests(guildId, 25)).find((request) => request.id === requestId) ??
+      null
+    );
+  }
   public async getSetupRequest(
     guildId: string,
     requestId: string

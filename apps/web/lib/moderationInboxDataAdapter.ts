@@ -40,6 +40,9 @@ export interface ModerationQueueRow {
   updated_at: unknown;
   metadata: unknown;
   server_settings: unknown;
+  case_kind?: string | null;
+  discord_member_pending_since?: unknown;
+  discord_member_pending_last_checked_at?: unknown;
   detection_type: string | null;
   detection_confidence: number | null;
   detection_detected_at: unknown;
@@ -120,14 +123,20 @@ const queueStatusLabelByKind: Record<ModerationInboxItemKind, (row: ModerationQu
     support_attention: () => 'needs attention',
   };
 
-function toIsoString(value: unknown): string {
+function toIsoString(value: unknown): string | null {
   if (value instanceof Date) {
     return value.toISOString();
   }
   if (typeof value === 'string') {
     return new Date(value).toISOString();
   }
-  return new Date(0).toISOString();
+  return null;
+}
+
+function nullableIso(value: unknown): string | null {
+  if (!(value instanceof Date) && typeof value !== 'string') return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
 function metadataToRecord(metadata: unknown): Record<string, unknown> {
@@ -155,7 +164,8 @@ function readUrl(value: unknown): string | null {
   }
 }
 
-function staleHoursFrom(updatedAt: string, now = new Date()): number {
+function staleHoursFrom(updatedAt: string | null, now = new Date()): number {
+  if (!updatedAt) return 0;
   return Math.max(0, Math.floor((now.getTime() - Date.parse(updatedAt)) / 3_600_000));
 }
 
@@ -246,12 +256,14 @@ export function caseSummaryToInboxItem(item: CaseSummary): ModerationInboxItem {
       secondaryLabel: item.userIdentity.username,
       avatarUrl: item.userIdentity.avatarUrl,
     },
-    title: 'Pending moderation case',
+    title: item.status === 'pending' ? 'Pending moderation case' : 'Moderation case',
     summary: item.latestDetectionType
       ? `Latest detection: ${item.latestDetectionType}.`
-      : 'Pending case needs moderator review.',
+      : item.status === 'pending'
+        ? 'Pending case needs moderator review.'
+        : null,
     summarySource: 'other',
-    statusLabel: item.presenceState,
+    statusLabel: item.status,
     signalLabel: confidenceSignal(item.confidence),
     createdAt: item.createdAt,
     updatedAt: item.updatedAt,
@@ -273,7 +285,7 @@ export function reportQueueItemToInboxItem(item: ReportQueueItem): ModerationInb
     sourceId: item.id,
     queueItemId: null,
     subject: {
-      userId: item.targetUserId ?? item.reporterId,
+      userId: item.targetUserId,
       displayLabel: item.targetUserId ? `Target ${item.targetUserId}` : 'Unknown report target',
       secondaryLabel: `Reporter ${item.reporterId}`,
       avatarUrl: null,
@@ -348,11 +360,12 @@ export function parseModerationQueueRow(
   );
 
   const sourceId =
-    row.verification_event_id ??
-    row.detection_event_id ??
-    row.report_intake_id ??
-    row.source_thread_id ??
-    row.id;
+    kind === 'observed_alert'
+      ? row.detection_event_id
+      : kind === 'case'
+        ? row.verification_event_id
+        : (row.report_intake_id ?? row.verification_event_id ?? row.source_thread_id ?? row.id);
+  if (!sourceId) return null;
   const summary =
     row.report_summary ??
     readString(metadata.latest_message_url) ??
@@ -360,7 +373,40 @@ export function parseModerationQueueRow(
     null;
 
   return moderationInboxItemSchema.parse({
-    id: `queue:${row.id}`,
+    id:
+      kind === 'observed_alert' && row.detection_event_id
+        ? `detection:${row.detection_event_id}`
+        : kind === 'case' && row.verification_event_id
+          ? `case:${row.verification_event_id}`
+          : `queue:${row.id}`,
+    sourceMetadata: {
+      subtype:
+        row.item_type === 'quarantine_breach_attention'
+          ? 'quarantine_breach'
+          : row.item_type === 'support_thread_attention'
+            ? row.case_kind === 'compromised_account'
+              ? 'recovery_reply'
+              : 'support_reply'
+            : null,
+      caseId: row.verification_event_id,
+      reportId: row.report_intake_id,
+      detectionId: row.detection_event_id,
+      sourceThreadId: row.source_thread_id,
+      latestReplyMessageId: row.last_source_message_id,
+      eventAt:
+        kind === 'observed_alert'
+          ? nullableIso(row.detection_detected_at)
+          : nullableIso(metadata.latest_message_at),
+      pendingSince:
+        nullableIso(row.discord_member_pending_since) ?? nullableIso(metadata.pending_since),
+      thresholdDays:
+        typeof metadata.threshold_days === 'number' && metadata.threshold_days >= 0
+          ? metadata.threshold_days
+          : null,
+      lastCheckedAt:
+        nullableIso(row.discord_member_pending_last_checked_at) ??
+        nullableIso(metadata.last_checked_at),
+    },
     guildId: row.server_id,
     kind,
     sourceId,
@@ -424,15 +470,19 @@ export class PostgresModerationInboxDataAdapter implements ModerationInboxDataAd
            de.reasons as detection_reasons,
            de.metadata as detection_metadata,
            ve.status as case_status,
+           ve.case_kind,
+           sm.discord_member_pending_since,
+           sm.discord_member_pending_last_checked_at,
            ri.status as report_status,
            ri.summary as report_summary,
            ri.metadata as report_metadata,
            u.username as user_username,
            u.metadata as user_metadata
          from moderation_queue_items mqi
-         left join detection_events de on de.id = mqi.detection_event_id
-         left join verification_events ve on ve.id = mqi.verification_event_id
-         left join report_intakes ri on ri.id = mqi.report_intake_id
+         left join detection_events de on de.id = mqi.detection_event_id and de.server_id = mqi.server_id
+         left join verification_events ve on ve.id = mqi.verification_event_id and ve.server_id = mqi.server_id
+         left join report_intakes ri on ri.id = mqi.report_intake_id and ri.server_id = mqi.server_id
+         left join server_members sm on sm.server_id = mqi.server_id and sm.user_id = mqi.user_id
          left join users u on u.discord_id = mqi.user_id
          left join servers s on s.guild_id = mqi.server_id
          where mqi.server_id = $1

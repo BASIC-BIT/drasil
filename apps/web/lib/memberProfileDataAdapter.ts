@@ -233,7 +233,10 @@ function parseAccountingStatus(row: MemberDetectionRow): MemberProfileDetectionA
   };
 }
 
-function parseDetectionRow(guildId: string, row: MemberDetectionRow): MemberProfileDetection {
+export function parseDetectionRow(
+  guildId: string,
+  row: MemberDetectionRow
+): MemberProfileDetection {
   const metadata = metadataToRecord(row.metadata);
   const rawObservedAction = row.admin_action ?? readString(metadata.observed_action);
   const observedAction =
@@ -247,7 +250,7 @@ function parseDetectionRow(guildId: string, row: MemberDetectionRow): MemberProf
     id: row.id,
     detectionType: row.detection_type,
     confidence: row.confidence,
-    detectedAt: toIsoString(row.detected_at),
+    detectedAt: toNullableIsoString(row.detected_at),
     reasons: row.reasons ?? [],
     latestCaseId: row.latest_verification_event_id,
     accounting: parseAccountingStatus(row),
@@ -270,8 +273,8 @@ export function parseReportRow(guildId: string, row: MemberReportRow): MemberPro
     status: row.status,
     summary: row.summary,
     summarySource: resolveReportSummarySource(row.summary, row.metadata),
-    createdAt: toIsoString(row.created_at),
-    updatedAt: toIsoString(row.updated_at),
+    createdAt: toNullableIsoString(row.created_at),
+    updatedAt: toNullableIsoString(row.updated_at),
     reportThreadUrl: row.thread_id ? discordMessageUrl(guildId, row.thread_id) : null,
     latestCaseId: row.latest_case_id,
   };

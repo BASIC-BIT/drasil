@@ -7,7 +7,7 @@ const fixtureAvatarUrl = null;
 export function fixtureModerationInboxItems(guildId = 'guild-1'): ModerationInboxItem[] {
   return sortModerationInboxItems([
     moderationInboxItemSchema.parse({
-      id: 'fixture-case-stale',
+      id: 'case:case-stale',
       guildId,
       kind: 'case',
       sourceId: 'case-stale',
@@ -45,7 +45,7 @@ export function fixtureModerationInboxItems(guildId = 'guild-1'): ModerationInbo
       ],
     }),
     moderationInboxItemSchema.parse({
-      id: 'fixture-report-1',
+      id: 'report:report-1',
       guildId,
       kind: 'submitted_report',
       sourceId: 'report-1',
@@ -81,7 +81,7 @@ export function fixtureModerationInboxItems(guildId = 'guild-1'): ModerationInbo
       ],
     }),
     moderationInboxItemSchema.parse({
-      id: 'fixture-support-attention-1',
+      id: 'queue:queue-support-1',
       guildId,
       kind: 'support_attention',
       sourceId: 'case-stale',
@@ -110,7 +110,7 @@ export function fixtureModerationInboxItems(guildId = 'guild-1'): ModerationInbo
       allowedActions: ['acknowledge', 'open_discord'],
     }),
     moderationInboxItemSchema.parse({
-      id: 'fixture-observed-1',
+      id: 'detection:det-observed-1',
       guildId,
       kind: 'observed_alert',
       sourceId: 'det-observed-1',

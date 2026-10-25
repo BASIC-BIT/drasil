@@ -54,3 +54,11 @@ describe('moderation inbox contracts', () => {
     ).not.toThrow();
   });
 });
+it('sorts inbox records with unknown movement dates last', () => {
+  expect(
+    sortModerationInboxItems([
+      { ...buildItem('unknown', false, '2026-10-21T14:40:00.000Z'), updatedAt: null },
+      buildItem('known', false, '2026-10-21T14:40:00.000Z'),
+    ]).map((item) => item.id)
+  ).toEqual(['known', 'unknown']);
+});

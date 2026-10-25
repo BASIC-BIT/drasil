@@ -69,11 +69,12 @@ export function Timestamp({
   format = 'datetime',
   prefix,
 }: {
-  readonly value: string;
+  readonly value: string | null;
   readonly format?: 'datetime' | 'date' | 'time';
   readonly prefix?: string;
 }) {
   const now = useContext(ClockContext);
+  if (value === null) return <span>{prefix ? `${prefix} ` : null}Unknown date</span>;
   return (
     <time
       dateTime={value}

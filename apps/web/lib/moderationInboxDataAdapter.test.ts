@@ -8,6 +8,7 @@ import {
 } from './moderationInboxDataAdapter';
 
 const baseCase: CaseSummary = {
+  status: 'pending',
   id: 'case-1',
   guildId: 'guild-1',
   userId: 'user-1',
@@ -172,7 +173,7 @@ describe('moderationInboxDataAdapter', () => {
 
     expect(item).toEqual(
       expect.objectContaining({
-        id: 'queue:queue-1',
+        id: 'detection:det-observed-1',
         kind: 'observed_alert',
         sourceId: 'det-observed-1',
         queueItemId: 'queue-1',
@@ -272,4 +273,10 @@ describe('moderationInboxDataAdapter', () => {
       })
     );
   });
+});
+
+it('uses a durable detection ID and preserves the detection event date', () => {
+  const item = parseModerationQueueRow(baseQueueRow);
+  expect(item?.id).toBe('detection:det-observed-1');
+  expect(item?.sourceMetadata?.eventAt).toBe('2026-06-01T00:00:00.000Z');
 });

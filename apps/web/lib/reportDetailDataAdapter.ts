@@ -1,6 +1,8 @@
 import { readFixtureReportBan } from './reportBanFixtures';
 import {
   reportDetailSchema,
+  reportAttentionRecordSchema,
+  type ReportAttentionRecord,
   type ReportDetail,
   type ReportEvidenceAttachment,
   type ReportEvidenceItem,
@@ -22,7 +24,7 @@ interface ReportDetailRow {
   server_id: string;
   reporter_id: string;
   thread_id: string | null;
-  status: ReportQueueStatus;
+  status: ReportAttentionRecord['status'];
   summary: string | null;
   metadata?: unknown;
   confirmed_target_user_id: string | null;
@@ -34,6 +36,7 @@ interface ReportDetailRow {
   latest_detection_handled: boolean;
   latest_case_id: string | null;
   target_display_name?: string | null;
+  reporter_display_name?: string | null;
 }
 
 interface ReportEvidenceRow {
@@ -139,7 +142,7 @@ function parseEvidenceRow(guildId: string, row: ReportEvidenceRow): ReportEviden
     id: row.id,
     kind: row.kind,
     content: row.content,
-    createdAt: toIsoString(row.created_at),
+    createdAt: toNullableIsoString(row.created_at),
     sourceMessageUrl:
       row.source_channel_id && row.source_message_id
         ? discordMessageUrl(guildId, row.source_channel_id, row.source_message_id)
@@ -148,27 +151,42 @@ function parseEvidenceRow(guildId: string, row: ReportEvidenceRow): ReportEviden
   };
 }
 
-export function parseReportDetailRows(
-  row: ReportDetailRow,
-  evidenceRows: readonly ReportEvidenceRow[]
-): ReportDetail {
-  return reportDetailSchema.parse({
+function reportFields(row: ReportDetailRow, evidenceRows: readonly ReportEvidenceRow[]) {
+  return {
     id: row.id,
     guildId: row.server_id,
     reporterId: row.reporter_id,
     targetUserId: row.confirmed_target_user_id,
     targetDisplayName: row.target_display_name ?? null,
+    reporterDisplayName: row.reporter_display_name ?? null,
     status: row.status,
     summary: row.summary,
     summarySource: resolveReportSummarySource(row.summary, row.metadata),
-    createdAt: toIsoString(row.created_at),
-    updatedAt: toIsoString(row.updated_at),
+    createdAt: toNullableIsoString(row.created_at),
+    updatedAt: toNullableIsoString(row.updated_at),
     closedAt: toNullableIsoString(row.closed_at),
     reportThreadUrl: row.thread_id ? discordMessageUrl(row.server_id, row.thread_id) : null,
     latestDetectionId: row.latest_detection_id,
     latestCaseId: row.latest_case_id,
     evidence: evidenceRows.map((evidence) => parseEvidenceRow(row.server_id, evidence)),
     allowedActions: resolveAllowedActions(row),
+  };
+}
+
+export function parseReportDetailRows(
+  row: ReportDetailRow,
+  evidenceRows: readonly ReportEvidenceRow[]
+): ReportDetail {
+  return reportDetailSchema.parse(reportFields(row, evidenceRows));
+}
+
+export function parseReportAttentionRows(
+  row: ReportDetailRow,
+  evidenceRows: readonly ReportEvidenceRow[]
+): ReportAttentionRecord {
+  return reportAttentionRecordSchema.parse({
+    ...reportFields(row, evidenceRows),
+    allowedActions: [],
   });
 }
 
@@ -185,24 +203,28 @@ export class PostgresReportDetailDataAdapter implements ReportDetailDataAdapter 
          ri.metadata,
          ri.confirmed_target_user_id,
          target.username as target_display_name,
+         reporter.username as reporter_display_name,
          ri.created_at,
          ri.updated_at,
          ri.closed_at,
          de.id as latest_detection_id,
          de.user_id as latest_detection_user_id,
          coalesce(de.metadata, '{}'::jsonb) ? 'observed_action' as latest_detection_handled,
-         de.latest_verification_event_id as latest_case_id
+         linked_case.id as latest_case_id
        from report_intakes ri
        left join users target on target.discord_id = ri.confirmed_target_user_id
+       left join users reporter on reporter.discord_id = ri.reporter_id
        left join lateral (
          select id, user_id, metadata, latest_verification_event_id
          from detection_events
          where server_id = ri.server_id
+           and user_id = ri.confirmed_target_user_id
            and metadata ->> 'reportIntakeId' = ri.id::text
          order by detected_at desc nulls last
          limit 1
        ) de on true
-       where ri.id = $1 and ri.server_id = $2 and ri.status = any($3::report_intake_status[])
+       left join verification_events linked_case on linked_case.id = de.latest_verification_event_id and linked_case.server_id = ri.server_id and linked_case.user_id = ri.confirmed_target_user_id
+       where ri.id::text = $1 and ri.server_id = $2 and ri.status = any($3::report_intake_status[])
        limit 1`,
       [reportId, guildId, reviewedReportStatuses]
     );
@@ -213,10 +235,10 @@ export class PostgresReportDetailDataAdapter implements ReportDetailDataAdapter 
 
     const evidenceResult = await getPostgresPool().query<ReportEvidenceRow>(
       `select id, kind, source_message_id, source_channel_id, attachment_id, content, metadata, created_at
-       from report_intake_evidence
-       where intake_id = $1
+       from report_intake_evidence evidence
+       where intake_id = $1 and exists (select 1 from report_intakes ri where ri.id = evidence.intake_id and ri.server_id = $2)
        order by created_at asc`,
-      [reportId]
+      [reportId, guildId]
     );
     return parseReportDetailRows(report, evidenceResult.rows);
   }

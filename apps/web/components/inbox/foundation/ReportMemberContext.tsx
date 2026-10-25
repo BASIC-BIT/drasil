@@ -20,6 +20,7 @@ export function ReportMemberContext({ report, profile }: ReportMemberContextProp
     profile?.detections.flatMap((detection) =>
       detection.observedAction &&
       detection.observedActionAt &&
+      report.createdAt &&
       Date.parse(detection.observedActionAt) < Date.parse(report.createdAt)
         ? [{ action: detection.observedAction, at: detection.observedActionAt }]
         : []

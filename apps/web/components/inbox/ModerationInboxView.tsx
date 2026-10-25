@@ -598,7 +598,11 @@ function InboxActions({
           );
         }
 
-        if (item.kind === 'observed_alert' && (action === 'kick_user' || action === 'ban_user')) {
+        if (
+          item.kind === 'observed_alert' &&
+          item.subject.userId &&
+          (action === 'kick_user' || action === 'ban_user')
+        ) {
           return (
             <details className="destructive-action" key={`${item.id}-${action}`}>
               <summary className="button secondary compact-button destructive-summary">
@@ -635,6 +639,7 @@ function InboxActions({
 
         if (
           item.kind === 'observed_alert' &&
+          item.subject.userId &&
           (action === 'open_case' ||
             action === 'dismiss_no_action' ||
             action === 'mark_false_positive')

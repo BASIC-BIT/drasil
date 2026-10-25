@@ -148,7 +148,11 @@ export function CaseChecks({
 }) {
   const checks = detail.detectionHistory
     .filter((item) => item.detectionType !== 'user_report')
-    .sort((a, b) => Date.parse(b.detectedAt) - Date.parse(a.detectedAt));
+    .sort(
+      (a, b) =>
+        (b.detectedAt ? Date.parse(b.detectedAt) : -Infinity) -
+        (a.detectedAt ? Date.parse(a.detectedAt) : -Infinity)
+    );
   const [latest, ...earlier] = checks;
   if (!latest) return null;
   const check = (item: CaseDetail['detectionHistory'][number]) => (

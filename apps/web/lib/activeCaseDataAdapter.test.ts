@@ -852,3 +852,32 @@ describe('shared case moderation policy availability', () => {
     expect(summary.allowedActions).toContain('kick_user');
   });
 });
+it('preserves an unknown case detection date while keeping known dates intact', async () => {
+  persistence.query.mockImplementation(async (sql: string) => ({
+    rows: sql.includes('from verification_events ve')
+      ? [baseRow]
+      : sql.includes('select id, detection_type, confidence, detected_at, reasons')
+        ? [
+            {
+              id: 'unknown',
+              detection_type: 'suspicious_content',
+              confidence: 0.8,
+              detected_at: null,
+              reasons: [],
+            },
+            {
+              id: 'known',
+              detection_type: 'suspicious_content',
+              confidence: 0.8,
+              detected_at: '2026-10-21T14:40:00.000Z',
+              reasons: [],
+            },
+          ]
+        : [],
+  }));
+  const result = await new PostgresActiveCaseDataAdapter().getCaseDetail('guild-1', 'ver-1');
+  expect(result?.detectionHistory.map((item) => item.detectedAt)).toEqual([
+    null,
+    '2026-10-21T14:40:00.000Z',
+  ]);
+});

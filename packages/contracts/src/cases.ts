@@ -92,7 +92,16 @@ export const caseUserIdentitySchema = z.object({
   displayLabel: z.string(),
 });
 
+export const caseStatusSchema = z.enum([
+  'pending',
+  'verified',
+  'banned',
+  'kicked',
+  'closed_no_action',
+]);
+
 export const caseSummarySchema = z.object({
+  status: caseStatusSchema,
   id: z.string(),
   guildId: z.string(),
   userId: z.string(),
@@ -132,7 +141,7 @@ export const caseDetectionHistoryItemSchema = z.object({
   id: z.string(),
   detectionType: z.string(),
   confidence: z.number().min(0).max(1),
-  detectedAt: z.string(),
+  detectedAt: z.string().nullable(),
   reasons: z.array(z.string()),
 });
 
@@ -171,6 +180,7 @@ export const caseDetailSchema = caseSummarySchema.extend({
   moderationOutcomes: z.array(caseModerationOutcomeSchema),
 });
 
+export type CaseStatus = z.infer<typeof caseStatusSchema>;
 export type CasePresenceState = z.infer<typeof casePresenceStateSchema>;
 export type CaseAction = z.infer<typeof caseActionSchema>;
 export type CaseSurfaceKind = z.infer<typeof caseSurfaceKindSchema>;

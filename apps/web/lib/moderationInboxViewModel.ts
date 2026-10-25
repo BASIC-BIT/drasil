@@ -141,14 +141,20 @@ export function sortModerationInboxItemsForView(
   switch (sortMode) {
     case 'newest':
       return [...items].sort(
-        (left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)
+        (left, right) =>
+          (right.updatedAt ? Date.parse(right.updatedAt) : -Infinity) -
+          (left.updatedAt ? Date.parse(left.updatedAt) : -Infinity)
       );
     case 'oldest':
       return [...items].sort(
-        (left, right) => Date.parse(left.updatedAt) - Date.parse(right.updatedAt)
+        (left, right) =>
+          (left.updatedAt ? Date.parse(left.updatedAt) : Infinity) -
+          (right.updatedAt ? Date.parse(right.updatedAt) : Infinity)
       );
     case 'stale':
       return [...items].sort((left, right) => {
+        if (!left.updatedAt || !right.updatedAt)
+          return left.updatedAt ? -1 : right.updatedAt ? 1 : 0;
         if (left.stale !== right.stale) {
           return left.stale ? -1 : 1;
         }
@@ -157,7 +163,10 @@ export function sortModerationInboxItemsForView(
           return right.staleHours - left.staleHours;
         }
 
-        return Date.parse(left.updatedAt) - Date.parse(right.updatedAt);
+        return (
+          (left.updatedAt ? Date.parse(left.updatedAt) : Infinity) -
+          (right.updatedAt ? Date.parse(right.updatedAt) : Infinity)
+        );
       });
     case 'priority':
       return sortModerationInboxItems(items);

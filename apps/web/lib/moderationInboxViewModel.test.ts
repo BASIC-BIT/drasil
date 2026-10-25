@@ -197,3 +197,14 @@ describe('moderationInboxViewModel', () => {
     ]);
   });
 });
+it.each(['newest', 'oldest', 'stale', 'priority'] as const)(
+  'keeps unknown dates last in %s order',
+  (sortMode) => {
+    expect(
+      sortModerationInboxItemsForView(
+        [buildItem('unknown', { updatedAt: null }), buildItem('known')],
+        sortMode
+      ).map((item) => item.id)
+    ).toEqual(['known', 'unknown']);
+  }
+);
