@@ -93,3 +93,49 @@ for (const width of [320, 390, 1440]) {
     });
   });
 }
+
+for (const state of ['loaded', 'pending']) {
+  for (const identity of ['channel', 'message']) {
+    test(`resolved source replacement resets ${state} context when ${identity} changes`, async ({
+      page,
+    }) => {
+      await page.goto(story.replace('--available', `--replace-${state}-${identity}`));
+      const reader = page.getByRole('region', { name: 'Channel conversation' });
+      if (state === 'loaded')
+        await expect(reader.getByText('Old source text', { exact: true })).toBeVisible();
+      else await expect(reader.getByText('Loading conversation…')).toBeVisible();
+      await page.getByRole('button', { name: 'Replace resolved source' }).click();
+      await expect(reader.getByText('Old source text', { exact: true })).toHaveCount(0);
+      await expect(reader.locator('[data-source="true"]')).toHaveText(/Replacement source text/);
+      await expect(reader.getByText(/1 messages loaded/)).toBeVisible();
+      await expect(
+        reader.getByRole('heading', { name: 'Conversation · #replacement' })
+      ).toBeVisible();
+      const channel = identity === 'channel' ? '100000000000000003' : '100000000000000002';
+      const message = identity === 'message' ? '100000000000000126' : '100000000000000125';
+      await expect(
+        reader.getByRole('link', { name: 'Continue in Discord in a new tab' })
+      ).toHaveAttribute(
+        'href',
+        `https://discord.com/channels/100000000000000001/${channel}/${message}`
+      );
+      if (state === 'pending') {
+        await expect(page.getByText('Old request aborted: true', { exact: true })).toBeVisible();
+        await page.getByRole('button', { name: 'Release old response' }).click();
+        await expect(page.getByText('Old response released: true', { exact: true })).toBeVisible();
+      }
+      await reader.getByRole('button', { name: 'Load later' }).click();
+      await expect(
+        page.getByText(`Last replacement page: after:${message}`, { exact: true })
+      ).toBeVisible();
+      await expect(reader.getByText(/2 messages loaded/)).toBeVisible();
+      await expect(reader.locator('article')).toHaveCount(2);
+      await expect(reader.getByText('Replacement source text', { exact: true })).toBeVisible();
+      await expect(reader.getByText('Replacement later message', { exact: true })).toBeVisible();
+      await expect(reader.getByText('Old source text', { exact: true })).toHaveCount(0);
+      await expect(
+        reader.getByRole('heading', { name: 'Conversation · #replacement' })
+      ).toBeVisible();
+    });
+  }
+}
