@@ -1,3 +1,4 @@
+import { createModerationActionRequestDataAdapter } from './moderationActionRequestDataAdapter';
 import { randomUUID } from 'node:crypto';
 import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ownedTestDatabase } from '../../../scripts/owned-test-database.js';
@@ -198,13 +199,13 @@ it('executes the real inbox and all six selected-read branches with stored linka
     data: {
       detail: { id: caseId, status: 'pending' },
       report: { id: reportId },
-      requests: [{ id: requestId }],
+      requests: [{ id: requestId, actorUserId: reporterId }],
       cleanup: { workspace: { verificationEventId: caseId, targetUserId: targetId }, jobs: [] },
     },
   });
   expect(selected.find((item) => item?.kind === 'submitted_report')).toMatchObject({
     report: { id: reportId, targetUserId: targetId },
-    requests: [{ id: requestId }],
+    requests: [{ id: requestId, actorUserId: reporterId }],
   });
   expect(selected.find((item) => item?.kind === 'observed_alert')).toMatchObject({
     detection: {
@@ -232,12 +233,15 @@ it('keeps durable records readable after their pending queue state ends', async 
   );
   expect(caseItem).toMatchObject({
     kind: 'case',
-    data: { detail: { status: 'verified' }, requests: [{ id: requestId }] },
+    data: {
+      detail: { status: 'verified' },
+      requests: [{ id: requestId, actorUserId: reporterId }],
+    },
   });
   expect(reportItem).toMatchObject({
     kind: 'submitted_report',
     report: { status: 'actioned' },
-    requests: [{ id: requestId }],
+    requests: [{ id: requestId, actorUserId: reporterId }],
   });
   expect(detectionItem).toMatchObject({
     kind: 'observed_alert',
@@ -291,4 +295,48 @@ it('rejects foreign source IDs and removes acknowledged attention from selected 
   expect(
     await adapter().getInboxItemDetail({ guildId, itemId: `queue:${supportQueueId}` })
   ).toBeNull();
+});
+
+it('reads actual persisted quarantine ownership and recovery attention from the owned database', async () => {
+  await pool.query(
+    "update verification_events set case_kind='compromised_account',attention_state='parked',containment_status='contained',parked_by=$2,parked_at=now() where id=$1",
+    [caseId, reporterId]
+  );
+  await pool.query(
+    "update moderation_action_requests set action_type='preview_account_quarantine',completed_at=now(),result=$2::jsonb where id=$1",
+    [
+      requestId,
+      JSON.stringify({
+        action_type: 'preview_account_quarantine',
+        enabled: true,
+        previewed_at: new Date().toISOString(),
+        containment_fingerprint: 'private-fingerprint',
+      }),
+    ]
+  );
+  const result = await adapter().getCaseWorkspaceData({ guildId, caseId });
+  expect(result?.actorUserId).toBe(reporterId);
+  expect(result?.requests).toMatchObject([
+    { id: requestId, actorUserId: reporterId, accountQuarantinePreview: { enabled: true } },
+  ]);
+  expect(result?.detail.allowedActions).not.toContain('close_no_action');
+  expect(result?.policy.allowedActions).not.toContain('close_no_action');
+  expect(result?.recoveryAttention).toHaveLength(2);
+  expect(
+    result?.recoveryAttention?.find((item) => item.id === `queue:${breachQueueId}`)
+  ).toMatchObject({
+    subject: { userId: targetId },
+    sourceMetadata: {
+      subtype: 'quarantine_breach',
+      caseId,
+      sourceThreadId: 'prohibited-channel',
+      latestReplyMessageId: 'breach-reply',
+    },
+  });
+  expect(JSON.stringify(result)).not.toContain('private-fingerprint');
+  const requests = await createModerationActionRequestDataAdapter().listCaseRequests(
+    guildId,
+    caseId
+  );
+  expect(requests[0]?.actorUserId).toBe(reporterId);
 });

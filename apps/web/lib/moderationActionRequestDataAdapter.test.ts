@@ -21,6 +21,8 @@ describe('moderationActionRequestDataAdapter', () => {
       id: 'request-1',
       actionType: 'clear_moderation_queue',
       actorSurface: 'web',
+      actorUserId: null,
+      accountQuarantinePreviewRequestId: null,
       completedAt: '2026-06-08T01:20:00.000Z',
       detectionEventId: null,
       failedAt: null,

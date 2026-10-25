@@ -134,13 +134,7 @@ describe('moderationInboxDataAdapter', () => {
         detailHref: '/admin/guild/guild-1/cases/case-1',
         signalLabel: '91% confidence',
         captchaChallenge: expect.objectContaining({ status: 'pending' }),
-        allowedActions: [
-          'view_case',
-          'view_history',
-          'verify_user',
-          'close_no_action',
-          'refresh_notification',
-        ],
+        allowedActions: ['view_case', 'view_history', 'verify_user', 'refresh_notification'],
       })
     );
   });
