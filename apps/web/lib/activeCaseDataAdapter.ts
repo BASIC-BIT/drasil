@@ -504,6 +504,7 @@ export function parseCaseSummaryRow(row: CaseSummaryRow, now = new Date()): Case
 
   return caseSummarySchema.parse({
     id: row.id,
+    status: row.status,
     guildId: row.server_id,
     userId: row.user_id,
     userIdentity: resolveUserIdentity(row),
@@ -614,7 +615,7 @@ function parseDetectionHistoryRow(row: DetectionHistoryRow): CaseDetectionHistor
     id: row.id,
     detectionType: row.detection_type,
     confidence: row.confidence,
-    detectedAt: toIsoString(row.detected_at),
+    detectedAt: toNullableIsoString(row.detected_at),
     reasons: row.reasons ?? [],
   };
 }
@@ -728,7 +729,7 @@ const SUMMARY_QUERY = `
   join servers s on s.guild_id = ve.server_id
   left join users u on u.discord_id = ve.user_id
   left join server_members sm on sm.server_id = ve.server_id and sm.user_id = ve.user_id
-  left join captcha_challenges cc on cc.verification_event_id = ve.id
+  left join captcha_challenges cc on cc.verification_event_id = ve.id and cc.server_id = ve.server_id and cc.user_id = ve.user_id
   left join lateral (
     select jsonb_agg(
       jsonb_build_object(
@@ -755,26 +756,26 @@ const SUMMARY_QUERY = `
      and captcha_bypass.generation = captcha_request.generation
     where captcha_request.captcha_challenge_id = cc.id
   ) captcha_history on true
-  left join detection_events opening_de on opening_de.id = ve.detection_event_id
+  left join detection_events opening_de on opening_de.id = ve.detection_event_id and opening_de.server_id = ve.server_id and opening_de.user_id = ve.user_id
   left join lateral (
     select detection_type, confidence, detected_at, metadata, channel_id, message_id
     from detection_events linked_de
-    where linked_de.id = ve.detection_event_id
-       or linked_de.latest_verification_event_id = ve.id
+    where linked_de.server_id = ve.server_id and linked_de.user_id = ve.user_id
+      and (linked_de.id = ve.detection_event_id or linked_de.latest_verification_event_id = ve.id)
     order by detected_at desc nulls last
     limit 1
   ) de on true
   left join lateral (
     select action_type, action_at
     from admin_actions
-    where verification_event_id = ve.id
+    where server_id = ve.server_id and verification_event_id = ve.id
     order by action_at desc nulls last
     limit 1
   ) aa on true
   left join lateral (
     select outcome_type, source
     from moderation_outcomes
-    where verification_event_id = ve.id
+    where server_id = ve.server_id and verification_event_id = ve.id
     order by occurred_at desc nulls last
     limit 1
   ) mo on true
@@ -850,7 +851,7 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
   public async getCaseDetail(guildId: string, caseId: string): Promise<CaseDetail | null> {
     const summaryResult = await getPostgresPool().query<CaseSummaryRow>(
       `${SUMMARY_QUERY}
-       where ve.server_id = $1 and ve.id = $2 and ve.user_id is not null
+       where ve.server_id = $1 and ve.id::text = $2 and ve.user_id is not null
        limit 1`,
       [guildId, caseId]
     );
@@ -874,11 +875,11 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
     const evidenceQuery = reportIntakeId
       ? getPostgresPool().query<CaseEvidenceRow>(
           `select id, kind, source_message_id, source_channel_id, content, metadata, created_at
-           from report_intake_evidence
-           where intake_id = $1
+           from report_intake_evidence evidence
+           where intake_id = $1 and exists (select 1 from report_intakes ri where ri.id = evidence.intake_id and ri.server_id = $2 and ri.confirmed_target_user_id = $3)
            order by created_at asc nulls last
            limit 25`,
-          [reportIntakeId]
+          [reportIntakeId, guildId, row.user_id]
         )
       : Promise.resolve({ rows: [] as CaseEvidenceRow[] });
 

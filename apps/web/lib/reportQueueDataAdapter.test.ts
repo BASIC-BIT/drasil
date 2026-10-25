@@ -336,3 +336,22 @@ it('closes directly with context provenance and clears attention without a reque
   expect(discord.deleteBotMessage).toHaveBeenCalledWith('channel-1', 'message-1');
   expect(db.query).toHaveBeenCalledTimes(2);
 });
+it('keeps missing report queue event dates unknown and fresh', () => {
+  const parsed = parseReportQueueRow({
+    id: 'unknown-dates',
+    server_id: 'guild-1',
+    reporter_id: 'reporter',
+    thread_id: null,
+    status: 'submitted',
+    summary: null,
+    confirmed_target_user_id: null,
+    created_at: null,
+    updated_at: null,
+    evidence_count: 0,
+    latest_detection_id: null,
+    latest_detection_user_id: null,
+    latest_detection_handled: false,
+    latest_case_id: null,
+  });
+  expect(parsed).toMatchObject({ createdAt: null, updatedAt: null, staleHours: 0, stale: false });
+});

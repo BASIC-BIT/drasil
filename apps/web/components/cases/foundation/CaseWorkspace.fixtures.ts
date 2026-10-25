@@ -4,6 +4,7 @@ import { everydayReports } from '@/components/inbox/foundation/ReportInbox.fixtu
 
 export const openedReport = { ...everydayReports[0], latestCaseId: 'case-report-1' };
 export const everydayCase: CaseDetail = {
+  status: 'pending',
   id: 'case-report-1',
   guildId: openedReport.guildId,
   userId: 'user-300',
