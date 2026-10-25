@@ -1,3 +1,6 @@
+.back {
+  display: none;
+}
 .heading {
   padding: 30px 32px 20px;
 }
@@ -113,6 +116,25 @@
     display: block;
   }
   .queue {
+    border-right: 0;
+  }
+  .detail {
     display: none;
+  }
+  .inbox[data-detail-open='true'] .queue,
+  .inbox[data-detail-open='true'] .filters {
+    display: none;
+  }
+  .inbox[data-detail-open='true'] .detail {
+    display: block;
+  }
+  .back {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    padding: 0;
+    border: 0;
+    color: var(--dr-positive);
+    background: transparent;
   }
 }
