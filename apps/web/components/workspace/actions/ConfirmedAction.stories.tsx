@@ -89,6 +89,7 @@ function Interaction({
               }}
               action={{
                 id: 'ban_user',
+                tone: 'danger',
                 label: 'Ban member',
                 description: 'Ban Member one from this server. No message deletion requested.',
                 reasonRequired: true,

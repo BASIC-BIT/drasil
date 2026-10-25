@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ComponentProps } from 'react';
 import { useRouter } from 'next/navigation';
 import type {
   CaseDetail,
@@ -37,6 +37,7 @@ export interface ConfirmedActionDescriptor {
   readonly id: ModerationInboxAction;
   readonly label: string;
   readonly description: string;
+  readonly tone?: ComponentProps<typeof ActionButton>['tone'];
   readonly reasonRequired?: boolean;
   readonly reasonMaxLength?: number;
   readonly disabled?: boolean;
@@ -175,7 +176,12 @@ function ConfirmedActionIntent({
   }
   return (
     <div>
-      <ActionButton ref={trigger} disabled={blocked} onClick={() => setOpen(true)}>
+      <ActionButton
+        ref={trigger}
+        tone={action.tone}
+        disabled={blocked}
+        onClick={() => setOpen(true)}
+      >
         {submission.kind === 'submitting' ? 'Submitting...' : action.label}
       </ActionButton>
       <ActionConfirmation

@@ -13,7 +13,10 @@ import {
   matchesWorkspaceActionRequest,
   type WorkspaceRequestTarget,
 } from '@/lib/inboxActionReceipts';
-import { ConfirmedAction } from '@/components/workspace/actions/ConfirmedAction';
+import {
+  ConfirmedAction,
+  type ConfirmedActionDescriptor,
+} from '@/components/workspace/actions/ConfirmedAction';
 import { Timestamp } from '@/components/workspace/Timestamp';
 import { CaseEvidenceReader } from '@/components/cases/CaseEvidenceReader';
 import { CaseChecks } from '@/components/cases/CaseChecks';
@@ -62,21 +65,37 @@ export function matchingInboxRequests(
     )
   );
 }
+const routineCaseActions: readonly ModerationInboxAction[] = [
+  'verify_user',
+  'close_no_action',
+  'kick_user',
+  'ban_user',
+];
+function actionTone(action: ModerationInboxAction): ConfirmedActionDescriptor['tone'] {
+  switch (action) {
+    case 'verify_user':
+      return 'positive';
+    case 'kick_user':
+      return 'warning';
+    case 'ban_user':
+    case 'ban_by_id':
+      return 'danger';
+    default:
+      return 'neutral';
+  }
+}
 // Specialized preview/generation-bound controls are composed by the later case-tool controller.
 function detailActions(detail: WorkspaceItemDetail): readonly ModerationInboxAction[] {
   switch (detail.kind) {
     case 'case':
       return [
-        'verify_user',
-        'kick_user',
-        'ban_user',
+        ...routineCaseActions,
         'ban_by_id',
         'sync_existing_ban',
         'refresh_notification',
         'repair_thread',
         'create_thread',
         'reopen_case',
-        'close_no_action',
       ];
     case 'submitted_report':
       return ['open_case', 'ban_user', 'mark_actioned', 'dismiss_no_action', 'mark_false_positive'];
@@ -330,7 +349,17 @@ function SelectedDetail({
   );
   const [offered, setOffered] = useState(currentActions);
   const [pendingTrack, setPendingTrack] = useState<string | null>(null);
-  const retainedActions = [...new Set([...offered, ...currentActions])];
+  const retainedActions = detailActions(detail).filter(
+    (action) => offered.includes(action) || currentActions.includes(action)
+  );
+  const primaryActions =
+    detail.kind === 'case'
+      ? retainedActions.filter((action) => routineCaseActions.includes(action))
+      : retainedActions;
+  const maintenanceActions =
+    detail.kind === 'case'
+      ? retainedActions.filter((action) => !routineCaseActions.includes(action))
+      : [];
   const scopedRequests = useMemo(() => matchingInboxRequests(detail), [detail]);
   useEffect(() => {
     setOffered((previous) =>
@@ -382,6 +411,47 @@ function SelectedDetail({
           : detail.kind === 'support_attention' && (detail.caseData || item.sourceMetadata?.caseId)
             ? `${prefix}/cases/${encodeURIComponent(detail.caseData?.detail.id ?? item.sourceMetadata?.caseId ?? '')}`
             : item.detailHref;
+  function renderAction(action: ModerationInboxAction) {
+    const submit = bindAction(detail, action, actions);
+    if (!submit) return null;
+    const matching = scopedRequests.filter((request) =>
+      matchesWorkspaceActionRequest(request, target, action)
+    );
+    const durable =
+      matching.find((request) => request.id === trackedRequestId) ?? matching[0] ?? null;
+    return (
+      <ConfirmedAction
+        key={action}
+        target={target}
+        action={{
+          id: action,
+          tone: actionTone(action),
+          label: actionLabel(action, detail),
+          description: `${target.label}. ${actionEffect(action)}`,
+          disabled: !available || !isAllowed(detail, action),
+          reasonRequired:
+            action === 'kick_user'
+              ? detail.policy.kickReasonRequired
+              : action === 'ban_user' || action === 'ban_by_id'
+                ? detail.policy.banReasonRequired
+                : false,
+        }}
+        durableRequest={durable}
+        record={record}
+        cleanupJob={
+          detail.kind === 'case' && durable?.messageDeletionJobId
+            ? (detail.data.cleanup?.jobs.find((job) => job.id === durable.messageDeletionJobId) ??
+              null)
+            : null
+        }
+        submit={async (form) => {
+          const result = await submit(form);
+          if (result.kind === 'request') setPendingTrack(result.receipt.id);
+          return result;
+        }}
+      />
+    );
+  }
   return (
     <article>
       <header>
@@ -422,50 +492,19 @@ function SelectedDetail({
           </a>
         ))}
       </div>
-      {retainedActions.length ? (
-        <section className={styles.actions} aria-label="Moderation actions">
-          {retainedActions.map((action) => {
-            const submit = bindAction(detail, action, actions);
-            if (!submit) return null;
-            const matching = scopedRequests.filter((request) =>
-              matchesWorkspaceActionRequest(request, target, action)
-            );
-            const durable =
-              matching.find((request) => request.id === trackedRequestId) ?? matching[0] ?? null;
-            return (
-              <ConfirmedAction
-                key={action}
-                target={target}
-                action={{
-                  id: action,
-                  label: actionLabel(action, detail),
-                  description: `${target.label}. ${actionEffect(action)}`,
-                  disabled: !available || !isAllowed(detail, action),
-                  reasonRequired:
-                    action === 'kick_user'
-                      ? detail.policy.kickReasonRequired
-                      : action === 'ban_user' || action === 'ban_by_id'
-                        ? detail.policy.banReasonRequired
-                        : false,
-                }}
-                durableRequest={durable}
-                record={record}
-                cleanupJob={
-                  detail.kind === 'case' && durable?.messageDeletionJobId
-                    ? (detail.data.cleanup?.jobs.find(
-                        (job) => job.id === durable.messageDeletionJobId
-                      ) ?? null)
-                    : null
-                }
-                submit={async (form) => {
-                  const result = await submit(form);
-                  if (result.kind === 'request') setPendingTrack(result.receipt.id);
-                  return result;
-                }}
-              />
-            );
-          })}
+      {primaryActions.length ? (
+        <section
+          className={styles.actions}
+          aria-label={detail.kind === 'case' ? 'Case decisions' : 'Moderation actions'}
+        >
+          {primaryActions.map(renderAction)}
         </section>
+      ) : null}
+      {maintenanceActions.length ? (
+        <details className={styles.tools}>
+          <summary>Case tools</summary>
+          <div className={styles.actions}>{maintenanceActions.map(renderAction)}</div>
+        </details>
       ) : null}
       {detail.kind === 'case' ? (
         <>

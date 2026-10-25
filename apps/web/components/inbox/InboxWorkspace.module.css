@@ -198,3 +198,13 @@
   padding: 12px 0;
   border-bottom: 1px solid var(--dr-line);
 }
+
+.tools {
+  border-block: 1px solid var(--dr-line);
+  padding: 12px 0;
+  margin: 16px 0;
+}
+.tools > summary {
+  cursor: pointer;
+  font-weight: 500;
+}

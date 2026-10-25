@@ -111,6 +111,7 @@ function Runnable({
   const [revision, setRevision] = useState(0);
   const disabled = useRef(false);
   const done = useRef(false);
+  const caseRequest = useRef<ModerationActionRequestSummary | null>(null);
   const [submissions, setSubmissions] = useState(0);
   const [refreshes, setRefreshes] = useState(0);
   const [initialLocation] = useState(() =>
@@ -153,8 +154,10 @@ function Runnable({
               report: null,
               membership: null,
               cleanup: null,
-              requests:
-                new URLSearchParams(window.location.search).get('request') === 'security-request'
+              requests: [
+                ...(caseRequest.current ? [caseRequest.current] : []),
+                ...(new URLSearchParams(window.location.search).get('request') ===
+                'security-request'
                   ? [
                       {
                         ...request,
@@ -164,9 +167,10 @@ function Runnable({
                         detectionEventId: null,
                         verificationEventId: fixtureCaseDetails[0].id,
                         targetUserId: fixtureCaseDetails[0].userId,
-                      },
+                      } satisfies ModerationActionRequestSummary,
                     ]
-                  : [],
+                  : []),
+              ],
               policy: currentPolicy,
               loadedAt: `read-${revision}`,
             },
@@ -268,7 +272,22 @@ function Runnable({
   };
   const actions: WorkspaceActions = {
     observedAction: complete,
-    caseAction: async () => ({ kind: 'request', receipt: { id: 'case-result', status: 'queued' } }),
+    caseAction: async (input, form) => {
+      if (form.get('confirmAction') !== 'on') throw new Error('Confirmation missing');
+      setSubmissions((value) => value + 1);
+      if (input.action === 'refresh_notification')
+        caseRequest.current = {
+          ...request,
+          id: 'case-result',
+          status: 'queued',
+          actionType: 'refresh_case_notification',
+          requestedAction: input.action,
+          verificationEventId: input.caseId,
+          detectionEventId: null,
+          targetUserId: fixtureCaseDetails[0].userId,
+        };
+      return { kind: 'request', receipt: { id: 'case-result', status: 'queued' } };
+    },
     reportAction: async () => ({ kind: 'failed', message: 'Story report response unavailable' }),
     attentionAction: async ({ queueItemId }) => ({
       kind: 'attention',
@@ -301,6 +320,20 @@ function Runnable({
           }
         >
           Remove observed row
+        </button>
+        <button
+          onClick={() => {
+            if (caseRequest.current)
+              caseRequest.current = {
+                ...caseRequest.current,
+                status: 'completed',
+                updatedAt: '2026-10-25T12:00:03Z',
+                completedAt: '2026-10-25T12:00:03Z',
+              };
+            setRevision((value) => value + 1);
+          }}
+        >
+          Complete case request
         </button>
         <span data-testid="submissions">{submissions}</span>
         <span data-testid="refreshes">{refreshes}</span>
