@@ -148,3 +148,86 @@ export const CaseIntent: Story = { args: { surface: 'case' } };
 export const ResponseLossPendingManual: Story = {
   args: { mode: 'pending', deferFirstRefresh: true },
 };
+
+function RequestLifecycle({ failedReceipt = false }: { readonly failedReceipt?: boolean }) {
+  const [recordId, setRecordId] = useState('detection-1');
+  const [revision, setRevision] = useState(0);
+  const [refreshCount, setRefreshCount] = useState(0);
+  const [durable, setDurable] = useState<ModerationActionRequestSummary | null>(
+    failedReceipt ? { ...request, id: 'request-a', status: 'failed' } : null
+  );
+  useEffect(() => {
+    const refresh = (): void => setRefreshCount((count) => count + 1);
+    window.addEventListener('storybook:router-refresh', refresh);
+    return () => window.removeEventListener('storybook:router-refresh', refresh);
+  }, []);
+  return (
+    <Foundation>
+      <div style={{ maxWidth: 720, padding: 32 }}>
+        <h1>Request reconciliation</h1>
+        <InboxActionRequestPollingProvider
+          enabled
+          serverRequests={failedReceipt && durable ? [durable] : []}
+        >
+          <ConfirmedAction
+            target={{
+              guildId: 'guild-1',
+              kind: 'observed_alert',
+              recordId,
+              targetUserId: 'member-1',
+              label: 'Member one',
+              loadedAt: `completed-read-${revision}`,
+            }}
+            action={{
+              id: 'ban_user',
+              label: 'Ban member',
+              description: 'Ban Member one from this server. No message deletion requested.',
+            }}
+            durableRequest={durable}
+            submit={async () => ({
+              kind: 'request',
+              receipt: { id: 'request-b', status: failedReceipt ? 'failed' : 'queued' },
+            })}
+          />
+        </InboxActionRequestPollingProvider>
+        <span data-testid="refresh-count">{refreshCount}</span>
+        <span data-testid="selection">{recordId}</span>
+        <button onClick={() => setRevision((value) => value + 1)}>Rerender same intent</button>
+        <button
+          onClick={() => {
+            setRecordId('detection-2');
+            setDurable(null);
+          }}
+        >
+          Select next record
+        </button>
+        <button
+          onClick={() =>
+            setDurable({
+              ...request,
+              id: 'request-a',
+              status: 'completed',
+              updatedAt: '2026-10-25T12:00:03Z',
+            })
+          }
+        >
+          Update other request
+        </button>
+        <button
+          onClick={() =>
+            setDurable({
+              ...request,
+              id: 'request-b',
+              status: 'processing',
+              updatedAt: '2026-10-25T12:00:04Z',
+            })
+          }
+        >
+          Supply returned request
+        </button>
+      </div>
+    </Foundation>
+  );
+}
+export const FailedReceiptIdentity: Story = { render: () => <RequestLifecycle failedReceipt /> };
+export const PersistentProvider: Story = { render: () => <RequestLifecycle /> };

@@ -89,9 +89,9 @@ test('active request polling stops when the consumer unmounts', async ({ page })
   await page.addInitScript(() =>
     sessionStorage.setItem('workspace-action-story-pending', 'pending')
   );
+  await page.clock.install();
   await page.goto(story.replace('interactive', 'response-loss-pending'));
   await expect(page.getByRole('status')).toContainText('Request processing.');
-  await page.clock.install();
   await page.clock.fastForward(2_200);
   await expect(page.getByTestId('refresh-count')).not.toHaveText('0');
   await page.getByRole('button', { name: 'Leave action area' }).click();
@@ -131,4 +131,48 @@ test('explicit refresh after response loss retains its newly found matching requ
   await expect(page.getByTestId('refresh-count')).toHaveText('1');
   await expect(page.getByRole('status')).toContainText('Request processing.');
   await expect(page.getByRole('button', { name: 'Ban member', exact: true })).toBeDisabled();
+});
+
+test('known failed receipt stays bound to request B when another matching action request A changes', async ({
+  page,
+}) => {
+  await page.goto(story.replace('interactive', 'failed-receipt-identity'));
+  await page.getByRole('button', { name: 'Ban member', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Confirm Ban member').check();
+  await dialog.getByRole('button', { name: 'Confirm Ban member', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Request failed.');
+  await page.getByRole('button', { name: 'Update other request' }).click();
+  await expect(page.getByRole('status')).toContainText('Request failed.');
+  await expect(
+    page.getByRole('button', { name: 'Refresh durable state', exact: true })
+  ).toBeVisible();
+  await page.getByRole('button', { name: 'Supply returned request' }).click();
+  await expect(page.getByRole('status')).toContainText('Request processing.');
+  await expect(page.getByRole('button', { name: 'Ban member', exact: true })).toBeDisabled();
+});
+
+test('local polling survives same-ID rerenders and stops on replacement under a persistent provider', async ({
+  page,
+}) => {
+  await page.clock.install();
+  await page.goto(story.replace('interactive', 'persistent-provider'));
+  await page.getByRole('button', { name: 'Ban member', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Confirm Ban member').check();
+  await dialog.getByRole('button', { name: 'Confirm Ban member', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Request queued.');
+  const countBeforeRerender = Number(await page.getByTestId('refresh-count').textContent());
+  await page.getByRole('button', { name: 'Rerender same intent' }).click();
+  await page.clock.fastForward(2_200);
+  await expect(page.getByTestId('refresh-count')).toHaveText(String(countBeforeRerender + 1));
+  await page.getByRole('button', { name: 'Rerender same intent' }).click();
+  await page.clock.fastForward(2_200);
+  await expect(page.getByTestId('refresh-count')).toHaveText(String(countBeforeRerender + 2));
+  await page.getByRole('button', { name: 'Select next record' }).click();
+  await expect(page.getByTestId('selection')).toHaveText('detection-2');
+  await expect(page.getByRole('status')).toHaveCount(0);
+  const countAfterReplacement = await page.getByTestId('refresh-count').textContent();
+  await page.clock.runFor(4_200);
+  await expect(page.getByTestId('refresh-count')).toHaveText(countAfterReplacement ?? '');
 });
