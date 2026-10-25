@@ -154,7 +154,13 @@ describe('case action admission and submission', () => {
       persistence.query.mockResolvedValueOnce({ rows: [{ id: 'request', status: 'queued' }] });
       expect(
         await adapter.queueCaseAction({ ...input, action, attemptId, reason: 'Reviewed evidence' })
-      ).toEqual({ action, caseId: 'case', requestId: 'request', status: 'queued' });
+      ).toEqual({
+        action,
+        caseId: 'case',
+        requestId: 'request',
+        receipt: { id: 'request', status: 'queued' },
+        status: 'queued',
+      });
       expect(persistence.query).toHaveBeenCalledExactlyOnceWith(
         expect.stringContaining('insert into moderation_action_requests'),
         [
@@ -688,6 +694,7 @@ describe('activeCaseDataAdapter', () => {
       action: 'repair_thread',
       caseId: 'case-stale',
       requestId: 'fixture-case-action-repair_thread-case-stale',
+      receipt: { id: 'fixture-case-action-repair_thread-case-stale', status: 'queued' },
       status: 'queued',
     });
     await expect(
@@ -701,6 +708,7 @@ describe('activeCaseDataAdapter', () => {
       action: 'refresh_notification',
       caseId: 'case-stale',
       requestId: 'fixture-case-action-refresh_notification-case-stale',
+      receipt: { id: 'fixture-case-action-refresh_notification-case-stale', status: 'queued' },
       status: 'queued',
     });
     await expect(
@@ -727,6 +735,7 @@ describe('activeCaseDataAdapter', () => {
       action: 'sync_existing_ban',
       caseId: 'case-banned',
       requestId: 'fixture-case-action-sync_existing_ban-case-banned',
+      receipt: { id: 'fixture-case-action-sync_existing_ban-case-banned', status: 'queued' },
       status: 'queued',
     });
   });

@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   assertCanManageGuild: vi.fn(),
   getServer: vi.fn(),
   queue: vi.fn(),
+  detail: vi.fn(),
 }));
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 vi.mock('next/navigation', () => ({
@@ -28,7 +29,10 @@ vi.mock('@/lib/setupDataAdapter', () => ({
   createSetupDataAdapter: () => ({ getServer: mocks.getServer }),
 }));
 vi.mock('@/lib/activeCaseDataAdapter', () => ({
-  createActiveCaseDataAdapter: () => ({ queueCaseAction: mocks.queue }),
+  createActiveCaseDataAdapter: () => ({
+    queueCaseAction: mocks.queue,
+    getCaseDetail: mocks.detail,
+  }),
 }));
 
 import { queueCaseAction, queueInboxCaseAction } from './actions';
@@ -196,5 +200,113 @@ describe.each<Surface>(['case', 'inbox'])('%s CAPTCHA action submission', (surfa
       );
       expect(mocks.queue).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('workspace case confirmation boundary', () => {
+  function workspaceForm() {
+    const form = confirmedForm();
+    form.set('confirmedRecordId', 'case-1');
+    form.set('confirmedTargetUserId', 'member-1');
+    return form;
+  }
+  beforeEach(() => {
+    mocks.detail.mockResolvedValue({
+      id: 'case-1',
+      guildId: 'guild-1',
+      userId: 'member-1',
+      allowedActions: [
+        'verify_user',
+        'close_no_action',
+        'repair_thread',
+        'refresh_notification',
+        'bypass_captcha',
+      ],
+    });
+    mocks.queue.mockResolvedValue({
+      action: 'verify_user',
+      caseId: 'case-1',
+      status: 'queued',
+      requestId: 'request-1',
+      receipt: { id: 'request-1', status: 'processing' },
+    });
+  });
+  it.each(['verify_user', 'close_no_action', 'repair_thread', 'refresh_notification'] as const)(
+    'requires contextual confirmation for %s',
+    async (action) => {
+      const { submitWorkspaceCaseAction } = await import('./actions');
+      const form = workspaceForm();
+      form.delete('confirmAction');
+      expect(
+        await submitWorkspaceCaseAction({ guildId: 'guild-1', caseId: 'case-1', action }, form)
+      ).toMatchObject({ kind: 'failed' });
+      expect(mocks.queue).not.toHaveBeenCalled();
+    }
+  );
+  it.each(['confirmedRecordId', 'confirmedTargetUserId'])(
+    'blocks a wrong %s before queue submission',
+    async (field) => {
+      const { submitWorkspaceCaseAction } = await import('./actions');
+      const form = workspaceForm();
+      form.set(field, 'wrong');
+      expect(
+        await submitWorkspaceCaseAction(
+          { guildId: 'guild-1', caseId: 'case-1', action: 'verify_user' },
+          form
+        )
+      ).toMatchObject({ kind: 'failed' });
+      expect(mocks.queue).not.toHaveBeenCalled();
+    }
+  );
+  it.each([{ guildId: 'other-guild' }, { allowedActions: [] }])(
+    'blocks a cross-guild or stale case %j',
+    async (changes) => {
+      const { submitWorkspaceCaseAction } = await import('./actions');
+      mocks.detail.mockResolvedValue({
+        id: 'case-1',
+        guildId: 'guild-1',
+        userId: 'member-1',
+        allowedActions: ['verify_user'],
+        ...changes,
+      });
+      expect(
+        await submitWorkspaceCaseAction(
+          { guildId: 'guild-1', caseId: 'case-1', action: 'verify_user' },
+          workspaceForm()
+        )
+      ).toMatchObject({ kind: 'failed' });
+      expect(mocks.queue).not.toHaveBeenCalled();
+    }
+  );
+  it('preserves actual request status from the queue adapter', async () => {
+    const { submitWorkspaceCaseAction } = await import('./actions');
+    expect(
+      await submitWorkspaceCaseAction(
+        { guildId: 'guild-1', caseId: 'case-1', action: 'close_no_action' },
+        workspaceForm()
+      )
+    ).toEqual({ kind: 'request', receipt: { id: 'request-1', status: 'processing' } });
+  });
+  it('retains reason-policy failure and direct-case login return', async () => {
+    const { submitWorkspaceCaseAction } = await import('./actions');
+    const form = workspaceForm();
+    form.delete('reason');
+    expect(
+      await submitWorkspaceCaseAction(
+        { guildId: 'guild-1', caseId: 'case-1', action: 'bypass_captcha' },
+        form
+      )
+    ).toMatchObject({ kind: 'failed', message: expect.stringContaining('reason') });
+    expect(mocks.queue).not.toHaveBeenCalled();
+    mocks.session.mockResolvedValue(null);
+    form.set('returnTo', '/admin/guild/guild-1/cases/case-1?returnTo=inbox');
+    await expect(
+      submitWorkspaceCaseAction(
+        { guildId: 'guild-1', caseId: 'case-1', action: 'close_no_action' },
+        form
+      )
+    ).rejects.toThrow(
+      `returnTo=${encodeURIComponent('/admin/guild/guild-1/cases/case-1?returnTo=inbox')}`
+    );
   });
 });

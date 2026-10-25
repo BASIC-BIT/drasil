@@ -3,7 +3,7 @@ const router = {
   forward: () => undefined,
   prefetch: async () => undefined,
   push: () => undefined,
-  refresh: () => undefined,
+  refresh: () => window.dispatchEvent(new Event('storybook:router-refresh')),
   replace: () => undefined,
 };
 

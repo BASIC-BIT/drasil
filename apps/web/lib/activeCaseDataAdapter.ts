@@ -29,7 +29,10 @@ import {
 } from './e2eFixtures';
 import { discordDesktopUrl, discordMessageUrl } from './discordUrls';
 import { getPostgresPool } from './setupDataAdapter';
-import type { ModerationActionRequestQueueStatus } from './moderationActionRequestQueue';
+import type {
+  ModerationActionRequestReceipt,
+  ModerationActionRequestQueueStatus,
+} from './moderationActionRequestQueue';
 
 export type WebCaseAction = Extract<
   CaseAction,
@@ -57,6 +60,7 @@ export type CaseActionQueueStatus =
   | 'failed';
 
 export interface CaseActionQueueResult {
+  readonly receipt?: ModerationActionRequestReceipt;
   readonly action: WebCaseAction;
   readonly caseId: string;
   readonly requestId: string | null;
@@ -996,6 +1000,7 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
       action: input.action,
       caseId: input.caseId,
       requestId: receipt.id,
+      receipt,
       status: resolveCaseActionQueueStatus(receipt.status),
     };
   }
@@ -1075,6 +1080,7 @@ export class FixtureActiveCaseDataAdapter implements ActiveCaseDataAdapter {
       action: input.action,
       caseId: input.caseId,
       requestId: `fixture-case-action-${input.action}-${input.caseId}`,
+      receipt: { id: `fixture-case-action-${input.action}-${input.caseId}`, status: 'queued' },
       status: 'queued',
     };
   }

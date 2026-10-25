@@ -10,6 +10,8 @@ const m = vi.hoisted(() => ({
   resources: vi.fn(),
   queue: vi.fn(),
   revalidate: vi.fn(),
+  close: vi.fn(),
+  open: vi.fn(),
 }));
 vi.mock('next/headers', () => ({ cookies: async () => m.cookies }));
 vi.mock('next/cache', () => ({ revalidatePath: m.revalidate }));
@@ -34,7 +36,12 @@ vi.mock('@/lib/reportDetailDataAdapter', () => ({
 }));
 vi.mock('@/lib/discordApi', () => ({ fetchGuildResources: m.resources }));
 vi.mock('@/lib/e2eFixtures', () => ({ isWebE2eFixtureMode: () => m.fixture }));
-vi.mock('@/lib/reportQueueDataAdapter', () => ({ createReportQueueDataAdapter: vi.fn() }));
+vi.mock('@/lib/reportQueueDataAdapter', () => ({
+  createReportQueueDataAdapter: () => ({
+    closeSubmittedReport: m.close,
+    openCaseFromSubmittedReport: m.open,
+  }),
+}));
 import { banSubmittedReport } from './actions';
 const idle = { status: 'idle', message: null, requestId: null } as const;
 function form(changes: Partial<Record<string, string>> = {}) {
@@ -175,4 +182,121 @@ it('keeps fixture report-ban feedback queued and records its report identity wit
     expect.stringContaining('"reportId":"report-1"'),
     expect.objectContaining({ httpOnly: true, path: '/admin' })
   );
+});
+
+describe('workspace report action boundary', () => {
+  function confirmed() {
+    const data = form();
+    data.set('confirmedRecordId', 'report-1');
+    return data;
+  }
+  beforeEach(() => {
+    m.detail.mockResolvedValue({
+      id: 'report-1',
+      guildId: 'guild-1',
+      targetUserId: 'user-1',
+      latestDetectionId: 'det-1',
+      status: 'submitted',
+      allowedActions: [
+        'ban_user',
+        'open_case',
+        'mark_actioned',
+        'dismiss_no_action',
+        'mark_false_positive',
+      ],
+    });
+    m.close.mockResolvedValue({
+      actor: { id: 'admin-1', surface: 'web' },
+      action: 'dismiss_no_action',
+      reportId: 'report-1',
+      reportStatus: 'dismissed',
+      status: 'closed',
+      queueCleanupStatus: 'failed',
+    });
+  });
+  it.each([
+    'mark_actioned',
+    'dismiss_no_action',
+    'mark_false_positive',
+    'open_case',
+    'ban_user',
+  ] as const)('requires confirmation for report %s', async (action) => {
+    const { submitWorkspaceReportAction } = await import('./actions');
+    const data = confirmed();
+    data.delete('confirmAction');
+    expect(
+      await submitWorkspaceReportAction({ guildId: 'guild-1', reportId: 'report-1', action }, data)
+    ).toMatchObject({ kind: 'failed' });
+    expect(m.queue).not.toHaveBeenCalled();
+    expect(m.close).not.toHaveBeenCalled();
+    expect(m.open).not.toHaveBeenCalled();
+  });
+  it.each(['confirmedRecordId', 'confirmedTargetUserId'])(
+    'rejects report mismatch %s before mutation',
+    async (field) => {
+      const { submitWorkspaceReportAction } = await import('./actions');
+      const data = confirmed();
+      data.set(field, 'wrong');
+      expect(
+        await submitWorkspaceReportAction(
+          { guildId: 'guild-1', reportId: 'report-1', action: 'dismiss_no_action' },
+          data
+        )
+      ).toMatchObject({ kind: 'failed' });
+      expect(m.close).not.toHaveBeenCalled();
+    }
+  );
+  it.each([{ guildId: 'other-guild' }, { allowedActions: [] }])(
+    'rejects cross-guild and stale reports',
+    async (changes) => {
+      const { submitWorkspaceReportAction } = await import('./actions');
+      m.detail.mockResolvedValue({
+        id: 'report-1',
+        guildId: 'guild-1',
+        targetUserId: 'user-1',
+        status: 'submitted',
+        allowedActions: ['dismiss_no_action'],
+        ...changes,
+      });
+      expect(
+        await submitWorkspaceReportAction(
+          { guildId: 'guild-1', reportId: 'report-1', action: 'dismiss_no_action' },
+          confirmed()
+        )
+      ).toMatchObject({ kind: 'failed' });
+      expect(m.close).not.toHaveBeenCalled();
+    }
+  );
+  it('allows targetless report closure and preserves closed with cleanup failure', async () => {
+    const { submitWorkspaceReportAction } = await import('./actions');
+    m.detail.mockResolvedValue({
+      id: 'report-1',
+      guildId: 'guild-1',
+      targetUserId: null,
+      status: 'submitted',
+      allowedActions: ['dismiss_no_action'],
+    });
+    const data = confirmed();
+    data.delete('confirmedTargetUserId');
+    const closedWithCleanupFailure = await submitWorkspaceReportAction(
+      { guildId: 'guild-1', reportId: 'report-1', action: 'dismiss_no_action' },
+      data
+    );
+    expect(closedWithCleanupFailure).toMatchObject({
+      kind: 'report_closure',
+      result: { status: 'closed', queueCleanupStatus: 'failed' },
+    });
+  });
+  it('retains report ban reason policy with contextual confirmation', async () => {
+    const { submitWorkspaceReportAction } = await import('./actions');
+    const data = confirmed();
+    data.delete('reason');
+    expect(
+      await submitWorkspaceReportAction(
+        { guildId: 'guild-1', reportId: 'report-1', action: 'ban_user' },
+        data
+      )
+    ).toMatchObject({ kind: 'failed', message: 'Ban reason is required.' });
+    expect(m.queue).not.toHaveBeenCalled();
+  });
 });

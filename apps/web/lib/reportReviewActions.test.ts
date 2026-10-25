@@ -9,7 +9,14 @@ import { initialInboxActionState } from './inboxActionState';
 const runtime = vi.hoisted(() => ({
   query: vi.fn(),
   assertCanManageGuild: vi.fn(async () => undefined),
-  closeSubmittedReport: vi.fn(async () => true),
+  closeSubmittedReport: vi.fn(async () => ({
+    actor: { id: 'session-moderator-1', surface: 'web' },
+    action: 'mark_actioned',
+    reportId: 'report-1',
+    reportStatus: 'actioned',
+    status: 'closed',
+    queueCleanupStatus: 'skipped',
+  })),
   openCaseFromSubmittedReport: vi.fn(async () => ({
     status: 'queued',
     requestId: 'queued-request-1',
