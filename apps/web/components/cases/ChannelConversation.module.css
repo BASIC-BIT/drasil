@@ -1,0 +1,102 @@
+.reader {
+  color: var(--dr-text, #202020);
+  background: var(--dr-surface, #f8f8f8);
+  min-width: 0;
+}
+.header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: start;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 1px solid var(--dr-line, #777);
+  padding: 1rem 0;
+}
+.header h2 {
+  font-size: 1.1rem;
+  margin: 0;
+}
+.header p,
+.extent p {
+  margin: 0.4rem 0;
+  font-size: 0.85rem;
+}
+.links,
+.paging {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.8rem;
+}
+.reader a {
+  color: inherit;
+  text-decoration: underline;
+  overflow-wrap: anywhere;
+}
+.reader button {
+  color: inherit;
+  background: transparent;
+  border: 1px solid currentColor;
+  padding: 0.5rem 0.7rem;
+  border-radius: 3px;
+  font: inherit;
+  cursor: pointer;
+}
+.reader button[aria-disabled='true'] {
+  opacity: 0.55;
+  cursor: default;
+}
+.reader :focus-visible {
+  outline: 2px solid var(--dr-text, #202020);
+  outline-offset: 3px;
+}
+.extent {
+  padding: 0.6rem 0;
+}
+.paging {
+  padding: 0.4rem 0 0.8rem;
+}
+.messages {
+  max-height: 60vh;
+  overflow: auto;
+  overflow-anchor: none;
+  position: relative;
+}
+.messages article {
+  border-top: 1px solid var(--dr-line, #777);
+  padding: 1rem 0.7rem;
+  overflow-wrap: anywhere;
+}
+.messages article[data-source='true'] {
+  border-left: 3px solid currentColor;
+  background: var(--dr-raised, #ededed);
+}
+.messages header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  font-size: 0.85rem;
+}
+.messages header span {
+  font-weight: 600;
+}
+.body {
+  white-space: pre-wrap;
+  line-height: 1.55;
+  margin: 0.65rem 0;
+}
+.messages article > a {
+  display: block;
+  margin: 0.4rem 0;
+}
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

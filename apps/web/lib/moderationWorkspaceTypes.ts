@@ -12,7 +12,8 @@ import {
   messageCleanupJobDetailSchema,
 } from '@drasil/contracts';
 import type { ModerationActionRequestSummary } from './moderationActionRequestDataAdapter';
-import type { CaseDiscordMessage } from './caseDiscordContent';
+import { caseDiscordMessageSchema, conversationSourceSchema } from './conversationTypes';
+export { caseDiscordMessageSchema } from './conversationTypes';
 
 const nullableString = z.string().nullable();
 const roleSchema = z.object({
@@ -96,6 +97,7 @@ export const workspaceActionPolicySchema = z.object({
   banReasonRequired: z.boolean(),
 });
 export const caseWorkspaceDataSchema = z.object({
+  conversationSources: z.array(conversationSourceSchema).optional(),
   detail: caseDetailSchema,
   report: reportDetailSchema.nullable(),
   membership: memberProfileMembershipSchema.nullable(),
@@ -108,22 +110,6 @@ export const caseWorkspaceDataSchema = z.object({
     .nullable(),
   policy: workspaceActionPolicySchema,
   loadedAt: z.string(),
-});
-const caseDiscordMessageSchema: z.ZodType<CaseDiscordMessage> = z.object({
-  id: z.string(),
-  channelId: z.string(),
-  authorLabel: z.string(),
-  content: z.string(),
-  timestamp: z.string(),
-  url: z.string().url(),
-  attachments: z.array(
-    z.object({
-      id: z.string(),
-      filename: nullableString,
-      url: z.string().url().nullable(),
-      contentType: nullableString,
-    })
-  ),
 });
 export const replyReadStateSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('available'), message: caseDiscordMessageSchema }),
@@ -145,6 +131,7 @@ export const workspaceItemDetailSchema = z.discriminatedUnion('kind', [
   z.object({
     ...common,
     kind: z.literal('submitted_report'),
+    conversationSources: z.array(conversationSourceSchema).optional(),
     item: moderationInboxItemSchema.extend({ kind: z.literal('submitted_report') }),
     report: reportDetailSchema,
     requests: z.array(moderationActionRequestSummarySchema).readonly(),

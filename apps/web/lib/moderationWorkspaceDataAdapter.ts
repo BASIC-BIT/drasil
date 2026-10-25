@@ -1,3 +1,5 @@
+import { caseConversationSources, reportConversationSources } from './conversationTypes';
+import { readAttentionReply } from './conversationDataAdapter';
 import { z } from 'zod';
 import {
   hasAuthority,
@@ -209,18 +211,23 @@ export function createModerationWorkspaceDataAdapter(
             .map((job) => cleanup.getJobDetail(guildId, caseId, job.id))
         )
       : [];
+    const matchingReport =
+      report &&
+      report.guildId === guildId &&
+      report.id === linked?.report_id &&
+      report.targetUserId === detail.userId &&
+      report.latestCaseId === caseId
+        ? report
+        : null;
     return caseWorkspaceDataSchema.parse({
       detail,
+      conversationSources: [
+        ...caseConversationSources(detail),
+        ...(matchingReport ? reportConversationSources(matchingReport) : []),
+      ],
       policy: effectivePolicy,
       loadedAt: new Date().toISOString(),
-      report:
-        report &&
-        report.guildId === guildId &&
-        report.id === linked?.report_id &&
-        report.targetUserId === detail.userId &&
-        report.latestCaseId === caseId
-          ? report
-          : null,
+      report: matchingReport,
       membership:
         member && member.guildId === guildId && member.userId === detail.userId
           ? member.membership
@@ -277,6 +284,7 @@ export function createModerationWorkspaceDataAdapter(
       ]);
       return workspaceItemDetailSchema.parse({
         kind: 'submitted_report',
+        conversationSources: reportConversationSources(report),
         item: { ...item, allowedActions: effectivePolicy.allowedActions },
         policy: effectivePolicy,
         report,
@@ -347,6 +355,15 @@ export function createModerationWorkspaceDataAdapter(
     });
     if (!attention) return null;
     const effectivePolicy = await policy(attention.item);
+    const reply =
+      attention.item.kind === 'pending_screening'
+        ? attention.reply
+        : await readAttentionReply({
+            guildId,
+            actorId: actor.userId,
+            channelId: attention.sourceThreadId,
+            messageId: attention.latestReplyMessageId,
+          });
     const common = {
       item: { ...attention.item, allowedActions: effectivePolicy.allowedActions },
       policy: effectivePolicy,
@@ -358,7 +375,7 @@ export function createModerationWorkspaceDataAdapter(
               ...common,
               kind: 'report_attention',
               intake: attention.intake,
-              reply: attention.reply,
+              reply,
             })
           : null;
       case 'support_attention': {
@@ -371,7 +388,7 @@ export function createModerationWorkspaceDataAdapter(
           kind: 'support_attention',
           subtype: attention.subtype,
           caseData,
-          reply: attention.reply,
+          reply,
         });
       }
       case 'pending_screening':
