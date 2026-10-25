@@ -371,3 +371,36 @@ it('rejects a cleanup workspace from another guild before loading its jobs', asy
   ).toMatchObject({ cleanup: null });
   expect(state.job).not.toHaveBeenCalled();
 });
+it('emits all trusted linked-report conversation keys while retaining report identity', async () => {
+  const guildId = '100000000000000001';
+  const detail = { ...fixtureCaseDetails[0], guildId };
+  const report = {
+    ...fixtureReportDetail('report-1')!,
+    guildId,
+    targetUserId: detail.userId,
+    latestCaseId: detail.id,
+  };
+  report.evidence = report.evidence.map((item) => ({
+    ...item,
+    sourceMessageUrl: `https://discord.com/channels/${guildId}/100000000000000002/100000000000000003`,
+  }));
+  state.detail.mockResolvedValue(detail);
+  state.report.mockResolvedValue(report);
+  state.query.mockImplementation(async (sql: string) => ({
+    rows: sql.includes('from verification_events ve')
+      ? [{ report_id: report.id, detection_id: 'det-1' }]
+      : [],
+  }));
+  const result = await createModerationWorkspaceDataAdapter({
+    ...actor,
+    guildId,
+  }).getCaseWorkspaceData({ guildId, caseId: detail.id });
+  expect(result?.conversationSources?.map((source) => source.sourceKey)).toEqual(
+    report.evidence.map((item) => `evidence:${item.id}`)
+  );
+  expect(
+    result?.conversationSources?.every(
+      (source) => source.recordKind === 'report' && source.recordId === report.id
+    )
+  ).toBe(true);
+});

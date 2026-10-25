@@ -325,3 +325,26 @@ export async function fetchBotMessagePage(
 function assertDiscordId(id: string): void {
   if (!/^\d{17,20}$/.test(id)) throw new Error('Invalid Discord ID.');
 }
+
+/** Exactly one source-centered page. Snapshot callers retain their recent-history API. */
+export async function fetchBotChannelMessagePage({
+  channelId,
+  page,
+  limit,
+}: {
+  channelId: string;
+  page: { kind: 'around' | 'before' | 'after'; cursor: string };
+  limit: 50;
+}): Promise<DiscordMessage[]> {
+  assertDiscordId(channelId);
+  assertDiscordId(page.cursor);
+  if (limit !== 50 || !['around', 'before', 'after'].includes(page.kind))
+    throw new Error('Invalid conversation page.');
+  const params = new URLSearchParams({ limit: String(limit), [page.kind]: page.cursor });
+  const messages = await fetchBotJson<DiscordMessage[]>(
+    `/channels/${channelId}/messages?${params.toString()}`
+  );
+  if (!Array.isArray(messages) || messages.length > limit)
+    throw new Error('Invalid conversation page.');
+  return messages;
+}

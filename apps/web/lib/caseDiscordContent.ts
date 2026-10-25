@@ -85,7 +85,7 @@ function mapAttachment(attachment: DiscordMessageAttachment): CaseDiscordAttachm
   };
 }
 
-function mapMessage(guildId: string, message: DiscordMessage): CaseDiscordMessage {
+export function mapDiscordMessage(guildId: string, message: DiscordMessage): CaseDiscordMessage {
   return {
     id: message.id,
     channelId: message.channel_id,
@@ -184,7 +184,7 @@ async function fetchSourceMessage(
 
   try {
     const message = await fetchBotMessage(parsed.channelId, parsed.messageId);
-    return { message: mapMessage(guildId, message), error: null };
+    return { message: mapDiscordMessage(guildId, message), error: null };
   } catch (error) {
     return { message: null, error: formatFetchError(error) };
   }
@@ -227,7 +227,7 @@ async function fetchThreadSnapshot(
       label: surface.label,
       channelId,
       url: surface.url,
-      messages: messages.map((message) => mapMessage(guildId, message)),
+      messages: messages.map((message) => mapDiscordMessage(guildId, message)),
       truncated: messages.length >= THREAD_MESSAGE_LIMIT,
       error: null,
     };
