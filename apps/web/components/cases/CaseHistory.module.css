@@ -1,0 +1,46 @@
+.history {
+  border-bottom: 1px solid var(--dr-line);
+  padding: 22px 0;
+}
+.history > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.history h2 {
+  font-size: 14px;
+  font-weight: 600;
+  scroll-margin-top: var(--case-command-offset, 88px);
+}
+.history header > span {
+  color: var(--dr-muted);
+  font-size: 11px;
+}
+.history ol {
+  padding: 0;
+  list-style: none;
+}
+.history li {
+  padding-left: 14px;
+  border-left: 2px solid var(--dr-boundary);
+}
+.history li + li {
+  margin-top: 20px;
+}
+.history h3 {
+  font-size: 13px;
+  font-weight: 500;
+}
+.history time,
+.history p {
+  color: var(--dr-muted);
+  font-size: 11px;
+  margin-top: 4px;
+}
+.history .reason {
+  color: var(--dr-text);
+  font-size: 12px;
+  margin-top: 8px;
+}

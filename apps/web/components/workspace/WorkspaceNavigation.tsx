@@ -1,22 +1,18 @@
 'use client';
 
 import { useEffect, useId, useRef, useState } from 'react';
-import styles from './ReportInbox.module.css';
+import styles from './WorkspaceShell.module.css';
 
-const primaryDestinations = [
-  { label: 'Cases', path: 'cases' },
-  { label: 'Reports', path: 'reports' },
-  { label: 'History', path: 'history' },
-];
+const primaryDestinations = [{ label: 'History', path: 'history' }];
 const secondaryDestinations = [
-  { label: 'Setup', path: 'setup' },
+  { label: 'Settings', path: 'setup' },
   { label: 'Operations', path: 'operations' },
 ];
 
 interface WorkspaceLinksProps {
   readonly guildId: string;
   readonly onInbox?: () => void;
-  readonly currentPage?: 'inbox' | 'cases';
+  readonly currentPage?: 'inbox' | 'cases' | 'history' | 'setup' | 'operations';
   readonly onNavigate?: () => void;
 }
 
@@ -30,7 +26,7 @@ export function WorkspaceLinks({
     <nav className={styles.workspaceLinks} aria-label="Workspace">
       <a
         href={onInbox ? '#inbox' : `/admin/guild/${guildId}/inbox`}
-        aria-current={currentPage === 'inbox' ? 'page' : undefined}
+        aria-current={currentPage === 'inbox' || currentPage === 'cases' ? 'page' : undefined}
         onClick={(event) => {
           onNavigate?.();
           if (onInbox) {
@@ -53,7 +49,12 @@ export function WorkspaceLinks({
       ))}
       <hr />
       {secondaryDestinations.map(({ label, path }) => (
-        <a key={path} href={`/admin/guild/${guildId}/${path}`} onClick={onNavigate}>
+        <a
+          key={path}
+          href={`/admin/guild/${guildId}/${path}`}
+          aria-current={currentPage === path ? 'page' : undefined}
+          onClick={onNavigate}
+        >
           {label}
         </a>
       ))}

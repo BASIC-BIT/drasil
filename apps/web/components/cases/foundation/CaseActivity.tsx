@@ -1,6 +1,7 @@
 import type { CaseDetail, ReportDetail } from '@drasil/contracts';
-import { Timestamp } from '@/components/inbox/foundation/Timestamp';
-import { caseRequestLabel, recordLabel, type CaseRequestState } from './caseReview';
+import { Timestamp } from '@/components/workspace/Timestamp';
+import { caseRequestLabel, type CaseRequestState } from './caseReview';
+import { recordLabel } from '../caseRecordLabel';
 import styles from './CaseWorkspace.module.css';
 
 export function CaseActivity({

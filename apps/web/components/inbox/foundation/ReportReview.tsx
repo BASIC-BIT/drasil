@@ -1,6 +1,6 @@
 'use client';
 
-import { Timestamp } from './Timestamp';
+import { Timestamp } from '@/components/workspace/Timestamp';
 
 import { useId, useRef, useState, type Ref } from 'react';
 import type { MemberProfile, ReportDetail } from '@drasil/contracts';

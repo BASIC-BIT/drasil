@@ -1,0 +1,63 @@
+.section {
+  padding: 22px 0;
+  border-bottom: 1px solid var(--dr-line);
+}
+.sectionHeading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.sectionHeading h2 {
+  font-size: 14px;
+  font-weight: 600;
+  scroll-margin-top: var(--case-command-offset, 88px);
+}
+.sectionHeading > span,
+.muted {
+  color: var(--dr-muted);
+  font-size: 11px;
+}
+.check header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 16px;
+}
+.check h3 {
+  font-size: 13px;
+  font-weight: 500;
+}
+.check time {
+  color: var(--dr-muted);
+  font-size: 11px;
+}
+.check ul {
+  list-style: none;
+  padding: 12px 0;
+  font-size: 13px;
+}
+.check li + li {
+  margin-top: 6px;
+}
+.check + .check {
+  padding-top: 20px;
+}
+.disclosure {
+  margin-top: 12px;
+}
+.disclosure summary {
+  min-height: 44px;
+  cursor: pointer;
+  align-content: center;
+  font-size: 12px;
+}
+.disclosure summary span {
+  color: var(--dr-muted);
+  margin-left: 8px;
+}
+.disclosure .check {
+  padding-block: 14px;
+  border-top: 1px solid var(--dr-line);
+}

@@ -2,7 +2,7 @@
 
 import { useId, useLayoutEffect, useRef, useState, type ComponentProps } from 'react';
 import type { CaseDetail } from '@drasil/contracts';
-import { ActionButton } from '@/components/inbox/foundation/Foundation';
+import { ActionButton } from '@/components/workspace/Foundation';
 import {
   caseDecisions,
   caseRequestLabel,

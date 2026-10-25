@@ -2,10 +2,10 @@
 
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { MemberProfile, ReportDetail } from '@drasil/contracts';
-import { Foundation, DrasilBrand, type FoundationTheme } from './Foundation';
+import { Foundation, DrasilBrand, type FoundationTheme } from '@/components/workspace/Foundation';
 import { ReportQueue } from './ReportQueue';
 import { ReportReview } from './ReportReview';
-import { MobileWorkspaceMenu, WorkspaceLinks } from './WorkspaceNavigation';
+import { MobileWorkspaceMenu, WorkspaceLinks } from '@/components/workspace/WorkspaceNavigation';
 import {
   isReportClosed,
   readyReport,

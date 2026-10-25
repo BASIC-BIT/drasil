@@ -1,8 +1,8 @@
 'use client';
 
 import { useRef, useState } from 'react';
-import { ActionButton } from '@/components/inbox/foundation/Foundation';
-import { Timestamp } from '@/components/inbox/foundation/Timestamp';
+import { ActionButton } from '@/components/workspace/Foundation';
+import { Timestamp } from '@/components/workspace/Timestamp';
 import type { ResultView, StudyAction } from './workflowStudyState';
 import styles from './WorkflowStudyPanels.module.css';
 

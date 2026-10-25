@@ -2,18 +2,12 @@
 
 import { useId, useRef, useState } from 'react';
 import type { CaseDetail, MemberProfile, ReportDetail } from '@drasil/contracts';
-import {
-  Foundation,
-  DrasilBrand,
-  type FoundationTheme,
-} from '@/components/inbox/foundation/Foundation';
-import {
-  MobileWorkspaceMenu,
-  WorkspaceLinks,
-} from '@/components/inbox/foundation/WorkspaceNavigation';
+import { Foundation, DrasilBrand, type FoundationTheme } from '@/components/workspace/Foundation';
+import { MobileWorkspaceMenu, WorkspaceLinks } from '@/components/workspace/WorkspaceNavigation';
 import { ReportEvidence } from '@/components/inbox/foundation/ReportEvidence';
-import { Timestamp } from '@/components/inbox/foundation/Timestamp';
-import { CaseSources, CaseChecks } from './CaseSources';
+import { Timestamp } from '@/components/workspace/Timestamp';
+import { CaseSources } from './CaseSources';
+import { CaseChecks } from '../CaseChecks';
 import { CaseActivity } from './CaseActivity';
 import { CaseDecisions } from './CaseDecisions';
 import { type CaseDecision, type CaseDecisionHandler, type CaseRequestState } from './caseReview';

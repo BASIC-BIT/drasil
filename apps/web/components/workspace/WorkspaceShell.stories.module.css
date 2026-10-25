@@ -1,0 +1,118 @@
+.heading {
+  padding: 30px 32px 20px;
+}
+.heading h1 {
+  font-size: 26px;
+  font-weight: 600;
+}
+.heading p {
+  color: var(--dr-muted);
+  font-size: 12px;
+}
+.filters {
+  padding: 0 32px 24px;
+}
+.filters label {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+}
+.filters input {
+  min-height: 44px;
+  padding: 10px;
+  color: var(--dr-text);
+  background: var(--dr-raised);
+  border: 1px solid var(--dr-boundary);
+  border-radius: 4px;
+}
+.filters nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  padding-top: 14px;
+}
+.filters a {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  font-size: 12px;
+}
+.split {
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+  border-top: 1px solid var(--dr-line);
+}
+.queue {
+  border-right: 1px solid var(--dr-line);
+}
+.queue button {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--dr-line);
+  border-left: 3px solid transparent;
+  text-align: left;
+  color: var(--dr-text);
+  background: transparent;
+  padding: 20px;
+  overflow-wrap: anywhere;
+}
+.queue button[aria-pressed='true'] {
+  border-left-color: var(--dr-positive);
+  background: var(--dr-selected);
+}
+.queue button span,
+.queue time {
+  color: var(--dr-muted);
+  font-size: 12px;
+}
+.detail {
+  padding: 24px 32px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.detail header {
+  margin-bottom: 22px;
+}
+.detail h2 {
+  font-size: 24px;
+}
+.detail header p,
+.detail header time {
+  color: var(--dr-muted);
+  font-size: 12px;
+}
+.detail > a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  margin-right: 18px;
+}
+.detail button {
+  margin: 12px 8px 0 0;
+}
+.detail blockquote {
+  white-space: pre-wrap;
+  margin: 16px 0;
+}
+@media (max-width: 999px) {
+  .split {
+    grid-template-columns: 260px minmax(0, 1fr);
+  }
+}
+@media (max-width: 699px) {
+  .heading,
+  .detail {
+    padding: 22px;
+  }
+  .filters {
+    padding: 0 22px 20px;
+  }
+  .split {
+    display: block;
+  }
+  .queue {
+    display: none;
+  }
+}

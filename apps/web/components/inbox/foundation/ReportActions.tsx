@@ -2,7 +2,7 @@
 
 import { useId, useLayoutEffect, useRef, useState, type ComponentProps } from 'react';
 import type { ReportDetail } from '@drasil/contracts';
-import { ActionButton } from './Foundation';
+import { ActionButton } from '@/components/workspace/Foundation';
 import {
   actionLabels,
   isReportClosed,
