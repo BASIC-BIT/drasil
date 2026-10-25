@@ -94,3 +94,6 @@ Thumbs.db
 repomix-output.xml
 
 .vercel
+
+# Per-plan subagent execution artifacts
+.superpowers/sdd/
