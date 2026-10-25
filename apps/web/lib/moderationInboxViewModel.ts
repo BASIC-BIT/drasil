@@ -9,6 +9,7 @@ export type ModerationInboxFreshnessFilter = 'all' | 'stale' | 'fresh' | 'attent
 export type ModerationInboxSortMode = 'priority' | 'newest' | 'oldest' | 'stale';
 export type ModerationInboxSavedViewId =
   | 'all'
+  | 'cases'
   | 'stale_cases'
   | 'reports'
   | 'observed_alerts'
@@ -35,6 +36,11 @@ export const moderationInboxSavedViews: readonly ModerationInboxSavedView[] = [
     id: 'all',
     label: 'All',
     controls: { kind: 'all', freshness: 'all', sortMode: 'priority', searchQuery: '' },
+  },
+  {
+    id: 'cases',
+    label: 'Cases',
+    controls: { kind: 'case', freshness: 'all', sortMode: 'priority', searchQuery: '' },
   },
   {
     id: 'stale_cases',
