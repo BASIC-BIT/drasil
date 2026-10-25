@@ -75,6 +75,14 @@ function ConfirmedActionIntent({
 }: ConfirmedActionProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
+  const [openedIntent, setOpenedIntent] = useState<{
+    readonly action: ConfirmedActionDescriptor;
+    readonly target: ConfirmedActionTarget;
+    readonly submit: WorkspaceMutation;
+  } | null>(null);
+  const intent = openedIntent ?? { action, target, submit };
+  const intentChanged =
+    open && JSON.stringify(intent.action.fields ?? []) !== JSON.stringify(action.fields ?? []);
   const [reason, setReason] = useState('');
   const [localResult, setLocalResult] = useState<WorkspaceMutationResult | null>(null);
   const [submission, setSubmission] = useState<SubmissionState>({ kind: 'ready' });
@@ -109,6 +117,7 @@ function ConfirmedActionIntent({
   const uncertain = submission.kind === 'uncertain' && !durable;
   const blocked = Boolean(
     action.disabled ||
+    intentChanged ||
     submission.kind === 'submitting' ||
     uncertain ||
     active ||
@@ -150,13 +159,14 @@ function ConfirmedActionIntent({
     atSubmit.current = { id: candidate?.id ?? null, updatedAt: candidate?.updatedAt ?? null };
     setSubmission({ kind: 'submitting' });
     setOpen(false);
-    for (const field of action.fields ?? []) formData.set(field.name, field.value);
-    formData.set('confirmedRecordId', target.recordId);
-    if (target.targetUserId !== null) formData.set('confirmedTargetUserId', target.targetUserId);
-    if (target.returnTo) formData.set('returnTo', target.returnTo);
+    for (const field of intent.action.fields ?? []) formData.set(field.name, field.value);
+    formData.set('confirmedRecordId', intent.target.recordId);
+    if (intent.target.targetUserId !== null)
+      formData.set('confirmedTargetUserId', intent.target.targetUserId);
+    if (intent.target.returnTo) formData.set('returnTo', intent.target.returnTo);
     let result: WorkspaceMutationResult;
     try {
-      result = await submit(formData);
+      result = await intent.submit(formData);
     } catch {
       result = {
         kind: 'failed',
@@ -180,18 +190,21 @@ function ConfirmedActionIntent({
         ref={trigger}
         tone={action.tone}
         disabled={blocked}
-        onClick={() => setOpen(true)}
+        onClick={() => {
+          setOpenedIntent({ action, target, submit });
+          setOpen(true);
+        }}
       >
         {submission.kind === 'submitting' ? 'Submitting...' : action.label}
       </ActionButton>
       <ActionConfirmation
         open={open}
-        targetLabel={target.label}
-        actionLabel={action.label}
-        description={action.description}
+        targetLabel={intent.target.label}
+        actionLabel={intent.action.label}
+        description={`${intent.action.description}${intentChanged ? ' This confirmation is out of date. Cancel and review the current action before continuing.' : ''}`}
         reason={reason}
-        reasonRequired={action.reasonRequired ?? false}
-        reasonMaxLength={action.reasonMaxLength}
+        reasonRequired={intent.action.reasonRequired ?? false}
+        reasonMaxLength={intent.action.reasonMaxLength}
         blocked={blocked}
         onReasonChange={setReason}
         onCancel={cancel}

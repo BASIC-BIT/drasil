@@ -1,3 +1,4 @@
+import { filterCaseKindActions } from './caseActionEligibility';
 import { buildQueuedCaseCommand } from './application/caseCommands';
 import { createWebActionContext } from './application/context';
 import { submitQueuedAction } from './application/queuedSubmission';
@@ -474,9 +475,7 @@ function resolveAllowedActions(
 }
 
 function resolveCaseKindActions(row: CaseSummaryRow, actions: readonly CaseAction[]): CaseAction[] {
-  return row.case_kind === 'compromised_account'
-    ? actions.filter((action) => action !== 'close_no_action')
-    : [...actions];
+  return filterCaseKindActions({ caseKind: row.case_kind }, actions);
 }
 
 function appendRefreshNotificationAction(

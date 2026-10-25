@@ -1,3 +1,4 @@
+import { filterCaseKindActions } from './caseActionEligibility';
 import { readFixtureReportBan } from './reportBanFixtures';
 import {
   moderationInboxItemSchema,
@@ -273,7 +274,10 @@ export function caseSummaryToInboxItem(item: CaseSummary): ModerationInboxItem {
     captchaChallenge: item.captchaChallenge,
     detailHref: `/admin/guild/${item.guildId}/cases/${item.id}`,
     links: item.surfaces.map((surface) => ({ label: surface.label, url: surface.url })),
-    allowedActions: ['view_case', ...item.allowedActions.map((action) => caseActionMap[action])],
+    allowedActions: [
+      'view_case',
+      ...filterCaseKindActions(item, item.allowedActions).map((action) => caseActionMap[action]),
+    ],
   });
 }
 

@@ -33,6 +33,8 @@ export interface ModerationActionRequestSummary {
   readonly id: string;
   readonly actionType: ModerationActionRequestActionType;
   readonly actorSurface: string;
+  readonly actorUserId?: string | null;
+  readonly accountQuarantinePreviewRequestId?: string | null;
   readonly completedAt: string | null;
   readonly detectionEventId: string | null;
   readonly failedAt: string | null;
@@ -66,6 +68,18 @@ export interface AccountQuarantineRoleSummary {
 }
 
 export interface AccountQuarantinePreviewSummary {
+  readonly lockdownIssues?: readonly {
+    readonly code: string;
+    readonly message: string;
+    readonly severity: string;
+  }[];
+  readonly memberBypasses?: readonly {
+    readonly channelId: string;
+    readonly channelName: string;
+    readonly permissions: readonly string[];
+    readonly subjectId: string;
+    readonly subjectType: string;
+  }[];
   readonly adminNotificationReady: boolean;
   readonly canContain: boolean;
   readonly caseRoleReady: boolean;
@@ -110,6 +124,7 @@ interface ModerationActionRequestRow {
   readonly id: string;
   readonly action_type: ModerationActionRequestActionType;
   readonly actor_surface: string;
+  readonly actor_id?: string | null;
   readonly completed_at: unknown;
   readonly detection_event_id?: string | null;
   readonly failed_at: unknown;
@@ -193,6 +208,14 @@ function readRoleSummary(value: unknown): AccountQuarantineRoleSummary | null {
   return readRoleSummaries(value ? [value] : [])[0] ?? null;
 }
 
+function readDetailRecords(value: unknown): OperationResultRecord[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is OperationResultRecord =>
+        Boolean(item && typeof item === 'object' && !Array.isArray(item))
+      )
+    : [];
+}
+
 function parseAccountQuarantinePreview(result: unknown): AccountQuarantinePreviewSummary | null {
   if (!result || typeof result !== 'object' || Array.isArray(result)) {
     return null;
@@ -202,6 +225,29 @@ function parseAccountQuarantinePreview(result: unknown): AccountQuarantinePrevie
     return null;
   }
   return {
+    lockdownIssues: readDetailRecords(record.lockdown_issues).flatMap((issue) => {
+      const code = readString(issue.code),
+        message = readString(issue.message),
+        severity = readString(issue.severity);
+      return code && message && severity ? [{ code, message, severity }] : [];
+    }),
+    memberBypasses: readDetailRecords(record.member_bypasses).flatMap((bypass) => {
+      const channelId = readString(bypass.channel_id),
+        channelName = readString(bypass.channel_name),
+        subjectId = readString(bypass.subject_id),
+        subjectType = readString(bypass.subject_type);
+      return channelId && channelName && subjectId && subjectType
+        ? [
+            {
+              channelId,
+              channelName,
+              subjectId,
+              subjectType,
+              permissions: readStringArray(bypass.permissions),
+            },
+          ]
+        : [];
+    }),
     adminNotificationReady: readBoolean(record.admin_notification_ready) ?? false,
     canContain: readBoolean(record.can_contain) ?? false,
     caseRoleReady: readBoolean(record.case_role_ready) ?? false,
@@ -417,6 +463,11 @@ export function parseModerationActionRequestRow(
     id: row.id,
     actionType: row.action_type,
     actorSurface: row.actor_surface,
+    actorUserId: row.actor_id ?? null,
+    accountQuarantinePreviewRequestId:
+      row.metadata && typeof row.metadata === 'object'
+        ? readString((row.metadata as OperationResultRecord).preview_request_id)
+        : null,
     completedAt: toNullableIsoString(row.completed_at),
     detectionEventId: row.detection_event_id ?? null,
     failedAt: toNullableIsoString(row.failed_at),
@@ -460,6 +511,7 @@ export class PostgresModerationActionRequestDataAdapter implements ModerationAct
          id::text,
          action_type::text as action_type,
          actor_surface,
+         actor_id,
          completed_at,
          detection_event_id::text,
          failed_at,
@@ -515,6 +567,7 @@ export class PostgresModerationActionRequestDataAdapter implements ModerationAct
          id::text,
          action_type::text as action_type,
          actor_surface,
+         actor_id,
          completed_at,
          detection_event_id::text,
          failed_at,
@@ -566,6 +619,7 @@ export class PostgresModerationActionRequestDataAdapter implements ModerationAct
          requests.id::text,
          requests.action_type::text as action_type,
          requests.actor_surface,
+         requests.actor_id,
          requests.completed_at,
          requests.detection_event_id::text,
          requests.failed_at,

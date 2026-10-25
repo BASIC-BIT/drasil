@@ -22,6 +22,20 @@ const roleSchema = z.object({
   reason: nullableString,
 });
 const previewSchema = z.object({
+  lockdownIssues: z
+    .array(z.object({ code: z.string(), message: z.string(), severity: z.string() }))
+    .optional(),
+  memberBypasses: z
+    .array(
+      z.object({
+        channelId: z.string(),
+        channelName: z.string(),
+        permissions: z.array(z.string()),
+        subjectId: z.string(),
+        subjectType: z.string(),
+      })
+    )
+    .optional(),
   adminNotificationReady: z.boolean(),
   canContain: z.boolean(),
   caseRoleReady: z.boolean(),
@@ -51,6 +65,8 @@ export const moderationActionRequestSummarySchema: z.ZodType<
       Object.prototype.hasOwnProperty.call(queuedCommandSchemas, value)
     ),
   actorSurface: z.string(),
+  actorUserId: z.string().nullable().optional(),
+  accountQuarantinePreviewRequestId: z.string().nullable().optional(),
   completedAt: nullableString,
   detectionEventId: nullableString,
   failedAt: nullableString,
@@ -97,6 +113,8 @@ export const workspaceActionPolicySchema = z.object({
   banReasonRequired: z.boolean(),
 });
 export const caseWorkspaceDataSchema = z.object({
+  actorUserId: z.string().nullable().default(null),
+  recoveryAttention: z.array(moderationInboxItemSchema).optional(),
   conversationSources: z.array(conversationSourceSchema).optional(),
   detail: caseDetailSchema,
   report: reportDetailSchema.nullable(),

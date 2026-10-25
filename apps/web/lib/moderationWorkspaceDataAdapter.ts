@@ -1,3 +1,4 @@
+import { filterCaseKindActions } from './caseActionEligibility';
 import { caseConversationSources, reportConversationSources } from './conversationTypes';
 import { readAttentionReply } from './conversationDataAdapter';
 import { z } from 'zod';
@@ -29,7 +30,12 @@ import {
 } from './moderationActionRequestDataAdapter';
 import { createMessageCleanupDataAdapter } from './messageCleanupDataAdapter';
 import { createModerationAttentionDataAdapter } from './moderationAttentionDataAdapter';
-import { caseSummaryToInboxItem, reportQueueItemToInboxItem } from './moderationInboxDataAdapter';
+import {
+  caseSummaryToInboxItem,
+  reportQueueItemToInboxItem,
+  parseModerationQueueRow,
+  type ModerationQueueRow,
+} from './moderationInboxDataAdapter';
 import { getPostgresPool } from './setupDataAdapter';
 import {
   caseWorkspaceDataSchema,
@@ -180,6 +186,30 @@ export function createModerationWorkspaceDataAdapter(
     if (!detail || detail.guildId !== guildId || detail.id !== caseId) return null;
     const linked = linkage.rows.find((row) => row.report_id) ?? linkage.rows[0];
     const effectivePolicy = await policy(caseSummaryToInboxItem(detail));
+    const attention =
+      detail.caseKind === 'compromised_account'
+        ? await getPostgresPool().query<ModerationQueueRow>(
+            `select mqi.*, ve.case_kind, ve.status as case_status, u.username as user_username, u.metadata as user_metadata
+       from moderation_queue_items mqi
+       join verification_events ve on ve.id=mqi.verification_event_id and ve.server_id=mqi.server_id and ve.user_id=mqi.user_id
+       left join users u on u.discord_id=mqi.user_id
+       where mqi.server_id=$1 and mqi.verification_event_id::text=$2 and mqi.user_id=$3
+         and mqi.item_type in ('support_thread_attention', 'quarantine_breach_attention')
+       order by mqi.updated_at desc nulls last`,
+            [guildId, caseId, detail.userId]
+          )
+        : { rows: [] };
+    const recoveryAttention = attention.rows
+      .filter(
+        (row) =>
+          row.server_id === guildId &&
+          row.verification_event_id === caseId &&
+          row.user_id === detail.userId
+      )
+      .flatMap((row) => {
+        const item = parseModerationQueueRow(row);
+        return item?.kind === 'support_attention' ? [item] : [];
+      });
     const [report, member, matchingRequests, workspace] = await Promise.all([
       linked?.report_id ? reports.getReportDetail(guildId, linked.report_id) : null,
       createMemberProfileDataAdapter().getMemberProfile(guildId, detail.userId),
@@ -220,7 +250,9 @@ export function createModerationWorkspaceDataAdapter(
         ? report
         : null;
     return caseWorkspaceDataSchema.parse({
-      detail,
+      detail: { ...detail, allowedActions: filterCaseKindActions(detail, detail.allowedActions) },
+      actorUserId: actor.userId,
+      recoveryAttention,
       conversationSources: [
         ...caseConversationSources(detail),
         ...(matchingReport ? reportConversationSources(matchingReport) : []),

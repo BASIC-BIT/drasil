@@ -24,6 +24,7 @@ import { CaseHistory } from '@/components/cases/CaseHistory';
 import { recordLabel } from '@/components/cases/caseRecordLabel';
 import { inboxKindLabels } from './InboxQueue';
 import styles from './InboxWorkspace.module.css';
+import { filterCaseKindActions } from '@/lib/caseActionEligibility';
 
 export function inboxDetailRequests(
   detail: WorkspaceItemDetail
@@ -88,7 +89,7 @@ function actionTone(action: ModerationInboxAction): ConfirmedActionDescriptor['t
 function detailActions(detail: WorkspaceItemDetail): readonly ModerationInboxAction[] {
   switch (detail.kind) {
     case 'case':
-      return [
+      return filterCaseKindActions(detail.data.detail, [
         ...routineCaseActions,
         'ban_by_id',
         'sync_existing_ban',
@@ -96,7 +97,7 @@ function detailActions(detail: WorkspaceItemDetail): readonly ModerationInboxAct
         'repair_thread',
         'create_thread',
         'reopen_case',
-      ];
+      ]);
     case 'submitted_report':
       return ['open_case', 'ban_user', 'mark_actioned', 'dismiss_no_action', 'mark_false_positive'];
     case 'observed_alert':
@@ -111,7 +112,9 @@ function detailActions(detail: WorkspaceItemDetail): readonly ModerationInboxAct
 function actionLabel(action: ModerationInboxAction, detail: WorkspaceItemDetail): string {
   switch (action) {
     case 'verify_user':
-      return 'Verify member';
+      return detail.kind === 'case' && detail.data.detail.caseKind === 'compromised_account'
+        ? 'Verify and release'
+        : 'Verify member';
     case 'kick_user':
       return 'Kick member';
     case 'ban_user':
@@ -134,7 +137,7 @@ function actionLabel(action: ModerationInboxAction, detail: WorkspaceItemDetail)
       return recordLabel(action).replace(/^./, (letter) => letter.toUpperCase());
   }
 }
-function actionEffect(action: ModerationInboxAction): string {
+function actionEffect(action: ModerationInboxAction, detail: WorkspaceItemDetail): string {
   switch (action) {
     case 'ban_user':
     case 'ban_by_id':
@@ -154,7 +157,7 @@ function actionEffect(action: ModerationInboxAction): string {
     case 'mark_actioned':
       return 'Record that this report has been actioned.';
     case 'acknowledge':
-      return 'Clear this reply from the attention queue. The conversation remains available in Discord.';
+      return `Clear this reply from the attention queue. The conversation remains available in Discord.${detail.kind === 'support_attention' && detail.subtype !== 'support_reply' ? ' This does not establish account recovery or release quarantine.' : ''}`;
     case 'sync_existing_ban':
       return 'Update this case from the existing Discord ban.';
     case 'refresh_notification':
@@ -427,7 +430,7 @@ function SelectedDetail({
           id: action,
           tone: actionTone(action),
           label: actionLabel(action, detail),
-          description: `${target.label}. ${actionEffect(action)}`,
+          description: `${target.label}. ${action === 'verify_user' && detail.kind === 'case' && detail.data.detail.caseKind === 'compromised_account' ? 'Confirm account recovery, release quarantine, restore eligible snapshotted roles under current role policy, and resolve this case.' : actionEffect(action, detail)}`,
           disabled: !available || !isAllowed(detail, action),
           reasonRequired:
             action === 'kick_user'

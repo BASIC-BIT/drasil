@@ -404,3 +404,66 @@ it('emits all trusted linked-report conversation keys while retaining report ide
     )
   ).toBe(true);
 });
+it('returns the authenticated actor, removes close without action, and retains recovery attention source identity', async () => {
+  const detail = {
+    ...fixtureCaseDetails[0],
+    caseKind: 'compromised_account',
+    attentionState: 'parked',
+    allowedActions: ['verify_user', 'close_no_action'],
+  };
+  state.detail.mockResolvedValue(detail);
+  state.query.mockImplementation(async (sql: string) => ({
+    rows: sql.includes('from moderation_queue_items mqi')
+      ? [
+          {
+            id: 'breach-1',
+            server_id: 'guild-1',
+            user_id: detail.userId,
+            item_type: 'quarantine_breach_attention',
+            verification_event_id: detail.id,
+            detection_event_id: null,
+            report_intake_id: null,
+            source_thread_id: 'actual-channel',
+            queue_channel_id: null,
+            queue_message_id: null,
+            last_source_message_id: 'actual-message',
+            last_notified_at: null,
+            created_at: null,
+            updated_at: '2026-10-25T12:00:00Z',
+            metadata: {},
+            server_settings: {},
+            case_kind: 'compromised_account',
+            case_status: 'pending',
+            detection_type: null,
+            detection_confidence: null,
+            detection_detected_at: null,
+            detection_reasons: null,
+            detection_metadata: {},
+            report_status: null,
+            report_summary: null,
+            report_metadata: {},
+            user_username: 'member',
+            user_metadata: {},
+          },
+        ]
+      : [],
+  }));
+  const result = await createModerationWorkspaceDataAdapter(actor).getCaseWorkspaceData({
+    guildId: 'guild-1',
+    caseId: detail.id,
+  });
+  expect(result?.actorUserId).toBe('admin');
+  expect(result?.detail.allowedActions).not.toContain('close_no_action');
+  expect(result?.policy.allowedActions).not.toContain('close_no_action');
+  expect(result?.recoveryAttention).toMatchObject([
+    {
+      id: 'queue:breach-1',
+      subject: { userId: detail.userId },
+      sourceMetadata: {
+        caseId: detail.id,
+        sourceThreadId: 'actual-channel',
+        latestReplyMessageId: 'actual-message',
+      },
+    },
+  ]);
+});
