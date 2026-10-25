@@ -179,6 +179,8 @@ Operating principles:
 
 Product copy:
 
+- Write moderator-facing copy for experienced operators: state the concrete concern, source, status or action effect. Omit UI narration, generic evidence disclaimers and prototype notes inside product screens. See `docs/design/operator-copy.md` for examples and semantic checks.
+
 - User-facing Drasil surfaces should feel deterministic and productized even when GPT or other AI
   assisted the decision. Do not label user-visible report, case, or confirmation copy as "AI";
   describe concrete facts, checks, suggestions, or confidence in plain product language. Admin-facing
