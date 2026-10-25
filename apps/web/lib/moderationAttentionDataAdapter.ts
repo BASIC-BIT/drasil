@@ -87,7 +87,6 @@ export function createModerationAttentionDataAdapter(): ModerationAttentionDataA
           Parameters<typeof parseReportAttentionRows>[1][number]
         >(
           `select e.* from report_intake_evidence e join report_intakes ri on ri.id = e.intake_id
-           left join verification_events linked_case on linked_case.id = de.latest_verification_event_id and linked_case.server_id = ri.server_id and linked_case.user_id = ri.confirmed_target_user_id
            where ri.server_id = $1 and ri.id::text = $2 order by e.created_at asc`,
           [guildId, row.report_intake_id]
         );

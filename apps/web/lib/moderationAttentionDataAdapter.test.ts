@@ -96,6 +96,13 @@ it('retains separate linkage IDs and guild-scopes all joined records and evidenc
   expect(values).toEqual(['guild-1', 'attention']);
   expect(sql).toContain('ve.server_id = mqi.server_id');
   expect(sql).toContain('ri.server_id = mqi.server_id');
+  const evidenceCall = db.query.mock.calls.find(([query]) =>
+    query.includes('from report_intake_evidence')
+  );
+  expect(evidenceCall?.[1]).toEqual(['guild-1', 'intake']);
+  expect(evidenceCall?.[0]).toContain('join report_intakes ri on ri.id = e.intake_id');
+  expect(evidenceCall?.[0]).toContain('ri.server_id = $1 and ri.id::text = $2');
+  expect(evidenceCall?.[0]).not.toContain('de.');
 });
 it('retains a quarantine breach subtype without calling the posting location the recovery thread', async () => {
   db.query.mockImplementation(async (sql: string) => ({
