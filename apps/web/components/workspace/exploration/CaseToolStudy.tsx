@@ -41,6 +41,8 @@ const quarantinePreview: AccountQuarantinePreviewSummary = {
 const check: CaptchaChallengeSummary = {
   id: '023b25e1-5537-450f-a486-90721442251e',
   status: 'pending',
+  method: 'turnstile',
+  methodRevision: 0,
   requestSource: 'moderator',
   passEffect: 'evidence_only',
   generation: 2,
@@ -56,6 +58,8 @@ const check: CaptchaChallengeSummary = {
   history: [
     {
       generation: 1,
+      method: 'turnstile',
+      methodRevision: 0,
       requestSource: 'moderator',
       passEffect: 'evidence_only',
       caseRevisionAtIssue: 3,
