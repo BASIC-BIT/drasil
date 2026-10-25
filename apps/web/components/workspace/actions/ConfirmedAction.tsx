@@ -88,6 +88,7 @@ function ConfirmedActionIntent({
     durableRequest && matchesWorkspaceActionRequest(durableRequest, target, action.id)
       ? durableRequest
       : null;
+  const receipt = workspaceRequestReceipt(localResult);
   const freshAfterLostResponse =
     submission.kind === 'uncertain' &&
     candidate &&
@@ -95,12 +96,11 @@ function ConfirmedActionIntent({
     (candidate.id !== atSubmit.current.id || candidate.updatedAt !== atSubmit.current.updatedAt);
   const durable =
     candidate &&
-    (submission.kind === 'uncertain'
+    (submission.kind === 'uncertain' && !receipt
       ? freshAfterLostResponse
       : shouldUseDurableWorkspaceActionResult(localResult, candidate, atSubmit.current.updatedAt))
       ? candidate
       : null;
-  const receipt = workspaceRequestReceipt(localResult);
   const relevantRequestId = durable?.id ?? receipt?.id ?? null;
   const presentationInput = { localResult, durableRequest: durable, cleanupJob, record };
   const presentation = deriveWorkspaceActionPresentation(presentationInput);
@@ -118,8 +118,9 @@ function ConfirmedActionIntent({
     blocksBanResubmission(durable)
   );
   useEffect(() => {
-    if (relevantRequestId)
-      setLocalRequestActive(relevantRequestId, active, atSubmit.current.updatedAt);
+    if (!relevantRequestId || !active) return;
+    setLocalRequestActive(relevantRequestId, true, atSubmit.current.updatedAt);
+    return () => setLocalRequestActive(relevantRequestId, false);
   }, [active, relevantRequestId, setLocalRequestActive]);
   useEffect(() => {
     if (submission.kind !== 'uncertain') return;
