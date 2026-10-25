@@ -176,3 +176,20 @@ test('local polling survives same-ID rerenders and stops on replacement under a 
   await page.clock.runFor(4_200);
   await expect(page.getByTestId('refresh-count')).toHaveText(countAfterReplacement ?? '');
 });
+
+test('the shared confirmed action uses its supplied severity token', async ({ page }) => {
+  await page.goto(story);
+  const trigger = page.getByRole('button', { name: 'Ban member', exact: true });
+  await expect(trigger).toHaveAttribute('data-tone', 'danger');
+  const colors = await trigger.evaluate((button) => {
+    const sample = document.createElement('span');
+    sample.style.color = 'var(--dr-danger)';
+    button.appendChild(sample);
+    const expected = getComputedStyle(sample).color;
+    sample.remove();
+    const actual = getComputedStyle(button);
+    return { color: actual.color, border: actual.borderTopColor, expected };
+  });
+  expect(colors.color).toBe(colors.expected);
+  expect(colors.border).toBe(colors.expected);
+});

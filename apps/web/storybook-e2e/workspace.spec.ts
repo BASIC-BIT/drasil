@@ -392,3 +392,124 @@ test('a verified selected-record security request remains in the URL after eligi
   await expect(page.getByRole('button', { name: 'Verify member', exact: true })).toBeDisabled();
   await expect(page).toHaveURL(/request=security-request/);
 });
+
+for (const width of [1440, 390]) {
+  test(`case decisions use the approved order and severity at ${width}px`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width, height: 1000 });
+    await page.addInitScript(() => localStorage.setItem('drasil-theme', 'dark'));
+    await page.goto(`${story}&selected=case%3Acase-stale`);
+    const decisions = page.getByRole('region', { name: 'Case decisions', exact: true });
+    await expect(decisions.getByRole('button')).toHaveText([
+      'Verify member',
+      'Close case',
+      'Kick member',
+      'Ban member',
+    ]);
+    const severity = await decisions.getByRole('button').evaluateAll((buttons) =>
+      buttons.map((button) => {
+        const root = button.closest('[data-foundation-theme]');
+        if (!root) throw new Error('Missing foundation');
+        const tone = button.getAttribute('data-tone');
+        const token =
+          tone === 'positive'
+            ? '--dr-positive'
+            : tone === 'warning'
+              ? '--dr-warning'
+              : tone === 'danger'
+                ? '--dr-danger'
+                : '--dr-text';
+        const sample = document.createElement('span');
+        sample.style.color = `var(${token})`;
+        root.appendChild(sample);
+        const expected = getComputedStyle(sample).color;
+        sample.remove();
+        const actual = getComputedStyle(button);
+        return { tone, color: actual.color, border: actual.borderTopColor, expected };
+      })
+    );
+    expect(severity.map((value) => value.tone)).toEqual([
+      'positive',
+      'neutral',
+      'warning',
+      'danger',
+    ]);
+    for (const value of severity) {
+      expect(value.color).toBe(value.expected);
+      if (value.tone !== 'neutral') expect(value.border).toBe(value.expected);
+    }
+    await expect(
+      page.getByRole('button', { name: 'Refresh notification', exact: true })
+    ).toBeHidden();
+    await page.getByText('Case tools', { exact: true }).click();
+    await expect(
+      page.getByRole('button', { name: 'Refresh notification', exact: true })
+    ).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Repair thread', exact: true })).toBeVisible();
+    await page.screenshot({
+      path: testInfo.outputPath(`case-decisions-${width}-dark.png`),
+      fullPage: true,
+    });
+  });
+}
+
+test('case tools retain their draft, request result and polling through disclosure changes', async ({
+  page,
+}) => {
+  await page.clock.install();
+  await page.goto(`${story}&selected=case%3Acase-stale`);
+  const tools = page
+    .locator('details')
+    .filter({ has: page.locator('summary').filter({ hasText: /^Case tools$/ }) });
+  await tools.locator('summary').click();
+  await tools.getByRole('button', { name: 'Refresh notification', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Reason', { exact: true }).fill('Retained maintenance context');
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await tools.locator('summary').click();
+  await tools.locator('summary').click();
+  await tools.getByRole('button', { name: 'Refresh notification', exact: true }).click();
+  await expect(dialog.getByLabel('Reason', { exact: true })).toHaveValue(
+    'Retained maintenance context'
+  );
+  await dialog.getByLabel('Confirm Refresh notification').check();
+  await dialog.getByRole('button', { name: 'Confirm Refresh notification', exact: true }).click();
+  await expect(tools.getByRole('status')).toContainText('Request queued.');
+  await expect(page.getByTestId('submissions')).toHaveText('1');
+  await tools.locator('summary').click();
+  const before = Number(await page.getByTestId('refreshes').textContent());
+  await page.clock.runFor(2200);
+  await expect(page.getByTestId('refreshes')).toHaveText(String(before + 1));
+  await tools.locator('summary').click();
+  await expect(tools.getByRole('status')).toContainText('Request queued.');
+  await page.getByRole('button', { name: 'Complete case request', exact: true }).click();
+  await expect(tools.getByRole('status')).toContainText('Request completed.');
+  await tools.locator('summary').click();
+  await tools.locator('summary').click();
+  await expect(tools.getByRole('status')).toContainText('Request completed.');
+  const completedCount = await page.getByTestId('refreshes').textContent();
+  await page.clock.runFor(4200);
+  await expect(page.getByTestId('refreshes')).toHaveText(completedCount ?? '');
+});
+
+test('case tools preserve an open confirmation and reason when eligibility disappears', async ({
+  page,
+}) => {
+  await page.goto(`${story}&selected=case%3Acase-stale`);
+  await page.getByText('Case tools', { exact: true }).click();
+  await page.getByRole('button', { name: 'Refresh notification', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Reason', { exact: true }).fill('Keep this contextual review');
+  await dialog.getByLabel('Confirm Refresh notification').check();
+  await page.getByRole('button', { name: 'Revoke selected eligibility' }).evaluate((element) => {
+    if (element instanceof HTMLButtonElement) element.click();
+  });
+  await expect(
+    dialog.getByRole('button', { name: 'Confirm Refresh notification', exact: true })
+  ).toBeDisabled();
+  await expect(dialog.getByLabel('Reason', { exact: true })).toHaveValue(
+    'Keep this contextual review'
+  );
+  await expect(page.getByTestId('submissions')).toHaveText('0');
+});
