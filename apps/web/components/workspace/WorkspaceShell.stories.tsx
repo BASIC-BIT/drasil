@@ -1,7 +1,11 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { fn } from 'storybook/test';
-import type { ModerationInboxItemKind } from '@drasil/contracts';
+import {
+  moderationInboxItemSchema,
+  type ModerationInboxAction,
+  type ModerationInboxItemKind,
+} from '@drasil/contracts';
 import { fixtureModerationInboxItems } from '@/lib/inboxFixtures';
 import { fixtureReportDetails } from '@/lib/reportFixtures';
 import { fixtureCaseDetails } from '@/lib/caseFixtures';
@@ -11,7 +15,83 @@ import { ActionButton } from './Foundation';
 import { WorkspaceShell } from './WorkspaceShell';
 import styles from './WorkspaceShell.stories.module.css';
 
-const items = fixtureModerationInboxItems();
+const items = [
+  ...fixtureModerationInboxItems(),
+  moderationInboxItemSchema.parse({
+    id: 'queue:queue-report-reply-1',
+    guildId: 'guild-1',
+    kind: 'report_attention',
+    sourceId: 'report-collecting-1',
+    queueItemId: 'queue-report-reply-1',
+    subject: {
+      userId: 'reporter-100',
+      displayLabel: 'juniper',
+      secondaryLabel: 'Reporter · target not confirmed',
+      avatarUrl: null,
+    },
+    title: 'Reporter follow-up',
+    summary: 'Additional screenshot attached',
+    statusLabel: 'collecting_evidence',
+    signalLabel: null,
+    createdAt: '2026-10-23T14:56:00Z',
+    updatedAt: '2026-10-23T14:56:00Z',
+    stale: false,
+    staleHours: 0,
+    detailHref: null,
+    links: [
+      { label: 'Open reply', url: 'https://discord.com/channels/guild-1/report-thread-1/reply-1' },
+    ],
+    allowedActions: ['acknowledge', 'open_discord'],
+    sourceMetadata: {
+      subtype: null,
+      caseId: null,
+      reportId: 'report-collecting-1',
+      detectionId: null,
+      sourceThreadId: 'report-thread-1',
+      latestReplyMessageId: 'reply-1',
+      eventAt: '2026-10-23T14:56:00Z',
+      pendingSince: null,
+      thresholdDays: null,
+      lastCheckedAt: null,
+    },
+  }),
+  moderationInboxItemSchema.parse({
+    id: 'queue:queue-screening-1',
+    guildId: 'guild-1',
+    kind: 'pending_screening',
+    sourceId: 'user-600',
+    queueItemId: 'queue-screening-1',
+    subject: { userId: 'user-600', displayLabel: 'orbit', secondaryLabel: null, avatarUrl: null },
+    title: 'Pending screening',
+    summary: 'Discord membership screening pending',
+    statusLabel: 'pending_screening',
+    signalLabel: null,
+    createdAt: '2026-10-21T14:40:00Z',
+    updatedAt: '2026-10-23T14:40:00Z',
+    stale: false,
+    staleHours: 0,
+    detailHref: null,
+    links: [
+      {
+        label: 'Open screening notice',
+        url: 'https://discord.com/channels/guild-1/admin-channel-1/screening-message-1',
+      },
+    ],
+    allowedActions: ['open_discord'],
+    sourceMetadata: {
+      subtype: null,
+      caseId: null,
+      reportId: null,
+      detectionId: null,
+      sourceThreadId: null,
+      latestReplyMessageId: null,
+      eventAt: '2026-10-23T14:40:00Z',
+      pendingSince: '2026-10-21T14:40:00Z',
+      thresholdDays: 2,
+      lastCheckedAt: '2026-10-23T14:40:00Z',
+    },
+  }),
+];
 const labels: Record<ModerationInboxItemKind, string> = {
   case: 'Case',
   submitted_report: 'Submitted report',
@@ -20,22 +100,31 @@ const labels: Record<ModerationInboxItemKind, string> = {
   support_attention: 'Recovery reply',
   pending_screening: 'Pending screening',
 };
-const onRequestConfirmation = fn();
+const onRequestConfirmation = fn<(action: ModerationInboxAction, targetId: string) => void>();
 
 // The queue/detail region is injected into the production shell. Selection and handlers
 // are story inputs; the URL controller and kind-specific action wiring belong to Task 4.
 function InboxRegion({
-  initialKind = 'case',
+  initialKind,
   breach = false,
+  onRequestConfirmation,
 }: {
   readonly initialKind?: ModerationInboxItemKind;
   readonly breach?: boolean;
+  readonly onRequestConfirmation: (action: ModerationInboxAction, targetId: string) => void;
 }) {
-  const [kind, setKind] = useState(initialKind);
-  const selected = items.find((item) => item.kind === kind);
+  const [selected, setSelected] = useState(
+    () => items.find((item) => item.kind === (initialKind ?? 'case')) ?? items[0]
+  );
+  const [detailOpen, setDetailOpen] = useState(initialKind !== undefined);
+  const selectedRow = useRef<HTMLButtonElement>(null);
+  const detailHeading = useRef<HTMLHeadingElement>(null);
+  const kind = selected.kind;
+  const isBreach = breach && kind === 'support_attention';
+  const attentionId = selected.queueItemId;
   const report = fixtureReportDetails[0];
   return (
-    <>
+    <div className={styles.inbox} data-detail-open={detailOpen}>
       <header className={styles.heading}>
         <h1>Inbox</h1>
         <p>{items.length} items need attention</p>
@@ -59,8 +148,13 @@ function InboxRegion({
             <button
               key={item.id}
               type="button"
-              aria-pressed={kind === item.kind}
-              onClick={() => setKind(item.kind)}
+              ref={selected.id === item.id ? selectedRow : undefined}
+              aria-pressed={selected.id === item.id}
+              onClick={() => {
+                setSelected(item);
+                setDetailOpen(true);
+                requestAnimationFrame(() => detailHeading.current?.focus());
+              }}
             >
               <strong>{item.subject.displayLabel}</strong>
               <span>{labels[item.kind]}</span>
@@ -74,11 +168,23 @@ function InboxRegion({
           ))}
         </nav>
         <section className={styles.detail} aria-label="Selected item">
+          <button
+            type="button"
+            className={styles.back}
+            onClick={() => {
+              setDetailOpen(false);
+              requestAnimationFrame(() => selectedRow.current?.focus());
+            }}
+          >
+            ← Back to inbox
+          </button>
           <header>
-            <p>{breach ? 'Containment breach' : labels[kind]}</p>
-            <h2>{selected?.subject.displayLabel ?? 'Unknown member'}</h2>
-            <p>{selected?.subject.userId ?? 'Target not confirmed'}</p>
-            <Timestamp value={selected?.createdAt ?? null} />
+            <p>{isBreach ? 'Containment breach' : labels[kind]}</p>
+            <h2 ref={detailHeading} tabIndex={-1}>
+              {selected.subject.displayLabel}
+            </h2>
+            <p>{selected.subject.userId ?? 'Target not confirmed'}</p>
+            <Timestamp value={selected.createdAt ?? null} />
           </header>
           {kind === 'submitted_report' ? (
             <>
@@ -115,10 +221,10 @@ function InboxRegion({
                     ?.contentPreview
                 }
               </blockquote>
-              <a href={selected?.detailHref ?? '#case'}>Investigate</a>
+              <a href={selected.detailHref ?? '#case'}>Investigate</a>
               <ActionButton
                 tone="positive"
-                onClick={() => onRequestConfirmation('verify_user', selected?.sourceId)}
+                onClick={() => onRequestConfirmation('verify_user', selected.sourceId)}
               >
                 Verify member
               </ActionButton>
@@ -127,9 +233,9 @@ function InboxRegion({
           {kind === 'observed_alert' ? (
             <>
               <h3>Content check</h3>
-              <p>{selected?.summary}</p>
+              <p>{selected.summary}</p>
               <ActionButton
-                onClick={() => onRequestConfirmation('dismiss_no_action', selected?.sourceId)}
+                onClick={() => onRequestConfirmation('dismiss_no_action', selected.sourceId)}
               >
                 Dismiss alert
               </ActionButton>
@@ -139,35 +245,42 @@ function InboxRegion({
             <>
               <h3>Discord membership screening pending</h3>
               <p>
-                Pending since <Timestamp value={selected?.createdAt ?? null} />
+                Pending since <Timestamp value={selected.createdAt ?? null} />
+              </p>
+              <p>{selected.summary}</p>
+              {selected.sourceMetadata?.thresholdDays !== null ? (
+                <p>Attention threshold: {selected.sourceMetadata?.thresholdDays} days</p>
+              ) : null}
+              <p>
+                Last checked <Timestamp value={selected.sourceMetadata?.lastCheckedAt ?? null} />
               </p>
             </>
           ) : null}
           {kind === 'report_attention' || kind === 'support_attention' ? (
             <>
               <h3>
-                {breach
+                {isBreach
                   ? 'Message outside the recovery thread'
                   : kind === 'report_attention'
                     ? 'Reporter follow-up'
                     : 'Recovery reply'}
               </h3>
-              <p>{selected?.summary}</p>
-              <ActionButton
-                onClick={() => onRequestConfirmation('acknowledge', selected?.queueItemId)}
-              >
-                Mark reviewed
-              </ActionButton>
+              <p>{selected.summary}</p>
+              {attentionId !== null && selected.allowedActions.includes('acknowledge') ? (
+                <ActionButton onClick={() => onRequestConfirmation('acknowledge', attentionId)}>
+                  Mark reviewed
+                </ActionButton>
+              ) : null}
             </>
           ) : null}
-          {selected?.links.map((link) => (
+          {selected.links.map((link) => (
             <a key={link.url} href={link.url} target="_blank" rel="noreferrer">
               {link.label} in Discord
             </a>
           ))}
         </section>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -180,27 +293,55 @@ const meta = {
     guildName: 'Example server',
     sessionUsername: 'Moderator',
     currentPage: 'inbox',
-    children: <InboxRegion />,
+    children: <InboxRegion onRequestConfirmation={onRequestConfirmation} />,
   },
 } satisfies Meta<typeof WorkspaceShell>;
 export default meta;
 type Story = StoryObj<typeof meta>;
 export const MixedInbox: Story = {};
 export const SubmittedReport: Story = {
-  args: { children: <InboxRegion initialKind="submitted_report" /> },
+  args: {
+    children: (
+      <InboxRegion onRequestConfirmation={onRequestConfirmation} initialKind="submitted_report" />
+    ),
+  },
 };
 export const ObservedAlert: Story = {
-  args: { children: <InboxRegion initialKind="observed_alert" /> },
+  args: {
+    children: (
+      <InboxRegion onRequestConfirmation={onRequestConfirmation} initialKind="observed_alert" />
+    ),
+  },
 };
 export const PendingScreening: Story = {
-  args: { children: <InboxRegion initialKind="pending_screening" /> },
+  args: {
+    children: (
+      <InboxRegion onRequestConfirmation={onRequestConfirmation} initialKind="pending_screening" />
+    ),
+  },
 };
 export const ReporterFollowup: Story = {
-  args: { children: <InboxRegion initialKind="report_attention" /> },
+  args: {
+    children: (
+      <InboxRegion onRequestConfirmation={onRequestConfirmation} initialKind="report_attention" />
+    ),
+  },
 };
 export const RecoveryReply: Story = {
-  args: { children: <InboxRegion initialKind="support_attention" /> },
+  args: {
+    children: (
+      <InboxRegion onRequestConfirmation={onRequestConfirmation} initialKind="support_attention" />
+    ),
+  },
 };
 export const ContainmentBreach: Story = {
-  args: { children: <InboxRegion initialKind="support_attention" breach /> },
+  args: {
+    children: (
+      <InboxRegion
+        onRequestConfirmation={onRequestConfirmation}
+        initialKind="support_attention"
+        breach
+      />
+    ),
+  },
 };
