@@ -3,6 +3,8 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 import {
   getMessageCleanupExecutionEligibility,
   messageCleanupJobDetailSchema,
+  messageCleanupJobModeSchema,
+  messageCleanupScopeSchema,
   type MessageCleanupJobDetail,
 } from '@drasil/contracts';
 import type { InboxStateAction } from '@/components/inbox/InboxActionForm';
@@ -81,6 +83,10 @@ function initial(scenario: Scenario): MessageCleanupJobDetail {
 }
 function Interaction({ scenario = 'ready' }: { readonly scenario?: Scenario }) {
   const [job, setJob] = useState(() => initial(scenario));
+  const [hasPreview, setHasPreview] = useState(scenario !== 'new');
+  const previewBinding = useRef<Pick<MessageCleanupJobDetail, 'mode' | 'scope' | 'reason'> | null>(
+    null
+  );
   const [requests, setRequests] = useState<readonly ModerationActionRequestSummary[]>([]);
   const [loadedAt, setLoadedAt] = useState('2026-10-25T12:00:00Z');
   const [payloads, setPayloads] = useState<unknown[]>([]);
@@ -103,6 +109,22 @@ function Interaction({ scenario = 'ready' }: { readonly scenario?: Scenario }) {
         setJob((previous) => ({ ...previous, previewedAt: '2026-10-25T12:01:00Z' }));
       if (change === 'read') {
         setReadCount((value) => value + 1);
+        setLoadedAt(new Date().toISOString());
+      }
+      if (change === 'preview-complete' && lastRequest.current && previewBinding.current) {
+        const request = lastRequest.current;
+        const binding = previewBinding.current;
+        setRequests([{ ...request, status: 'completed', updatedAt: new Date().toISOString() }]);
+        setJob((previous) =>
+          validated({
+            ...previous,
+            ...binding,
+            id: request.messageDeletionJobId!,
+            status: 'ready',
+            coverage: 'ready',
+          })
+        );
+        setHasPreview(true);
         setLoadedAt(new Date().toISOString());
       }
       if (change === 'permission') setCanManage(false);
@@ -188,6 +210,12 @@ function Interaction({ scenario = 'ready' }: { readonly scenario?: Scenario }) {
         updatedAt: '2026-10-25T12:00:00Z',
         cleanupIntentToken: String(fields.idempotencyKey),
       };
+      if (actionType === 'preview_case_message_deletion')
+        previewBinding.current = {
+          mode: messageCleanupJobModeSchema.parse(fields.mode),
+          scope: messageCleanupScopeSchema.parse(fields.scope),
+          reason: String(fields.reason),
+        };
       lastRequest.current = request;
       if (scenario === 'response-loss') throw new Error('Response lost');
       setRequests([request]);
@@ -196,7 +224,7 @@ function Interaction({ scenario = 'ready' }: { readonly scenario?: Scenario }) {
   const integration = {
     workspace: {
       ...fixtureMessageCleanupCaseWorkspaces[0],
-      latestJobs: scenario === 'new' ? [] : [job],
+      latestJobs: hasPreview ? [job] : [],
       ...(scenario === 'finalization'
         ? {
             caseStatus: 'banned' as const,
@@ -205,8 +233,8 @@ function Interaction({ scenario = 'ready' }: { readonly scenario?: Scenario }) {
           }
         : {}),
     },
-    deleteOnlyJob: scenario !== 'new' && job.mode === 'delete_only' ? job : null,
-    combinedJob: scenario !== 'new' && job.mode === 'ban_with_cleanup' ? job : null,
+    deleteOnlyJob: hasPreview && job.mode === 'delete_only' ? job : null,
+    combinedJob: hasPreview && job.mode === 'ban_with_cleanup' ? job : null,
     previewAction: action('preview_case_message_deletion'),
     executeAction: action('execute_case_message_deletion'),
     combinedBanAction: action('ban_case_user_with_message_cleanup'),

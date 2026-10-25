@@ -226,3 +226,67 @@ test('an already banned case offers only continuation of the original finalizati
     fields: { jobId: 'cleanup-job-combined', expectedCandidateCount: '2' },
   });
 });
+
+for (const change of ['scope', 'mode'] as const)
+  test(`completed preview renews through ${change} selection exactly once`, async ({ page }) => {
+    await page.goto(url('new-preview'));
+    let dialog = await review(page, 'Preview messages');
+    await dialog.getByRole('textbox').fill('First reviewed preview');
+    await dialog.getByRole('button', { name: 'Confirm Preview messages' }).click();
+    await expect(page.getByTestId('submission-count')).toHaveText('1');
+    const first = (await payloads(page))[0];
+    await event(page, 'preview-complete');
+    await expect(page.getByText('Request completed.', { exact: true })).toBeVisible();
+    if (change === 'scope')
+      await page.getByLabel('Scope', { exact: true }).selectOption('last_hour');
+    else await page.getByLabel('Cleanup action').selectOption('ban_with_cleanup');
+    await expect(page.getByRole('button', { name: 'Preview messages', exact: true })).toBeEnabled();
+    dialog = await review(page, 'Preview messages');
+    await dialog.getByRole('textbox').fill('Second reviewed preview');
+    await dialog.evaluate((element) => element.setAttribute('data-renewed-intent', 'retained'));
+    await page.locator('select[aria-label="Scope"]').selectOption('last_7_days', { force: true });
+    await expect(dialog).toHaveAttribute('data-renewed-intent', 'retained');
+    await expect(dialog.getByRole('textbox')).toHaveValue('Second reviewed preview');
+    await expect(dialog).toContainText('out of date');
+    await expect(dialog.getByRole('button', { name: 'Confirm Preview messages' })).toBeDisabled();
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+    dialog = await review(page, 'Preview messages');
+    await expect(dialog.getByRole('textbox')).toHaveValue('Second reviewed preview');
+    await dialog.getByRole('button', { name: 'Confirm Preview messages' }).click();
+    await expect(page.getByTestId('submission-count')).toHaveText('2');
+    const second = (await payloads(page))[1];
+    expect(second.fields.idempotencyKey).not.toBe(first.fields.idempotencyKey);
+    expect(second.fields).toMatchObject({
+      scope: 'last_7_days',
+      mode: change === 'mode' ? 'ban_with_cleanup' : 'delete_only',
+      reason: 'Second reviewed preview',
+    });
+  });
+for (const status of ['pending', 'uncertain'] as const)
+  test(`${status} preview keeps its token and receipt across selection changes`, async ({
+    page,
+  }) => {
+    await page.goto(url(status === 'pending' ? 'new-preview' : 'response-loss'));
+    if (status === 'uncertain')
+      await page.getByRole('button', { name: 'New preview', exact: true }).click();
+    const dialog = await review(page, 'Preview messages');
+    await dialog.getByRole('textbox').fill('Reviewed preview');
+    await dialog.getByRole('button', { name: 'Confirm Preview messages' }).click();
+    await expect(page.getByTestId('submission-count')).toHaveText('1');
+    await page.getByLabel('Scope', { exact: true }).selectOption('last_hour');
+    await page.getByLabel('Cleanup action').selectOption('ban_with_cleanup');
+    await expect(
+      page.getByRole('button', { name: 'Preview messages', exact: true })
+    ).toBeDisabled();
+    if (status === 'uncertain') {
+      await expect(
+        page.getByRole('button', { name: 'Refresh durable state', exact: true })
+      ).toBeVisible();
+      await event(page, 'recover');
+      await expect(
+        page.getByRole('button', { name: 'Refresh durable state', exact: true })
+      ).toHaveCount(0);
+    }
+    await expect(page.getByText('Request queued.', { exact: true })).toBeVisible();
+    await expect(page.getByTestId('submission-count')).toHaveText('1');
+  });

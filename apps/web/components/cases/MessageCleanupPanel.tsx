@@ -188,7 +188,7 @@ export function MessageCleanupPanel({ integration, policy }: MessageCleanupPanel
   const [newPreview, setNewPreview] = useState(!workspace.latestJobs.length);
   useEffect(() => {
     setPreviewToken(`preview-${crypto.randomUUID()}`);
-  }, [previewVersion]);
+  }, []);
   const job = mode === 'delete_only' ? integration.deleteOnlyJob : integration.combinedJob;
   const summary = workspace.latestJobs.find((value) => value.mode === mode);
   const lastJobs = useRef(workspace.latestJobs.map((value) => value.id).join(':'));
@@ -222,6 +222,8 @@ export function MessageCleanupPanel({ integration, policy }: MessageCleanupPanel
     integration.requests.find(
       (request) =>
         request.actionType === 'preview_case_message_deletion' &&
+        request.verificationEventId === workspace.verificationEventId &&
+        request.targetUserId === workspace.targetUserId &&
         request.cleanupIntentToken === previewToken
     ) ?? null;
   const busy =
@@ -231,6 +233,15 @@ export function MessageCleanupPanel({ integration, policy }: MessageCleanupPanel
         request.verificationEventId === workspace.verificationEventId &&
         ['queued', 'processing'].includes(request.status)
     );
+  function enterPreviewIntent(): void {
+    setNewPreview(true);
+    // Only a matching terminal receipt ends the prior intent. Field changes alone
+    // retain pending/uncertain submissions and any open confirmation draft.
+    if (previewRequest?.status === 'completed' || previewRequest?.status === 'failed') {
+      setPreviewToken(`preview-${crypto.randomUUID()}`);
+      setPreviewVersion((value) => value + 1);
+    }
+  }
   if (!policy.canManageCleanup) return null;
   return (
     <section className={styles.panel} aria-label="Message cleanup">
@@ -247,7 +258,8 @@ export function MessageCleanupPanel({ integration, policy }: MessageCleanupPanel
                 nextMode === 'delete_only' ? integration.deleteOnlyJob : integration.combinedJob;
               setMode(nextMode);
               setScope(nextJob?.scope ?? 'source_message');
-              setNewPreview(!nextJob);
+              if (nextJob) setNewPreview(false);
+              else enterPreviewIntent();
             }}
           >
             <option value="delete_only">Delete messages</option>
@@ -261,7 +273,7 @@ export function MessageCleanupPanel({ integration, policy }: MessageCleanupPanel
             value={scope}
             onChange={(event) => {
               setScope(event.target.value as MessageCleanupScope);
-              setNewPreview(true);
+              enterPreviewIntent();
             }}
           >
             {scopes.map((value) => (
@@ -348,20 +360,12 @@ export function MessageCleanupPanel({ integration, policy }: MessageCleanupPanel
           </div>
         ))}
       {workspace.canPreview && !newPreview ? (
-        <ActionButton
-          disabled={busy}
-          onClick={() => {
-            setNewPreview(true);
-            setPreviewVersion((value) => value + 1);
-          }}
-        >
+        <ActionButton disabled={busy} onClick={enterPreviewIntent}>
           New preview
         </ActionButton>
       ) : null}
       {previewRequest?.status === 'failed' ? (
-        <ActionButton onClick={() => setPreviewVersion((value) => value + 1)}>
-          Review preview retry
-        </ActionButton>
+        <ActionButton onClick={enterPreviewIntent}>Review preview retry</ActionButton>
       ) : null}
       {workspace.canPreview ? (
         <ConfirmedAction
