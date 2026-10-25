@@ -143,6 +143,13 @@ export function BrowserSecurityPanel({
       if (intentKey(id, previous) === intentKey(id, currentIntent)) continue;
       const key = intentKey(id, currentIntent);
       setAttemptKeys((values) => (values[id] === key ? values : { ...values, [id]: key }));
+      // A terminal submitted intent can renew the action only once.
+      setSubmitted((values) => {
+        if (values[id] !== previous) return values;
+        const remaining = { ...values };
+        delete remaining[id];
+        return remaining;
+      });
     }
   }, [submitted, challenge, configuration, requests]);
   const running = scoped.some(
@@ -331,10 +338,7 @@ export function BrowserSecurityPanel({
       )}
       <div className={styles.actions}>
         {[...new Set([...offered, ...available])].map((id) => {
-          const intent =
-            attemptKeys[id] === intentKey(id, currentIntent)
-              ? currentIntent
-              : (submitted[id] ?? currentIntent);
+          const intent = submitted[id] ?? currentIntent;
           const request = scoped.find((request) => matchesIntent(request, id, intent)) ?? null;
           return (
             <ConfirmedAction

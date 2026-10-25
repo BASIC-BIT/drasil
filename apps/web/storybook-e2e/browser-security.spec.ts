@@ -152,19 +152,57 @@ for (const width of [320, 1440])
     await page.screenshot({ path: `/tmp/task7-security-${width}.png`, fullPage: true });
   });
 
-test('a completed retry allows the next failed generation to be reviewed', async ({ page }) => {
-  await page.goto(url);
-  const dialog = await confirm(page, 'Retry security check');
-  await dialog.getByRole('button', { name: 'Confirm Retry security check' }).click();
-  await expect(page.getByRole('status')).toContainText('Request queued.');
-  await event(page, 'generation');
-  await event(page, 'complete');
-  await expect(
-    page.getByRole('button', { name: 'Retry security check', exact: true })
-  ).toBeEnabled();
-  const next = await confirm(page, 'Retry security check');
-  await expect(next).toContainText('generation 3');
-});
+for (const { label, change, blocked } of [
+  { label: 'Retry security check', change: 'generation', blocked: true },
+  { label: 'Retry security check', change: 'configuration', blocked: true },
+  { label: 'Continue without security check', change: 'generation', blocked: true },
+  { label: 'Continue without security check', change: 'configuration', blocked: false },
+])
+  test(`renewed ${label} retains its dialog and reason after another ${change} change`, async ({
+    page,
+  }) => {
+    await page.goto(url);
+    const first = await confirm(page, label);
+    await first.getByRole('button', { name: `Confirm ${label}`, exact: true }).click();
+    await expect(page.getByRole('status')).toContainText('Request queued.');
+    await event(page, 'generation');
+    await event(page, 'complete');
+    await expect(page.getByRole('button', { name: label, exact: true })).toBeEnabled();
+    const renewed = await confirm(page, label);
+    await expect(renewed).toContainText('generation 3');
+    await renewed.getByRole('textbox').fill('Keep this renewed review reason');
+    await renewed.evaluate((dialog) => dialog.setAttribute('data-renewed-review', 'retained'));
+    await event(page, change);
+    await expect(renewed).toBeVisible();
+    await expect(renewed).toHaveAttribute('data-renewed-review', 'retained');
+    await expect(renewed.getByRole('textbox')).toHaveValue('Keep this renewed review reason');
+    const submit = renewed.getByRole('button', { name: `Confirm ${label}`, exact: true });
+    if (blocked) {
+      await expect(renewed).toContainText('out of date');
+      await expect(submit).toBeDisabled();
+      await expect(page.getByTestId('submission-count')).toHaveText('1');
+      await renewed.getByRole('button', { name: 'Cancel', exact: true }).click();
+      const current = await confirm(page, label);
+      await expect(current).toContainText(
+        change === 'generation' ? 'generation 4' : 'method revision 8'
+      );
+      await current.getByRole('button', { name: `Confirm ${label}`, exact: true }).click();
+    } else {
+      await expect(renewed).not.toContainText('out of date');
+      await expect(submit).toBeEnabled();
+      await submit.click();
+    }
+    await expect(page.getByTestId('submission-count')).toHaveText('2');
+    await expect(page.getByRole('status')).toContainText('Request queued.');
+    const payload = JSON.parse(await page.getByTestId('submitted-payload').innerText());
+    expect(payload.fields.expectedCaptchaGeneration).toBe(change === 'generation' ? '4' : '3');
+    if (label === 'Retry security check' && change === 'configuration') {
+      expect(payload.fields).toMatchObject({
+        expectedCaptchaConfigurationMethod: 'discord_image',
+        expectedCaptchaConfigurationRevision: '8',
+      });
+    }
+  });
 
 for (const story of ['failed', 'not-issued'])
   test(`configured issuance method change invalidates ${story} confirmation`, async ({ page }) => {
