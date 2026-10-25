@@ -467,3 +467,23 @@ it('returns the authenticated actor, removes close without action, and retains r
     },
   ]);
 });
+
+it('reads configured issuance method/revision separately from challenge history and preserves unknown configuration', async () => {
+  state.detail.mockResolvedValue(fixtureCaseDetails[0]);
+  state.query.mockImplementation(async (sql: string) => ({
+    rows: sql.includes('select settings from servers')
+      ? [{ settings: { captcha_method: 'discord_image', captcha_method_revision: 8 } }]
+      : [],
+  }));
+  const data = await createModerationWorkspaceDataAdapter(actor).getCaseWorkspaceData({
+    guildId: 'guild-1',
+    caseId: fixtureCaseDetails[0].id,
+  });
+  expect(data?.securityCheckConfiguration).toEqual({ method: 'discord_image', methodRevision: 8 });
+  state.query.mockResolvedValue({ rows: [] });
+  const unknown = await createModerationWorkspaceDataAdapter(actor).getCaseWorkspaceData({
+    guildId: 'guild-1',
+    caseId: fixtureCaseDetails[0].id,
+  });
+  expect(unknown?.securityCheckConfiguration).toBeNull();
+});

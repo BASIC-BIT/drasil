@@ -278,6 +278,46 @@ describe('workspace case confirmation boundary', () => {
       expect(mocks.queue).not.toHaveBeenCalled();
     }
   );
+  it('binds workspace issuance to fresh configured method/revision and preserves it for the worker', async () => {
+    const { submitWorkspaceCaseAction } = await import('./actions');
+    mocks.detail.mockResolvedValue({
+      id: 'case-1',
+      guildId: 'guild-1',
+      userId: 'member-1',
+      allowedActions: ['challenge_user'],
+    });
+    mocks.getServer.mockResolvedValue({
+      settings: {
+        captcha_mode: 'manual',
+        captcha_method: 'discord_image',
+        captcha_method_revision: 8,
+      },
+    });
+    const form = workspaceForm();
+    form.set('expectedCaptchaConfigurationMethod', 'turnstile');
+    form.set('expectedCaptchaConfigurationRevision', '7');
+    expect(
+      await submitWorkspaceCaseAction(
+        { guildId: 'guild-1', caseId: 'case-1', action: 'challenge_user' },
+        form
+      )
+    ).toMatchObject({ kind: 'failed' });
+    expect(mocks.queue).not.toHaveBeenCalled();
+    form.set('expectedCaptchaConfigurationMethod', 'discord_image');
+    form.set('expectedCaptchaConfigurationRevision', '8');
+    expect(
+      await submitWorkspaceCaseAction(
+        { guildId: 'guild-1', caseId: 'case-1', action: 'challenge_user' },
+        form
+      )
+    ).toMatchObject({ kind: 'request' });
+    expect(mocks.queue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedCaptchaConfiguration: { method: 'discord_image', methodRevision: 8 },
+      })
+    );
+  });
+
   it('preserves actual request status from the queue adapter', async () => {
     const { submitWorkspaceCaseAction } = await import('./actions');
     expect(

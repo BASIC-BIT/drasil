@@ -2,7 +2,13 @@
 
 import { assertWorkspaceConfirmation, resolveWorkspaceReturnTo } from '@/lib/workspaceConfirmation';
 import type { WorkspaceActions } from '@/lib/workspaceActionTypes';
-import { evaluateCasePolicy, readCasePolicy, type ActionContext } from '@drasil/application';
+import {
+  evaluateCasePolicy,
+  readCasePolicy,
+  getCaptchaMethodRevision,
+  type CaptchaIssuanceConfiguration,
+  type ActionContext,
+} from '@drasil/application';
 import { createWebActionContext, createWebConfirmationPort } from '@/lib/application/context';
 import { randomUUID } from 'node:crypto';
 import { revalidatePath } from 'next/cache';
@@ -60,9 +66,12 @@ type CaptchaCaseAction = Extract<
 >;
 
 interface CaseActionOptions {
+  readonly expectedCaptchaConfiguration?: CaptchaIssuanceConfiguration;
   readonly attemptId: string | null;
   readonly expectedCaptchaChallengeId?: string | null;
   readonly expectedCaptchaGeneration?: number | null;
+  readonly expectedCaptchaMethod?: 'turnstile' | 'discord_image' | null;
+  readonly expectedCaptchaMethodRevision?: number | null;
   readonly quarantinePhase: 'preview' | 'execute' | null;
   readonly previewRequestId: string | null;
   readonly reason: string | null;
@@ -183,12 +192,28 @@ async function readCaptchaActionOptions(
   if (formData?.get('confirmAction') !== 'on') {
     throw new Error('Confirm the security-check action before queueing it.');
   }
+  let expectedCaptchaConfiguration: CaptchaIssuanceConfiguration | undefined;
   if (action !== 'bypass_captcha') {
     const server = await createSetupDataAdapter().getServer(guildId);
     const method = getEffectiveCaptchaMethod(server?.settings);
     const mode = server?.settings.captcha_mode;
     if (method === 'none' || (mode !== 'manual' && mode !== 'suspicious_join')) {
       throw new Error('Browser security checks are disabled for this server.');
+    }
+    const expectedMethod = readFormString(formData, 'expectedCaptchaConfigurationMethod');
+    const revisionText = readFormString(formData, 'expectedCaptchaConfigurationRevision');
+    if (formData?.get('confirmedRecordId') || expectedMethod !== null || revisionText !== null) {
+      const methodRevision = revisionText === null ? -1 : Number(revisionText);
+      if (
+        expectedMethod !== method ||
+        !Number.isInteger(methodRevision) ||
+        methodRevision < 0 ||
+        methodRevision !== getCaptchaMethodRevision(server?.settings)
+      )
+        throw new Error(
+          'The configured security-check method changed. Refresh and review the current method before continuing.'
+        );
+      expectedCaptchaConfiguration = { method, methodRevision };
     }
   }
   const reason = action === 'bypass_captcha' ? readFormString(formData, 'reason') : null;
@@ -205,7 +230,24 @@ async function readCaptchaActionOptions(
   if (requiresDisplayedChallenge && (!expectedCaptchaChallengeId || !expectedCaptchaGeneration)) {
     throw new Error('The displayed security check is no longer available. Refresh and try again.');
   }
+  const method = readFormString(formData, 'expectedCaptchaMethod');
+  const revisionText = readFormString(formData, 'expectedCaptchaMethodRevision');
+  const revision = revisionText === null ? null : Number(revisionText);
+  if (
+    (method !== null && method !== 'turnstile' && method !== 'discord_image') ||
+    (revision !== null && (!Number.isInteger(revision) || revision < 0)) ||
+    (requiresDisplayedChallenge &&
+      formData?.get('confirmedRecordId') &&
+      (!method || revision === null))
+  ) {
+    throw new Error(
+      'The displayed security-check method is no longer available. Refresh and try again.'
+    );
+  }
   return {
+    expectedCaptchaConfiguration,
+    expectedCaptchaMethod: method === 'turnstile' || method === 'discord_image' ? method : null,
+    expectedCaptchaMethodRevision: revision,
     attemptId: action === 'retry_captcha' || action === 'bypass_captcha' ? randomUUID() : null,
     expectedCaptchaChallengeId,
     expectedCaptchaGeneration,
@@ -375,6 +417,9 @@ async function performQueueCaseAction(
     caseId,
     expectedCaptchaChallengeId: options.expectedCaptchaChallengeId,
     expectedCaptchaGeneration: options.expectedCaptchaGeneration,
+    expectedCaptchaConfiguration: options.expectedCaptchaConfiguration,
+    expectedCaptchaMethod: options.expectedCaptchaMethod,
+    expectedCaptchaMethodRevision: options.expectedCaptchaMethodRevision,
     guildId,
     quarantinePhase: options.quarantinePhase,
     previewRequestId: options.previewRequestId,

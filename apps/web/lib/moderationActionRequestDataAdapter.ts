@@ -1,3 +1,7 @@
+import {
+  captchaIssuanceConfigurationSchema,
+  type CaptchaIssuanceConfiguration,
+} from '@drasil/application';
 import { readFixtureReportBan } from './reportBanFixtures';
 import { inboxModerationActionRequestTypes } from './inboxActionRequestTypes';
 import type {
@@ -35,6 +39,8 @@ export interface ModerationActionRequestSummary {
   readonly actorSurface: string;
   readonly actorUserId?: string | null;
   readonly accountQuarantinePreviewRequestId?: string | null;
+  readonly captchaConfiguration?: CaptchaIssuanceConfiguration | null;
+  readonly captchaBinding?: { readonly challengeId: string; readonly generation: number } | null;
   readonly completedAt: string | null;
   readonly detectionEventId: string | null;
   readonly failedAt: string | null;
@@ -442,6 +448,9 @@ export function parseModerationActionRequestRow(
   const accountQuarantinePreview = parseAccountQuarantinePreview(row.result);
   const setupInput = parseSetupRequestInput(row.action_type, row.metadata);
   const metadata = (row.metadata ?? {}) as Record<string, unknown>;
+  const configuration = captchaIssuanceConfigurationSchema.safeParse(
+    metadata.expected_configuration
+  );
   const parsedBan = parseObservedBanResult(
     (row.result as Record<string, unknown> | null)?.observed_ban_result
   );
@@ -458,8 +467,20 @@ export function parseModerationActionRequestRow(
         }
       : null);
   return {
+    ...(configuration.success ? { captchaConfiguration: configuration.data } : {}),
     ...(accountQuarantinePreview ? { accountQuarantinePreview } : {}),
     ...(setupInput ? { setupInput } : {}),
+    ...(typeof metadata.expected_challenge_id === 'string' &&
+    typeof metadata.expected_generation === 'number' &&
+    Number.isInteger(metadata.expected_generation) &&
+    metadata.expected_generation > 0
+      ? {
+          captchaBinding: {
+            challengeId: metadata.expected_challenge_id,
+            generation: metadata.expected_generation,
+          },
+        }
+      : {}),
     id: row.id,
     actionType: row.action_type,
     actorSurface: row.actor_surface,

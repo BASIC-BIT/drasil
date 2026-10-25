@@ -5,6 +5,7 @@ import type { CaseWorkspaceData } from '@/lib/moderationWorkspaceTypes';
 import type { WorkspaceActions, WorkspaceMutation } from '@/lib/workspaceActionTypes';
 import { findAccountQuarantineActionRequests } from '@/lib/inboxActionReceipts';
 import { filterCaseKindActions } from '@/lib/caseActionEligibility';
+import { BrowserSecurityPanel } from './BrowserSecurityPanel';
 import { AccountQuarantinePanel } from './AccountQuarantinePanel';
 
 export interface CaseToolsProps {
@@ -53,6 +54,32 @@ export function CaseTools({ data, actions, returnHref, children }: CaseToolsProp
           submissions={{ preview: quarantine, execute: quarantine, release }}
         />
       ) : null}
+      <BrowserSecurityPanel
+        key={`security:${detail.guildId}:${detail.id}:${detail.userId}`}
+        detail={detail}
+        configuration={data.securityCheckConfiguration}
+        policy={data.policy}
+        requests={data.requests}
+        loadedAt={data.loadedAt}
+        returnHref={returnHref}
+        submissions={{
+          issue: (form) =>
+            actions.caseAction(
+              { guildId: detail.guildId, caseId: detail.id, action: 'challenge_user' },
+              form
+            ),
+          retry: (form) =>
+            actions.caseAction(
+              { guildId: detail.guildId, caseId: detail.id, action: 'retry_captcha' },
+              form
+            ),
+          bypass: (form) =>
+            actions.caseAction(
+              { guildId: detail.guildId, caseId: detail.id, action: 'bypass_captcha' },
+              form
+            ),
+        }}
+      />
       {children}
     </>
   );

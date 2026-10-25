@@ -205,6 +205,56 @@ describe('CaptchaChallengeService', () => {
     }
   );
 
+  it.each([false, true])(
+    'denies changed queued issuance method/revision before creating or sending (%s)',
+    async (retry) => {
+      for (const changed of [
+        { captcha_mode: 'manual', captcha_method: 'discord_image', captcha_method_revision: 8 },
+        { captcha_mode: 'manual', captcha_method: 'turnstile', captcha_method_revision: 9 },
+      ]) {
+        const { service, challenges, threads, config } = createHarness(changed);
+        const binding = {
+          expectedConfiguration: { method: 'turnstile' as const, methodRevision: 8 },
+        };
+        await expect(
+          service.requestChallenge({
+            ...binding,
+            verificationEventId: 'case-1',
+            requestSource: CaptchaChallengeRequestSource.MODERATOR,
+            retry,
+            ...(retry ? { expectedChallengeId: 'challenge-1', expectedGeneration: 1 } : {}),
+          })
+        ).rejects.toThrow('stale_state');
+        expect(config.getServerConfig).toHaveBeenCalledWith('guild-1', {
+          failOnReadError: true,
+          forceRefresh: true,
+        });
+        expect(challenges.create).not.toHaveBeenCalled();
+        expect(challenges.retry).not.toHaveBeenCalled();
+        expect(threads.sendCaptchaChallenge).not.toHaveBeenCalled();
+      }
+    }
+  );
+
+  it('issues the captured method when the fresh configuration still matches', async () => {
+    const { service, challenges } = createHarness({
+      captcha_mode: 'manual',
+      captcha_method: 'turnstile',
+      captcha_method_revision: 8,
+    });
+    const result = await service.requestChallenge({
+      verificationEventId: 'case-1',
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      expectedConfiguration: { method: 'turnstile', methodRevision: 8 },
+    });
+    expect(challenges.create).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: 'turnstile', methodRevision: 8 })
+    );
+    expect(result.challenge.provider).toBe('turnstile');
+    expect(result.challenge.method_revision).toBe(8);
+    expect(result.delivered).toBe(true);
+  });
+
   it('keeps an unknown database reply failure distinct from a proven stale revision rejection', async () => {
     const { service, challenges, threads } = createHarness();
     const unknown = new Error('Database response unavailable');

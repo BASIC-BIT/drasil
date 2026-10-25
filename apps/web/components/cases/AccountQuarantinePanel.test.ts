@@ -17,6 +17,7 @@ const policy: CaseWorkspaceData['policy'] = {
   banReasonRequired: true,
 };
 const data: CaseWorkspaceData = {
+  securityCheckConfiguration: null,
   actorUserId: 'moderator-1',
   detail: {
     ...fixtureCaseDetails[0],

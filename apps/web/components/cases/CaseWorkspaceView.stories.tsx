@@ -23,6 +23,7 @@ import styles from './CaseWorkspaceView.stories.module.css';
 const onIntent = fn();
 const loadedAt = '2026-10-23T15:16:00.000Z';
 const data: CaseWorkspaceData = {
+  securityCheckConfiguration: null,
   actorUserId: null,
   detail: fixtureCaseDetails[0],
   report: null,

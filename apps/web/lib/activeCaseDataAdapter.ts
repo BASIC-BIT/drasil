@@ -2,12 +2,17 @@ import { filterCaseKindActions } from './caseActionEligibility';
 import { buildQueuedCaseCommand } from './application/caseCommands';
 import { createWebActionContext } from './application/context';
 import { submitQueuedAction } from './application/queuedSubmission';
-import { evaluateCasePolicy, readCasePolicy } from '@drasil/application';
+import {
+  type CaptchaIssuanceConfiguration,
+  evaluateCasePolicy,
+  readCasePolicy,
+} from '@drasil/application';
 import {
   getEffectiveCaptchaMethod,
   caseDetailSchema,
   caseSummarySchema,
   sortCaseSummariesForQueue,
+  type CaptchaChallengeSummary,
   type CaseAction,
   type CaseDetail,
   type CaseDetectionHistoryItem,
@@ -73,8 +78,11 @@ export interface QueueCaseActionInput {
   readonly adminId: string;
   readonly attemptId?: string | null;
   readonly caseId: string;
+  readonly expectedCaptchaConfiguration?: CaptchaIssuanceConfiguration;
   readonly expectedCaptchaChallengeId?: string | null;
   readonly expectedCaptchaGeneration?: number | null;
+  readonly expectedCaptchaMethod?: CaptchaChallengeSummary['method'] | null;
+  readonly expectedCaptchaMethodRevision?: number | null;
   readonly guildId: string;
   readonly quarantinePhase?: 'preview' | 'execute' | null;
   readonly previewRequestId?: string | null;
@@ -976,7 +984,11 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
         input.expectedCaptchaGeneration === null ||
         input.expectedCaptchaGeneration === undefined ||
         detail.captchaChallenge?.id !== input.expectedCaptchaChallengeId ||
-        detail.captchaChallenge.generation !== input.expectedCaptchaGeneration)
+        detail.captchaChallenge.generation !== input.expectedCaptchaGeneration ||
+        (input.expectedCaptchaMethod != null &&
+          detail.captchaChallenge.method !== input.expectedCaptchaMethod) ||
+        (input.expectedCaptchaMethodRevision != null &&
+          detail.captchaChallenge.methodRevision !== input.expectedCaptchaMethodRevision))
     ) {
       return { action: input.action, caseId: input.caseId, requestId: null, status: 'not_allowed' };
     }

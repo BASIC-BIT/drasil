@@ -429,6 +429,16 @@ export function CaseActionControls({
                         type="hidden"
                         value={captchaChallenge?.generation}
                       />
+                      <input
+                        name="expectedCaptchaMethod"
+                        type="hidden"
+                        value={captchaChallenge?.method}
+                      />
+                      <input
+                        name="expectedCaptchaMethodRevision"
+                        type="hidden"
+                        value={captchaChallenge?.methodRevision}
+                      />
                       {action === 'retry_captcha' ? (
                         <p className="muted">
                           Replace the previous generation and send a new security check.
@@ -478,6 +488,16 @@ export function CaseActionControls({
                         name="expectedCaptchaGeneration"
                         type="hidden"
                         value={captchaChallenge?.generation}
+                      />
+                      <input
+                        name="expectedCaptchaMethod"
+                        type="hidden"
+                        value={captchaChallenge?.method}
+                      />
+                      <input
+                        name="expectedCaptchaMethodRevision"
+                        type="hidden"
+                        value={captchaChallenge?.methodRevision}
                       />
                       {action === 'retry_captcha' ? (
                         <p className="muted">

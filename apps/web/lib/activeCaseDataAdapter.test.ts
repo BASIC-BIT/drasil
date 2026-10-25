@@ -119,6 +119,29 @@ describe('case action admission and submission', () => {
     expect(persistence.query).not.toHaveBeenCalled();
   });
 
+  it('rejects generation 2 confirmation when the server now holds generation 3 before queueing', async () => {
+    const adapter = arrange();
+    const current = await adapter.getCaseDetail('guild', 'case');
+    vi.mocked(adapter.getCaseDetail).mockResolvedValue({
+      ...current!,
+      captchaChallenge: { ...current!.captchaChallenge!, generation: 3 },
+    });
+    expect((await adapter.queueCaseAction(input)).status).toBe('not_allowed');
+    expect(persistence.query).not.toHaveBeenCalled();
+  });
+
+  it('rejects changed displayed method and revision before queueing', async () => {
+    const adapter = arrange();
+    persistence.query.mockResolvedValue({ rows: [{ id: 'unexpected-queue', status: 'queued' }] });
+    for (const binding of [
+      { expectedCaptchaMethod: 'discord_image', expectedCaptchaMethodRevision: 0 },
+      { expectedCaptchaMethod: 'turnstile', expectedCaptchaMethodRevision: 4 },
+    ] as const) {
+      expect((await adapter.queueCaseAction({ ...input, ...binding })).status).toBe('not_allowed');
+    }
+    expect(persistence.query).not.toHaveBeenCalled();
+  });
+
   it('does not enqueue an unavailable quarantine preview', async () => {
     const adapter = arrange();
     expect(

@@ -1,0 +1,43 @@
+.panel {
+  padding-block: 1.25rem;
+  border-top: 1px solid var(--dr-line);
+  overflow-wrap: anywhere;
+}
+.panel h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1.1rem;
+}
+.state {
+  font-weight: 650;
+}
+.state[data-severity='warning'],
+.warning {
+  color: var(--dr-warning);
+}
+.state[data-severity='positive'] {
+  color: var(--dr-positive);
+}
+.facts {
+  display: grid;
+  grid-template-columns: minmax(6rem, auto) minmax(0, 1fr);
+  gap: 0.5rem 1rem;
+}
+.facts dt {
+  color: var(--dr-muted);
+}
+.facts dd {
+  margin: 0;
+}
+.reason,
+.panel li {
+  white-space: pre-wrap;
+}
+.panel li + li {
+  margin-top: 0.75rem;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}

@@ -3,6 +3,8 @@ import { caseConversationSources, reportConversationSources } from './conversati
 import { readAttentionReply } from './conversationDataAdapter';
 import { z } from 'zod';
 import {
+  getEffectiveCaptchaMethod,
+  getCaptchaMethodRevision,
   hasAuthority,
   hasStaffAuthority,
   readCasePolicy,
@@ -79,17 +81,19 @@ export function createModerationWorkspaceDataAdapter(
   const cleanup = createMessageCleanupDataAdapter();
   const inScope = (guildId: string): boolean =>
     actor.present && actor.guildId === guildId && actor.userId.length > 0;
-  let loadedSettings: Promise<z.infer<typeof settingsSchema>> | undefined;
-  function settings(): Promise<z.infer<typeof settingsSchema>> {
+  let loadedSettings: Promise<z.infer<typeof settingsSchema> | null> | undefined;
+  function settings(): Promise<z.infer<typeof settingsSchema> | null> {
     loadedSettings ??= getPostgresPool()
       .query<{ settings: unknown }>('select settings from servers where guild_id = $1 limit 1', [
         actor.guildId,
       ])
-      .then((result) => settingsSchema.parse(result.rows[0]?.settings ?? {}));
+      .then((result) =>
+        result.rows[0] ? settingsSchema.parse(result.rows[0].settings ?? {}) : null
+      );
     return loadedSettings;
   }
   async function policy(item: ModerationInboxItem): Promise<WorkspaceActionPolicy> {
-    const rawSettings = await settings();
+    const rawSettings = (await settings()) ?? settingsSchema.parse({});
     const current = readCasePolicy(rawSettings);
     const moderate = hasAuthority(actor, MODERATION_PERMISSIONS);
     const reportReview = hasStaffAuthority(actor, rawSettings.case_responder_role_ids);
@@ -249,7 +253,14 @@ export function createModerationWorkspaceDataAdapter(
       report.latestCaseId === caseId
         ? report
         : null;
+    const configured = await settings();
     return caseWorkspaceDataSchema.parse({
+      securityCheckConfiguration: configured
+        ? {
+            method: getEffectiveCaptchaMethod(configured),
+            methodRevision: getCaptchaMethodRevision(configured),
+          }
+        : null,
       detail: { ...detail, allowedActions: filterCaseKindActions(detail, detail.allowedActions) },
       actorUserId: actor.userId,
       recoveryAttention,

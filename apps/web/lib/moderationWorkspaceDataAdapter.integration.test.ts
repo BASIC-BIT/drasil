@@ -340,3 +340,34 @@ it('reads actual persisted quarantine ownership and recovery attention from the 
   );
   expect(requests[0]?.actorUserId).toBe(reporterId);
 });
+
+it('reads actual configured issuance and durable security intent bindings from Postgres', async () => {
+  await pool.query('update servers set settings=$2::jsonb where guild_id=$1', [
+    guildId,
+    JSON.stringify({
+      captcha_method: 'discord_image',
+      captcha_method_revision: 8,
+      captcha_mode: 'manual',
+    }),
+  ]);
+  const binding = {
+    expected_challenge_id: '11111111-1111-4111-8111-111111111111',
+    expected_generation: 2,
+    expected_configuration: { method: 'turnstile', methodRevision: 7 },
+  };
+  await pool.query(
+    "update moderation_action_requests set action_type='retry_captcha_challenge',metadata=$2::jsonb where id=$1",
+    [requestId, JSON.stringify(binding)]
+  );
+  const data = await adapter().getCaseWorkspaceData({ guildId, caseId });
+  expect(data?.securityCheckConfiguration).toEqual({ method: 'discord_image', methodRevision: 8 });
+  expect(data?.requests).toContainEqual(
+    expect.objectContaining({
+      id: requestId,
+      captchaBinding: { challengeId: binding.expected_challenge_id, generation: 2 },
+      captchaConfiguration: { method: 'turnstile', methodRevision: 7 },
+    })
+  );
+  const byId = await createModerationActionRequestDataAdapter().getRequest(guildId, requestId);
+  expect(byId?.captchaConfiguration).toEqual({ method: 'turnstile', methodRevision: 7 });
+});
