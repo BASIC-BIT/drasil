@@ -44,7 +44,7 @@ async function loadPage(
 export function ChannelConversation(props: ChannelConversationProps) {
   return (
     <ConversationReader
-      key={`${props.source.guildId}:${props.source.recordKind}:${props.source.recordId}:${props.source.sourceKey}`}
+      key={`${props.source.guildId}:${props.source.recordKind}:${props.source.recordId}:${props.source.sourceKey}:${props.source.channelId}:${props.source.messageId}`}
       {...props}
     />
   );

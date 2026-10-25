@@ -102,3 +102,100 @@ type Story = StoryObj<typeof meta>;
 export const Available: Story = { args: { scenario: 'available' } };
 export const DeletedSource: Story = { args: { scenario: 'deleted' } };
 export const DeniedChannel: Story = { args: { scenario: 'denied' } };
+
+function SourceReplacement({
+  change,
+  pending,
+}: {
+  change: 'channel' | 'message';
+  pending: boolean;
+}) {
+  const [replaced, setReplaced] = useState(false);
+  const [aborted, setAborted] = useState(false);
+  const [released, setReleased] = useState(false);
+  const [lastPage, setLastPage] = useState('');
+  const release = useRef<(() => void) | null>(null);
+  const selected = replaced
+    ? {
+        ...source,
+        channelId: change === 'channel' ? '100000000000000003' : source.channelId,
+        messageId: change === 'message' ? messageId(126) : source.messageId,
+      }
+    : source;
+  const selectedSource = {
+    ...selected,
+    url: `https://discord.com/channels/${guildId}/${selected.channelId}/${selected.messageId}`,
+  };
+  return (
+    <main style={{ maxWidth: 1000, margin: 'auto', padding: 16 }}>
+      <button type="button" onClick={() => setReplaced(true)}>
+        Replace resolved source
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          release.current?.();
+          setReleased(true);
+        }}
+      >
+        Release old response
+      </button>
+      <p>Old request aborted: {String(aborted)}</p>
+      <p>Old response released: {String(released)}</p>
+      <p>Last replacement page: {lastPage}</p>
+      <ChannelConversation
+        source={selectedSource}
+        onBackToSource={() => undefined}
+        loadPage={async (_guildId, query, signal) => {
+          if (!replaced && pending) {
+            signal.addEventListener('abort', () => setAborted(true), { once: true });
+            // Intentionally finish despite cancellation to exercise stale-response rejection.
+            await new Promise<void>((resolve) => {
+              release.current = resolve;
+            });
+          }
+          if (replaced)
+            setLastPage(
+              query.page.kind === 'around' ? 'around' : `${query.page.kind}:${query.page.cursor}`
+            );
+          const id = query.page.kind === 'around' ? selected.messageId : messageId(300);
+          return {
+            kind: 'available',
+            source: selectedSource,
+            messages: [
+              {
+                ...message(125),
+                id,
+                channelId: selected.channelId,
+                content: !replaced
+                  ? 'Old source text'
+                  : query.page.kind === 'around'
+                    ? 'Replacement source text'
+                    : 'Replacement later message',
+                url: `https://discord.com/channels/${guildId}/${selected.channelId}/${id}`,
+                attachments: [],
+              },
+            ],
+            channelLabel: replaced ? 'replacement' : 'original',
+            fetchedAt: '2026-10-25T15:00:00.000Z',
+            earlier: false,
+            later: true,
+            sourcePresent: query.page.kind === 'around',
+          };
+        }}
+      />
+    </main>
+  );
+}
+export const ReplaceLoadedChannel: Story = {
+  render: () => <SourceReplacement change="channel" pending={false} />,
+};
+export const ReplaceLoadedMessage: Story = {
+  render: () => <SourceReplacement change="message" pending={false} />,
+};
+export const ReplacePendingChannel: Story = {
+  render: () => <SourceReplacement change="channel" pending />,
+};
+export const ReplacePendingMessage: Story = {
+  render: () => <SourceReplacement change="message" pending />,
+};
