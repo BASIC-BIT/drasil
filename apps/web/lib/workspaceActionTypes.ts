@@ -1,9 +1,12 @@
+import type { InboxStateAction } from '@/components/inbox/InboxActionForm';
+import { initialInboxActionState } from './inboxActionState';
 import type {
+  MessageCleanupCommand,
   CloseSubmittedReportResult,
   OpenSubmittedReportCaseResult,
   AttentionOutcome as AcknowledgeQueueAttentionResult,
 } from '@drasil/application';
-import type { ReportQueueAction } from '@drasil/contracts';
+import type { ModerationInboxAction, ReportQueueAction } from '@drasil/contracts';
 import type { WebCaseAction } from './activeCaseDataAdapter';
 import type { ObservedAlertWebAction } from './observedAlertActionQueue';
 import type { ModerationActionRequestReceipt } from './moderationActionRequestQueue';
@@ -37,3 +40,20 @@ export interface WorkspaceActions {
     formData: FormData
   ): Promise<WorkspaceMutationResult>;
 }
+
+/** Adapt the returned durable receipt; submission itself does not imply queueing. */
+export function adaptInboxStateAction(action: InboxStateAction): WorkspaceMutation {
+  return async (formData) => {
+    const result = await action(initialInboxActionState, formData);
+    if (result.requestId && result.status !== 'idle') {
+      return { kind: 'request', receipt: { id: result.requestId, status: result.status } };
+    }
+    return {
+      kind: 'failed',
+      message: result.message ?? 'No durable request receipt was returned.',
+    };
+  };
+}
+
+export type CleanupActionId = MessageCleanupCommand['kind'];
+export type WorkspaceConfirmedActionId = ModerationInboxAction | CleanupActionId;

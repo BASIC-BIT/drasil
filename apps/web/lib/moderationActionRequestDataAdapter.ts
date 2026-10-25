@@ -45,6 +45,7 @@ export interface ModerationActionRequestSummary {
   readonly detectionEventId: string | null;
   readonly failedAt: string | null;
   readonly lastError: string | null;
+  readonly cleanupIntentToken?: string | null;
   readonly messageDeletionJobId: string | null;
   readonly requestedAt: string;
   readonly reportIntakeId: string | null;
@@ -135,6 +136,8 @@ interface ModerationActionRequestRow {
   readonly detection_event_id?: string | null;
   readonly failed_at: unknown;
   readonly last_error: string | null;
+  readonly server_id?: string;
+  readonly idempotency_key?: string | null;
   readonly metadata?: unknown;
   readonly message_deletion_job_id?: string | null;
   readonly requested_at: unknown;
@@ -442,6 +445,24 @@ function parseSetupRequestInput(
   };
 }
 
+function cleanupIntentToken(row: ModerationActionRequestRow): string | null {
+  if (
+    ![
+      'preview_case_message_deletion',
+      'execute_case_message_deletion',
+      'ban_case_user_with_message_cleanup',
+    ].includes(row.action_type) ||
+    !row.server_id ||
+    !row.verification_event_id ||
+    !row.actor_id
+  )
+    return null;
+  const prefix = `message-cleanup:${row.action_type}:${row.server_id}:${row.verification_event_id}:${row.actor_id}:`;
+  if (!row.idempotency_key?.startsWith(prefix)) return null;
+  const token = row.idempotency_key.slice(prefix.length);
+  return /^[A-Za-z0-9_-]{8,128}$/.test(token) ? token : null;
+}
+
 export function parseModerationActionRequestRow(
   row: ModerationActionRequestRow
 ): ModerationActionRequestSummary {
@@ -493,6 +514,7 @@ export function parseModerationActionRequestRow(
     detectionEventId: row.detection_event_id ?? null,
     failedAt: toNullableIsoString(row.failed_at),
     lastError: row.last_error ?? readString(metadata.report_ban_last_error),
+    ...(cleanupIntentToken(row) ? { cleanupIntentToken: cleanupIntentToken(row) } : {}),
     messageDeletionJobId: row.message_deletion_job_id ?? null,
     requestedAt: toIsoString(row.requested_at),
     reportIntakeId: row.report_intake_id ?? null,
@@ -538,6 +560,8 @@ export class PostgresModerationActionRequestDataAdapter implements ModerationAct
          failed_at,
          last_error,
          message_deletion_job_id::text,
+         server_id,
+         idempotency_key,
          metadata,
          requested_at,
          report_intake_id::text,
@@ -594,6 +618,8 @@ export class PostgresModerationActionRequestDataAdapter implements ModerationAct
          failed_at,
          last_error,
          message_deletion_job_id::text,
+         server_id,
+         idempotency_key,
          metadata,
          requested_at,
          report_intake_id::text,
@@ -646,6 +672,8 @@ export class PostgresModerationActionRequestDataAdapter implements ModerationAct
          requests.failed_at,
          requests.last_error,
          requests.message_deletion_job_id::text,
+         requests.server_id,
+         requests.idempotency_key,
          requests.metadata,
          requests.requested_at,
          requests.report_intake_id::text,

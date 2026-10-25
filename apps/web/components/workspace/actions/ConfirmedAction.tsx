@@ -2,13 +2,12 @@
 
 import { useEffect, useRef, useState, type ComponentProps } from 'react';
 import { useRouter } from 'next/navigation';
+import type { CaseDetail, MessageCleanupJobDetail, ReportDetail } from '@drasil/contracts';
 import type {
-  CaseDetail,
-  MessageCleanupJobDetail,
-  ModerationInboxAction,
-  ReportDetail,
-} from '@drasil/contracts';
-import type { WorkspaceMutation, WorkspaceMutationResult } from '@/lib/workspaceActionTypes';
+  WorkspaceMutation,
+  WorkspaceMutationResult,
+  WorkspaceConfirmedActionId,
+} from '@/lib/workspaceActionTypes';
 import type { ModerationActionRequestSummary } from '@/lib/moderationActionRequestDataAdapter';
 import {
   blocksBanResubmission,
@@ -34,7 +33,9 @@ export interface ConfirmedActionTarget extends WorkspaceRequestTarget {
   readonly returnTo?: string;
 }
 export interface ConfirmedActionDescriptor {
-  readonly id: ModerationInboxAction;
+  readonly id: WorkspaceConfirmedActionId;
+  readonly frozenReason?: string;
+  readonly finalizationOnly?: boolean;
   readonly label: string;
   readonly description: string;
   readonly tone?: ComponentProps<typeof ActionButton>['tone'];
@@ -96,7 +97,18 @@ function ConfirmedActionIntent({
   });
   const setLocalRequestActive = useInboxActionRequestPolling();
   const candidate =
-    durableRequest && matchesWorkspaceActionRequest(durableRequest, target, action.id)
+    durableRequest &&
+    matchesWorkspaceActionRequest(durableRequest, target, action.id) &&
+    (![
+      'preview_case_message_deletion',
+      'execute_case_message_deletion',
+      'ban_case_user_with_message_cleanup',
+    ].includes(action.id) ||
+      (durableRequest.cleanupIntentToken ===
+        action.fields?.find((field) => field.name === 'idempotencyKey')?.value &&
+        (!action.fields?.find((field) => field.name === 'jobId') ||
+          durableRequest.messageDeletionJobId ===
+            action.fields.find((field) => field.name === 'jobId')?.value)))
       ? durableRequest
       : null;
   const receipt = workspaceRequestReceipt(localResult);
@@ -124,9 +136,11 @@ function ConfirmedActionIntent({
     uncertain ||
     active ||
     presentation.kind === 'completed' ||
+    receipt?.status === 'completed' ||
+    durable?.status === 'completed' ||
     presentation.kind === 'banned_updates_pending' ||
     presentation.kind === 'ban_outcome_unknown' ||
-    presentation.kind === 'finalization_retry' ||
+    (presentation.kind === 'finalization_retry' && !action.finalizationOnly) ||
     blocksBanResubmission(durable)
   );
   useEffect(() => {
@@ -206,7 +220,8 @@ function ConfirmedActionIntent({
         targetLabel={intent.target.label}
         actionLabel={intent.action.label}
         description={`${intent.action.description}${intentChanged ? ' This confirmation is out of date. Cancel and review the current action before continuing.' : ''}`}
-        reason={reason}
+        reason={intent.action.frozenReason ?? reason}
+        reasonReadOnly={intent.action.frozenReason !== undefined}
         reasonRequired={intent.action.reasonRequired ?? false}
         reasonMaxLength={intent.action.reasonMaxLength}
         blocked={blocked}

@@ -149,3 +149,12 @@ it('preserves an actual processing receipt before or between durable snapshots',
     })
   ).toMatchObject({ kind: 'pending', message: 'Request processing.' });
 });
+it('keeps a queued finalization retry pending while the prior job result remains failed', async () => {
+  const { fixtureMessageCleanupJobDetails } = await import('./messageCleanupFixtures');
+  const result = deriveWorkspaceActionPresentation({
+    ...input,
+    cleanupJob: fixtureMessageCleanupJobDetails[1],
+    localResult: { kind: 'request', receipt: { id: 'retry', status: 'queued' } },
+  });
+  expect(result.kind).toBe('pending');
+});

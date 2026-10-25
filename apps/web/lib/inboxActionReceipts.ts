@@ -1,3 +1,4 @@
+import type { WorkspaceConfirmedActionId } from './workspaceActionTypes';
 import { isStaleInboxActionFailure } from './inboxActionState';
 import type { ModerationInboxAction, ModerationInboxItem } from '@drasil/contracts';
 import type { ModerationActionRequestSummary } from './moderationActionRequestDataAdapter';
@@ -5,8 +6,11 @@ import type { ModerationActionRequestActionType } from './moderationActionReques
 import type { MessageCleanupJobSummary } from '@drasil/contracts';
 
 const requestTypeByAction: Partial<
-  Record<ModerationInboxAction, readonly ModerationActionRequestActionType[]>
+  Record<WorkspaceConfirmedActionId, readonly ModerationActionRequestActionType[]>
 > = {
+  preview_case_message_deletion: ['preview_case_message_deletion'],
+  execute_case_message_deletion: ['execute_case_message_deletion'],
+  ban_case_user_with_message_cleanup: ['ban_case_user_with_message_cleanup'],
   ban_by_id: ['ban_case_user_by_id'],
   challenge_user: ['request_captcha_challenge'],
   retry_captcha: ['retry_captcha_challenge'],
@@ -147,7 +151,7 @@ export interface WorkspaceRequestTarget {
 export function matchesWorkspaceActionRequest(
   request: ModerationActionRequestSummary,
   target: WorkspaceRequestTarget,
-  action: ModerationInboxAction
+  action: WorkspaceConfirmedActionId
 ): boolean {
   const types = requestTypeByAction[action];
   if (

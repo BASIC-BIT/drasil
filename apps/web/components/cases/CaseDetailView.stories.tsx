@@ -40,6 +40,9 @@ export const StaleRestrictedCase: Story = {};
 export const StaleCaseWithMessageCleanup: Story = {
   args: {
     messageCleanup: {
+      loadedAt: '2026-10-25T12:00:00Z',
+      requests: [],
+      returnHref: '/admin/guild/guild-1/inbox',
       combinedBanAction: noopCleanupAction,
       combinedJob: fixtureMessageCleanupJobDetails[1],
       deleteOnlyJob: fixtureMessageCleanupJobDetails[0],

@@ -1,30 +1,14 @@
-import type {
-  CaseAction,
-  CaptchaChallengeSummary,
-  MessageCleanupCaseWorkspace,
-  MessageCleanupJobDetail,
-} from '@drasil/contracts';
+import { isMessageCleanupFinalizationRetry } from '@drasil/contracts';
+import type { CaseAction, CaptchaChallengeSummary } from '@drasil/contracts';
 import { formatCaseAction } from '@/lib/casePresentation';
 import { InboxActionForm, type InboxStateAction } from '@/components/inbox/InboxActionForm';
 import type { InboxActionState } from '@/lib/inboxActionState';
 import type { ModerationActionRequestSummary } from '@/lib/moderationActionRequestDataAdapter';
 import type { AccountQuarantineActionRequests } from '@/lib/inboxActionReceipts';
-import {
-  CaseBanActionControl,
-  CaseMessageCleanupControls,
-  type MessageCleanupStateAction,
-} from './CaseMessageCleanupControls';
+import { CaseBanActionControl } from './CaseMessageCleanupControls';
 
-export interface CaseMessageCleanupIntegration {
-  readonly workspace: MessageCleanupCaseWorkspace;
-  readonly deleteOnlyJob: MessageCleanupJobDetail | null;
-  readonly combinedJob: MessageCleanupJobDetail | null;
-  readonly previewAction: MessageCleanupStateAction;
-  readonly executeAction: MessageCleanupStateAction;
-  readonly combinedBanAction: MessageCleanupStateAction;
-  readonly deleteOnlyRequest?: ModerationActionRequestSummary | null;
-  readonly combinedRequest?: ModerationActionRequestSummary | null;
-}
+import { MessageCleanupPanel } from './MessageCleanupPanel';
+import type { CaseMessageCleanupIntegration } from './caseToolBindings';
 
 export type WebCaseAction = Extract<
   CaseAction,
@@ -297,7 +281,10 @@ export function CaseActionControls({
   const ordinaryExecutableActions = executableActions.filter(
     (action) => action !== 'quarantine_compromised_account'
   );
-  if (executableActions.length === 0) {
+  if (
+    executableActions.length === 0 &&
+    !messageCleanup?.workspace.latestJobs.some(isMessageCleanupFinalizationRetry)
+  ) {
     return null;
   }
 
@@ -365,17 +352,6 @@ export function CaseActionControls({
           canQueueCaseActions && (action === 'ban_user' || action === 'ban_by_id') ? (
             <CaseBanActionControl
               banActionLabel={formatCaseAction(action)}
-              cleanup={
-                messageCleanup
-                  ? {
-                      executeAction: messageCleanup.combinedBanAction,
-                      durableRequest: messageCleanup.combinedRequest,
-                      jobDetail: messageCleanup.combinedJob,
-                      previewAction: messageCleanup.previewAction,
-                      workspace: messageCleanup.workspace,
-                    }
-                  : undefined
-              }
               durableRequest={actionRequestsByAction?.[action]}
               key={`${caseId}-${action}`}
               requestBaseHref={`/admin/guild/${guildId}/operations`}
@@ -540,19 +516,20 @@ export function CaseActionControls({
         )}
       </div>
       {messageCleanup ? (
-        <section className="case-message-cleanup-block" aria-label="Message cleanup">
-          <div className="section-heading compact-heading">
-            <h3>Message cleanup</h3>
-            <p className="muted">Preview case-linked messages before deleting them.</p>
-          </div>
-          <CaseMessageCleanupControls
-            executeAction={messageCleanup.executeAction}
-            durableRequest={messageCleanup.deleteOnlyRequest}
-            jobDetail={messageCleanup.deleteOnlyJob}
-            previewAction={messageCleanup.previewAction}
-            workspace={messageCleanup.workspace}
-          />
-        </section>
+        <MessageCleanupPanel
+          integration={messageCleanup}
+          policy={{
+            allowedActions: actions.filter(
+              (action): action is Extract<typeof action, 'ban_user' | 'ban_by_id'> =>
+                action === 'ban_user' || action === 'ban_by_id'
+            ),
+            canManageCleanup: true,
+            canQueueCaseActions,
+            canOpenReportCases: false,
+            kickReasonRequired: true,
+            banReasonRequired: true,
+          }}
+        />
       ) : null}
     </div>
   );

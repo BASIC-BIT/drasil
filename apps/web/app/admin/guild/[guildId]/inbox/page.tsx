@@ -68,6 +68,9 @@ export default async function ModerationInboxPage({ params }: PageProps) {
         deleteOnlyRequest: findMessageCleanupActionRequest(recentActionRequests, deleteOnlyJob),
         executeAction: executeCaseMessageCleanup.bind(null, guildId, caseId),
         previewAction: previewCaseMessageCleanup.bind(null, guildId, caseId),
+        loadedAt: new Date().toISOString(),
+        returnHref: `/admin/guild/${guildId}/inbox`,
+        requests: recentActionRequests.filter((request) => request.verificationEventId === caseId),
         workspace,
       },
     ] as const;

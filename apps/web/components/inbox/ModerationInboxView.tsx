@@ -1,4 +1,5 @@
 'use client';
+import type { CaseMessageCleanupIntegration } from '@/components/cases/caseToolBindings';
 
 import { useEffect, useMemo, useState } from 'react';
 import type {
@@ -11,7 +12,6 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 import {
   CaseActionControls,
   isExecutableCaseAction,
-  type CaseMessageCleanupIntegration,
   type QueueInboxCaseAction,
   type QueueCaseAction,
   type WebCaseAction,

@@ -6,7 +6,7 @@ import type {
 } from '@drasil/contracts';
 import { AccountControl } from '@/components/AccountControl';
 import { ThemeToggle } from '@/components/ThemeToggle';
-import { formatUtc } from '@/lib/casePresentation';
+import { Timestamp } from '@/components/workspace/Timestamp';
 import { MessageCleanupJobPoller } from './MessageCleanupJobPoller';
 
 const scopeLabels: Record<MessageCleanupJobSummary['scope'], string> = {
@@ -88,7 +88,13 @@ export function MessageCleanupOutcomes({
   );
 }
 
-function MessageCleanupItemRow({ item }: { readonly item: MessageCleanupItem }) {
+function MessageCleanupItemRow({
+  item,
+  channelNames,
+}: {
+  readonly item: MessageCleanupItem;
+  readonly channelNames?: Readonly<Record<string, string>>;
+}) {
   return (
     <li className="cleanup-message-row">
       <div className="cleanup-message-heading">
@@ -96,8 +102,13 @@ function MessageCleanupItemRow({ item }: { readonly item: MessageCleanupItem }) 
           <span className={`status ${messageCleanupStatusClass(item.status)}`}>
             {itemStatusLabels[item.status]}
           </span>
-          <strong>Channel {item.channelId}</strong>
-          <span className="muted">{formatUtc(item.messageCreatedAt)}</span>
+          <strong>Channel {channelNames?.[item.channelId] ?? item.channelId}</strong>
+          <span>
+            Message {item.messageId} · Author {item.authorId}
+          </span>
+          <span className="muted">
+            <Timestamp value={item.messageCreatedAt} />
+          </span>
         </div>
         <div className="cleanup-message-links">
           {item.sourceMessageUrl ? (
@@ -142,7 +153,9 @@ function MessageCleanupItemRow({ item }: { readonly item: MessageCleanupItem }) 
 
 export function MessageCleanupItemList({
   items,
+  channelNames,
 }: {
+  readonly channelNames?: Readonly<Record<string, string>>;
   readonly items: readonly MessageCleanupItem[];
 }) {
   if (items.length === 0) {
@@ -153,7 +166,7 @@ export function MessageCleanupItemList({
     <section aria-label="Message cleanup preview">
       <ul className="cleanup-message-list">
         {items.map((item) => (
-          <MessageCleanupItemRow item={item} key={item.id} />
+          <MessageCleanupItemRow item={item} key={item.id} channelNames={channelNames} />
         ))}
       </ul>
     </section>
@@ -190,7 +203,9 @@ export function MessageCleanupJobSummaryBlock({ job }: { readonly job: MessageCl
         </div>
         <div>
           <dt>Requested</dt>
-          <dd>{formatUtc(job.createdAt)}</dd>
+          <dd>
+            <Timestamp value={job.createdAt} />
+          </dd>
         </div>
         <div>
           <dt>Requested by</dt>
