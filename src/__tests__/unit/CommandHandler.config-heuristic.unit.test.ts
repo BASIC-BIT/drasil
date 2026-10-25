@@ -1,5 +1,5 @@
 import { MessageFlags } from 'discord.js';
-import { buildHandler } from './commandHandlerTestHarness';
+import { buildHandler, configurationResponseMocks } from './commandHandlerTestHarness';
 
 describe('CommandHandler heuristic config commands (unit)', () => {
   it('handles /config heuristic set-threshold', async () => {
@@ -31,6 +31,7 @@ describe('CommandHandler heuristic config commands (unit)', () => {
         getInteger: jest.fn().mockReturnValue(8),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      ...configurationResponseMocks(),
     } as any;
 
     await handler.handleSlashCommand(interaction);
@@ -38,9 +39,8 @@ describe('CommandHandler heuristic config commands (unit)', () => {
     expect(configService.updateHeuristicSettings).toHaveBeenCalledWith('guild-1', {
       messageThreshold: 8,
     });
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('Updated heuristic threshold'),
-      flags: MessageFlags.Ephemeral,
     });
   });
 
@@ -73,6 +73,7 @@ describe('CommandHandler heuristic config commands (unit)', () => {
         getString: jest.fn().mockReturnValue('unknown keyword'),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      ...configurationResponseMocks(),
     } as any;
 
     await handler.handleSlashCommand(interaction);
@@ -108,6 +109,7 @@ describe('CommandHandler heuristic config commands (unit)', () => {
         getString: jest.fn().mockReturnValue('   '),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      ...configurationResponseMocks(),
     } as any;
 
     await handler.handleSlashCommand(interaction);

@@ -1,3 +1,4 @@
+import { fetchDiscordRead } from './discordReadRecovery';
 import { readOptionalEnv, requireEnv } from './env';
 import { fixtureGuildResources, fixtureGuilds, isWebE2eFixtureMode } from './e2eFixtures';
 
@@ -46,6 +47,8 @@ export interface DiscordRole {
 }
 
 export interface DiscordChannel {
+  readonly guild_id?: string;
+  readonly parent_id?: string | null;
   readonly id: string;
   readonly name: string;
   readonly type: number;
@@ -68,6 +71,7 @@ export interface DiscordMessageAttachment {
   readonly url?: string;
   readonly proxy_url?: string;
   readonly content_type?: string;
+  readonly size?: number;
 }
 
 export interface DiscordMessage {
@@ -130,11 +134,11 @@ export async function exchangeDiscordCode(args: {
 }
 
 export async function fetchDiscordUser(accessToken: string): Promise<DiscordUser> {
-  const response = await fetch(`${discordApiBaseUrl()}/users/@me`, {
-    headers: { authorization: `Bearer ${accessToken}` },
-    cache: 'no-store',
-  });
-  return readDiscordJson<DiscordUser>(response);
+  return fetchDiscordRead(
+    new URL(`${discordApiBaseUrl()}/users/@me`),
+    { headers: { authorization: `Bearer ${accessToken}` }, cache: 'no-store' },
+    readDiscordJson<DiscordUser>
+  );
 }
 
 export async function fetchDiscordGuilds(accessToken: string): Promise<DiscordGuildSummary[]> {
@@ -152,11 +156,11 @@ export async function fetchDiscordGuilds(accessToken: string): Promise<DiscordGu
       url.searchParams.set('after', after);
     }
 
-    const response = await fetch(url, {
-      headers: { authorization: `Bearer ${accessToken}` },
-      cache: 'no-store',
-    });
-    const page = await readDiscordJson<DiscordGuildSummary[]>(response);
+    const page = await fetchDiscordRead(
+      url,
+      { headers: { authorization: `Bearer ${accessToken}` }, cache: 'no-store' },
+      readDiscordJson<DiscordGuildSummary[]>
+    );
     guilds.push(...page);
     if (page.length < DISCORD_GUILD_PAGE_LIMIT) {
       return guilds;
@@ -175,11 +179,11 @@ async function fetchBotJson<T>(path: string): Promise<T> {
       'DRASIL_WEB_BOT_TOKEN or DISCORD_TOKEN is required for live setup diagnostics.'
     );
   }
-  const response = await fetch(`${discordApiBaseUrl()}${path}`, {
-    headers: { authorization: `Bot ${botToken}` },
-    cache: 'no-store',
-  });
-  return readDiscordJson<T>(response);
+  return fetchDiscordRead(
+    new URL(`${discordApiBaseUrl()}${path}`),
+    { headers: { authorization: `Bot ${botToken}` }, cache: 'no-store' },
+    readDiscordJson<T>
+  );
 }
 
 export async function fetchDiscordBotUser(): Promise<DiscordUser> {
@@ -267,4 +271,57 @@ export async function fetchBotChannelMessages(
   }
 
   return messages.reverse();
+}
+
+export async function fetchDiscordGuild(
+  guildId: string
+): Promise<{ readonly id: string; readonly owner_id: string; readonly name?: string }> {
+  return fetchBotJson(`/guilds/${guildId}`);
+}
+export async function fetchDiscordGuildMember(
+  guildId: string,
+  userId: string
+): Promise<DiscordGuildMember> {
+  return fetchBotJson(`/guilds/${guildId}/members/${userId}`);
+}
+export async function fetchDiscordGuildChannels(guildId: string): Promise<DiscordChannel[]> {
+  assertDiscordId(guildId);
+  return fetchBotJson(`/guilds/${guildId}/channels`);
+}
+export async function fetchDiscordGuildRoles(guildId: string): Promise<DiscordRole[]> {
+  return fetchBotJson(`/guilds/${guildId}/roles`);
+}
+
+/** Narrow read APIs: callers cannot supply Discord paths or arbitrary URLs. */
+export async function fetchDiscordChannel(channelId: string): Promise<DiscordChannel> {
+  assertDiscordId(channelId);
+  return fetchBotJson(`/channels/${channelId}`);
+}
+export interface DiscordThreadMember {
+  readonly id: string;
+  readonly user_id: string;
+}
+export async function fetchDiscordThreadMember(
+  threadId: string,
+  userId: string
+): Promise<DiscordThreadMember> {
+  assertDiscordId(threadId);
+  assertDiscordId(userId);
+  return fetchBotJson(`/channels/${threadId}/thread-members/${userId}`);
+}
+export async function fetchBotMessagePage(
+  channelId: string,
+  limit: number,
+  before: string | null
+): Promise<DiscordMessage[]> {
+  assertDiscordId(channelId);
+  if (before) assertDiscordId(before);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100)
+    throw new Error('Invalid Discord page size.');
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (before) params.set('before', before);
+  return fetchBotJson(`/channels/${channelId}/messages?${params.toString()}`);
+}
+function assertDiscordId(id: string): void {
+  if (!/^\d{17,20}$/.test(id)) throw new Error('Invalid Discord ID.');
 }

@@ -203,6 +203,13 @@ resource "aws_secretsmanager_secret" "observability_hash_key" {
   kms_key_id              = aws_kms_key.prod.arn
 }
 
+resource "aws_secretsmanager_secret" "captcha_image_answer" {
+  name = "${local.secrets_prefix}/DRASIL_CAPTCHA_IMAGE_ANSWER_SECRET"
+  #checkov:skip=CKV2_AWS_57:Rotation invalidates pending image challenges and requires coordinated bot/web rollout; see docs/captcha-methods-rollout.md.
+  recovery_window_in_days = 7
+  kms_key_id              = aws_kms_key.prod.arn
+}
+
 resource "aws_secretsmanager_secret" "posthog_project_api_key" {
   name = "${local.secrets_prefix}/POSTHOG_PROJECT_API_KEY"
   #checkov:skip=CKV2_AWS_57:Automatic rotation requires dedicated rotation Lambda + runbook and is deferred intentionally.
@@ -254,6 +261,7 @@ data "aws_iam_policy_document" "ecs_task_execution_secrets" {
       aws_secretsmanager_secret.langfuse_secret_key.arn,
       aws_secretsmanager_secret.database_url.arn,
       aws_secretsmanager_secret.observability_hash_key.arn,
+      aws_secretsmanager_secret.captcha_image_answer.arn,
       aws_secretsmanager_secret.posthog_project_api_key.arn
     ]
   }
@@ -320,6 +328,10 @@ resource "aws_ecs_task_definition" "bot" {
       essential = true
       environment = [
         {
+          name  = "DRASIL_MCP_ENABLED"
+          value = tostring(var.drasil_mcp_enabled)
+        },
+        {
           name  = "LANGFUSE_TRACING_ENABLED"
           value = tostring(var.langfuse_tracing_enabled)
         },
@@ -376,6 +388,10 @@ resource "aws_ecs_task_definition" "bot" {
         {
           name      = "OBSERVABILITY_HASH_KEY"
           valueFrom = aws_secretsmanager_secret.observability_hash_key.arn
+        },
+        {
+          name      = "DRASIL_CAPTCHA_IMAGE_ANSWER_SECRET"
+          valueFrom = aws_secretsmanager_secret.captcha_image_answer.arn
         },
         {
           name      = "POSTHOG_PROJECT_API_KEY"

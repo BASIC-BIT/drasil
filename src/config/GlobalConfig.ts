@@ -1,3 +1,4 @@
+import { shippedHeuristicDefaults } from '@drasil/application';
 /**
  * Global configuration settings for the bot
  * These settings apply across all servers/guilds
@@ -44,25 +45,13 @@ class GlobalConfig {
       autoSetupVerificationChannels: true, // Default to true for convenience
       useNewVerificationFlow: false, // Default to false for gradual rollout
       defaultServerSettings: {
-        messageThreshold: 5,
-        messageTimeframe: 10,
+        messageThreshold: shippedHeuristicDefaults.messageThreshold,
+        messageTimeframe: shippedHeuristicDefaults.timeframeSeconds,
         minConfidenceThreshold: 70,
         messageRetentionDays: 7,
         detectionRetentionDays: 30,
       },
-      defaultSuspiciousKeywords: [
-        'nitro scam',
-        'free discord nitro',
-        'free nitro',
-        'discord nitro',
-        'steam gift',
-        'gift card',
-        'click this link',
-        'claim your prize',
-        'crypto giveaway',
-        'airdrop',
-        'free robux',
-      ],
+      defaultSuspiciousKeywords: [...shippedHeuristicDefaults.suspiciousKeywords],
     };
 
     // Load settings from environment variables

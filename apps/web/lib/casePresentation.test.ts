@@ -38,6 +38,8 @@ describe('casePresentation', () => {
 
   it('distinguishes current CAPTCHA status from persisted generation outcomes', () => {
     const entry = {
+      method: 'discord_image' as const,
+      methodRevision: 2,
       generation: 1,
       requestSource: 'moderator' as const,
       passEffect: 'evidence_only' as const,
@@ -54,6 +56,7 @@ describe('casePresentation', () => {
     };
 
     expect(formatCaptchaHistoryEntry(entry, 'passed')).toContain('outcome passed');
+    expect(formatCaptchaHistoryEntry(entry)).toContain('Discord image CAPTCHA. Method revision 2.');
     expect(formatCaptchaHistoryEntry(entry)).toContain('outcome no outcome recorded');
     expect(formatCaptchaHistoryEntry(entry)).toContain('moderator notice updated');
   });

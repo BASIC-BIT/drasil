@@ -54,6 +54,7 @@ function buildChallenge(overrides: Partial<CaptchaChallenge> = {}): CaptchaChall
     server_id: 'guild-1',
     user_id: 'user-1',
     provider: CaptchaProvider.TURNSTILE,
+    method_revision: 0,
     status: CaptchaChallengeStatus.PENDING,
     request_source: CaptchaChallengeRequestSource.MODERATOR,
     pass_effect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
@@ -80,10 +81,19 @@ function buildChallenge(overrides: Partial<CaptchaChallenge> = {}): CaptchaChall
 function createHarness(settings: Record<string, unknown> = { captcha_mode: 'manual' }) {
   const challenge = buildChallenge();
   const challenges: jest.Mocked<ICaptchaChallengeRepository> = {
+    requestImageAssistance: jest.fn().mockResolvedValue(true),
+    isImageBindingEligible: jest.fn().mockResolvedValue(true),
+    invalidateImageMaterial: jest.fn().mockResolvedValue(false),
+    storeImageMaterial: jest.fn().mockResolvedValue(false),
+    findImageMaterial: jest.fn().mockResolvedValue(null),
+    deleteImageMaterial: jest.fn().mockResolvedValue(undefined),
+    cleanupImageMaterial: jest.fn().mockResolvedValue(0),
     findById: jest.fn().mockResolvedValue(challenge),
     findByCaseId: jest.fn().mockResolvedValue(null),
     create: jest.fn().mockImplementation(async (input: CaptchaChallengeIssueInput) => ({
       ...challenge,
+      provider: input.provider,
+      method_revision: input.methodRevision,
       link_token_hash: input.tokenHash,
       expires_at: input.expiresAt,
       request_source: input.requestSource,
@@ -175,6 +185,60 @@ describe('CaptchaChallengeService', () => {
     }
   });
 
+  it.each([false, true])(
+    'rejects delegated saved revision drift before request/retry effects (%s)',
+    async (retry) => {
+      const { service, challenges } = createHarness();
+      const approved = { expectedCaseRevision: 1 };
+      await expect(
+        service.requestChallenge({
+          ...approved,
+          verificationEventId: 'case-1',
+          requestSource: CaptchaChallengeRequestSource.MODERATOR,
+          requestedBy: 'moderator-1',
+          retry,
+          ...(retry ? { expectedChallengeId: 'challenge-1', expectedGeneration: 1 } : {}),
+        })
+      ).rejects.toThrow('stale_state');
+      expect(challenges.create).not.toHaveBeenCalled();
+      expect(challenges.retry).not.toHaveBeenCalled();
+    }
+  );
+
+  it('keeps an unknown database reply failure distinct from a proven stale revision rejection', async () => {
+    const { service, challenges, threads } = createHarness();
+    const unknown = new Error('Database response unavailable');
+    challenges.create.mockRejectedValue(unknown);
+    await expect(
+      service.requestChallenge({
+        verificationEventId: 'case-1',
+        requestSource: CaptchaChallengeRequestSource.MODERATOR,
+        requestedBy: 'moderator-1',
+        expectedCaseRevision: 2,
+      })
+    ).rejects.toBe(unknown);
+    expect(threads.sendCaptchaChallenge).not.toHaveBeenCalled();
+  });
+
+  it('delivers image generation controls without a public origin and dispatches persisted provider', async () => {
+    delete process.env.DRASIL_WEB_PUBLIC_URL;
+    const { service, challenges, threads } = createHarness({
+      captcha_method: 'discord_image',
+      captcha_mode: 'manual',
+    });
+    const result = await service.requestChallenge({
+      verificationEventId: 'case-1',
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+    });
+    expect(result.delivered).toBe(true);
+    expect(challenges.create.mock.calls[0][0]).toMatchObject({ provider: 'discord_image' });
+    expect(threads.sendCaptchaChallenge).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'case-1' }),
+      { challengeId: 'challenge-1', generation: 1 }
+    );
+    expect(challenges.recordDeliveryFailure).not.toHaveBeenCalled();
+  });
+
   it('creates a case-scoped challenge and stores only the link token hash', async () => {
     const { challenges, notifications, service, threads } = createHarness();
 
@@ -188,6 +252,7 @@ describe('CaptchaChallengeService', () => {
 
     const input = challenges.create.mock.calls[0][0];
     const deliveredUrl = threads.sendCaptchaChallenge.mock.calls[0][1];
+    if (typeof deliveredUrl !== 'string') throw new Error('Expected Turnstile URL');
     const token = new URL(deliveredUrl).pathname.split('/').at(-1) as string;
     expect(input.verificationEventId).toBe('case-1');
     expect(input.caseRevision).toBe(2);

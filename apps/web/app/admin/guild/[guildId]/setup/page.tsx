@@ -1,3 +1,6 @@
+import { CaptchaSettingsFields } from '@/components/setup/CaptchaSettingsFields';
+import { getEffectiveCaptchaMethod } from '@drasil/contracts';
+import { captchaImageSecretConfigured } from '@drasil/application';
 import Link from 'next/link';
 import { randomUUID } from 'node:crypto';
 import { redirect } from 'next/navigation';
@@ -16,10 +19,6 @@ import {
   CAPTCHA_DEFAULT_MAX_SUBMISSIONS,
   CAPTCHA_DEFAULT_MODE,
   CAPTCHA_DEFAULT_PASS_ACTION,
-  CAPTCHA_MAX_CHALLENGE_LIFETIME_HOURS,
-  CAPTCHA_MAX_MAX_SUBMISSIONS,
-  CAPTCHA_MIN_CHALLENGE_LIFETIME_HOURS,
-  CAPTCHA_MIN_MAX_SUBMISSIONS,
   HEURISTIC_DEFAULT_MESSAGE_THRESHOLD,
   HEURISTIC_DEFAULT_TIMEFRAME_SECONDS,
   HEURISTIC_KEYWORDS_INPUT_MAX_LENGTH,
@@ -227,8 +226,14 @@ export default async function GuildSetupPage({ params }: PageProps) {
     server?.settings.captcha_challenge_lifetime_hours ?? CAPTCHA_DEFAULT_CHALLENGE_LIFETIME_HOURS;
   const captchaMaxSubmissions =
     server?.settings.captcha_max_submissions ?? CAPTCHA_DEFAULT_MAX_SUBMISSIONS;
-  const captchaConfigurationIssues =
-    captchaMode === 'off' ? [] : captchaProviderConfigurationIssues();
+  const captchaMethod = getEffectiveCaptchaMethod(server?.settings);
+  const captchaReadinessIssues = {
+    none: [],
+    turnstile: captchaProviderConfigurationIssues(),
+    discord_image: captchaImageSecretConfigured(process.env.DRASIL_CAPTCHA_IMAGE_ANSWER_SECRET)
+      ? []
+      : ['DRASIL_CAPTCHA_IMAGE_ANSWER_SECRET'],
+  };
   const caseResponderRoleIds = server?.settings.case_responder_role_ids ?? [];
   const caseResponderRoutingMode = server?.settings.case_responder_routing_mode ?? 'off';
   const caseResponderThreadMemberCap =
@@ -1069,62 +1074,14 @@ export default async function GuildSetupPage({ params }: PageProps) {
           </div>
         </div>
 
-        <div>
-          <h2>Browser Security Checks</h2>
-          <p className="muted">
-            Add an optional Turnstile check to standard cases. Moderators can request a check in
-            manual mode; suspicious-join mode can also add one when a join case is first created.
-          </p>
-          {captchaConfigurationIssues.length > 0 ? (
-            <p className="danger-text" role="alert">
-              Browser checks are not ready. Operator configuration needs:{' '}
-              {captchaConfigurationIssues.join(', ')}.
-            </p>
-          ) : null}
-        </div>
-        <div className="form-grid">
-          <div className="field">
-            <label htmlFor="captchaMode">Security check mode</label>
-            <select defaultValue={captchaMode} id="captchaMode" name="captchaMode">
-              <option value="off">Off</option>
-              <option value="manual">Moderator request only</option>
-              <option value="suspicious_join">Moderator request and suspicious joins</option>
-            </select>
-          </div>
-          <div className="field">
-            <label htmlFor="captchaPassAction">Automatic join pass behavior</label>
-            <select
-              defaultValue={captchaPassAction}
-              id="captchaPassAction"
-              name="captchaPassAction"
-            >
-              <option value="evidence_only">Record evidence only</option>
-              <option value="verify_join_only">Verify unchanged join-only case</option>
-            </select>
-          </div>
-          <div className="field">
-            <label htmlFor="captchaChallengeLifetimeHours">Link lifetime hours</label>
-            <input
-              defaultValue={captchaChallengeLifetimeHours}
-              id="captchaChallengeLifetimeHours"
-              max={CAPTCHA_MAX_CHALLENGE_LIFETIME_HOURS}
-              min={CAPTCHA_MIN_CHALLENGE_LIFETIME_HOURS}
-              name="captchaChallengeLifetimeHours"
-              type="number"
-            />
-          </div>
-          <div className="field">
-            <label htmlFor="captchaMaxSubmissions">Maximum submissions</label>
-            <input
-              defaultValue={captchaMaxSubmissions}
-              id="captchaMaxSubmissions"
-              max={CAPTCHA_MAX_MAX_SUBMISSIONS}
-              min={CAPTCHA_MIN_MAX_SUBMISSIONS}
-              name="captchaMaxSubmissions"
-              type="number"
-            />
-          </div>
-        </div>
+        <CaptchaSettingsFields
+          method={captchaMethod}
+          mode={captchaMode}
+          passAction={captchaPassAction}
+          lifetimeHours={captchaChallengeLifetimeHours}
+          maxSubmissions={captchaMaxSubmissions}
+          readinessIssues={captchaReadinessIssues}
+        />
 
         <div>
           <h2>Verification Prompt And Context</h2>

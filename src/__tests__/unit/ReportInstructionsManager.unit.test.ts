@@ -1,3 +1,5 @@
+import { prepareQueuedRequest } from '../../application/requestRuntime';
+import { SetupEffectsStateChangedError } from '../../application/adapters/approvedSetup';
 import { Client, Collection, Message, TextChannel } from 'discord.js';
 import { IConfigService } from '../../config/ConfigService';
 import { ReportInstructionsManager } from '../../controllers/ReportInstructionsManager';
@@ -930,4 +932,59 @@ describe('ReportInstructionsManager deliberate repost', () => {
       expect(fixture.config.updateServerSettings).not.toHaveBeenCalled();
     }
   );
+});
+
+it('keeps the actual post-send panel recovery wrapper uncertain in delegated execution', async () => {
+  const fixture = buildManager('guild');
+  fixture.config.updateServerSettings
+    .mockImplementationOnce(fixture.save)
+    .mockImplementationOnce(async () => {
+      fixture.config.getServerConfig.mockRejectedValueOnce(new SetupEffectsStateChangedError());
+      throw new SetupEffectsStateChangedError();
+    });
+  const request = {
+    id: 'request',
+    server_id: 'guild',
+    actor_id: 'actor',
+    actor_surface: 'mcp',
+    target_user_id: null,
+    action_type: 'upsert_report_instructions',
+    metadata: {
+      setup_command: {
+        kind: 'upsert_report_instructions',
+        channelId: 'channel',
+        repost: true,
+        expectedMessageId: '100',
+        expectedChannelId: 'channel',
+        submissionId: 'submission',
+      },
+    },
+  };
+  const prepared = await prepareQueuedRequest({
+    request: request as never,
+    analytics: {} as never,
+    runtime: {
+      delegation: {
+        authorizeDelegatedRequest: async () => ({
+          kind: 'new_execution',
+          execution: { workflowId: 'upsert_report_instructions_repost' },
+        }),
+      },
+      setupRuntime: {
+        forExecution: () => ({
+          execute: async () => ({
+            kind: 'outcome',
+            outcome: { kind: 'upsert_report_instructions', result: await fixture.upsert() },
+          }),
+        }),
+      },
+    } as never,
+  });
+  await expect(prepared.execute()).resolves.toMatchObject({
+    state: 'uncertain',
+    code: 'report_panel_recovery_required',
+  });
+  expect(fixture.channel.send).toHaveBeenCalledTimes(1);
+  expect(fixture.newMessage.delete).not.toHaveBeenCalled();
+  expect(fixture.settings().report_instructions_pending_publication).not.toBeNull();
 });

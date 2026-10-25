@@ -48,11 +48,31 @@ npm run format:check
 npm run check
 ```
 
-If you're touching Prisma or anything that hits the DB, also run:
+Database suites truncate their fixtures. Use a dedicated local Postgres 16 instance
+on loopback port `55433` with database `drasil_mcp_test`; the development Supabase
+database is a separate target. For example, provision the disposable instance once:
 
 ```bash
+docker run -d --name drasil-test -p 127.0.0.1:55433:5432 \
+  -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_DB=drasil_mcp_test postgres:16
+```
+
+After Postgres is ready, configure all three URLs identically and prepare its schema:
+
+```bash
+export TEST_DATABASE_URL='postgresql://postgres:postgres@127.0.0.1:55433/drasil_mcp_test?schema=public'
+export DATABASE_URL="$TEST_DATABASE_URL"
+export POSTGRES_DB_URL="$TEST_DATABASE_URL"
+npm run test:db:prepare
 npm run test:integration
 ```
+
+The test guard accepts only this local target or CI's loopback `5432/drasil_test`,
+with an absent or `public` schema parameter. Run database consumers serially,
+including across worktrees. `npm run check:ci` prepares the database before web
+coverage, then runs the native, web issuer/DB and MCP browser suites in order.
+`npm run db:reset:local` retains its separate development-database behavior.
 
 ## Repo settings (one-time)
 

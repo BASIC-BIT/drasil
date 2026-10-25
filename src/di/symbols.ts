@@ -7,6 +7,7 @@
 export const TYPES = {
   // Core classes
   Bot: Symbol.for('Bot'),
+  BotApplication: Symbol.for('BotApplication'),
 
   // Services
   HeuristicService: Symbol.for('HeuristicService'),
@@ -41,6 +42,7 @@ export const TYPES = {
   CaseThreadClosureSweepService: Symbol.for('CaseThreadClosureSweepService'),
   CaseRoleReleaseReconciliationService: Symbol.for('CaseRoleReleaseReconciliationService'),
   CaptchaChallengeService: Symbol.for('CaptchaChallengeService'),
+  CaptchaImageService: Symbol.for('CaptchaImageService'),
 
   // Repositories
   BaseRepository: Symbol.for('BaseRepository'),

@@ -1,3 +1,14 @@
+import { captchaProviderConfigurationIssues } from './turnstile';
+import { applyCaptchaMethodChange } from '@drasil/application/postgres';
+import { captchaImageSecretConfigured, materializeSetupStoredChange } from '@drasil/application';
+import {
+  ActionDeniedError,
+  type SetupWritePrecondition,
+  setupStateMatches,
+  parseSetupStoredRecord,
+} from '@drasil/application';
+import { buildSetupSettingsPatch, normalizeOptionalId } from '@drasil/application/setup-settings';
+export { buildSetupSettingsPatch } from '@drasil/application/setup-settings';
 import { Pool, type PoolConfig } from 'pg';
 import {
   guildSetupUpdateSchema,
@@ -21,7 +32,10 @@ export interface SetupDataAdapter {
   listConfiguredGuildIds(guildIds: readonly string[]): Promise<Set<string>>;
   listCoreConfiguredGuildIds(guildIds: readonly string[]): Promise<Set<string>>;
   getServer(guildId: string): Promise<SetupServerRecord | null>;
-  updateGuildSetup(update: GuildSetupUpdate): Promise<SetupServerRecord>;
+  updateGuildSetup(
+    update: GuildSetupUpdate,
+    precondition?: SetupWritePrecondition
+  ): Promise<SetupServerRecord>;
 }
 
 const SETUP_SUMMARY_READ_CONCURRENCY = 8;
@@ -145,97 +159,12 @@ function parseServerRow(row: Record<string, unknown>): SetupServerRecord {
   });
 }
 
-function normalizeOptionalId(value: string | null | undefined): string | null | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : null;
-}
-
 function nextOptionalId(
   value: string | null | undefined,
   current: string | null | undefined
 ): string | null {
   const normalized = normalizeOptionalId(value);
   return normalized === undefined ? (current ?? null) : normalized;
-}
-
-export function buildSetupSettingsPatch(update: GuildSetupUpdate): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries({
-      observed_detection_notification_channel_id: normalizeOptionalId(
-        update.observedNotificationChannelId
-      ),
-      moderation_queue_channel_id: normalizeOptionalId(update.moderationQueueChannelId),
-      report_instructions_channel_id: normalizeOptionalId(update.reportInstructionsChannelId),
-      detection_response_mode: update.detectionResponseMode,
-      message_detection_response_mode: update.messageDetectionResponseMode,
-      join_detection_response_mode: update.joinDetectionResponseMode,
-      observed_detection_min_confidence_threshold: update.observedDetectionMinConfidenceThreshold,
-      observed_detection_notification_window_minutes:
-        update.observedDetectionNotificationWindowMinutes,
-      automatic_detection_exempt_moderators: update.automaticDetectionExemptModerators,
-      admin_case_open_requires_reason: update.adminCaseOpenRequiresReason,
-      moderator_ban_action_requires_reason: update.moderatorBanActionRequiresReason,
-      moderator_kick_action_requires_reason: update.moderatorKickActionRequiresReason,
-      moderator_ban_action_enabled: update.moderatorBanActionEnabled,
-      moderator_kick_action_enabled: update.moderatorKickActionEnabled,
-      observed_action_kick_enabled: update.observedActionKickEnabled,
-      message_detection_auto_kick_enabled: update.messageDetectionAutoKickEnabled,
-      join_detection_auto_kick_enabled: update.joinDetectionAutoKickEnabled,
-      report_intake_auto_kick_enabled: update.reportIntakeAutoKickEnabled,
-      auto_kick_min_confidence_threshold: update.autoKickMinConfidenceThreshold,
-      manual_intake_enabled: update.manualIntakeEnabled,
-      manual_intake_role_id: normalizeOptionalId(update.manualIntakeRoleId),
-      manual_intake_grace_period_seconds: update.manualIntakeGracePeriodSeconds,
-      case_role_lockdown_allowed_channel_ids: update.caseRoleLockdownAllowedChannelIds,
-      case_role_lockdown_allowed_category_ids: update.caseRoleLockdownAllowedCategoryIds,
-      user_report_reason_required: update.userReportReasonRequired,
-      user_report_external_response_mode: update.userReportExternalResponseMode,
-      report_intake_confirmed_response_mode: update.reportIntakeConfirmedResponseMode,
-      analytics_consent_level: update.analyticsConsentLevel,
-      case_review_reminders_enabled: update.caseReviewRemindersEnabled,
-      case_review_reminder_stale_hours: update.caseReviewReminderStaleHours,
-      case_review_reminder_repeat_hours: update.caseReviewReminderRepeatHours,
-      case_review_very_stale_days: update.caseReviewVeryStaleDays,
-      report_ai_triage_enabled: update.reportAiTriageEnabled,
-      report_ai_analyze_text: update.reportAiAnalyzeText,
-      report_ai_analyze_images: update.reportAiAnalyzeImages,
-      report_ai_max_action: update.reportAiMaxAction,
-      report_ai_open_case_threshold: update.reportAiOpenCaseThreshold,
-      report_ai_max_images: update.reportAiMaxImages,
-      report_ai_max_image_bytes: update.reportAiMaxImageBytes,
-      role_gate_enabled: update.roleGateEnabled,
-      honeypot_role_id: normalizeOptionalId(update.honeypotRoleId),
-      member_access_role_id: normalizeOptionalId(update.memberAccessRoleId),
-      honeypot_role_response_mode: update.honeypotRoleResponseMode,
-      role_quarantine_mode: update.roleQuarantineMode,
-      role_quarantine_exempt_role_ids: update.roleQuarantineExemptRoleIds,
-      account_quarantine_enabled: update.accountQuarantineEnabled,
-      captcha_mode: update.captchaMode,
-      captcha_pass_action: update.captchaPassAction,
-      captcha_challenge_lifetime_hours: update.captchaChallengeLifetimeHours,
-      captcha_max_submissions: update.captchaMaxSubmissions,
-      verification_ai_thread_analysis_enabled: update.verificationAnalysisEnabled,
-      verification_ai_thread_analysis_message_limit: update.verificationAnalysisMessageLimit,
-      verification_ai_max_action: update.verificationAnalysisMaxAction,
-      verification_ai_restrict_threshold: update.verificationAnalysisRestrictThreshold,
-      verification_prompt_template: update.verificationPromptTemplate,
-      server_about: update.serverAbout,
-      verification_context: update.verificationContext,
-      expected_topics: update.expectedTopics,
-      case_responder_role_ids: update.caseResponderRoleIds,
-      case_responder_routing_mode: update.caseResponderRoutingMode,
-      case_responder_thread_member_cap: update.caseResponderThreadMemberCap,
-      message_deletion_enabled: update.messageDeletionEnabled,
-      message_deletion_source_message_enabled: update.messageDeletionSourceMessageEnabled,
-      message_deletion_watchlist_enabled: update.messageDeletionWatchlistEnabled,
-      message_deletion_watchlist_disabled_default_ids:
-        update.messageDeletionWatchlistDisabledDefaultIds,
-      message_deletion_watchlist_custom_terms: update.messageDeletionWatchlistCustomTerms,
-    }).filter((entry) => entry[1] !== undefined)
-  );
 }
 
 function hasHeuristicColumnsPatch(update: GuildSetupUpdate): boolean {
@@ -286,14 +215,47 @@ export class PostgresSetupDataAdapter implements SetupDataAdapter {
     return row ? parseServerRow(row) : null;
   }
 
-  public async updateGuildSetup(rawUpdate: GuildSetupUpdate): Promise<SetupServerRecord> {
+  public async updateGuildSetup(
+    rawUpdate: GuildSetupUpdate,
+    precondition?: SetupWritePrecondition
+  ): Promise<SetupServerRecord> {
     const update = guildSetupUpdateSchema.parse(rawUpdate);
-    const current = await this.getServer(update.guildId);
     const settingsPatch = buildSetupSettingsPatch(update);
-    const updatedBy = update.updatedBy ?? current?.updated_by ?? null;
     const client = await getPostgresPool().connect();
     try {
       await client.query('begin');
+      if (!precondition)
+        await client.query(
+          'insert into servers(guild_id) values($1) on conflict(guild_id) do nothing',
+          [update.guildId]
+        );
+      const locked = await client.query('select * from servers where guild_id=$1 for update', [
+        update.guildId,
+      ]);
+      const row = locked.rows[0] as Record<string, unknown> | undefined;
+      const current = row
+        ? precondition
+          ? parseSetupStoredRecord(row)
+          : parseServerRow(row)
+        : null;
+      if (precondition && (!current || !setupStateMatches(current, precondition)))
+        throw new ActionDeniedError('stale_state');
+      if (!current) throw new Error('Server configuration is unavailable.');
+      const materialized = materializeSetupStoredChange(current, {
+        settings: settingsPatch,
+        captchaReadiness: {
+          turnstile: captchaProviderConfigurationIssues().length === 0,
+          discord_image: captchaImageSecretConfigured(
+            process.env.DRASIL_CAPTCHA_IMAGE_ANSWER_SECRET
+          ),
+        },
+      });
+      const revision = await applyCaptchaMethodChange(client, update.guildId, current.settings, {
+        ...current.settings,
+        ...materialized.settings,
+      });
+      const storedSettingsPatch = { ...materialized.settings, captcha_method_revision: revision };
+      const updatedBy = update.updatedBy ?? current?.updated_by ?? null;
       let result = await client.query(
         `insert into servers (
           guild_id,
@@ -325,22 +287,10 @@ export class PostgresSetupDataAdapter implements SetupDataAdapter {
           nextOptionalId(update.adminChannelId, current?.admin_channel_id),
           nextOptionalId(update.verificationChannelId, current?.verification_channel_id),
           nextOptionalId(update.adminNotificationRoleId, current?.admin_notification_role_id),
-          JSON.stringify(settingsPatch),
+          JSON.stringify(storedSettingsPatch),
           updatedBy,
         ]
       );
-
-      if (update.captchaMode === 'off') {
-        await client.query(
-          `update captcha_challenges
-           set status = 'cancelled'::captcha_challenge_status,
-               cancelled_at = now(),
-               updated_at = now()
-           where server_id = $1
-             and status = 'pending'::captcha_challenge_status`,
-          [update.guildId]
-        );
-      }
 
       if (hasHeuristicColumnsPatch(update)) {
         result = await client.query(
@@ -432,7 +382,11 @@ export class ConvexSetupDataAdapter implements SetupDataAdapter {
     return setupServerRecordSchema.parse(await response.json());
   }
 
-  public async updateGuildSetup(update: GuildSetupUpdate): Promise<SetupServerRecord> {
+  public async updateGuildSetup(
+    update: GuildSetupUpdate,
+    precondition?: SetupWritePrecondition
+  ): Promise<SetupServerRecord> {
+    if (precondition) throw new ActionDeniedError('approved_setup_executor_required');
     const result = await this.fetchJson<unknown>('/api/setup/guild', {
       method: 'POST',
       body: JSON.stringify(update),
@@ -460,7 +414,11 @@ export class FixtureSetupDataAdapter implements SetupDataAdapter {
     return guildId === fixtureGuildId ? fixtureServerRecord() : null;
   }
 
-  public async updateGuildSetup(update: GuildSetupUpdate): Promise<SetupServerRecord> {
+  public async updateGuildSetup(
+    update: GuildSetupUpdate,
+    precondition?: SetupWritePrecondition
+  ): Promise<SetupServerRecord> {
+    if (precondition) throw new ActionDeniedError('approved_setup_executor_required');
     return updateFixtureServerRecord(update);
   }
 }

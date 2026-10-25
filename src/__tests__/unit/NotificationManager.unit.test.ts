@@ -104,6 +104,7 @@ const buildCaptchaChallenge = (overrides: Partial<CaptchaChallenge> = {}): Captc
   server_id: overrides.server_id ?? 'guild-1',
   user_id: overrides.user_id ?? 'user-1',
   provider: overrides.provider ?? CaptchaProvider.TURNSTILE,
+  method_revision: overrides.method_revision ?? 0,
   status: overrides.status ?? CaptchaChallengeStatus.PENDING,
   request_source: overrides.request_source ?? CaptchaChallengeRequestSource.MODERATOR,
   pass_effect: overrides.pass_effect ?? CaptchaChallengePassEffect.EVIDENCE_ONLY,
@@ -206,6 +207,20 @@ describe('NotificationManager (unit)', () => {
     }
   });
 
+  it('notifies moderators about member assistance with method-specific copy', async () => {
+    const manager = new NotificationManager({} as any, configService, detectionRepository);
+    await expect(
+      manager.notifyCaptchaAttention(buildVerificationEvent(), 'member_assistance')
+    ).resolves.toBe(true);
+    expect(adminChannel.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining(
+          'requested moderator assistance with a Discord image security check'
+        ),
+      })
+    );
+  });
+
   it('omits an undefined role prefix from CAPTCHA attention notifications', async () => {
     const manager = new NotificationManager({} as any, configService, detectionRepository);
 
@@ -230,7 +245,7 @@ describe('NotificationManager (unit)', () => {
     expect(adminChannel.send).toHaveBeenCalledWith(
       expect.objectContaining({
         content: expect.stringContaining(
-          'A browser security check was completed. Review the pending case.'
+          'A security check was completed. Review the pending case.'
         ),
       })
     );
@@ -1069,7 +1084,7 @@ describe('NotificationManager (unit)', () => {
     expect(editArgs.embeds[0].data.fields).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          name: 'Browser Security Check',
+          name: 'Security Check',
           value: expect.stringContaining('Status: Passed'),
         }),
       ])
@@ -2165,4 +2180,55 @@ describe('NotificationManager (unit)', () => {
       })
     ).resolves.toBe(false);
   });
+  it.each(['create', 'missing', 'wrong_guild', 'wrong_type', 'reuse'] as const)(
+    'does not escape bound verification %s through native config reads or fallback selection',
+    async (mode) => {
+      jest.spyOn(console, 'error').mockImplementation(() => undefined);
+      configService.getServerConfig = jest
+        .fn()
+        .mockRejectedValue(new Error('unguarded config read'));
+      const create = jest.fn().mockResolvedValue({ id: 'created-channel', delete: jest.fn() });
+      const selected =
+        mode === 'missing'
+          ? null
+          : {
+              id: 'approved',
+              guildId: mode === 'wrong_guild' ? 'foreign' : 'guild-1',
+              type: mode === 'wrong_type' ? ChannelType.GuildCategory : ChannelType.GuildText,
+              permissionOverwrites: { cache: new Collection(), set: jest.fn() },
+            };
+      const guild = {
+        id: 'guild-1',
+        roles: { everyone: { id: 'guild-1' }, cache: { filter: jest.fn().mockReturnValue([]) } },
+        channels: {
+          cache: buildChannelCollection([
+            { id: 'unapproved-match', name: 'verification', type: ChannelType.GuildText },
+          ]),
+          fetch: jest.fn().mockResolvedValue(selected),
+          create,
+        },
+      } as unknown as Guild;
+      const manager = new NotificationManager({} as any, configService, detectionRepository);
+      const choice =
+        mode === 'create'
+          ? { kind: 'create' as const }
+          : { kind: 'reuse' as const, id: 'approved' };
+      await expect(
+        manager.setupVerificationChannel(
+          guild,
+          'case-role',
+          false,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          { choice, previousSyncState: null }
+        )
+      ).resolves.toBe(mode === 'create' ? 'created-channel' : mode === 'reuse' ? 'approved' : null);
+      expect(configService.getServerConfig).not.toHaveBeenCalled();
+      expect(configService.updateServerSettings).not.toHaveBeenCalled();
+      expect(configService.updateServerConfig).not.toHaveBeenCalled();
+      expect(create).toHaveBeenCalledTimes(mode === 'create' ? 1 : 0);
+    }
+  );
 });

@@ -1,9 +1,13 @@
-import { randomUUID } from 'node:crypto';
-import { isWebE2eFixtureMode } from './e2eFixtures';
 import {
-  queueModerationActionRequest,
-  type ModerationActionRequestQueueStatus,
-} from './moderationActionRequestQueue';
+  type QueuedReportCommand,
+  createReportRequestSubmission,
+  type ActionContext,
+  type ConfirmationPort,
+  type ReportAdmissionFacts,
+} from '@drasil/application';
+import { isWebE2eFixtureMode } from './e2eFixtures';
+import type { ModerationActionRequestQueueStatus } from './moderationActionRequestQueue';
+import { submitQueuedAction } from './application/queuedSubmission';
 import { getPostgresPool } from './setupDataAdapter';
 
 async function ensureReportTargetUser(input: {
@@ -24,80 +28,44 @@ async function ensureReportTargetUser(input: {
   );
 }
 
-export async function queueUserReportSubmissionRequest(input: {
-  readonly actorId: string;
-  readonly guildId: string;
-  readonly reason?: string | null;
-  readonly targetLabel: string;
-  readonly targetUserId: string;
+export async function submitReportRequest(input: {
+  readonly context: ActionContext;
+  readonly command: QueuedReportCommand;
+  readonly access: ReportAdmissionFacts;
+  readonly confirmations: ConfirmationPort;
+  readonly openIntake: () => Promise<{ readonly id: string } | null>;
 }): Promise<ModerationActionRequestQueueStatus> {
-  if (isWebE2eFixtureMode()) {
-    return 'queued';
-  }
-
-  await ensureReportTargetUser({
-    actorId: input.actorId,
-    targetUserId: input.targetUserId,
-  });
-
-  return queueModerationActionRequest({
-    actionType: 'submit_user_report',
-    actorId: input.actorId,
-    actorSurface: 'web_report',
-    idempotencyKey: `web:report:submit_user_report:${input.guildId}:${input.targetUserId}:${randomUUID()}`,
-    metadata: {
-      reason: input.reason ?? null,
-      report_action: 'submit_user_report',
-      requested_surface: 'web_report',
-      target_label: input.targetLabel,
+  const actions = createReportRequestSubmission({
+    access: { load: async () => input.access },
+    intakes: { openForReporter: input.openIntake },
+    confirmations: input.confirmations,
+    queue: {
+      async enqueue(context, command) {
+        if (context.actor.kind !== 'user') throw new Error('Reporter session is unavailable.');
+        if (isWebE2eFixtureMode()) return 'queued';
+        if (command.kind === 'submit_user_report') {
+          await ensureReportTargetUser({
+            actorId: context.actor.userId,
+            targetUserId: command.targetUserId,
+          });
+        }
+        return (await submitQueuedAction({ context, command })).status;
+      },
     },
-    serverId: input.guildId,
-    targetUserId: input.targetUserId,
   });
-}
-
-export async function queueGuidedReportIntakeRequest(input: {
-  readonly actorId: string;
-  readonly channelId: string;
-  readonly guildId: string;
-}): Promise<ModerationActionRequestQueueStatus> {
-  if (isWebE2eFixtureMode()) {
-    return 'queued';
-  }
-
-  return queueModerationActionRequest({
-    actionType: 'start_report_intake',
-    actorId: input.actorId,
-    actorSurface: 'web_report',
-    idempotencyKey: `web:report:start_report_intake:${input.guildId}:${input.actorId}:${randomUUID()}`,
-    metadata: {
-      channel_id: input.channelId,
-      report_action: 'start_report_intake',
-      requested_surface: 'web_report',
-    },
-    serverId: input.guildId,
-  });
-}
-
-export async function queueReportIntakeCloseRequest(input: {
-  readonly actorId: string;
-  readonly guildId: string;
-  readonly reportIntakeId: string;
-}): Promise<ModerationActionRequestQueueStatus> {
-  if (isWebE2eFixtureMode()) {
-    return 'queued';
-  }
-
-  return queueModerationActionRequest({
-    actionType: 'close_report_intake',
-    actorId: input.actorId,
-    actorSurface: 'web_report',
-    idempotencyKey: `web:report:close_report_intake:${input.guildId}:${input.reportIntakeId}:${randomUUID()}`,
-    metadata: {
-      report_action: 'close_report_intake',
-      requested_surface: 'web_report',
-    },
-    reportIntakeId: input.reportIntakeId,
-    serverId: input.guildId,
-  });
+  const result = await actions.execute(input.context, input.command);
+  if (result.kind === 'outcome') return result.outcome.status;
+  const errors = {
+    actor_unavailable: 'This report destination is not available to the signed-in Discord account.',
+    permission_denied: 'You cannot report yourself.',
+    reason_required: 'This server requires a report reason.',
+    stale_state: 'This report intake is no longer available.',
+    confirmation_required:
+      input.command.kind === 'close_report_intake'
+        ? 'Confirm the report intake close before submitting it.'
+        : 'Confirm the report before submitting it.',
+    binding_mismatch: 'This report does not match the signed-in account.',
+    policy_disabled: 'Reporting is unavailable.',
+  };
+  throw new Error(errors[result.code]);
 }

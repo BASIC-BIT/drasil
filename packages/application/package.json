@@ -1,0 +1,53 @@
+{
+  "name": "@drasil/application",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "import": "./dist/index.js"
+    },
+    "./postgres": {
+      "types": "./dist/postgres/index.d.ts",
+      "require": "./dist/postgres/index.js",
+      "import": "./dist/postgres/index.js"
+    },
+    "./setup-settings": {
+      "types": "./dist/setup/settings.d.ts",
+      "require": "./dist/setup/settings.js",
+      "import": "./dist/browser/settings.mjs"
+    },
+    "./approval-presentation": {
+      "types": "./dist/delegation/approvalPresentation.d.ts",
+      "require": "./dist/delegation/approvalPresentation.js",
+      "import": "./dist/browser/approvalPresentation.mjs"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/build-browser.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src --max-warnings=0",
+    "test": "jest --config jest.config.cjs",
+    "test:coverage": "jest --config jest.config.cjs --coverage"
+  },
+  "dependencies": {
+    "zod": "^3.25.76"
+  },
+  "typesVersions": {
+    "*": {
+      "setup-settings": [
+        "dist/setup/settings.d.ts"
+      ],
+      "postgres": [
+        "dist/postgres/index.d.ts"
+      ],
+      "approval-presentation": [
+        "dist/delegation/approvalPresentation.d.ts"
+      ]
+    }
+  }
+}

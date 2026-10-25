@@ -1,0 +1,1386 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`decodes and dispatches the shipped apply_captcha_pass row with its receipt: receipt 1`] = `
+{
+  "action_type": "apply_captcha_pass",
+  "challenge_id": "challenge",
+  "effect": "verify",
+  "generation": 2,
+  "held_reason": null,
+  "resolved": true,
+  "target_user_id": "target",
+  "verification_event_id": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped apply_captcha_pass row with its receipt: storage 1`] = `
+{
+  "actionType": "apply_captcha_pass",
+  "actorId": "drasil:captcha",
+  "actorSurface": "captcha",
+  "idempotencyKey": "captcha:apply:challenge:2",
+  "metadata": {
+    "challenge_id": "challenge",
+    "expected_case_revision": 3,
+    "generation": 2,
+  },
+  "serverId": "guild",
+  "targetUserId": "target",
+  "verificationEventId": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped apply_case_role_lockdown row with its receipt: receipt 1`] = `
+{
+  "action_type": "apply_case_role_lockdown",
+  "applied_writes": 0,
+  "enabled": true,
+  "error_count": 0,
+  "failed_writes": 0,
+  "issues": [],
+  "planned_writes": 0,
+  "server_id": "guild",
+  "synced_allowed_channel_blockers": 0,
+  "unsynced_allowed_channels": 0,
+  "warning_count": 0,
+}
+`;
+
+exports[`decodes and dispatches the shipped apply_case_role_lockdown row with its receipt: storage 1`] = `
+{
+  "actionType": "apply_case_role_lockdown",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:operation:apply_case_role_lockdown:guild:request",
+  "metadata": {
+    "operation_action": "apply_case_role_lockdown",
+    "requested_surface": "web",
+    "unsync_allowed_channels": true,
+  },
+  "serverId": "guild",
+  "targetUserId": null,
+}
+`;
+
+exports[`decodes and dispatches the shipped audit_case_role_lockdown row with its receipt: receipt 1`] = `
+{
+  "action_type": "audit_case_role_lockdown",
+  "applied_writes": 0,
+  "enabled": true,
+  "error_count": 0,
+  "failed_writes": 0,
+  "issues": [],
+  "planned_writes": 0,
+  "server_id": "guild",
+  "synced_allowed_channel_blockers": 0,
+  "unsynced_allowed_channels": 0,
+  "warning_count": 0,
+}
+`;
+
+exports[`decodes and dispatches the shipped audit_case_role_lockdown row with its receipt: storage 1`] = `
+{
+  "actionType": "audit_case_role_lockdown",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:operation:audit_case_role_lockdown:guild:request",
+  "metadata": {
+    "operation_action": "audit_case_role_lockdown",
+    "requested_surface": "web",
+  },
+  "serverId": "guild",
+  "targetUserId": null,
+}
+`;
+
+exports[`decodes and dispatches the shipped audit_integrity row with its receipt: receipt 1`] = `
+{
+  "action_type": "audit_integrity",
+  "checked_cases": 5,
+  "error_count": 0,
+  "server_id": "guild",
+  "warning_count": 1,
+}
+`;
+
+exports[`decodes and dispatches the shipped audit_integrity row with its receipt: storage 1`] = `
+{
+  "actionType": "audit_integrity",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:operation:audit_integrity:guild:request",
+  "metadata": {
+    "days": 30,
+    "limit": 100,
+    "operation_action": "audit_integrity",
+    "operation_command": {
+      "days": 30,
+      "kind": "audit_integrity",
+      "limit": 100,
+      "scope": "all",
+      "userId": null,
+    },
+    "requested_surface": "web",
+    "scope": "all",
+  },
+  "serverId": "guild",
+  "targetUserId": null,
+}
+`;
+
+exports[`decodes and dispatches the shipped ban_case_user row with its receipt: receipt 1`] = `
+{
+  "action_type": "ban_case_user",
+  "banned": true,
+  "target_user_id": "target",
+  "verification_event_id": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped ban_case_user row with its receipt: storage 1`] = `
+{
+  "actionType": "ban_case_user",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "detectionEventId": "detection",
+  "idempotencyKey": "web:case-action:ban_user:guild:case",
+  "metadata": {
+    "case_action": "ban_user",
+    "reason": "Reviewed",
+    "requested_surface": "web",
+  },
+  "serverId": "guild",
+  "targetUserId": "target",
+  "verificationEventId": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped ban_case_user_by_id row with its receipt: receipt 1`] = `
+{
+  "action_type": "ban_case_user_by_id",
+  "banned": true,
+  "target_user_id": "target",
+  "verification_event_id": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped ban_case_user_by_id row with its receipt: storage 1`] = `
+{
+  "actionType": "ban_case_user_by_id",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "detectionEventId": "detection",
+  "idempotencyKey": "web:case-action:ban_by_id:guild:case",
+  "metadata": {
+    "case_action": "ban_by_id",
+    "reason": "Reviewed",
+    "requested_surface": "web",
+  },
+  "serverId": "guild",
+  "targetUserId": "target",
+  "verificationEventId": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped ban_case_user_with_message_cleanup row with its receipt: receipt 1`] = `
+{
+  "action_type": "ban_case_user_with_message_cleanup",
+  "already_completed": false,
+  "already_missing_count": 1,
+  "banned": true,
+  "case_finalized": true,
+  "changed_since_preview_count": 0,
+  "delete_failed_count": 0,
+  "deleted_count": 2,
+  "evidence_failed_count": 0,
+  "message_deletion_job_id": "job",
+  "mode": "ban_with_cleanup",
+  "permission_denied_count": 0,
+  "preserved_count": 3,
+}
+`;
+
+exports[`decodes and dispatches the shipped ban_case_user_with_message_cleanup row with its receipt: storage 1`] = `
+{
+  "actionType": "ban_case_user_with_message_cleanup",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "detectionEventId": "detection",
+  "idempotencyKey": "message-cleanup:ban_case_user_with_message_cleanup:guild:case:moderator:request",
+  "messageDeletionJobId": "job",
+  "metadata": {
+    "cleanup_mode": "ban_with_cleanup",
+    "cleanup_preview_generation": "2026-10-20T00:00:00.000Z",
+    "cleanup_scope": "last_hour",
+    "reason": "Reviewed",
+  },
+  "serverId": "guild",
+  "targetUserId": "target",
+  "verificationEventId": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped ban_observed_detection row with its receipt: receipt 1`] = `
+{
+  "action_type": "ban_observed_detection",
+  "ban_by_id": true,
+  "detection_event_id": "detection",
+  "observed_ban_result": {
+    "operationId": "request",
+    "status": "banned_updates_pending",
+  },
+  "report_intake_id": null,
+  "target_user_id": "target",
+}
+`;
+
+exports[`decodes and dispatches the shipped ban_observed_detection row with its receipt: storage 1`] = `
+{
+  "actionType": "ban_observed_detection",
+  "actorId": "moderator",
+  "actorSurface": "web_report",
+  "detectionEventId": "detection",
+  "idempotencyKey": "observed-ban:guild:detection",
+  "metadata": {
+    "reason": "Reviewed",
+    "requested_action": "ban_user",
+  },
+  "reportIntakeId": null,
+  "serverId": "guild",
+  "targetUserId": "target",
+}
+`;
+
+exports[`decodes and dispatches the shipped bypass_captcha_challenge row with its receipt: receipt 1`] = `
+{
+  "action_type": "bypass_captcha_challenge",
+  "bypassed": true,
+  "challenge_id": "challenge",
+  "generation": 2,
+  "target_user_id": "target",
+  "verification_event_id": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped bypass_captcha_challenge row with its receipt: storage 1`] = `
+{
+  "actionType": "bypass_captcha_challenge",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:case-action:bypass_captcha:guild:case:request",
+  "metadata": {
+    "case_action": "bypass_captcha",
+    "expected_challenge_id": "challenge",
+    "expected_generation": 2,
+    "reason": "Reviewed",
+    "requested_surface": "web",
+  },
+  "serverId": "guild",
+  "targetUserId": "target",
+  "verificationEventId": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped clear_moderation_queue row with its receipt: receipt 1`] = `
+{
+  "action_type": "clear_moderation_queue",
+  "removed_count": 3,
+  "server_id": "guild",
+}
+`;
+
+exports[`decodes and dispatches the shipped clear_moderation_queue row with its receipt: storage 1`] = `
+{
+  "actionType": "clear_moderation_queue",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:operation:clear_moderation_queue:guild:request",
+  "metadata": {
+    "operation_action": "clear_moderation_queue",
+    "requested_surface": "web",
+  },
+  "serverId": "guild",
+  "targetUserId": null,
+}
+`;
+
+exports[`decodes and dispatches the shipped clear_report_instructions row with its receipt: receipt 1`] = `
+{
+  "action_type": "clear_report_instructions",
+  "status": "completed",
+}
+`;
+
+exports[`decodes and dispatches the shipped clear_report_instructions row with its receipt: storage 1`] = `
+{
+  "actionType": "clear_report_instructions",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:setup:clear_report_instructions:guild:request",
+  "metadata": {
+    "requested_surface": "web",
+    "setup_command": {
+      "kind": "clear_report_instructions",
+    },
+  },
+  "serverId": "guild",
+  "targetUserId": null,
+}
+`;
+
+exports[`decodes and dispatches the shipped close_case_no_action row with its receipt: receipt 1`] = `
+{
+  "action_type": "close_case_no_action",
+  "closed_count": 2,
+  "target_user_id": "target",
+  "verification_event_id": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped close_case_no_action row with its receipt: storage 1`] = `
+{
+  "actionType": "close_case_no_action",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:case-action:close_no_action:guild:case",
+  "metadata": {
+    "case_action": "close_no_action",
+    "requested_surface": "web",
+  },
+  "serverId": "guild",
+  "targetUserId": "target",
+  "verificationEventId": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped close_report_intake row with its receipt: receipt 1`] = `
+{
+  "action_type": "close_report_intake",
+  "closed": true,
+  "message": "Closed",
+  "report_intake_id": "report",
+  "server_id": "guild",
+  "thread_archived": true,
+  "thread_id": "thread",
+}
+`;
+
+exports[`decodes and dispatches the shipped close_report_intake row with its receipt: storage 1`] = `
+{
+  "actionType": "close_report_intake",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:report:close_report_intake:guild:report:request",
+  "metadata": {
+    "report_action": "close_report_intake",
+    "requested_surface": "web",
+  },
+  "reportIntakeId": "report",
+  "serverId": "guild",
+  "targetUserId": null,
+}
+`;
+
+exports[`decodes and dispatches the shipped close_resolved_case_threads row with its receipt: receipt 1`] = `
+{
+  "action_type": "close_resolved_case_threads",
+  "already_closed_threads": 1,
+  "checked_cases": 5,
+  "checked_threads": 4,
+  "closed_threads": 0,
+  "days": 30,
+  "execute": false,
+  "failed_threads": 0,
+  "limit": 100,
+  "missing_threads": 1,
+  "server_id": "guild",
+  "would_close_threads": 3,
+}
+`;
+
+exports[`decodes and dispatches the shipped close_resolved_case_threads row with its receipt: storage 1`] = `
+{
+  "actionType": "close_resolved_case_threads",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:operation:close_resolved_case_threads:guild:request",
+  "metadata": {
+    "days": 30,
+    "execute": false,
+    "limit": 100,
+    "operation_action": "close_resolved_case_threads",
+    "requested_surface": "web",
+  },
+  "serverId": "guild",
+  "targetUserId": null,
+}
+`;
+
+exports[`decodes and dispatches the shipped complete_setup_verification row with its receipt: receipt 1`] = `
+{
+  "action_type": "complete_setup_verification",
+  "admin_channel_id": "admin",
+  "case_role_created": false,
+  "case_role_id": "role",
+  "report_instructions_action": null,
+  "report_instructions_channel_id": null,
+  "report_instructions_error": null,
+  "report_instructions_message_id": null,
+  "server_id": "guild",
+  "verification_channel_action": "created",
+  "verification_channel_id": "verification",
+}
+`;
+
+exports[`decodes and dispatches the shipped complete_setup_verification row with its receipt: storage 1`] = `
+{
+  "actionType": "complete_setup_verification",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:setup:complete_setup_verification:guild:request",
+  "metadata": {
+    "admin_channel_id": "admin",
+    "case_role_id": "role",
+    "onboarding_wizard": false,
+    "report_instructions_channel_id": null,
+    "requested_surface": "web",
+    "setup_action": "complete_setup_verification",
+    "verification_channel_id": null,
+  },
+  "serverId": "guild",
+  "targetUserId": null,
+}
+`;
+
+exports[`decodes and dispatches the shipped disable_lockdown row with its receipt: receipt 1`] = `
+{
+  "action_type": "disable_lockdown",
+  "status": "completed",
+}
+`;
+
+exports[`decodes and dispatches the shipped disable_lockdown row with its receipt: storage 1`] = `
+{
+  "actionType": "disable_lockdown",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:setup:disable_lockdown:guild:request",
+  "metadata": {
+    "requested_surface": "web",
+    "setup_command": {
+      "kind": "disable_lockdown",
+    },
+  },
+  "serverId": "guild",
+  "targetUserId": null,
+}
+`;
+
+exports[`decodes and dispatches the shipped dismiss_observed_detection row with its receipt: receipt 1`] = `
+{
+  "action_type": "dismiss_observed_detection",
+  "detection_event_id": "detection",
+  "dismissed": true,
+  "target_user_id": "target",
+}
+`;
+
+exports[`decodes and dispatches the shipped dismiss_observed_detection row with its receipt: storage 1`] = `
+{
+  "actionType": "dismiss_observed_detection",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "detectionEventId": "detection",
+  "idempotencyKey": "web:observed-action:dismiss_no_action:guild:detection",
+  "metadata": {
+    "inbox_action": "dismiss_no_action",
+    "reason": null,
+    "requested_surface": "web",
+  },
+  "serverId": "guild",
+  "targetUserId": "target",
+}
+`;
+
+exports[`decodes and dispatches the shipped execute_case_message_deletion row with its receipt: receipt 1`] = `
+{
+  "action_type": "execute_case_message_deletion",
+  "already_completed": false,
+  "already_missing_count": 1,
+  "changed_since_preview_count": 0,
+  "delete_failed_count": 0,
+  "deleted_count": 2,
+  "evidence_failed_count": 0,
+  "message_deletion_job_id": "job",
+  "mode": "delete_only",
+  "permission_denied_count": 0,
+  "preserved_count": 3,
+}
+`;
+
+exports[`decodes and dispatches the shipped execute_case_message_deletion row with its receipt: storage 1`] = `
+{
+  "actionType": "execute_case_message_deletion",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "detectionEventId": "detection",
+  "idempotencyKey": "message-cleanup:execute_case_message_deletion:guild:case:moderator:request",
+  "messageDeletionJobId": "job",
+  "metadata": {
+    "cleanup_mode": "delete_only",
+    "cleanup_preview_generation": "2026-10-20T00:00:00.000Z",
+    "cleanup_scope": "last_hour",
+    "reason": "Reviewed",
+  },
+  "serverId": "guild",
+  "targetUserId": "target",
+  "verificationEventId": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped ignore_detection_accounting row with its receipt: receipt 1`] = `
+{
+  "action_type": "ignore_detection_accounting",
+  "detection_event_id": "detection",
+  "ignored": true,
+  "target_user_id": "target",
+}
+`;
+
+exports[`decodes and dispatches the shipped ignore_detection_accounting row with its receipt: storage 1`] = `
+{
+  "actionType": "ignore_detection_accounting",
+  "actorId": "moderator",
+  "actorSurface": "discord_interaction",
+  "detectionEventId": "detection",
+  "idempotencyKey": "web:detection-accounting:ignore_detection:guild:detection",
+  "metadata": {
+    "reason": null,
+    "requested_surface": "discord_interaction",
+    "web_action": "ignore_detection",
+  },
+  "serverId": "guild",
+  "targetUserId": "target",
+}
+`;
+
+exports[`decodes and dispatches the shipped intake_role_members row with its receipt: receipt 1`] = `
+{
+  "action_type": "intake_role_members",
+  "batch_id": "batch",
+  "eligible_members": 2,
+  "execute": false,
+  "failed": 0,
+  "failures": [],
+  "opened": 0,
+  "processed": 2,
+  "role_id": "role",
+  "role_name": "Role",
+  "server_id": "guild",
+  "skipped_active_cases": 0,
+  "skipped_bots": 1,
+  "skipped_over_limit": 0,
+  "total_members": 3,
+}
+`;
+
+exports[`decodes and dispatches the shipped intake_role_members row with its receipt: storage 1`] = `
+{
+  "actionType": "intake_role_members",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:operation:intake_role_members:guild:request",
+  "metadata": {
+    "execute": false,
+    "limit": 250,
+    "operation_action": "intake_role_members",
+    "requested_surface": "web",
+    "role_id": "role",
+  },
+  "serverId": "guild",
+  "targetUserId": null,
+}
+`;
+
+exports[`decodes and dispatches the shipped kick_case_user row with its receipt: receipt 1`] = `
+{
+  "action_type": "kick_case_user",
+  "kicked": true,
+  "target_user_id": "target",
+  "verification_event_id": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped kick_case_user row with its receipt: storage 1`] = `
+{
+  "actionType": "kick_case_user",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "detectionEventId": "detection",
+  "idempotencyKey": "web:case-action:kick_user:guild:case",
+  "metadata": {
+    "case_action": "kick_user",
+    "reason": "Reviewed",
+    "requested_surface": "web",
+  },
+  "serverId": "guild",
+  "targetUserId": "target",
+  "verificationEventId": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped kick_observed_detection row with its receipt: receipt 1`] = `
+{
+  "action_type": "kick_observed_detection",
+  "detection_event_id": "detection",
+  "kicked": true,
+  "target_user_id": "target",
+}
+`;
+
+exports[`decodes and dispatches the shipped kick_observed_detection row with its receipt: storage 1`] = `
+{
+  "actionType": "kick_observed_detection",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "detectionEventId": "detection",
+  "idempotencyKey": "web:observed-action:kick_user:guild:detection",
+  "metadata": {
+    "inbox_action": "kick_user",
+    "reason": "Reviewed",
+    "requested_surface": "web",
+  },
+  "serverId": "guild",
+  "targetUserId": "target",
+}
+`;
+
+exports[`decodes and dispatches the shipped lockdown_allow_add row with its receipt: receipt 1`] = `
+{
+  "action_type": "lockdown_allow_add",
+  "status": "completed",
+}
+`;
+
+exports[`decodes and dispatches the shipped lockdown_allow_add row with its receipt: storage 1`] = `
+{
+  "actionType": "lockdown_allow_add",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:setup:lockdown_allow_add:guild:request",
+  "metadata": {
+    "requested_surface": "web",
+    "setup_command": {
+      "kind": "lockdown_allow_add",
+      "targetId": "category",
+      "targetKind": "category",
+    },
+  },
+  "serverId": "guild",
+  "targetUserId": null,
+}
+`;
+
+exports[`decodes and dispatches the shipped lockdown_allow_remove row with its receipt: receipt 1`] = `
+{
+  "action_type": "lockdown_allow_remove",
+  "status": "completed",
+}
+`;
+
+exports[`decodes and dispatches the shipped lockdown_allow_remove row with its receipt: storage 1`] = `
+{
+  "actionType": "lockdown_allow_remove",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:setup:lockdown_allow_remove:guild:request",
+  "metadata": {
+    "requested_surface": "web",
+    "setup_command": {
+      "kind": "lockdown_allow_remove",
+      "targetId": "channel",
+      "targetKind": "channel",
+    },
+  },
+  "serverId": "guild",
+  "targetUserId": null,
+}
+`;
+
+exports[`decodes and dispatches the shipped manual_flag_user row with its receipt: receipt 1`] = `
+{
+  "action_type": "manual_flag_user",
+  "flagged": true,
+  "target_user_id": "target",
+}
+`;
+
+exports[`decodes and dispatches the shipped manual_flag_user row with its receipt: storage 1`] = `
+{
+  "actionType": "manual_flag_user",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:member-manual-flag:guild:target:request",
+  "metadata": {
+    "reason": "Reviewed",
+    "requested_surface": "web",
+    "web_action": "manual_flag_user",
+  },
+  "serverId": "guild",
+  "targetUserId": "target",
+}
+`;
+
+exports[`decodes and dispatches the shipped mark_observed_detection_false_positive row with its receipt: receipt 1`] = `
+{
+  "action_type": "mark_observed_detection_false_positive",
+  "detection_event_id": "detection",
+  "dismissed": true,
+  "target_user_id": "target",
+}
+`;
+
+exports[`decodes and dispatches the shipped mark_observed_detection_false_positive row with its receipt: storage 1`] = `
+{
+  "actionType": "mark_observed_detection_false_positive",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "detectionEventId": "detection",
+  "idempotencyKey": "web:observed-action:mark_false_positive:guild:detection",
+  "metadata": {
+    "inbox_action": "mark_false_positive",
+    "reason": null,
+    "requested_surface": "web",
+  },
+  "serverId": "guild",
+  "targetUserId": "target",
+}
+`;
+
+exports[`decodes and dispatches the shipped notify_captcha_attention row with its receipt: receipt 1`] = `
+{
+  "action_type": "notify_captcha_attention",
+  "challenge_id": "challenge",
+  "generation": 2,
+  "notified": true,
+  "reason": "expired",
+  "target_user_id": "target",
+  "verification_event_id": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped notify_captcha_attention row with its receipt: storage 1`] = `
+{
+  "actionType": "notify_captcha_attention",
+  "actorId": "drasil:captcha",
+  "actorSurface": "captcha",
+  "idempotencyKey": "captcha:attention:challenge:2:expired",
+  "metadata": {
+    "challenge_id": "challenge",
+    "generation": 2,
+    "reason": "expired",
+  },
+  "serverId": "guild",
+  "targetUserId": "target",
+  "verificationEventId": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped open_admin_case row with its receipt: receipt 1`] = `
+{
+  "action_type": "open_admin_case",
+  "case_role_active": true,
+  "case_role_attempted": true,
+  "detection_event_id": "detection",
+  "opened": true,
+  "source_channel_id": null,
+  "source_message_fetched": false,
+  "source_message_id": null,
+  "target_user_id": "target",
+}
+`;
+
+exports[`decodes and dispatches the shipped open_admin_case row with its receipt: storage 1`] = `
+{
+  "actionType": "open_admin_case",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "detectionEventId": "detection",
+  "idempotencyKey": "web:member-open-case:guild:target:request",
+  "metadata": {
+    "reason": "Reviewed",
+    "requested_surface": "web",
+    "web_action": "open_admin_case",
+  },
+  "serverId": "guild",
+  "targetUserId": "target",
+}
+`;
+
+exports[`decodes and dispatches the shipped open_case_from_observed_detection row with its receipt: receipt 1`] = `
+{
+  "action_type": "open_case_from_observed_detection",
+  "detection_event_id": "detection",
+  "opened": true,
+  "target_user_id": "target",
+}
+`;
+
+exports[`decodes and dispatches the shipped open_case_from_observed_detection row with its receipt: storage 1`] = `
+{
+  "actionType": "open_case_from_observed_detection",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "detectionEventId": "detection",
+  "idempotencyKey": "web:observed-action:open_case:guild:detection",
+  "metadata": {
+    "inbox_action": "open_case",
+    "reason": null,
+    "requested_surface": "web",
+  },
+  "serverId": "guild",
+  "targetUserId": "target",
+}
+`;
+
+exports[`decodes and dispatches the shipped preview_account_quarantine row with its receipt: receipt 1`] = `
+{
+  "action_type": "preview_account_quarantine",
+  "admin_notification_ready": true,
+  "can_contain": true,
+  "case_role": {
+    "role_id": "role",
+    "role_name": "Case",
+  },
+  "case_role_ready": true,
+  "containment_fingerprint": "fingerprint",
+  "enabled": true,
+  "lockdown_error_count": 0,
+  "lockdown_issues": [],
+  "lockdown_planned_actions": 0,
+  "member_bypasses": [],
+  "planned_roles": [
+    {
+      "role_id": "member",
+      "role_name": "Member",
+    },
+  ],
+  "previewed_at": "2026-10-20T00:00:00.000Z",
+  "privileged_roles": [],
+  "recovery_thread_id": "thread",
+  "recovery_thread_ready": true,
+  "retained_roles": [],
+  "target_user_id": "target",
+  "unremovable_privilege_reasons": [],
+  "verification_event_id": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped preview_account_quarantine row with its receipt: storage 1`] = `
+{
+  "actionType": "preview_account_quarantine",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:case-action:quarantine_compromised_account:guild:case:preview:request",
+  "metadata": {
+    "case_action": "quarantine_compromised_account",
+    "quarantine_phase": "preview",
+    "requested_surface": "web",
+  },
+  "serverId": "guild",
+  "targetUserId": "target",
+  "verificationEventId": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped preview_case_message_deletion row with its receipt: receipt 1`] = `
+{
+  "action_type": "preview_case_message_deletion",
+  "candidate_count": 3,
+  "coverage": "complete",
+  "message_deletion_job_id": "job",
+  "mode": "delete_only",
+  "preview_generation": "2026-10-20T00:00:00.000Z",
+  "scope": "last_hour",
+  "status": "preview_ready",
+  "target_user_id": "target",
+  "verification_event_id": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped preview_case_message_deletion row with its receipt: storage 1`] = `
+{
+  "actionType": "preview_case_message_deletion",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "detectionEventId": "detection",
+  "idempotencyKey": "message-cleanup:preview_case_message_deletion:guild:case:moderator:request",
+  "messageDeletionJobId": "job",
+  "metadata": {
+    "cleanup_mode": "delete_only",
+    "cleanup_preview_generation": "2026-10-20T00:00:00.000Z",
+    "cleanup_scope": "last_hour",
+    "reason": "Reviewed",
+  },
+  "serverId": "guild",
+  "targetUserId": "target",
+  "verificationEventId": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped quarantine_compromised_account row with its receipt: receipt 1`] = `
+{
+  "action_type": "quarantine_compromised_account",
+  "containment_status": "contained",
+  "failed_role_removals": 0,
+  "member_bypasses": 0,
+  "parked": true,
+  "preview_request_id": "preview",
+  "recovered_after_worker_interruption": true,
+  "retained_roles": 0,
+  "target_user_id": "target",
+  "verification_event_id": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped quarantine_compromised_account row with its receipt: storage 1`] = `
+{
+  "actionType": "quarantine_compromised_account",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:case-action:quarantine_compromised_account:guild:case:execute:preview",
+  "metadata": {
+    "case_action": "quarantine_compromised_account",
+    "preview_request_id": "preview",
+    "quarantine_phase": "execute",
+    "reason": "Reviewed",
+    "requested_surface": "web",
+  },
+  "serverId": "guild",
+  "targetUserId": "target",
+  "verificationEventId": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped refresh_case_notification row with its receipt: receipt 1`] = `
+{
+  "action_type": "refresh_case_notification",
+  "message": "Refreshed",
+  "notification_channel_id": null,
+  "notification_message_id": null,
+  "refreshed": true,
+  "status": null,
+  "target_user_id": "target",
+  "verification_event_id": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped refresh_case_notification row with its receipt: storage 1`] = `
+{
+  "actionType": "refresh_case_notification",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:case-action:refresh_notification:guild:case",
+  "metadata": {
+    "case_action": "refresh_notification",
+    "requested_surface": "web",
+  },
+  "serverId": "guild",
+  "targetUserId": "target",
+  "verificationEventId": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped reopen_case row with its receipt: receipt 1`] = `
+{
+  "action_type": "reopen_case",
+  "reopened": true,
+  "target_user_id": "target",
+  "verification_event_id": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped reopen_case row with its receipt: storage 1`] = `
+{
+  "actionType": "reopen_case",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:case-action:reopen_case:guild:case",
+  "metadata": {
+    "case_action": "reopen_case",
+    "requested_surface": "web",
+  },
+  "serverId": "guild",
+  "targetUserId": "target",
+  "verificationEventId": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped repair_active_case row with its receipt: receipt 1`] = `
+{
+  "action_type": "repair_active_case",
+  "message": "Repaired",
+  "repaired": true,
+  "target_user_id": "target",
+  "thread_created": true,
+  "verification_event_id": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped repair_active_case row with its receipt: storage 1`] = `
+{
+  "actionType": "repair_active_case",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:case-action:create_thread:guild:case",
+  "metadata": {
+    "case_action": "create_thread",
+    "requested_surface": "web",
+  },
+  "serverId": "guild",
+  "targetUserId": "target",
+  "verificationEventId": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped request_captcha_challenge row with its receipt: receipt 1`] = `
+{
+  "action_type": "request_captcha_challenge",
+  "challenge_id": "challenge",
+  "delivered": true,
+  "generation": 2,
+  "target_user_id": "target",
+  "verification_event_id": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped request_captcha_challenge row with its receipt: storage 1`] = `
+{
+  "actionType": "request_captcha_challenge",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:case-action:challenge_user:guild:case",
+  "metadata": {
+    "case_action": "challenge_user",
+    "requested_surface": "web",
+  },
+  "serverId": "guild",
+  "targetUserId": "target",
+  "verificationEventId": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped reset_heuristics row with its receipt: receipt 1`] = `
+{
+  "action_type": "reset_heuristics",
+  "status": "completed",
+}
+`;
+
+exports[`decodes and dispatches the shipped reset_heuristics row with its receipt: storage 1`] = `
+{
+  "actionType": "reset_heuristics",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:setup:reset_heuristics:guild:request",
+  "metadata": {
+    "requested_surface": "web",
+    "setup_command": {
+      "kind": "reset_heuristics",
+      "scope": "keywords",
+    },
+  },
+  "serverId": "guild",
+  "targetUserId": null,
+}
+`;
+
+exports[`decodes and dispatches the shipped restore_detection_accounting row with its receipt: receipt 1`] = `
+{
+  "action_type": "restore_detection_accounting",
+  "detection_event_id": "detection",
+  "restored": true,
+  "target_user_id": "target",
+}
+`;
+
+exports[`decodes and dispatches the shipped restore_detection_accounting row with its receipt: storage 1`] = `
+{
+  "actionType": "restore_detection_accounting",
+  "actorId": "moderator",
+  "actorSurface": "discord_interaction",
+  "detectionEventId": "detection",
+  "idempotencyKey": "web:detection-accounting:restore_detection:guild:detection",
+  "metadata": {
+    "reason": null,
+    "requested_surface": "discord_interaction",
+    "web_action": "restore_detection",
+  },
+  "serverId": "guild",
+  "targetUserId": "target",
+}
+`;
+
+exports[`decodes and dispatches the shipped retry_captcha_challenge row with its receipt: receipt 1`] = `
+{
+  "action_type": "retry_captcha_challenge",
+  "challenge_id": "challenge",
+  "delivered": true,
+  "generation": 2,
+  "target_user_id": "target",
+  "verification_event_id": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped retry_captcha_challenge row with its receipt: storage 1`] = `
+{
+  "actionType": "retry_captcha_challenge",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:case-action:retry_captcha:guild:case:request",
+  "metadata": {
+    "case_action": "retry_captcha",
+    "expected_challenge_id": "challenge",
+    "expected_generation": 2,
+    "requested_surface": "web",
+  },
+  "serverId": "guild",
+  "targetUserId": "target",
+  "verificationEventId": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped start_report_intake row with its receipt: receipt 1`] = `
+{
+  "action_type": "start_report_intake",
+  "channel_id": "channel",
+  "intake_id": "report",
+  "opened": true,
+  "reporter_id": "moderator",
+  "server_id": "guild",
+  "thread_id": "thread",
+  "thread_url": "https://discord.com/channels/guild/thread",
+}
+`;
+
+exports[`decodes and dispatches the shipped start_report_intake row with its receipt: storage 1`] = `
+{
+  "actionType": "start_report_intake",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:report:start_report_intake:guild:moderator:request",
+  "metadata": {
+    "channel_id": "channel",
+    "report_action": "start_report_intake",
+    "requested_surface": "web",
+  },
+  "serverId": "guild",
+  "targetUserId": null,
+}
+`;
+
+exports[`decodes and dispatches the shipped submit_user_report row with its receipt: receipt 1`] = `
+{
+  "action_type": "submit_user_report",
+  "reporter_id": "moderator",
+  "server_id": "guild",
+  "submitted": true,
+  "target_user_id": "target",
+}
+`;
+
+exports[`decodes and dispatches the shipped submit_user_report row with its receipt: storage 1`] = `
+{
+  "actionType": "submit_user_report",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:report:submit_user_report:guild:target:request",
+  "metadata": {
+    "reason": "Reviewed",
+    "report_action": "submit_user_report",
+    "requested_surface": "web",
+    "target_label": "Target",
+  },
+  "serverId": "guild",
+  "targetUserId": "target",
+}
+`;
+
+exports[`decodes and dispatches the shipped sync_existing_ban row with its receipt: receipt 1`] = `
+{
+  "action_type": "sync_existing_ban",
+  "synced_count": 2,
+  "target_user_id": "target",
+  "verification_event_id": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped sync_existing_ban row with its receipt: storage 1`] = `
+{
+  "actionType": "sync_existing_ban",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:case-action:sync_existing_ban:guild:case",
+  "metadata": {
+    "case_action": "sync_existing_ban",
+    "requested_surface": "web",
+  },
+  "serverId": "guild",
+  "targetUserId": "target",
+  "verificationEventId": "case",
+}
+`;
+
+exports[`decodes and dispatches the shipped sync_moderation_queue row with its receipt: receipt 1`] = `
+{
+  "action_type": "sync_moderation_queue",
+  "server_id": "guild",
+  "synced": true,
+}
+`;
+
+exports[`decodes and dispatches the shipped sync_moderation_queue row with its receipt: storage 1`] = `
+{
+  "actionType": "sync_moderation_queue",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:operation:sync_moderation_queue:guild:request",
+  "metadata": {
+    "operation_action": "sync_moderation_queue",
+    "requested_surface": "web",
+  },
+  "serverId": "guild",
+  "targetUserId": null,
+}
+`;
+
+exports[`decodes and dispatches the shipped undo_observed_detection_action row with its receipt: receipt 1`] = `
+{
+  "action_type": "undo_observed_detection_action",
+  "detection_event_id": "detection",
+  "target_user_id": "target",
+  "undone_action": "dismiss",
+}
+`;
+
+exports[`decodes and dispatches the shipped undo_observed_detection_action row with its receipt: storage 1`] = `
+{
+  "actionType": "undo_observed_detection_action",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "detectionEventId": "detection",
+  "idempotencyKey": "web:observed-action:undo:guild:detection",
+  "metadata": {
+    "inbox_action": "undo_observed_action",
+    "requested_surface": "web",
+  },
+  "serverId": "guild",
+  "targetUserId": "target",
+}
+`;
+
+exports[`decodes and dispatches the shipped update_heuristics row with its receipt: receipt 1`] = `
+{
+  "action_type": "update_heuristics",
+  "status": "completed",
+}
+`;
+
+exports[`decodes and dispatches the shipped update_heuristics row with its receipt: storage 1`] = `
+{
+  "actionType": "update_heuristics",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:setup:update_heuristics:guild:request",
+  "metadata": {
+    "requested_surface": "web",
+    "setup_command": {
+      "changes": {
+        "messageThreshold": 8,
+      },
+      "kind": "update_heuristics",
+    },
+  },
+  "serverId": "guild",
+  "targetUserId": null,
+}
+`;
+
+exports[`decodes and dispatches the shipped update_settings row with its receipt: receipt 1`] = `
+{
+  "action_type": "update_settings",
+  "status": "completed",
+}
+`;
+
+exports[`decodes and dispatches the shipped update_settings row with its receipt: storage 1`] = `
+{
+  "actionType": "update_settings",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:setup:update_settings:guild:request",
+  "metadata": {
+    "requested_surface": "web",
+    "setup_command": {
+      "changes": {
+        "case_responder_role_ids": [],
+      },
+      "kind": "update_settings",
+      "section": "caseStaff",
+    },
+  },
+  "serverId": "guild",
+  "targetUserId": null,
+}
+`;
+
+exports[`decodes and dispatches the shipped upsert_report_instructions row with its receipt: receipt 1`] = `
+{
+  "action": "updated",
+  "action_type": "upsert_report_instructions",
+  "channel_id": "channel",
+  "message_id": "message",
+  "server_id": "guild",
+}
+`;
+
+exports[`decodes and dispatches the shipped upsert_report_instructions row with its receipt: storage 1`] = `
+{
+  "actionType": "upsert_report_instructions",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:setup:upsert_report_instructions:guild:request",
+  "metadata": {
+    "channel_id": "channel",
+    "requested_surface": "web",
+    "setup_action": "upsert_report_instructions",
+  },
+  "serverId": "guild",
+  "targetUserId": null,
+}
+`;
+
+exports[`decodes and dispatches the shipped verify_case_user row with its receipt: receipt 1`] = `
+{
+  "action_type": "verify_case_user",
+  "target_user_id": "target",
+  "verification_event_id": "case",
+  "verified": true,
+}
+`;
+
+exports[`decodes and dispatches the shipped verify_case_user row with its receipt: storage 1`] = `
+{
+  "actionType": "verify_case_user",
+  "actorId": "moderator",
+  "actorSurface": "web",
+  "idempotencyKey": "web:case-action:verify_user:guild:case",
+  "metadata": {
+    "case_action": "verify_user",
+    "requested_surface": "web",
+  },
+  "serverId": "guild",
+  "targetUserId": "target",
+  "verificationEventId": "case",
+}
+`;

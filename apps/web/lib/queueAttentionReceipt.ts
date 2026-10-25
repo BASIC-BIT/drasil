@@ -1,4 +1,4 @@
-import type { QueueAttentionAcknowledgeStatus } from '../../../src/services/QueueAttentionService';
+import type { QueueAttentionAcknowledgeStatus } from '@drasil/application';
 
 export interface QueueAttentionAcknowledgementSummary {
   readonly acknowledgedCount: number;

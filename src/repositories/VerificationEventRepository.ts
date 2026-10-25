@@ -669,17 +669,19 @@ export class VerificationEventRepository implements IVerificationEventRepository
   ): Promise<VerificationEvent | null> {
     try {
       return await this.prisma.$transaction(async (transaction) => {
-        const policy = await transaction.$queryRaw<Array<{ guild_id: string }>>`
-          SELECT server.guild_id
-          FROM servers AS server
-          WHERE server.guild_id = ${input.serverId}
-            AND server.settings->>'captcha_mode' = 'suspicious_join'
-            AND server.settings->>'captcha_pass_action' = 'verify_join_only'
-          FOR UPDATE
+        // Separate lock statements preserve the parent order and force a fresh snapshot after waits.
+        await transaction.$queryRaw`
+          SELECT server.guild_id FROM servers AS server
+          WHERE server.guild_id = ${input.serverId} FOR UPDATE
         `;
-        if (!policy[0]) {
-          return null;
-        }
+        await transaction.$queryRaw`
+          SELECT id FROM verification_events WHERE id = ${input.id}::uuid
+            AND server_id = ${input.serverId} FOR UPDATE
+        `;
+        await transaction.$queryRaw`
+          SELECT id FROM captcha_challenges WHERE id = ${input.challengeId}::uuid
+            AND verification_event_id = ${input.id}::uuid FOR UPDATE
+        `;
         const rows = await transaction.$queryRaw<VerificationEvent[]>`
         UPDATE verification_events AS target
         SET
@@ -719,11 +721,29 @@ export class VerificationEventRepository implements IVerificationEventRepository
               AND challenge.verification_event_id = target.id
               AND challenge.server_id = target.server_id
               AND challenge.user_id = target.user_id
+              AND EXISTS (
+                SELECT 1 FROM servers AS server
+                WHERE server.guild_id = target.server_id
+                  AND server.settings->>'captcha_mode' = 'suspicious_join'
+                  AND server.settings->>'captcha_pass_action' = 'verify_join_only'
+                  AND case when server.settings ? 'captcha_method' then server.settings->>'captcha_method'
+                    when server.settings->>'captcha_mode' in ('manual', 'suspicious_join') then 'turnstile' else 'none' end = challenge.provider::text
+                  AND coalesce(server.settings->>'captcha_method_revision', '0') = challenge.method_revision::text
+              )
               AND challenge.generation = ${input.generation}
               AND challenge.case_revision_at_issue = ${input.expectedCaseRevision}
               AND challenge.status = ${CaptchaChallengeStatus.PASSED}::captcha_challenge_status
               AND challenge.request_source = ${CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN}::captcha_challenge_request_source
               AND challenge.pass_effect = ${CaptchaChallengePassEffect.VERIFY_JOIN_ONLY}::captcha_challenge_pass_effect
+          )
+          AND EXISTS (
+            SELECT 1 FROM detection_events AS evidence
+            WHERE evidence.latest_verification_event_id = target.id
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM detection_events AS evidence
+            WHERE evidence.latest_verification_event_id = target.id
+              AND evidence.detection_type NOT IN ('new_account'::detection_type, 'rejoin_after_kick'::detection_type)
           )
           AND NOT EXISTS (
             SELECT 1

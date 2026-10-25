@@ -1,3 +1,4 @@
+import type { ConfirmationBinding } from '@drasil/application';
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -13,15 +14,23 @@ const SLASH_CONFIRMATION_TTL_MS = 10 * 60 * 1000;
 interface PendingSlashCommandConfirmation {
   readonly userId: string;
   readonly guildId: string | null;
+  readonly confirmation: ConfirmationBinding | null;
   readonly createdAt: number;
-  readonly execute: (interaction: ButtonInteraction) => Promise<void>;
+  readonly execute: (
+    interaction: ButtonInteraction,
+    evidence: ConfirmationBinding | null
+  ) => Promise<void>;
 }
 
 interface SlashCommandConfirmationOptions {
+  readonly confirmation?: Pick<ConfirmationBinding, 'action' | 'targetId'>;
   readonly message: string;
   readonly confirmLabel: string;
   readonly confirmStyle?: ButtonStyle.Danger | ButtonStyle.Primary | ButtonStyle.Success;
-  readonly execute: (interaction: ButtonInteraction) => Promise<void>;
+  readonly execute: (
+    interaction: ButtonInteraction,
+    evidence: ConfirmationBinding | null
+  ) => Promise<void>;
 }
 
 const pendingConfirmations = new Map<string, PendingSlashCommandConfirmation>();
@@ -71,14 +80,17 @@ export async function requestSlashCommandConfirmation(
   pendingConfirmations.set(id, {
     userId: interaction.user.id,
     guildId: interaction.guildId ?? null,
+    confirmation:
+      options.confirmation && interaction.guildId
+        ? { ...options.confirmation, actorId: interaction.user.id, guildId: interaction.guildId }
+        : null,
     createdAt: Date.now(),
     execute: options.execute,
   });
 
   try {
-    await interaction.reply({
+    const response = {
       content: options.message,
-      flags: MessageFlags.Ephemeral,
       allowedMentions: { parse: [] },
       components: [
         new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -92,7 +104,12 @@ export async function requestSlashCommandConfirmation(
             .setStyle(ButtonStyle.Secondary)
         ),
       ],
-    });
+    };
+    if (interaction.deferred) {
+      await interaction.editReply(response);
+    } else {
+      await interaction.reply({ ...response, flags: MessageFlags.Ephemeral });
+    }
   } catch (error) {
     pendingConfirmations.delete(id);
     throw error;
@@ -132,6 +149,6 @@ export async function handleSlashCommandConfirmationButton(
     return true;
   }
 
-  await pending.execute(interaction);
+  await pending.execute(interaction, pending.confirmation);
   return true;
 }

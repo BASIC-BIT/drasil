@@ -1,12 +1,22 @@
 'use server';
 
+import {
+  authorizeMessageCleanup,
+  checkMessageCleanupSubmission,
+  canSubmitMessageCleanup,
+  isMessageCleanupFinalizationContinuation,
+  encodeQueuedAction,
+  messageCleanupSubmissionKey,
+  type ActionContext,
+  type MessageCleanupCommand,
+  type MessageCleanupJob,
+} from '@drasil/application';
+import { createWebConfirmationPort } from '@/lib/application/context';
 import { randomUUID } from 'node:crypto';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import {
   MESSAGE_CLEANUP_REASON_MAX_LENGTH,
-  getMessageCleanupExecutionEligibility,
-  isMessageCleanupFinalizationRetry,
   messageCleanupJobModeSchema,
   messageCleanupScopeSchema,
   type MessageCleanupBanStatus,
@@ -17,7 +27,6 @@ import {
   type MessageCleanupScope,
 } from '@drasil/contracts';
 import type { PoolClient, QueryResultRow } from 'pg';
-import { DISCORD_PERMISSIONS, hasPermission, parsePermissions } from '@/lib/discordPermissions';
 import {
   failedInboxActionState,
   queuedInboxActionState,
@@ -60,6 +69,7 @@ interface CleanupJobRow extends QueryResultRow {
   reason: string;
   evidence_thread_id: string;
   candidate_count: number;
+  previewed_at: Date | string | null;
   ban_status: MessageCleanupBanStatus;
   case_finalization_status: MessageCleanupCaseFinalizationStatus;
 }
@@ -128,10 +138,27 @@ async function cleanupActor(guildId: string, caseId: string): Promise<string> {
     guildId,
     token.accessToken
   );
-  if (
-    !guild.owner &&
-    !hasPermission(parsePermissions(guild.permissions), DISCORD_PERMISSIONS.Administrator)
-  ) {
+  const denial = await authorizeMessageCleanup(
+    {
+      guildId,
+      requestId: caseId,
+      source: ACTOR_SURFACE,
+      actor: { kind: 'user', userId: session.userId },
+    },
+    {
+      async loadFresh() {
+        return {
+          guildId,
+          userId: session.userId,
+          present: true,
+          owner: guild.owner,
+          permissions: guild.permissions,
+          roleIds: [],
+        };
+      },
+    }
+  );
+  if (denial) {
     throw new Error('You need Administrator permission to manage case message cleanup.');
   }
   return session.userId;
@@ -180,16 +207,6 @@ async function lockPendingCase(
     throw new Error('The moderation case does not have a private evidence thread.');
   }
   return row;
-}
-
-function idempotencyKey(
-  actionType: ModerationActionRequestActionType,
-  guildId: string,
-  caseId: string,
-  actorId: string,
-  token: string
-): string {
-  return `message-cleanup:${actionType}:${guildId}:${caseId}:${actorId}:${token}`;
 }
 
 async function findRequest(client: PoolClient, key: string): Promise<CleanupRequestRow | null> {
@@ -265,14 +282,11 @@ function requestReceipt(request: CleanupRequestRow): ModerationActionRequestRece
 async function insertRequest(
   client: PoolClient,
   input: {
-    actionType: ModerationActionRequestActionType;
-    actorId: string;
-    caseRow: CleanupCaseRow;
-    idempotencyKey: string;
-    jobId: string;
-    metadata: Record<string, unknown>;
+    command: MessageCleanupCommand;
+    context: ActionContext;
   }
 ): Promise<ModerationActionRequestReceipt> {
+  const encoded = encodeQueuedAction(input.context, input.command);
   const result = await client.query<{
     id: string;
     messageDeletionJobId: string;
@@ -289,16 +303,16 @@ async function insertRequest(
      returning id::text, message_deletion_job_id::text as "messageDeletionJobId",
                status::text as status`,
     [
-      input.caseRow.server_id,
-      input.actionType,
-      input.actorId,
-      ACTOR_SURFACE,
-      input.caseRow.user_id,
-      input.caseRow.detection_event_id,
-      input.caseRow.id,
-      input.jobId,
-      input.idempotencyKey,
-      JSON.stringify(input.metadata),
+      encoded.serverId,
+      encoded.actionType,
+      encoded.actorId,
+      encoded.actorSurface,
+      encoded.targetUserId,
+      encoded.detectionEventId,
+      encoded.verificationEventId,
+      encoded.messageDeletionJobId,
+      encoded.idempotencyKey,
+      JSON.stringify(encoded.metadata),
     ]
   );
   const receipt = result.rows[0];
@@ -306,89 +320,88 @@ async function insertRequest(
   return receipt;
 }
 
-function frozenJobBelongsToCase(job: CleanupJobRow, caseRow: CleanupCaseRow): boolean {
-  return [
-    job.server_id === caseRow.server_id,
-    job.verification_event_id === caseRow.id,
-    job.user_id === caseRow.user_id,
-    job.evidence_thread_id === caseRow.private_evidence_thread_id,
-    job.actor_surface === ACTOR_SURFACE,
-  ].every(Boolean);
-}
-
-function frozenJobMatchesSubmission(
-  job: CleanupJobRow,
-  values: CleanupFormValues,
-  expectedMode: MessageCleanupJobMode
-): boolean {
-  return [
-    job.mode === expectedMode,
-    values.mode === expectedMode,
-    job.scope === values.scope,
-    job.reason === values.reason,
-  ].every(Boolean);
-}
-
-function frozenJobCanExecute(job: CleanupJobRow): boolean {
-  return getMessageCleanupExecutionEligibility({
+function projectJob(job: CleanupJobRow): MessageCleanupJob {
+  return {
+    id: job.id,
+    guildId: job.server_id,
+    caseId: job.verification_event_id,
+    targetUserId: job.user_id,
+    requestedBy: job.requested_by,
+    source: job.actor_surface,
     mode: job.mode,
-    status: job.status === 'executing' ? 'ready' : job.status,
-    coverage: job.coverage,
     scope: job.scope,
+    reason: job.reason,
+    evidenceThreadId: job.evidence_thread_id,
+    generation: job.previewed_at ? new Date(job.previewed_at).toISOString() : null,
+    status: job.status,
+    coverage: job.coverage,
     candidateCount: job.candidate_count,
     banStatus: job.ban_status,
     caseFinalizationStatus: job.case_finalization_status,
-  }).canExecute;
+  };
 }
-
-function assertFrozenJob(
-  job: CleanupJobRow,
+function cleanupContext(guildId: string, actorId: string, token: string): ActionContext {
+  return {
+    guildId,
+    requestId: token,
+    source: ACTOR_SURFACE,
+    actor: { kind: 'user', userId: actorId },
+  };
+}
+function cleanupCommand(
+  kind: MessageCleanupCommand['kind'],
   caseRow: CleanupCaseRow,
+  jobId: string,
   values: CleanupFormValues,
-  expectedMode: MessageCleanupJobMode
-): void {
-  if (!frozenJobBelongsToCase(job, caseRow)) {
-    throw new Error('The cleanup preview does not belong to this case.');
-  }
-  if (!frozenJobMatchesSubmission(job, values, expectedMode)) {
-    throw new Error('The cleanup preview changed. Refresh the case before continuing.');
-  }
-  if (!frozenJobCanExecute(job)) {
-    throw new Error('The cleanup preview is not eligible for execution.');
-  }
-  if (
-    expectedMode === 'ban_with_cleanup' &&
-    !['not_requested', 'failed'].includes(job.ban_status) &&
-    !isMessageCleanupFinalizationRetry({
-      mode: job.mode,
-      status: job.status,
-      banStatus: job.ban_status,
-      caseFinalizationStatus: job.case_finalization_status,
-    })
-  ) {
-    throw new Error('The combined ban and cleanup has already started.');
-  }
+  generation: string | null
+): MessageCleanupCommand {
+  const common = {
+    caseId: caseRow.id,
+    targetUserId: caseRow.user_id!,
+    jobId,
+    scope: values.scope,
+    reason: values.reason,
+    detectionEventId: caseRow.detection_event_id,
+    previewReference: { jobId, generation },
+  };
+  if (kind === 'execute_case_message_deletion') return { ...common, kind, mode: 'delete_only' };
+  if (kind === 'ban_case_user_with_message_cleanup')
+    return { ...common, kind, mode: 'ban_with_cleanup' };
+  return { ...common, kind, mode: values.mode };
 }
-
-function assertPreviewJob(
+async function assertSubmission(
+  context: ActionContext,
+  command: MessageCleanupCommand,
   job: CleanupJobRow,
   caseRow: CleanupCaseRow,
-  actorId: string,
-  values: CleanupFormValues
-): void {
-  if (
-    job.server_id !== caseRow.server_id ||
-    job.verification_event_id !== caseRow.id ||
-    job.user_id !== caseRow.user_id ||
-    job.evidence_thread_id !== caseRow.private_evidence_thread_id ||
-    job.requested_by !== actorId ||
-    job.actor_surface !== ACTOR_SURFACE ||
-    job.mode !== values.mode ||
-    job.scope !== values.scope ||
-    job.reason !== values.reason
-  ) {
-    throw new Error('The existing cleanup preview does not match this submission.');
-  }
+  formData?: FormData,
+  banEnabled = true
+): Promise<void> {
+  const code = await checkMessageCleanupSubmission({
+    context,
+    command,
+    job: projectJob(job),
+    state: {
+      id: caseRow.id,
+      guildId: caseRow.server_id,
+      targetUserId: caseRow.user_id,
+      status: caseRow.status,
+      evidenceThreadId: caseRow.private_evidence_thread_id,
+    },
+    confirmations: createWebConfirmationPort(context, command, formData),
+    banEnabled,
+  });
+  if (!code) return;
+  const messages = {
+    binding_mismatch: 'The cleanup preview does not belong to this case.',
+    stale_state: 'The cleanup preview changed. Refresh the case before continuing.',
+    reason_required: 'Message cleanup requires a reason.',
+    confirmation_required: 'Confirm the moderation action before queueing it.',
+    policy_disabled: 'Moderator ban actions are disabled for this server.',
+    actor_unavailable: 'You need Administrator permission to manage case message cleanup.',
+    permission_denied: 'You need Administrator permission to manage case message cleanup.',
+  };
+  throw new Error(messages[code]);
 }
 
 async function lockJob(client: PoolClient, jobId: string): Promise<CleanupJobRow> {
@@ -396,7 +409,7 @@ async function lockJob(client: PoolClient, jobId: string): Promise<CleanupJobRow
     `select id::text, server_id, user_id, verification_event_id::text,
             requested_by, actor_surface, mode::text as mode, scope::text as scope,
             status::text as status, coverage::text as coverage, reason,
-            evidence_thread_id, candidate_count, ban_status::text as ban_status,
+            evidence_thread_id, candidate_count, previewed_at, ban_status::text as ban_status,
             case_finalization_status::text as case_finalization_status
      from message_deletion_jobs
      where id = $1::uuid
@@ -415,17 +428,27 @@ async function queuePreview(
   values: CleanupFormValues
 ): Promise<ModerationActionRequestReceipt> {
   const actionType = 'preview_case_message_deletion' as const;
-  const key = idempotencyKey(actionType, guildId, caseId, actorId, values.idempotencyToken);
+  const key = messageCleanupSubmissionKey(
+    cleanupContext(guildId, actorId, values.idempotencyToken),
+    { kind: actionType, caseId }
+  );
   return inTransaction(async (client) => {
     const caseRow = await lockPendingCase(client, guildId, caseId);
     const existing = await findRequest(client, key);
     if (existing) {
       assertRequestMatches(existing, actionType, caseRow.server_id, caseRow.id, actorId);
-      assertPreviewJob(
-        await lockJob(client, existing.message_deletion_job_id),
-        caseRow,
-        actorId,
-        values
+      const existingJob = await lockJob(client, existing.message_deletion_job_id);
+      await assertSubmission(
+        cleanupContext(guildId, actorId, values.idempotencyToken),
+        cleanupCommand(
+          actionType,
+          caseRow,
+          existingJob.id,
+          values,
+          projectJob(existingJob).generation
+        ),
+        existingJob,
+        caseRow
       );
       if (existing.status === 'failed') {
         await assertNoActiveRequest(client, caseId);
@@ -459,12 +482,8 @@ async function queuePreview(
     const jobId = jobResult.rows[0]?.id;
     if (!jobId) throw new Error('Drasil could not create the message cleanup preview.');
     return insertRequest(client, {
-      actionType,
-      actorId,
-      caseRow,
-      idempotencyKey: key,
-      jobId,
-      metadata: { cleanup_mode: values.mode, cleanup_scope: values.scope },
+      command: cleanupCommand(actionType, caseRow, jobId, values, null),
+      context: cleanupContext(guildId, actorId, values.idempotencyToken),
     });
   });
 }
@@ -477,9 +496,13 @@ async function queueFrozenJob(
   values: CleanupFormValues,
   actionType: 'execute_case_message_deletion' | 'ban_case_user_with_message_cleanup',
   expectedMode: MessageCleanupJobMode,
+  formData: FormData,
   banActionEnabled = true
 ): Promise<ModerationActionRequestReceipt> {
-  const key = idempotencyKey(actionType, guildId, caseId, actorId, values.idempotencyToken);
+  const key = messageCleanupSubmissionKey(
+    cleanupContext(guildId, actorId, values.idempotencyToken),
+    { kind: actionType, caseId }
+  );
   return inTransaction(async (client) => {
     const existing = await findRequest(client, key);
     if (existing) {
@@ -489,27 +512,23 @@ async function queueFrozenJob(
 
     const caseRow = await lockPendingCase(client, guildId, caseId);
     const job = await lockJob(client, jobId);
-    assertFrozenJob(job, caseRow, values, expectedMode);
+    const context = cleanupContext(guildId, actorId, values.idempotencyToken);
+    const command = cleanupCommand(actionType, caseRow, jobId, values, projectJob(job).generation);
+    if (values.mode !== expectedMode)
+      throw new Error('The cleanup preview changed. Refresh the case before continuing.');
+    await assertSubmission(context, command, job, caseRow, formData, banActionEnabled);
+    if (!canSubmitMessageCleanup(projectJob(job)))
+      throw new Error('The cleanup preview is not eligible for execution.');
     if (
       expectedMode === 'ban_with_cleanup' &&
-      !banActionEnabled &&
-      !isMessageCleanupFinalizationRetry({
-        mode: job.mode,
-        status: job.status,
-        banStatus: job.ban_status,
-        caseFinalizationStatus: job.case_finalization_status,
-      })
-    ) {
-      throw new Error('Moderator ban actions are disabled for this server.');
-    }
+      !['not_requested', 'failed'].includes(job.ban_status) &&
+      !isMessageCleanupFinalizationContinuation(projectJob(job))
+    )
+      throw new Error('The combined ban and cleanup has already started.');
     await assertNoActiveRequest(client, caseId);
     return insertRequest(client, {
-      actionType,
-      actorId,
-      caseRow,
-      idempotencyKey: key,
-      jobId,
-      metadata: { cleanup_mode: job.mode, cleanup_scope: job.scope },
+      command,
+      context,
     });
   });
 }
@@ -603,7 +622,8 @@ export async function executeCaseMessageCleanup(
       actorId,
       values,
       'execute_case_message_deletion',
-      'delete_only'
+      'delete_only',
+      formData
     );
     revalidateCleanupPaths(guildId, caseId);
     return queuedInboxActionState(receipt, 'Message cleanup queued.');
@@ -642,6 +662,7 @@ export async function banCaseUserWithMessageCleanup(
       values,
       'ban_case_user_with_message_cleanup',
       'ban_with_cleanup',
+      formData,
       banActionEnabled
     );
     revalidateCleanupPaths(guildId, caseId);

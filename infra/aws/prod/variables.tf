@@ -203,3 +203,9 @@ variable "langfuse_base_url" {
     error_message = "Use a Langfuse Cloud regional HTTPS URL, or leave empty while disabled."
   }
 }
+
+variable "drasil_mcp_enabled" {
+  description = "Enable new delegated MCP worker admission after separate reviewed rollout."
+  type        = bool
+  default     = false
+}

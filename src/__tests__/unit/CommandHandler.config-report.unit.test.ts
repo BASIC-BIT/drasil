@@ -1,10 +1,9 @@
-import { MessageFlags } from 'discord.js';
 import { REPORT_INTAKE_CONFIRMED_RESPONSE_MODE_SETTING_KEY } from '../../utils/reportIntakeSettings';
 import {
   USER_REPORT_EXTERNAL_RESPONSE_MODE_SETTING_KEY,
   USER_REPORT_REASON_REQUIRED_SETTING_KEY,
 } from '../../utils/userReportSettings';
-import { buildHandler } from './commandHandlerTestHarness';
+import { buildHandler, configurationResponseMocks } from './commandHandlerTestHarness';
 
 describe('CommandHandler report config commands (unit)', () => {
   it('handles /config report reason-require', async () => {
@@ -35,6 +34,7 @@ describe('CommandHandler report config commands (unit)', () => {
         getSubcommand: jest.fn().mockReturnValue('reason-require'),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      ...configurationResponseMocks(),
     } as any;
 
     await handler.handleSlashCommand(interaction);
@@ -42,9 +42,8 @@ describe('CommandHandler report config commands (unit)', () => {
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       [USER_REPORT_REASON_REQUIRED_SETTING_KEY]: true,
     });
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('Report reason required: `yes`'),
-      flags: MessageFlags.Ephemeral,
     });
   });
 
@@ -77,6 +76,7 @@ describe('CommandHandler report config commands (unit)', () => {
         getString: jest.fn().mockReturnValue('notify_only'),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      ...configurationResponseMocks(),
     } as any;
 
     await handler.handleSlashCommand(interaction);
@@ -84,9 +84,8 @@ describe('CommandHandler report config commands (unit)', () => {
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       [USER_REPORT_EXTERNAL_RESPONSE_MODE_SETTING_KEY]: 'notify_only',
     });
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('External reports: `notify_only`'),
-      flags: MessageFlags.Ephemeral,
     });
   });
 
@@ -119,6 +118,7 @@ describe('CommandHandler report config commands (unit)', () => {
         getString: jest.fn().mockReturnValue('kick'),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      ...configurationResponseMocks(),
     } as any;
 
     await handler.handleSlashCommand(interaction);
@@ -126,9 +126,8 @@ describe('CommandHandler report config commands (unit)', () => {
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       [REPORT_INTAKE_CONFIRMED_RESPONSE_MODE_SETTING_KEY]: 'kick',
     });
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('Confirmed report intake response: `kick`'),
-      flags: MessageFlags.Ephemeral,
     });
   });
 
@@ -161,6 +160,7 @@ describe('CommandHandler report config commands (unit)', () => {
         getInteger: jest.fn().mockReturnValue(6),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      ...configurationResponseMocks(),
     } as any;
 
     await handler.handleSlashCommand(interaction);
@@ -168,9 +168,8 @@ describe('CommandHandler report config commands (unit)', () => {
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       report_ai_max_images: 6,
     });
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('Max images: `6`'),
-      flags: MessageFlags.Ephemeral,
     });
   });
 
@@ -203,6 +202,7 @@ describe('CommandHandler report config commands (unit)', () => {
         getInteger: jest.fn().mockReturnValue(15),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      ...configurationResponseMocks(),
     } as any;
 
     await handler.handleSlashCommand(interaction);
@@ -210,9 +210,8 @@ describe('CommandHandler report config commands (unit)', () => {
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       report_ai_max_image_bytes: 15 * 1024 * 1024,
     });
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('Max image size: `15 MB`'),
-      flags: MessageFlags.Ephemeral,
     });
   });
 });

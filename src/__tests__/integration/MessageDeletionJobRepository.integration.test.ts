@@ -6,6 +6,7 @@ import { ServerRepository } from '../../repositories/ServerRepository';
 import {
   DetectionType,
   MessageDeletionCoverage,
+  MessageDeletionBanStatus,
   MessageDeletionDiscoverySource,
   MessageDeletionEvidenceStatus,
   MessageDeletionItemStatus,
@@ -247,6 +248,57 @@ describeIntegration('MessageDeletionJobRepository (integration)', () => {
     });
   });
 
+  it('preserves committed combined operation ownership against later requests and job updates', async () => {
+    const verification = await createPendingCase();
+    const job = await jobs.create({
+      serverId: 'guild-1',
+      userId: 'user-1',
+      verificationEventId: verification.id,
+      requestedBy: 'administrator-1',
+      actorSurface: 'web',
+      mode: MessageDeletionJobMode.BAN_WITH_CLEANUP,
+      scope: MessageDeletionScope.LAST_HOUR,
+      reason: 'Reviewed cleanup',
+      evidenceThreadId: 'evidence-thread-1',
+    });
+    const original = await requests.enqueue({
+      serverId: 'guild-1',
+      actionType: ModerationActionRequestType.BAN_CASE_USER_WITH_MESSAGE_CLEANUP,
+      actorId: 'administrator-1',
+      actorSurface: 'web',
+      targetUserId: 'user-1',
+      verificationEventId: verification.id,
+      messageDeletionJobId: job.id,
+      idempotencyKey: `test:original:${job.id}`,
+    });
+    const operation = { requestId: original.id, actorId: 'administrator-1', source: 'web' };
+    await jobs.recordCombinedOperation(job.id, operation);
+    await jobs.updateBanStatus(job.id, MessageDeletionBanStatus.SUCCEEDED);
+    await requests.fail(original.id, 'interrupted after ban');
+    const foreign = await requests.enqueue({
+      serverId: 'guild-1',
+      actionType: ModerationActionRequestType.BAN_CASE_USER_WITH_MESSAGE_CLEANUP,
+      actorId: 'administrator-2',
+      actorSurface: 'web',
+      targetUserId: 'user-1',
+      verificationEventId: verification.id,
+      messageDeletionJobId: job.id,
+      idempotencyKey: `test:foreign:${job.id}`,
+    });
+    await jobs.recordCombinedOperation(job.id, {
+      requestId: foreign.id,
+      actorId: 'administrator-2',
+      source: 'web',
+    });
+    expect((await jobs.findById(job.id))?.metadata).toMatchObject({
+      combined_operation: operation,
+    });
+    await prisma.$executeRaw`update message_deletion_jobs set updated_at = now() + interval '1 second' where id = ${job.id}::uuid`;
+    expect((await jobs.findById(job.id))?.metadata).toMatchObject({
+      combined_operation: operation,
+    });
+  });
+
   it('reclaims stale processing cleanup requests after a worker interruption', async () => {
     const verification = await createPendingCase();
     const job = await jobs.create({
@@ -325,7 +377,7 @@ describeIntegration('MessageDeletionJobRepository (integration)', () => {
     });
   });
 
-  it('fails interrupted setup requests so the same submission can be retried', async () => {
+  it('fails interrupted setup requests and preserves the original actor when retrying a submission', async () => {
     const servers = new ServerRepository(prisma);
     await servers.getOrCreateServer('guild-1');
     const request = await requests.enqueue({
@@ -357,9 +409,42 @@ describeIntegration('MessageDeletionJobRepository (integration)', () => {
         idempotencyKey: 'web:setup:complete_setup_verification:guild-1:submission-1',
       })
     ).resolves.toMatchObject({
+      id: request.id,
+      actor_id: 'administrator-1',
+      status: ModerationActionRequestStatus.FAILED,
+      last_error: 'Worker interrupted before this action completed.',
+    });
+    await expect(requests.findById(request.id)).resolves.toMatchObject({
+      actor_id: 'administrator-1',
+      status: ModerationActionRequestStatus.FAILED,
+    });
+
+    await expect(
+      requests.enqueue({
+        serverId: 'guild-1',
+        actionType: ModerationActionRequestType.COMPLETE_SETUP_VERIFICATION,
+        actorId: 'administrator-1',
+        actorSurface: 'web',
+        idempotencyKey: 'web:setup:complete_setup_verification:guild-1:submission-1',
+      })
+    ).resolves.toMatchObject({
+      id: request.id,
+      actor_id: 'administrator-1',
+      status: ModerationActionRequestStatus.QUEUED,
+    });
+
+    const newActorSubmission = await requests.enqueue({
+      serverId: 'guild-1',
+      actionType: ModerationActionRequestType.COMPLETE_SETUP_VERIFICATION,
+      actorId: 'administrator-2',
+      actorSurface: 'web',
+      idempotencyKey: 'web:setup:complete_setup_verification:guild-1:submission-2',
+    });
+    expect(newActorSubmission).toMatchObject({
       actor_id: 'administrator-2',
       status: ModerationActionRequestStatus.QUEUED,
     });
+    expect(newActorSubmission.id).not.toBe(request.id);
   });
 
   it('merges prior and candidate setup permission provenance into request metadata', async () => {

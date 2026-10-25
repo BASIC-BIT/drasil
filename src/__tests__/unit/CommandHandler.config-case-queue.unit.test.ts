@@ -55,6 +55,7 @@ describe('CommandHandler case queue config commands (unit)', () => {
       [MODERATION_QUEUE_CHANNEL_ID_SETTING_KEY]: 'queue-channel',
     });
     expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect(interaction.deferReply).toHaveBeenCalledTimes(1);
     expect(interaction.deferReply.mock.invocationCallOrder[0]).toBeLessThan(
       syncServerQueue.mock.invocationCallOrder[0]
     );
@@ -82,6 +83,7 @@ describe('CommandHandler case queue config commands (unit)', () => {
       [MODERATION_QUEUE_CHANNEL_ID_SETTING_KEY]: null,
     });
     expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect(interaction.deferReply).toHaveBeenCalledTimes(1);
     expect(interaction.deferReply.mock.invocationCallOrder[0]).toBeLessThan(
       clearServerQueue.mock.invocationCallOrder[0]
     );

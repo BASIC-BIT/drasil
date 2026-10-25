@@ -1,3 +1,6 @@
+import { requireSetupOutcome } from '../application/adapters/setup';
+import { createDiscordActionContext } from '../application/context';
+import type { BotApplication } from '../application/createBotApplication';
 import {
   ChannelType,
   ChatInputCommandInteraction,
@@ -8,19 +11,13 @@ import {
 } from 'discord.js';
 import type { DetectionResponseMode } from '../contracts/setup';
 import { IConfigService } from '../config/ConfigService';
-import { INotificationManager } from '../services/NotificationManager';
-import { IProductAnalyticsService } from '../services/ProductAnalyticsService';
 import {
   ISetupDiagnosticsService,
   SetupDiagnosticIssue,
   SetupDiagnosticReport,
 } from '../services/SetupDiagnosticsService';
-import { SetupWorkflowService, type SetupWorkflowResult } from '../services/SetupWorkflowService';
-import {
-  DEFAULT_VERIFICATION_CHANNEL_NAME,
-  SetupProvisioningService,
-} from '../services/SetupProvisioningService';
-import { ReportInstructionsManager } from './ReportInstructionsManager';
+import { type SetupWorkflowResult } from '../services/SetupWorkflowService';
+import { DEFAULT_VERIFICATION_CHANNEL_NAME } from '../services/SetupProvisioningService';
 
 const DEFAULT_SETUP_FAILURE_DETAIL = 'Please check permissions and try again.';
 
@@ -32,34 +29,12 @@ type ConfigSetupReportInstructionsStatus = {
 };
 
 export class SetupCommandHandler {
-  private readonly setupWorkflowService?: SetupWorkflowService;
-  private readonly setupProvisioningService?: SetupProvisioningService;
-
   public constructor(
     private readonly configService: IConfigService,
-    notificationManager: INotificationManager,
-    productAnalyticsService: IProductAnalyticsService,
     private readonly setupDiagnosticsService: ISetupDiagnosticsService | undefined,
-    private readonly reportInstructionsManager: ReportInstructionsManager,
-    private readonly replyGuildInstallRequired: ReplyGuildInstallRequired
-  ) {
-    this.setupWorkflowService = setupDiagnosticsService
-      ? new SetupWorkflowService(
-          configService,
-          notificationManager,
-          productAnalyticsService,
-          setupDiagnosticsService
-        )
-      : undefined;
-    this.setupProvisioningService =
-      setupDiagnosticsService && this.setupWorkflowService
-        ? new SetupProvisioningService(
-            configService,
-            setupDiagnosticsService,
-            this.setupWorkflowService
-          )
-        : undefined;
-  }
+    private readonly replyGuildInstallRequired: ReplyGuildInstallRequired,
+    private readonly application?: BotApplication
+  ) {}
 
   public async handleSetupVerificationCommand(
     interaction: ChatInputCommandInteraction
@@ -80,8 +55,7 @@ export class SetupCommandHandler {
       return;
     }
 
-    const setupProvisioningService = this.setupProvisioningService;
-    if (!this.setupDiagnosticsService || !setupProvisioningService) {
+    if (!this.setupDiagnosticsService || !this.application) {
       await interaction.reply({
         content: 'Setup diagnostics are not available in this runtime.',
         flags: MessageFlags.Ephemeral,
@@ -114,17 +88,37 @@ export class SetupCommandHandler {
 
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-      const setupResult = await setupProvisioningService.provision({
-        guild,
-        adminChannelId: adminChannel.id,
-        caseRole: caseRole as Role,
-        caseRoleId: caseRole.id,
-        verificationChannel: verificationChannel as TextChannel | null,
-        verificationChannelId: verificationChannel?.id ?? null,
-        reportInstructionsChannelId: null,
-        actorLabel: interaction.user.username,
-        captureAnalytics: true,
-      });
+      const outcome = requireSetupOutcome(
+        await this.application.setupRuntime.execute(
+          createDiscordActionContext({
+            guildId: guild.id,
+            userId: interaction.user.id,
+            requestId: interaction.id,
+          }),
+          {
+            kind: 'complete_setup_verification',
+            mode: 'provision',
+            adminChannelId: adminChannel.id,
+            caseRoleId: caseRole.id,
+            verificationChannelId: verificationChannel?.id ?? null,
+            reportInstructionsChannelId: null,
+            onboardingWizard: false,
+          },
+          {
+            kind: 'direct',
+            guild,
+            caseRole: caseRole as Role,
+            verificationChannel: verificationChannel as TextChannel | null,
+            reportChannel: null,
+            actorLabel: interaction.user.username,
+            captureAnalytics: true,
+            publishPanel: false,
+          }
+        )
+      );
+      if (outcome.kind !== 'complete_setup_verification')
+        throw new Error('Setup outcome mismatch.');
+      const setupResult = outcome.result;
 
       if (setupResult.status === 'ambiguous_case_role') {
         await interaction.editReply({
@@ -238,8 +232,7 @@ export class SetupCommandHandler {
     interaction: ChatInputCommandInteraction,
     guild: NonNullable<ChatInputCommandInteraction['guild']>
   ): Promise<void> {
-    const setupProvisioningService = this.setupProvisioningService;
-    if (!this.setupDiagnosticsService || !setupProvisioningService) {
+    if (!this.setupDiagnosticsService || !this.application) {
       await interaction.reply({
         content: 'Setup diagnostics are not available in this runtime.',
         flags: MessageFlags.Ephemeral,
@@ -273,29 +266,43 @@ export class SetupCommandHandler {
     let setupFailureDetail: string | null = null;
 
     try {
-      let reportInstructionsStatus: ConfigSetupReportInstructionsStatus = {
+      const reportInstructionsStatus: ConfigSetupReportInstructionsStatus = {
         line: null,
         warningLine: null,
       };
-      const setupResult = await setupProvisioningService.provision({
-        guild,
-        adminChannelId: adminChannel.id,
-        caseRole: existingCaseRole as Role | null,
-        caseRoleId: existingCaseRole?.id ?? null,
-        caseRoleName: requestedRoleName,
-        verificationChannelId: verificationChannel?.id ?? null,
-        verificationChannel: verificationChannel as TextChannel | null,
-        reportInstructionsChannelId: reportChannel?.id ?? null,
-        detectionResponseMode: protectionMode ?? undefined,
-        actorLabel: interaction.user.username,
-        captureAnalytics: true,
-        afterSetupCompleted: async () => {
-          reportInstructionsStatus = await this.upsertReportInstructionsStatus(
-            guild.id,
-            reportChannel as TextChannel | null
-          );
-        },
-      });
+      const outcome = requireSetupOutcome(
+        await this.application.setupRuntime.execute(
+          createDiscordActionContext({
+            guildId: guild.id,
+            userId: interaction.user.id,
+            requestId: interaction.id,
+          }),
+          {
+            kind: 'complete_setup_verification',
+            mode: 'provision',
+            adminChannelId: adminChannel.id,
+            caseRoleId: existingCaseRole?.id ?? null,
+            caseRoleName: requestedRoleName,
+            verificationChannelId: verificationChannel?.id ?? null,
+            reportInstructionsChannelId: reportChannel?.id ?? null,
+            detectionResponseMode: protectionMode ?? undefined,
+            onboardingWizard: false,
+          },
+          {
+            kind: 'direct',
+            guild,
+            caseRole: existingCaseRole as Role | null,
+            verificationChannel: verificationChannel as TextChannel | null,
+            reportChannel: reportChannel as TextChannel | null,
+            actorLabel: interaction.user.username,
+            captureAnalytics: true,
+            publishPanel: true,
+          }
+        )
+      );
+      if (outcome.kind !== 'complete_setup_verification')
+        throw new Error('Setup outcome mismatch.');
+      const setupResult = outcome.result;
 
       if (setupResult.status === 'ambiguous_case_role') {
         await interaction.editReply({
@@ -334,6 +341,13 @@ export class SetupCommandHandler {
           throw incompleteResult.error;
         }
         return;
+      }
+
+      if (reportChannel && setupResult.reportInstructions) {
+        if (setupResult.reportInstructions.error)
+          reportInstructionsStatus.warningLine = `[WARNING] Core setup was saved, but report instructions were not updated in <#${reportChannel.id}>. Check Drasil can send messages and embeds there, then rerun setup.`;
+        else
+          reportInstructionsStatus.line = `Report instructions ${setupResult.reportInstructions.action}: <#${reportChannel.id}>`;
       }
 
       const lines = this.buildConfigSetupSuccessLines(
@@ -426,34 +440,6 @@ export class SetupCommandHandler {
       case 'verification_channel_failed':
       case 'config_save_failed':
         return { setupFailureDetail: setupResult.setupFailureDetail, error: setupResult.error };
-    }
-  }
-
-  private async upsertReportInstructionsStatus(
-    guildId: string,
-    reportChannel: TextChannel | null
-  ): Promise<ConfigSetupReportInstructionsStatus> {
-    if (!reportChannel) {
-      return { line: null, warningLine: null };
-    }
-
-    try {
-      const result = await this.reportInstructionsManager.upsertReportInstructionsMessage(
-        guildId,
-        reportChannel
-      );
-      return {
-        line: `Report instructions ${result.action}: <#${reportChannel.id}>`,
-        warningLine: null,
-      };
-    } catch (error) {
-      console.error(`Failed to upsert report instructions for guild ${guildId}:`, error);
-      return {
-        line: null,
-        warningLine:
-          `[WARNING] Core setup was saved, but report instructions were not updated in <#${reportChannel.id}>. ` +
-          'Check Drasil can send messages and embeds there, then rerun setup.',
-      };
     }
   }
 

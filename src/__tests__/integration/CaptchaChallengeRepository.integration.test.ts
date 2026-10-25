@@ -10,6 +10,7 @@ import {
 } from '../../repositories/VerificationEventRepository';
 import {
   CaptchaChallengePassEffect,
+  CaptchaProvider,
   CaptchaChallengeRequestOutcome,
   CaptchaChallengeRequestSource,
   CaptchaChallengeStatus,
@@ -42,7 +43,10 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     const detections = new DetectionEventsRepository(prisma);
     const verifications = new VerificationEventRepository(prisma);
     await servers.getOrCreateServer(serverId);
-    await servers.updateSettings(serverId, { captcha_mode: 'manual' });
+    await prisma.servers.update({
+      where: { guild_id: serverId },
+      data: { settings: { captcha_mode: 'manual' } },
+    });
     await users.getOrCreateUser(userId, 'captcha-target');
     const detection = await detections.create({
       server_id: serverId,
@@ -63,16 +67,56 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
 
   async function enableAutomaticCaptchaResolution(serverId: string): Promise<void> {
     const servers = new ServerRepository(prisma);
-    await servers.updateSettings(serverId, {
-      captcha_mode: 'suspicious_join',
-      captcha_pass_action: 'verify_join_only',
-    });
+    await servers.updateSettings(
+      serverId,
+      {
+        captcha_mode: 'suspicious_join',
+        captcha_pass_action: 'verify_join_only',
+      },
+      { turnstile: true, discord_image: true }
+    );
   }
 
   async function enableManualCaptcha(serverId: string): Promise<void> {
     const servers = new ServerRepository(prisma);
-    await servers.updateSettings(serverId, { captcha_mode: 'manual' });
+    await servers.updateSettings(
+      serverId,
+      { captcha_mode: 'manual' },
+      { turnstile: true, discord_image: true }
+    );
   }
+
+  it.each([{ captcha_mode: 'off' }, { captcha_method: 'none', captcha_mode: 'suspicious_join' }])(
+    'allows pending standard challenge bypass after disablement %j and preserves generation CAS',
+    async (settings) => {
+      const { verification } = await createCase('guild-off-bypass', 'user-off-bypass');
+      const repository = new CaptchaChallengeRepository(prisma);
+      const challenge = await repository.create({
+        verificationEventId: verification.id,
+        serverId: verification.server_id!,
+        userId: verification.user_id!,
+        requestSource: CaptchaChallengeRequestSource.MODERATOR,
+        passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+        provider: CaptchaProvider.TURNSTILE,
+        methodRevision: 0,
+        caseRevision: verification.case_revision,
+        tokenHash: 'off-test-hash',
+        expiresAt: new Date(Date.now() + 60_000),
+        requestedBy: 'moderator',
+      });
+      // Isolate policy from the separate mode-off cancellation sweep.
+      await prisma.servers.update({
+        where: { guild_id: verification.server_id! },
+        data: { settings },
+      });
+      expect(
+        await repository.bypass(challenge.id, challenge.generation + 1, 'moderator', 'Reviewed')
+      ).toBeNull();
+      expect(
+        await repository.bypass(challenge.id, challenge.generation, 'moderator', 'Reviewed')
+      ).toMatchObject({ status: 'bypassed' });
+    }
+  );
 
   it('keeps a delivered generation recoverable until its presentation is recorded', async () => {
     const { verification } = await createCase(
@@ -87,6 +131,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'presentation-recovery-hash',
       expiresAt: new Date(Date.now() + 60_000),
@@ -137,6 +183,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: first.verification.user_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: first.verification.case_revision,
       tokenHash: 'presentation-rotation-hash-1',
       expiresAt: new Date(Date.now() + 60_000),
@@ -148,6 +196,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: second.verification.user_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: second.verification.case_revision,
       tokenHash: 'presentation-rotation-hash-2',
       expiresAt: new Date(Date.now() + 60_000),
@@ -187,6 +237,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'initial-hash',
       expiresAt: new Date(Date.now() - 60_000),
@@ -203,6 +255,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'replacement-hash',
       expiresAt: new Date(Date.now() + 60_000),
@@ -275,6 +329,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
         userId: verification.user_id,
         requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
         passEffect: CaptchaChallengePassEffect.VERIFY_JOIN_ONLY,
+        provider: CaptchaProvider.TURNSTILE,
+        methodRevision: 0,
         caseRevision: verification.case_revision,
         tokenHash: 'automatic-manual-mode-hash',
         expiresAt: new Date(Date.now() + 60_000),
@@ -288,6 +344,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
         userId: verification.user_id,
         requestSource: CaptchaChallengeRequestSource.MODERATOR,
         passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+        provider: CaptchaProvider.TURNSTILE,
+        methodRevision: 0,
         caseRevision: verification.case_revision,
         tokenHash: 'moderator-manual-mode-hash',
         expiresAt: new Date(Date.now() + 60_000),
@@ -311,6 +369,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'locked-pass-effect-create',
       expiresAt: new Date(Date.now() - 60_000),
@@ -318,10 +378,14 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     expect(initial.pass_effect).toBe(CaptchaChallengePassEffect.VERIFY_JOIN_ONLY);
 
     await challenges.expirePending(new Date(), 10);
-    await servers.updateSettings(verification.server_id, {
-      captcha_mode: 'suspicious_join',
-      captcha_pass_action: 'evidence_only',
-    });
+    await servers.updateSettings(
+      verification.server_id,
+      {
+        captcha_mode: 'suspicious_join',
+        captcha_pass_action: 'evidence_only',
+      },
+      { turnstile: true, discord_image: true }
+    );
     const retried = await challenges.retry({
       expectedChallengeId: initial.id,
       expectedGeneration: initial.generation,
@@ -330,6 +394,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
       passEffect: CaptchaChallengePassEffect.VERIFY_JOIN_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'locked-pass-effect-retry',
       expiresAt: new Date(Date.now() + 60_000),
@@ -371,6 +437,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'mutation-receipt-token',
       expiresAt: new Date(Date.now() + 60_000),
@@ -400,6 +468,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
       passEffect: CaptchaChallengePassEffect.VERIFY_JOIN_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'automatic-retry-initial-hash',
       expiresAt: new Date(Date.now() - 60_000),
@@ -416,6 +486,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
         userId: verification.user_id,
         requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
         passEffect: CaptchaChallengePassEffect.VERIFY_JOIN_ONLY,
+        provider: CaptchaProvider.TURNSTILE,
+        methodRevision: 0,
         caseRevision: verification.case_revision,
         tokenHash: 'automatic-retry-manual-mode-hash',
         expiresAt: new Date(Date.now() + 60_000),
@@ -436,6 +508,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'stale-retry-initial',
       expiresAt: new Date(Date.now() - 60_000),
@@ -450,6 +524,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'stale-retry-advanced',
       expiresAt: new Date(Date.now() + 60_000),
@@ -466,6 +542,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
         userId: verification.user_id,
         requestSource: CaptchaChallengeRequestSource.MODERATOR,
         passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+        provider: CaptchaProvider.TURNSTILE,
+        methodRevision: 0,
         caseRevision: verification.case_revision,
         tokenHash: 'stale-retry-rejected',
         expiresAt: new Date(Date.now() + 120_000),
@@ -493,6 +571,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'bypass-closed-case-hash',
       expiresAt: new Date(Date.now() + 60_000),
@@ -516,7 +596,7 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     );
   });
 
-  it('rejects a bypass after the server disables CAPTCHA', async () => {
+  it('rejects a bypass after the mode-off sweep cancels its challenge', async () => {
     const { verification } = await createCase(
       'guild-captcha-bypass-disabled',
       'user-captcha-bypass-disabled'
@@ -530,19 +610,26 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'bypass-disabled-hash',
       expiresAt: new Date(Date.now() + 60_000),
       requestedBy: 'moderator-1',
     });
-    await servers.updateSettings(verification.server_id, { captcha_mode: 'off' });
+    await servers.updateSettings(
+      verification.server_id,
+      { captcha_mode: 'off' },
+      { turnstile: true, discord_image: true }
+    );
+    await challenges.cancelPendingForDisabledServers(10);
 
     await expect(
       challenges.bypass(challenge.id, challenge.generation, 'moderator-1', 'Reviewed manually')
     ).resolves.toBeNull();
     await expect(prisma.captcha_challenge_bypasses.count()).resolves.toBe(0);
     await expect(challenges.findById(challenge.id)).resolves.toEqual(
-      expect.objectContaining({ status: CaptchaChallengeStatus.PENDING })
+      expect.objectContaining({ status: CaptchaChallengeStatus.CANCELLED })
     );
   });
 
@@ -558,6 +645,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'bypass-compromised-hash',
       expiresAt: new Date(Date.now() + 60_000),
@@ -589,6 +678,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'bypass-attention-hash',
       expiresAt: new Date(Date.now() - 60_000),
@@ -634,6 +725,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'bypass-presentation-hash',
       expiresAt: new Date(Date.now() + 60_000),
@@ -682,6 +775,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'pass-recovery-hash',
       expiresAt: new Date(Date.now() + 60_000),
@@ -721,6 +816,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: newerVerification.user_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: newerVerification.case_revision,
       tokenHash: 'pass-recovery-newer-hash',
       expiresAt: new Date(Date.now() + 60_000),
@@ -769,6 +866,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
       passEffect: CaptchaChallengePassEffect.VERIFY_JOIN_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'reopen-revision-hash',
       expiresAt: new Date(Date.now() + 60_000),
@@ -814,6 +913,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
       passEffect: CaptchaChallengePassEffect.VERIFY_JOIN_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'finalization-lease-hash',
       expiresAt: new Date(Date.now() + 60_000),
@@ -890,6 +991,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       serverId: first.verification.server_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: 0,
       expiresAt: new Date(Date.now() + 60_000),
     };
@@ -931,6 +1034,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       expiresAt: new Date(Date.now() + 60_000),
       requestedBy: 'moderator-1',
@@ -985,6 +1090,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
         userId: compromised.verification.user_id,
         requestSource: CaptchaChallengeRequestSource.MODERATOR,
         passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+        provider: CaptchaProvider.TURNSTILE,
+        methodRevision: 0,
         caseRevision: compromised.verification.case_revision,
         tokenHash: 'compromised-create-guard',
         expiresAt: new Date(Date.now() + 60_000),
@@ -996,7 +1103,11 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       'guild-captcha-create-disabled',
       'user-captcha-create-disabled'
     );
-    await servers.updateSettings(disabled.verification.server_id, { captcha_mode: 'off' });
+    await servers.updateSettings(
+      disabled.verification.server_id,
+      { captcha_mode: 'off' },
+      { turnstile: true, discord_image: true }
+    );
     await expect(
       challenges.create({
         verificationEventId: disabled.verification.id,
@@ -1004,6 +1115,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
         userId: disabled.verification.user_id,
         requestSource: CaptchaChallengeRequestSource.MODERATOR,
         passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+        provider: CaptchaProvider.TURNSTILE,
+        methodRevision: 0,
         caseRevision: disabled.verification.case_revision,
         tokenHash: 'disabled-create-guard',
         expiresAt: new Date(Date.now() + 60_000),
@@ -1021,6 +1134,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: retryCase.verification.user_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: retryCase.verification.case_revision,
       tokenHash: 'disabled-retry-initial',
       expiresAt: new Date(Date.now() + 60_000),
@@ -1031,7 +1146,11 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       challenge.generation,
       'discord_delivery_failed'
     );
-    await servers.updateSettings(retryCase.verification.server_id, { captcha_mode: 'off' });
+    await servers.updateSettings(
+      retryCase.verification.server_id,
+      { captcha_mode: 'off' },
+      { turnstile: true, discord_image: true }
+    );
 
     await expect(
       challenges.retry({
@@ -1042,6 +1161,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
         userId: retryCase.verification.user_id,
         requestSource: CaptchaChallengeRequestSource.MODERATOR,
         passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+        provider: CaptchaProvider.TURNSTILE,
+        methodRevision: 0,
         caseRevision: retryCase.verification.case_revision,
         tokenHash: 'disabled-retry-replacement',
         expiresAt: new Date(Date.now() + 120_000),
@@ -1060,6 +1181,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
       passEffect: CaptchaChallengePassEffect.VERIFY_JOIN_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'expiry-hash',
       expiresAt: new Date(Date.now() - 60_000),
@@ -1085,6 +1208,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'expiry-attention-hash',
       expiresAt: new Date(Date.now() - 60_000),
@@ -1130,6 +1255,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'submission-attention-hash',
       expiresAt: new Date(Date.now() + 60_000),
@@ -1177,6 +1304,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'delivery-attention-hash',
       expiresAt: new Date(Date.now() + 60_000),
@@ -1220,6 +1349,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'delivery-failed-hash',
       expiresAt: new Date(Date.now() + 60_000),
@@ -1240,6 +1371,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
         userId: verification.user_id,
         requestSource: CaptchaChallengeRequestSource.MODERATOR,
         passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+        provider: CaptchaProvider.TURNSTILE,
+        methodRevision: 0,
         caseRevision: verification.case_revision,
         tokenHash: 'delivery-retry-hash',
         expiresAt: new Date(Date.now() + 120_000),
@@ -1268,6 +1401,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'delivery-retry-fence-hash',
       expiresAt: new Date(Date.now() + 60_000),
@@ -1300,6 +1435,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'delivery-retry-after-attention-hash',
       expiresAt: new Date(Date.now() + 120_000),
@@ -1343,6 +1480,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'interrupted-delivery-hash',
       expiresAt: new Date(Date.now() + 60_000),
@@ -1370,6 +1509,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
         userId: verification.user_id,
         requestSource: CaptchaChallengeRequestSource.MODERATOR,
         passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+        provider: CaptchaProvider.TURNSTILE,
+        methodRevision: 0,
         caseRevision: verification.case_revision,
         tokenHash: 'interrupted-delivery-retry-hash',
         expiresAt: new Date(Date.now() + 120_000),
@@ -1380,7 +1521,6 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
 
   it('cancels pending challenges exactly once after the server disables the feature', async () => {
     const { verification } = await createCase('guild-captcha-disabled', 'user-captcha-disabled');
-    const servers = new ServerRepository(prisma);
     const challenges = new CaptchaChallengeRepository(prisma);
     const requests = new ModerationActionRequestRepository(prisma);
     await enableManualCaptcha(verification.server_id);
@@ -1390,12 +1530,17 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'disabled-hash',
       expiresAt: new Date(Date.now() - 60_000),
       requestedBy: 'moderator-1',
     });
-    await servers.updateSettings(verification.server_id, { captcha_mode: 'off' });
+    await prisma.servers.update({
+      where: { guild_id: verification.server_id },
+      data: { settings: { captcha_mode: 'off' } },
+    });
 
     await expect(challenges.expirePending(new Date(), 10)).resolves.toEqual([]);
     await expect(challenges.cancelPendingForDisabledServers(10)).resolves.toEqual([
@@ -1445,6 +1590,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: first.verification.user_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: first.verification.case_revision,
       tokenHash: 'cancelled-rotation-hash-1',
       expiresAt: new Date(Date.now() + 60_000),
@@ -1456,6 +1603,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: second.verification.user_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: second.verification.case_revision,
       tokenHash: 'cancelled-rotation-hash-2',
       expiresAt: new Date(Date.now() + 60_000),
@@ -1511,6 +1660,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'terminal-case-hash',
       expiresAt: new Date(Date.now() - 60_000),
@@ -1541,6 +1692,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'reopen-pending-hash',
       expiresAt: new Date(Date.now() + 60_000),
@@ -1585,6 +1738,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'compromised-case-hash',
       expiresAt: new Date(Date.now() - 60_000),
@@ -1611,6 +1766,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'cancelled-hash',
       expiresAt: new Date(Date.now() + 60_000),
@@ -1641,6 +1798,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'reopened-hash',
       expiresAt: new Date(Date.now() + 120_000),
@@ -1690,6 +1849,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
       passEffect: CaptchaChallengePassEffect.VERIFY_JOIN_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'exact-case-hash',
       expiresAt: new Date(Date.now() + 60_000),
@@ -1773,6 +1934,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
       passEffect: CaptchaChallengePassEffect.VERIFY_JOIN_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'policy-fence-hash',
       expiresAt: new Date(Date.now() + 60_000),
@@ -1796,10 +1959,14 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       captcha_pass_action: 'evidence_only',
     });
     await expect(verifications.completeCaptchaVerification(completion)).resolves.toBeNull();
-    await servers.updateSettings(verification.server_id, {
-      captcha_mode: 'off',
-      captcha_pass_action: 'verify_join_only',
-    });
+    await servers.updateSettings(
+      verification.server_id,
+      {
+        captcha_mode: 'off',
+        captcha_pass_action: 'verify_join_only',
+      },
+      { turnstile: true, discord_image: true }
+    );
     await expect(verifications.completeCaptchaVerification(completion)).resolves.toBeNull();
     await enableAutomaticCaptchaResolution(verification.server_id);
     await expect(verifications.completeCaptchaVerification(completion)).resolves.toEqual(
@@ -1821,6 +1988,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
       passEffect: CaptchaChallengePassEffect.VERIFY_JOIN_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'policy-serialization-hash',
       expiresAt: new Date(Date.now() + 60_000),
@@ -1866,6 +2035,220 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
     );
   });
 
+  it.each([
+    { captcha_method: 'none', captcha_mode: 'suspicious_join' },
+    { captcha_method: null, captcha_mode: 'suspicious_join' },
+    { captcha_method: 'discord_image', captcha_mode: 'manual' },
+    { captcha_method: 'turnstile', captcha_mode: 'manual', captcha_method_revision: 2 },
+  ])('fences issue, retry, delivery and expiry for changed settings %j', async (settings) => {
+    const { verification } = await createCase('guild-disabled-paths', 'user-disabled-paths');
+    const repository = new CaptchaChallengeRepository(prisma);
+    const input = {
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.MODERATOR,
+      passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
+      caseRevision: verification.case_revision,
+      tokenHash: 'disabled-paths',
+      expiresAt: new Date(Date.now() + 60_000),
+    };
+    const challenge = await repository.create(input);
+    await prisma.captcha_challenges.update({
+      where: { id: challenge.id },
+      data: { updated_at: new Date(0) },
+    });
+    await prisma.servers.update({
+      where: { guild_id: verification.server_id },
+      data: { settings },
+    });
+    await expect(repository.create({ ...input, tokenHash: 'another-issue' })).rejects.toThrow(
+      /changed/
+    );
+    await expect(
+      repository.retry({ ...input, expectedChallengeId: challenge.id, expectedGeneration: 1 })
+    ).rejects.toThrow(/changed/);
+    await expect(repository.recordDelivery(challenge.id, 1)).resolves.toBe(false);
+    await expect(
+      repository.recordDeliveryFailure(challenge.id, 1, 'delivery_failed')
+    ).resolves.toBe(false);
+    await expect(repository.markStaleUndelivered(new Date(), 10)).resolves.toEqual([]);
+    await prisma.captcha_challenges.update({
+      where: { id: challenge.id },
+      data: { expires_at: new Date(0) },
+    });
+    await expect(repository.expirePending(new Date(), 10)).resolves.toEqual([]);
+    await expect(repository.cancelPendingForDisabledServers(10)).resolves.toEqual([
+      expect.objectContaining({ id: challenge.id, status: 'cancelled' }),
+    ]);
+  });
+
+  it('allows selected image automatic join resolution and holds new non-join evidence', async () => {
+    const { verification } = await createCase('guild-image-policy', 'user-image-policy');
+    const servers = new ServerRepository(prisma);
+    await servers.updateSettings(
+      verification.server_id,
+      {
+        captcha_method: 'discord_image',
+        captcha_mode: 'suspicious_join',
+        captcha_pass_action: 'verify_join_only',
+      },
+      { turnstile: true, discord_image: true }
+    );
+    const challenge = await new CaptchaChallengeRepository(prisma).create({
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
+      passEffect: CaptchaChallengePassEffect.VERIFY_JOIN_ONLY,
+      provider: CaptchaProvider.DISCORD_IMAGE,
+      methodRevision: 1,
+      caseRevision: verification.case_revision,
+      tokenHash: 'image-policy',
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    await prisma.captcha_challenges.update({
+      where: { id: challenge.id },
+      data: { status: CaptchaChallengeStatus.PASSED, passed_at: new Date() },
+    });
+    const completion = {
+      challengeId: challenge.id,
+      generation: 1,
+      id: verification.id,
+      expectedCaseRevision: verification.case_revision,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      resolvedAt: new Date(),
+      resolvedBy: 'drasil:captcha',
+    };
+    const events = new VerificationEventRepository(prisma);
+    await prisma.detection_events.updateMany({
+      where: { latest_verification_event_id: verification.id },
+      data: { detection_type: DetectionType.SUSPICIOUS_CONTENT },
+    });
+    await expect(events.completeCaptchaVerification(completion)).resolves.toBeNull();
+    await prisma.detection_events.updateMany({
+      where: { latest_verification_event_id: verification.id },
+      data: { detection_type: DetectionType.NEW_ACCOUNT },
+    });
+    await expect(events.completeCaptchaVerification(completion)).resolves.toMatchObject({
+      status: 'verified',
+    });
+  });
+
+  it.each(['none', 'discord_image', 'round_trip'] as const)(
+    'holds old passed evidence after method change %s',
+    async (method) => {
+      const { verification } = await createCase('guild-method-fence', 'user-method-fence');
+      await enableAutomaticCaptchaResolution(verification.server_id);
+      const challenges = new CaptchaChallengeRepository(prisma);
+      const challenge = await challenges.create({
+        verificationEventId: verification.id,
+        serverId: verification.server_id,
+        userId: verification.user_id,
+        requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
+        passEffect: CaptchaChallengePassEffect.VERIFY_JOIN_ONLY,
+        provider: CaptchaProvider.TURNSTILE,
+        methodRevision: 0,
+        caseRevision: verification.case_revision,
+        tokenHash: 'method-fence',
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+      await prisma.captcha_challenges.update({
+        where: { id: challenge.id },
+        data: { status: CaptchaChallengeStatus.PASSED, passed_at: new Date() },
+      });
+      // Keep the passed generation. Settings changes must hold evidence even when no pending generation is cancelled.
+      const servers = new ServerRepository(prisma);
+      await servers.updateSettings(
+        verification.server_id,
+        { captcha_method: method === 'none' ? 'none' : 'discord_image' },
+        { turnstile: true, discord_image: true }
+      );
+      if (method === 'round_trip')
+        await servers.updateSettings(
+          verification.server_id,
+          { captcha_method: 'turnstile' },
+          { turnstile: true, discord_image: true }
+        );
+      await expect(
+        new VerificationEventRepository(prisma).completeCaptchaVerification({
+          challengeId: challenge.id,
+          generation: 1,
+          id: verification.id,
+          expectedCaseRevision: verification.case_revision,
+          serverId: verification.server_id,
+          userId: verification.user_id,
+          resolvedAt: new Date(),
+          resolvedBy: 'drasil:captcha',
+        })
+      ).resolves.toBeNull();
+      expect(await challenges.findById(challenge.id)).toMatchObject({
+        status: CaptchaChallengeStatus.PASSED,
+      });
+    }
+  );
+
+  it('rereads method revision after a server-lock wait even when the selected method returns to Turnstile', async () => {
+    const { verification } = await createCase('guild-revision-race', 'user-revision-race');
+    await enableAutomaticCaptchaResolution(verification.server_id);
+    const challenge = await new CaptchaChallengeRepository(prisma).create({
+      verificationEventId: verification.id,
+      serverId: verification.server_id,
+      userId: verification.user_id,
+      requestSource: CaptchaChallengeRequestSource.AUTOMATIC_SUSPICIOUS_JOIN,
+      passEffect: CaptchaChallengePassEffect.VERIFY_JOIN_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
+      caseRevision: verification.case_revision,
+      tokenHash: 'revision-race',
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    await prisma.captcha_challenges.update({
+      where: { id: challenge.id },
+      data: { status: CaptchaChallengeStatus.PASSED, passed_at: new Date() },
+    });
+    let completion!: ReturnType<VerificationEventRepository['completeCaptchaVerification']>;
+    let settled = false;
+    await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`select guild_id from servers where guild_id=${verification.server_id} for update`;
+      completion = new VerificationEventRepository(prisma)
+        .completeCaptchaVerification({
+          challengeId: challenge.id,
+          generation: 1,
+          id: verification.id,
+          expectedCaseRevision: verification.case_revision,
+          serverId: verification.server_id,
+          userId: verification.user_id,
+          resolvedAt: new Date(),
+          resolvedBy: 'drasil:captcha',
+        })
+        .finally(() => {
+          settled = true;
+        });
+      void completion.catch(() => undefined);
+      // Observe a real blocked resolver before committing the settings update.
+      let waiting = false;
+      for (let i = 0; i < 100 && !waiting; i++) {
+        await tx.$queryRaw`select pg_stat_clear_snapshot()::text`;
+        const rows = await tx.$queryRaw<
+          Array<{ waiting: boolean }>
+        >`select exists(select 1 from pg_stat_activity where datname=current_database() and pid<>pg_backend_pid() and wait_event_type='Lock' and query like '%FROM servers AS server%') as waiting`;
+        waiting = rows[0].waiting;
+        if (!waiting) await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(waiting).toBe(true);
+      expect(settled).toBe(false);
+      await tx.$executeRaw`update servers set settings=settings || '{"captcha_method":"turnstile","captcha_method_revision":2}'::jsonb where guild_id=${verification.server_id}`;
+    });
+    await expect(completion).resolves.toBeNull();
+    expect(await new VerificationEventRepository(prisma).findById(verification.id)).toMatchObject({
+      status: VerificationStatus.PENDING,
+    });
+  });
+
   it('fences CAPTCHA pass presentation against moderator terminal actions', async () => {
     const { verification } = await createCase(
       'guild-captcha-presentation-fence',
@@ -1879,6 +2262,8 @@ describeIntegration('CaptchaChallengeRepository (integration)', () => {
       userId: verification.user_id,
       requestSource: CaptchaChallengeRequestSource.MODERATOR,
       passEffect: CaptchaChallengePassEffect.EVIDENCE_ONLY,
+      provider: CaptchaProvider.TURNSTILE,
+      methodRevision: 0,
       caseRevision: verification.case_revision,
       tokenHash: 'presentation-fence-hash',
       expiresAt: new Date(Date.now() + 60_000),

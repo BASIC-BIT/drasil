@@ -80,10 +80,10 @@ If the user says "Reset the database", run `npm run db:reset:local`.
 - Integration tests live in `src/__tests__/integration` and use a real Postgres DB via Prisma.
 - Integration tests are enabled by `JEST_INTEGRATION=1`.
 - Test setup runs `prisma migrate deploy` and truncates tables between tests.
-- Env for integration tests:
-  - `TEST_DATABASE_URL` (preferred)
-  - `DATABASE_URL` (fallback)
-  - `POSTGRES_DB_URL` (for extension creation)
+- Integration tests require identical `TEST_DATABASE_URL`, `DATABASE_URL` and
+  `POSTGRES_DB_URL` values. The owned disposable targets are loopback
+  `55433/drasil_mcp_test` locally and `5432/drasil_test` in CI. The shared test
+  guard rejects other targets before migrations, pools or destructive fixtures.
 - Manual regression list and test ideas: `docs/test-cases.md`.
 - Full-stack smoke testing is optional and uses a staging Discord server.
 

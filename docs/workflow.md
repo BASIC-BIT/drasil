@@ -30,27 +30,52 @@ detections, and cases, see `docs/moderation-flow.md`.
    - Otherwise creates a `verification_event` case (PENDING), applies the case
      role, creates a verification thread, and upserts the admin notification.
 
-## Case-bound browser security checks
+## Case-bound security checks
 
-CAPTCHA is an optional component of a normal pending case. It is never a separate case type and is
-never available for compromised-account recovery cases.
+CAPTCHA is an optional component of a normal pending case. It is unavailable for
+compromised-account recovery. Administrators select exactly one method in Setup:
+None, Discord image CAPTCHA, or Cloudflare Turnstile. Members cannot select a
+method, and outages never substitute another method.
 
-- `captcha_mode=off` disables new checks and causes the bounded bot sweep to cancel pending checks.
-- `captcha_mode=manual` lets moderators add a check to a pending standard case.
-- `captcha_mode=suspicious_join` also adds a check when suspicious join detection creates a new
-  case. Later join evidence added to an existing case does not add one automatically.
-- A moderator-requested pass is durable evidence only. The case stays pending.
-- An automatic suspicious-join pass can resolve its exact case only when
-  `captcha_pass_action=verify_join_only`, the case is still unchanged and join-only, and the member
-  has no other pending case. All other valid passes remain evidence without releasing the case role.
-- Failure, expiry, delivery failure, and bypass keep the case pending. No CAPTCHA outcome kicks or
-  bans a member.
+- None suppresses issuance and cancels pending checks without resolving cases.
+  Existing settings without an explicit method map Off to None and active modes
+  to Turnstile. Deployment does not change existing servers or enable the fleet.
+- `captcha_mode=off` disables new checks and the bounded bot sweep cancels pending
+  checks. `manual` permits moderator issuance. `suspicious_join` also issues when
+  suspicious join detection opens a new case; later evidence on existing cases
+  does not issue a check. Method selection and issuance preferences are separate.
+- A moderator-requested pass is evidence only. Automatic resolution requires
+  `captcha_pass_action=verify_join_only`, automatic suspicious-join issuance,
+  nonempty exclusively eligible join evidence, the unchanged pending standard
+  case and revision, matching current method and revision, and no other pending
+  case for the member. The moderation queue owns the final effects.
+- Failure, expiry, delivery failure, and bypass keep the case pending. No CAPTCHA
+  outcome kicks or bans a member. Defaults remain 24 hours, five invalid
+  submissions, and `evidence_only`; selecting a method does not enable resolution.
 
-The existing user-facing case thread receives the opaque browser link. The public web flow uses a
-dedicated Discord `identify` OAuth session, validates Turnstile server-side, records the pass and a
-system-only `apply_captcha_pass` request in one database transaction, then lets the bot own Discord
-roles, threads, notifications, and audit effects. See
-`docs/captcha-case-challenge-plan.md` for the complete state and security contract.
+Image checks use a case-thread entry button. Only the bound member may open the
+private persisted PNG or submit the Discord answer modal. Reopening reuses the
+image, generation and remaining attempts. Matching trims surrounding whitespace
+and ignores ASCII letter case only. Rendering, storage and delivery failures do
+not consume answer attempts. Ask for help queues moderator attention without
+resolving the case. Completion confirms the check; it does not promise release.
+
+Turnstile uses an opaque browser link, a separate Discord `identify` OAuth session,
+and server validation of hostname, action and challenge binding. Both methods
+record passes and a system-only `apply_captcha_pass` request transactionally. The
+bot queue owns roles, threads, notifications and audit effects. Every interaction
+retains mandatory actor, server, case, generation and revision checks.
+
+Changing methods cancels pending generations, removes usable image material, and
+marks old controls stale. It neither issues replacements nor backfills cases.
+A moderator can request a new check. Terminal/generation changes delete image
+material in the lifecycle transaction; the bounded minute sweep also removes
+expired material and cancels disabled or terminal-case pending checks. Discord may
+cache old attachments, but their old generations cannot pass.
+
+See [the rollout runbook](captcha-methods-rollout.md),
+[approved methods design](superpowers/specs/2026-10-22-captcha-methods-design.md), and
+[original lifecycle design](captcha-case-challenge-plan.md).
 
 ## Recent message context
 

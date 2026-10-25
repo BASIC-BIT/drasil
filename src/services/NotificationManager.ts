@@ -67,15 +67,19 @@ export type AccountQuarantineAttentionReason =
   | 'role_restoration_incomplete';
 
 export type CaptchaAttentionReason =
+  | 'member_assistance'
   | 'delivery_failed'
   | 'expired'
   | 'submission_limit'
   | 'evidence_only_pass'
   | 'automatic_resolution_held';
 
-/**
- * Interface for NotificationManager service
- */
+/** Delegated setup supplies its resolved choice and exact prior provenance; native callers omit it. */
+export interface BoundVerificationSetup {
+  readonly choice: { readonly kind: 'create' } | { readonly kind: 'reuse'; readonly id: string };
+  readonly previousSyncState: VerificationChannelPermissionSyncState | null;
+}
+
 export interface INotificationManager {
   /**
    * Creates or updates a notification about a suspicious user
@@ -126,7 +130,8 @@ export interface INotificationManager {
       snapshot: VerificationPermissionSnapshot,
       state: VerificationChannelPermissionSyncState
     ) => void | Promise<void>,
-    previousSyncStateOverride?: VerificationChannelPermissionSyncState
+    previousSyncStateOverride?: VerificationChannelPermissionSyncState,
+    binding?: BoundVerificationSetup
   ): Promise<string | null>;
   restoreVerificationChannelPermissions?(
     guild: Guild,
@@ -724,16 +729,19 @@ export class NotificationManager implements INotificationManager {
       }
 
       const notificationRoleIds = this.presentationBuilder.getCaseNotificationRoleIds(serverConfig);
-      const summary =
-        reason === 'delivery_failed'
-          ? 'A browser security check could not be delivered. Review the case and retry when ready.'
-          : reason === 'expired'
-            ? 'A browser security check expired. The user remains restricted.'
-            : reason === 'submission_limit'
-              ? 'A browser security check reached its submission limit. The user remains restricted.'
-              : reason === 'evidence_only_pass'
-                ? 'A browser security check was completed. Review the pending case.'
-                : 'A browser security check passed, but current case state prevented automatic resolution.';
+      const summaries: Record<CaptchaAttentionReason, string> = {
+        member_assistance:
+          'A member requested moderator assistance with a Discord image security check. Review the pending case.',
+        delivery_failed:
+          'A security check could not be delivered. Review the case and retry when ready.',
+        expired: 'A security check expired. The user remains restricted.',
+        submission_limit:
+          'A security check reached its submission limit. The user remains restricted.',
+        evidence_only_pass: 'A security check was completed. Review the pending case.',
+        automatic_resolution_held:
+          'A security check passed, but current case state prevented automatic resolution.',
+      };
+      const summary = summaries[reason];
       const roleMentions = this.presentationBuilder.formatRoleMentions(notificationRoleIds) ?? '';
       const lines = [
         `${roleMentions} ${summary}`.trim(),
@@ -751,7 +759,7 @@ export class NotificationManager implements INotificationManager {
       return true;
     } catch (error) {
       console.warn(
-        `Failed to notify admins about browser security-check attention for case ${verificationEvent.id}:`,
+        `Failed to notify admins about security-check attention for case ${verificationEvent.id}:`,
         error
       );
       return false;
@@ -965,7 +973,8 @@ export class NotificationManager implements INotificationManager {
       snapshot: VerificationPermissionSnapshot,
       state: VerificationChannelPermissionSyncState
     ) => void | Promise<void>,
-    previousSyncStateOverride?: VerificationChannelPermissionSyncState
+    previousSyncStateOverride?: VerificationChannelPermissionSyncState,
+    binding?: BoundVerificationSetup
   ): Promise<string | null> {
     if (!caseRoleId) {
       console.error('Case role ID is required to set up verification channel');
@@ -974,17 +983,34 @@ export class NotificationManager implements INotificationManager {
 
     let createdVerificationChannel: GuildBasedChannel | null = null;
     try {
-      const serverConfig = await this.configService.getServerConfig(guild.id);
-      const previousSyncState =
-        previousSyncStateOverride ?? serverConfig.settings.verification_channel_permission_sync;
+      if (binding && persistConfig)
+        throw new Error('Bound verification setup must persist through its scoped workflow.');
+      const serverConfig = binding ? null : await this.configService.getServerConfig(guild.id);
+      const previousSyncState = binding
+        ? (binding.previousSyncState ?? undefined)
+        : (previousSyncStateOverride ??
+          serverConfig?.settings.verification_channel_permission_sync);
       const permissionOverwrites = this.buildVerificationChannelPermissionOverwrites(
         guild,
         caseRoleId
       );
-      const configuredVerificationChannel = await this.findConfiguredVerificationChannel(
-        guild,
-        configuredVerificationChannelId
-      );
+      let configuredVerificationChannel: TextChannel | null;
+      if (binding) {
+        const channel =
+          binding.choice.kind === 'reuse'
+            ? await guild.channels.fetch(binding.choice.id, { force: true })
+            : null;
+        if (
+          binding.choice.kind === 'reuse' &&
+          (!channel || channel.type !== ChannelType.GuildText || channel.guildId !== guild.id)
+        )
+          return null;
+        configuredVerificationChannel = channel?.type === ChannelType.GuildText ? channel : null;
+      } else
+        configuredVerificationChannel = await this.findConfiguredVerificationChannel(
+          guild,
+          configuredVerificationChannelId
+        );
       if (configuredVerificationChannel) {
         const snapshot = this.snapshotPermissionOverwrites(configuredVerificationChannel);
         const nextSyncState = this.buildVerificationPermissionSyncState(

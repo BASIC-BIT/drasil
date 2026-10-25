@@ -652,3 +652,43 @@ describe('SetupProvisioningService (unit)', () => {
     expect(setupWorkflowService.completeSetup).not.toHaveBeenCalled();
   });
 });
+
+it('checks the bound create-or-reuse choice inside serialization before diagnostics or creation', async () => {
+  const { Collection } = await import('discord.js');
+  const roles = new Collection<string, any>();
+  const channels = new Collection<string, any>();
+  const guild = {
+    id: 'bound-guild',
+    roles: { cache: roles, create: jest.fn() },
+    channels: { cache: channels },
+  } as any;
+  const config = {
+    getServerConfig: jest.fn().mockResolvedValue({
+      case_role_id: null,
+      admin_channel_id: null,
+      verification_channel_id: null,
+      settings: {},
+    }),
+  } as any;
+  const diagnostics = { validateSetupCandidate: jest.fn() } as any;
+  const workflow = { completeSetup: jest.fn() } as any;
+  const assertSelection = jest.fn(async (selection) => {
+    expect(selection.role).toEqual({ kind: 'reuse', id: 'new-match', name: 'Drasil Case' });
+    throw new Error('stale_state');
+  });
+  await expect(
+    new SetupProvisioningService(config, diagnostics, workflow).provision({
+      guild,
+      adminChannelId: 'admin',
+      actorLabel: 'actor',
+      beforeSelection: async () => {
+        roles.set('new-match', { id: 'new-match', name: 'Drasil Case' });
+      },
+      assertSelection,
+    })
+  ).rejects.toThrow('stale_state');
+  expect(assertSelection).toHaveBeenCalledTimes(1);
+  expect(diagnostics.validateSetupCandidate).not.toHaveBeenCalled();
+  expect(guild.roles.create).not.toHaveBeenCalled();
+  expect(workflow.completeSetup).not.toHaveBeenCalled();
+});

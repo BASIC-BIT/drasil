@@ -1,3 +1,4 @@
+import { prepareReportClient } from './reportApplicationTestHarness';
 import {
   ChannelType,
   ChatInputCommandInteraction,
@@ -26,7 +27,7 @@ describe('CommandHandler report commands (unit)', () => {
       saved.push('detection');
       if (failure === 'routing') throw new Error('delivery failed after saving detection');
     });
-    const { handler } = buildHandler({ handleUserReport });
+    const { client, handler } = buildHandler({ handleUserReport });
     const targetUser = { id: 'user-2', username: 'target' };
     const interaction = {
       commandName: route === 'slash' ? 'report' : 'Report User',
@@ -43,6 +44,7 @@ describe('CommandHandler report commands (unit)', () => {
     };
     if (failure === 'receipt')
       interaction.editReply.mockRejectedValueOnce(new Error('receipt failed'));
+    prepareReportClient(client, interaction);
     if (route === 'slash')
       await handler.handleSlashCommand(interaction as unknown as ChatInputCommandInteraction);
     else
@@ -71,7 +73,9 @@ describe('CommandHandler report commands (unit)', () => {
   )(
     'direct %s receipt uses the resolved username when available: %s',
     async (route, hasUsername) => {
-      const { handler } = buildHandler({ handleUserReport: jest.fn().mockResolvedValue(true) });
+      const { client, handler } = buildHandler({
+        handleUserReport: jest.fn().mockResolvedValue(true),
+      });
       const targetUser = { id: 'user-2', username: 'picker-label' };
       const targetMember = { id: 'user-2', user: { username: hasUsername ? 'tar`get' : '' } };
       const fetch = jest.fn().mockResolvedValue(targetMember);
@@ -88,6 +92,7 @@ describe('CommandHandler report commands (unit)', () => {
         editReply: jest.fn().mockResolvedValue(undefined),
         reply: jest.fn().mockResolvedValue(undefined),
       };
+      prepareReportClient(client, interaction);
       if (route === 'slash')
         await handler.handleSlashCommand(interaction as unknown as ChatInputCommandInteraction);
       else
@@ -100,13 +105,13 @@ describe('CommandHandler report commands (unit)', () => {
           : 'Report submitted for user `user-2`.',
         allowedMentions: { parse: [] },
       });
-      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(fetch).toHaveBeenCalledWith('user-2');
     }
   );
 
   it('handles /report with Discord user picker target', async () => {
     const handleUserReport = jest.fn().mockResolvedValue(true);
-    const { handler, securityActionService } = buildHandler({ handleUserReport });
+    const { client, handler, securityActionService } = buildHandler({ handleUserReport });
 
     const targetUser = { id: 'user-2', tag: 'target#0001' } as any;
     const targetMember = { id: targetUser.id } as any;
@@ -130,6 +135,8 @@ describe('CommandHandler report commands (unit)', () => {
       reply: jest.fn().mockResolvedValue(undefined),
     } as any;
 
+    prepareReportClient(client, interaction);
+
     await handler.handleSlashCommand(interaction);
 
     expect(securityActionService.handleUserReport).toHaveBeenCalledWith(
@@ -144,11 +151,14 @@ describe('CommandHandler report commands (unit)', () => {
     });
   });
 
-  it('keeps /report usable when report settings cannot be loaded', async () => {
+  it('fails closed when current report settings cannot be loaded', async () => {
     const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
     const handleUserReport = jest.fn().mockResolvedValue(true);
     const getServerConfig = jest.fn().mockRejectedValue(new Error('config unavailable'));
-    const { handler, securityActionService } = buildHandler({ handleUserReport, getServerConfig });
+    const { client, handler, securityActionService } = buildHandler({
+      handleUserReport,
+      getServerConfig,
+    });
 
     const targetUser = { id: 'user-2', tag: 'target#0001' } as any;
     const targetMember = { id: targetUser.id } as any;
@@ -172,17 +182,15 @@ describe('CommandHandler report commands (unit)', () => {
       reply: jest.fn().mockResolvedValue(undefined),
     } as any;
 
-    await handler.handleSlashCommand(interaction);
+    prepareReportClient(client, interaction);
 
-    expect(securityActionService.handleUserReport).toHaveBeenCalledWith(
-      targetMember,
-      interaction.user,
-      undefined
-    );
+    await handler.handleSlashCommand(interaction);
     expect(interaction.editReply).toHaveBeenCalledWith({
-      content: 'Report submitted for user `user-2`.',
-      allowedMentions: { parse: [] },
+      content:
+        "Drasil couldn't finish submitting this report. Please ask a moderator to review it.",
     });
+
+    expect(securityActionService.handleUserReport).not.toHaveBeenCalled();
     consoleError.mockRestore();
   });
 
@@ -193,7 +201,10 @@ describe('CommandHandler report commands (unit)', () => {
         [USER_REPORT_REASON_REQUIRED_SETTING_KEY]: true,
       },
     });
-    const { handler, securityActionService } = buildHandler({ handleUserReport, getServerConfig });
+    const { client, handler, securityActionService } = buildHandler({
+      handleUserReport,
+      getServerConfig,
+    });
 
     const guild = {
       id: 'guild-1',
@@ -215,6 +226,8 @@ describe('CommandHandler report commands (unit)', () => {
       reply: jest.fn().mockResolvedValue(undefined),
     } as any;
 
+    prepareReportClient(client, interaction);
+
     await handler.handleSlashCommand(interaction);
 
     expect(guild.members.fetch).not.toHaveBeenCalled();
@@ -227,7 +240,10 @@ describe('CommandHandler report commands (unit)', () => {
   it('rejects /report self-reports', async () => {
     const handleUserReport = jest.fn().mockResolvedValue(true);
     const getServerConfig = jest.fn();
-    const { handler, securityActionService } = buildHandler({ handleUserReport, getServerConfig });
+    const { client, handler, securityActionService } = buildHandler({
+      handleUserReport,
+      getServerConfig,
+    });
 
     const guild = {
       id: 'guild-1',
@@ -249,6 +265,8 @@ describe('CommandHandler report commands (unit)', () => {
       reply: jest.fn().mockResolvedValue(undefined),
     } as any;
 
+    prepareReportClient(client, interaction);
+
     await handler.handleSlashCommand(interaction);
 
     expect(guild.members.fetch).not.toHaveBeenCalled();
@@ -261,7 +279,7 @@ describe('CommandHandler report commands (unit)', () => {
 
   it('handles Report User context command in a guild', async () => {
     const handleUserReport = jest.fn().mockResolvedValue(true);
-    const { handler, securityActionService } = buildHandler({ handleUserReport });
+    const { client, handler, securityActionService } = buildHandler({ handleUserReport });
 
     const targetUser = {
       id: 'user-2',
@@ -286,6 +304,8 @@ describe('CommandHandler report commands (unit)', () => {
       reply: jest.fn().mockResolvedValue(undefined),
     } as any;
 
+    prepareReportClient(client, interaction);
+
     await handler.handleUserContextMenuCommand(interaction);
 
     expect(securityActionService.handleUserReport).toHaveBeenCalledWith(
@@ -306,7 +326,10 @@ describe('CommandHandler report commands (unit)', () => {
         [USER_REPORT_REASON_REQUIRED_SETTING_KEY]: true,
       },
     });
-    const { handler, securityActionService } = buildHandler({ handleUserReport, getServerConfig });
+    const { client, handler, securityActionService } = buildHandler({
+      handleUserReport,
+      getServerConfig,
+    });
 
     const guild = {
       id: 'guild-1',
@@ -325,6 +348,8 @@ describe('CommandHandler report commands (unit)', () => {
       reply: jest.fn().mockResolvedValue(undefined),
     } as any;
 
+    prepareReportClient(client, interaction);
+
     await handler.handleUserContextMenuCommand(interaction);
 
     expect(guild.members.fetch).not.toHaveBeenCalled();
@@ -337,7 +362,7 @@ describe('CommandHandler report commands (unit)', () => {
   it('opens a Report Message modal when user-install reporting is enabled', async () => {
     process.env.DRASIL_USER_INSTALL_REPORTING_ENABLED = 'true';
     const handleMessageReport = jest.fn().mockResolvedValue(true);
-    const { handler, securityActionService } = buildHandler({ handleMessageReport });
+    const { client, handler, securityActionService } = buildHandler({ handleMessageReport });
 
     const targetUser = { id: 'user-2', username: 'target' } as any;
     const interaction = {
@@ -356,6 +381,8 @@ describe('CommandHandler report commands (unit)', () => {
       reply: jest.fn().mockResolvedValue(undefined),
       showModal: jest.fn().mockResolvedValue(undefined),
     } as any;
+
+    prepareReportClient(client, interaction);
 
     await handler.handleMessageContextMenuCommand(interaction);
 
@@ -378,7 +405,7 @@ describe('CommandHandler report commands (unit)', () => {
         [USER_REPORT_REASON_REQUIRED_SETTING_KEY]: true,
       },
     });
-    const { handler, securityActionService } = buildHandler({
+    const { client, handler, securityActionService } = buildHandler({
       getServerConfig,
       handleMessageReport,
     });
@@ -400,6 +427,8 @@ describe('CommandHandler report commands (unit)', () => {
       showModal: jest.fn().mockResolvedValue(undefined),
     } as any;
 
+    prepareReportClient(client, interaction);
+
     await handler.handleMessageContextMenuCommand(interaction);
 
     expect(getServerConfig).toHaveBeenCalledWith('guild-1');
@@ -417,7 +446,7 @@ describe('CommandHandler report commands (unit)', () => {
   it('rejects Report Message context command when user-install reporting is disabled', async () => {
     delete process.env.DRASIL_USER_INSTALL_REPORTING_ENABLED;
     const handleMessageReport = jest.fn().mockResolvedValue(true);
-    const { handler, securityActionService } = buildHandler({ handleMessageReport });
+    const { client, handler, securityActionService } = buildHandler({ handleMessageReport });
 
     const interaction = {
       commandName: 'Report Message',
@@ -429,6 +458,8 @@ describe('CommandHandler report commands (unit)', () => {
       },
       reply: jest.fn().mockResolvedValue(undefined),
     } as any;
+
+    prepareReportClient(client, interaction);
 
     await handler.handleMessageContextMenuCommand(interaction);
 
@@ -463,7 +494,10 @@ describe('CommandHandler report commands (unit)', () => {
       },
     });
     const updateServerSettings = jest.fn().mockResolvedValue({});
-    const { handler, configService } = buildHandler({ getServerConfig, updateServerSettings });
+    const { client, handler, configService } = buildHandler({
+      getServerConfig,
+      updateServerSettings,
+    });
 
     const guild = {
       id: 'guild-1',
@@ -487,6 +521,8 @@ describe('CommandHandler report commands (unit)', () => {
       deferReply: jest.fn().mockResolvedValue(undefined),
       editReply: jest.fn().mockResolvedValue(undefined),
     } as any;
+
+    prepareReportClient(client, interaction);
 
     await handler.handleSlashCommand(interaction);
 
@@ -526,7 +562,7 @@ describe('CommandHandler report commands (unit)', () => {
     const upsert = jest
       .spyOn(ReportInstructionsManager.prototype, 'upsertReportInstructionsMessage')
       .mockResolvedValue({ action: 'reposted', messageId: 'replacement' });
-    const { handler } = buildHandler();
+    const { client, handler } = buildHandler();
     const channel = {
       id: 'channel-1',
       type: ChannelType.GuildText,
@@ -543,8 +579,13 @@ describe('CommandHandler report commands (unit)', () => {
       deferReply: jest.fn(),
       editReply: jest.fn(),
     };
+    prepareReportClient(client, interaction);
     await handler.handleSlashCommand(interaction as any);
-    expect(upsert).toHaveBeenCalledWith('guild-1', channel, { repost: true });
+    expect(upsert).toHaveBeenCalledWith('guild-1', channel, {
+      repost: true,
+      expectedMessageId: null,
+      expectedChannelId: null,
+    });
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: 'Report instructions reposted successfully in <#channel-1>.',
     });
@@ -567,7 +608,7 @@ describe('CommandHandler report commands (unit)', () => {
     jest
       .spyOn(ReportInstructionsManager.prototype, 'upsertReportInstructionsMessage')
       .mockRejectedValue(error);
-    const { handler } = buildHandler();
+    const { client, handler } = buildHandler();
     const interaction = {
       commandName: 'setupreportbutton',
       user: { id: 'admin' },
@@ -582,6 +623,7 @@ describe('CommandHandler report commands (unit)', () => {
       deferReply: jest.fn(),
       editReply: jest.fn(),
     };
+    prepareReportClient(client, interaction);
     await handler.handleSlashCommand(interaction as any);
     expect(interaction.editReply).toHaveBeenCalledWith({ content, allowedMentions: { parse: [] } });
   });
@@ -603,7 +645,10 @@ describe('CommandHandler report commands (unit)', () => {
       },
     });
     const updateServerSettings = jest.fn().mockResolvedValue({});
-    const { handler, configService } = buildHandler({ getServerConfig, updateServerSettings });
+    const { client, handler, configService } = buildHandler({
+      getServerConfig,
+      updateServerSettings,
+    });
 
     const guild = {
       id: 'guild-1',
@@ -627,6 +672,8 @@ describe('CommandHandler report commands (unit)', () => {
       deferReply: jest.fn().mockResolvedValue(undefined),
       editReply: jest.fn().mockResolvedValue(undefined),
     } as any;
+
+    prepareReportClient(client, interaction);
 
     await handler.handleSlashCommand(interaction);
 
@@ -664,7 +711,10 @@ describe('CommandHandler report commands (unit)', () => {
     } as any;
     const getServerConfig = jest.fn().mockResolvedValue({ settings: {} });
     const updateServerSettings = jest.fn().mockResolvedValue({});
-    const { handler, configService } = buildHandler({ getServerConfig, updateServerSettings });
+    const { client, handler, configService } = buildHandler({
+      getServerConfig,
+      updateServerSettings,
+    });
 
     const guild = {
       id: 'guild-1',
@@ -688,6 +738,8 @@ describe('CommandHandler report commands (unit)', () => {
       deferReply: jest.fn().mockResolvedValue(undefined),
       editReply: jest.fn().mockResolvedValue(undefined),
     } as any;
+
+    prepareReportClient(client, interaction);
 
     await handler.handleSlashCommand(interaction);
 
@@ -735,7 +787,7 @@ describe('CommandHandler report commands (unit)', () => {
       },
     });
     const updateServerSettings = jest.fn().mockResolvedValue({});
-    const { handler, configService, client } = buildHandler({
+    const { client, handler, configService } = buildHandler({
       getServerConfig,
       updateServerSettings,
     });
@@ -765,6 +817,8 @@ describe('CommandHandler report commands (unit)', () => {
       deferReply: jest.fn().mockResolvedValue(undefined),
       editReply: jest.fn().mockResolvedValue(undefined),
     } as any;
+
+    prepareReportClient(client, interaction);
 
     await handler.handleSlashCommand(interaction);
 

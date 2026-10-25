@@ -9,11 +9,11 @@ import {
   VERIFICATION_AI_THREAD_ANALYSIS_ENABLED_SETTING_KEY,
   VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT_SETTING_KEY,
 } from '../../utils/verificationThreadAnalysisSettings';
-import { buildHandler } from './commandHandlerTestHarness';
+import { buildHandler, configurationResponseMocks } from './commandHandlerTestHarness';
 
 describe('CommandHandler verification config commands (unit)', () => {
   it('handles /config verification prompt-set with escaped newlines', async () => {
-    const updateServerSettings = jest.fn().mockResolvedValue({});
+    const updateServerSettings = jest.fn().mockResolvedValue({ settings: {} });
     const { handler, configService } = buildHandler({ updateServerSettings });
 
     const guild = {
@@ -37,6 +37,7 @@ describe('CommandHandler verification config commands (unit)', () => {
         getString: jest.fn().mockReturnValue('Welcome {user_mention}\\nIn {server_name}'),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      ...configurationResponseMocks(),
     } as any;
 
     await handler.handleSlashCommand(interaction);
@@ -44,9 +45,8 @@ describe('CommandHandler verification config commands (unit)', () => {
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       verification_prompt_template: 'Welcome {user_mention}\nIn {server_name}',
     });
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('Updated verification prompt template'),
-      flags: MessageFlags.Ephemeral,
     });
   });
 
@@ -118,6 +118,7 @@ describe('CommandHandler verification config commands (unit)', () => {
         getSubcommand: jest.fn().mockReturnValue('prompt-view'),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      ...configurationResponseMocks(),
     } as any;
 
     await handler.handleSlashCommand(interaction);
@@ -139,8 +140,8 @@ describe('CommandHandler verification config commands (unit)', () => {
         [VERIFICATION_PROMPT_TEMPLATE_SETTING_KEY]: 'custom',
       },
     });
-    const updateServerConfig = jest.fn().mockResolvedValue({});
-    const { handler, configService } = buildHandler({ getServerConfig, updateServerConfig });
+    const updateSetupIfUnchanged = jest.fn().mockResolvedValue({ settings: {} });
+    const { handler, configService } = buildHandler({ getServerConfig, updateSetupIfUnchanged });
 
     const guild = {
       id: 'guild-1',
@@ -162,16 +163,18 @@ describe('CommandHandler verification config commands (unit)', () => {
         getSubcommand: jest.fn().mockReturnValue('prompt-reset'),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      ...configurationResponseMocks(),
     } as any;
 
     await handler.handleSlashCommand(interaction);
 
-    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-      settings: {},
-    });
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(configService.updateSetupIfUnchanged).toHaveBeenCalledWith(
+      'guild-1',
+      undefined,
+      expect.objectContaining({ settings: {}, resetSettings: ['verification_prompt_template'] })
+    );
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('Reset verification prompt template to default'),
-      flags: MessageFlags.Ephemeral,
     });
   });
 
@@ -211,6 +214,7 @@ describe('CommandHandler verification config commands (unit)', () => {
         }),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      ...configurationResponseMocks(),
     } as any;
 
     await handler.handleSlashCommand(interaction);
@@ -220,9 +224,8 @@ describe('CommandHandler verification config commands (unit)', () => {
       [VERIFICATION_CONTEXT_SETTING_KEY]: 'Legitimate members often mention splits',
       [EXPECTED_TOPICS_SETTING_KEY]: ['doom', 'quake'],
     });
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('Updated AI server context'),
-      flags: MessageFlags.Ephemeral,
       allowedMentions: { parse: [] },
     });
   });
@@ -258,6 +261,7 @@ describe('CommandHandler verification config commands (unit)', () => {
         getSubcommand: jest.fn().mockReturnValue('context-view'),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      ...configurationResponseMocks(),
     } as any;
 
     await handler.handleSlashCommand(interaction);
@@ -294,6 +298,7 @@ describe('CommandHandler verification config commands (unit)', () => {
         getString: jest.fn().mockReturnValue(null),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      ...configurationResponseMocks(),
     } as any;
 
     await handler.handleSlashCommand(interaction);
@@ -332,6 +337,7 @@ describe('CommandHandler verification config commands (unit)', () => {
         }),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      ...configurationResponseMocks(),
     } as any;
 
     await handler.handleSlashCommand(interaction);
@@ -351,8 +357,8 @@ describe('CommandHandler verification config commands (unit)', () => {
         [EXPECTED_TOPICS_SETTING_KEY]: ['doom'],
       },
     });
-    const updateServerConfig = jest.fn().mockResolvedValue({});
-    const { handler, configService } = buildHandler({ getServerConfig, updateServerConfig });
+    const updateSetupIfUnchanged = jest.fn().mockResolvedValue({ settings: {} });
+    const { handler, configService } = buildHandler({ getServerConfig, updateSetupIfUnchanged });
 
     const guild = {
       id: 'guild-1',
@@ -374,16 +380,21 @@ describe('CommandHandler verification config commands (unit)', () => {
         getSubcommand: jest.fn().mockReturnValue('context-reset'),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      ...configurationResponseMocks(),
     } as any;
 
     await handler.handleSlashCommand(interaction);
 
-    expect(configService.updateServerConfig).toHaveBeenCalledWith('guild-1', {
-      settings: {},
-    });
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(configService.updateSetupIfUnchanged).toHaveBeenCalledWith(
+      'guild-1',
+      undefined,
+      expect.objectContaining({
+        settings: {},
+        resetSettings: ['server_about', 'verification_context', 'expected_topics'],
+      })
+    );
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: '✅ Reset AI server context to defaults.',
-      flags: MessageFlags.Ephemeral,
     });
   });
 
@@ -416,6 +427,7 @@ describe('CommandHandler verification config commands (unit)', () => {
         getSubcommand: jest.fn().mockReturnValue('analysis-enable'),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      ...configurationResponseMocks(),
     } as any;
 
     await handler.handleSlashCommand(interaction);
@@ -423,9 +435,8 @@ describe('CommandHandler verification config commands (unit)', () => {
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       [VERIFICATION_AI_THREAD_ANALYSIS_ENABLED_SETTING_KEY]: true,
     });
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('Enabled verification reply AI analysis'),
-      flags: MessageFlags.Ephemeral,
     });
   });
 
@@ -458,6 +469,7 @@ describe('CommandHandler verification config commands (unit)', () => {
         getSubcommand: jest.fn().mockReturnValue('analysis-view'),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      ...configurationResponseMocks(),
     } as any;
 
     await handler.handleSlashCommand(interaction);
@@ -502,6 +514,7 @@ describe('CommandHandler verification config commands (unit)', () => {
         getSubcommand: jest.fn().mockReturnValue('analysis-disable'),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      ...configurationResponseMocks(),
     } as any;
 
     await handler.handleSlashCommand(interaction);
@@ -509,9 +522,8 @@ describe('CommandHandler verification config commands (unit)', () => {
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       [VERIFICATION_AI_THREAD_ANALYSIS_ENABLED_SETTING_KEY]: false,
     });
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('Disabled verification reply AI analysis'),
-      flags: MessageFlags.Ephemeral,
     });
   });
 
@@ -545,6 +557,7 @@ describe('CommandHandler verification config commands (unit)', () => {
         getInteger: jest.fn().mockReturnValue(5),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      ...configurationResponseMocks(),
     } as any;
 
     await handler.handleSlashCommand(interaction);
@@ -552,9 +565,8 @@ describe('CommandHandler verification config commands (unit)', () => {
     expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
       [VERIFICATION_AI_THREAD_ANALYSIS_MESSAGE_LIMIT_SETTING_KEY]: 5,
     });
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('Updated verification reply AI analysis message limit'),
-      flags: MessageFlags.Ephemeral,
     });
   });
 });

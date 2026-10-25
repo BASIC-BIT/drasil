@@ -1,3 +1,13 @@
+import type {
+  IntegrityAuditFindingSeverity,
+  IntegrityAuditFinding,
+  IntegrityAuditReport,
+} from '@drasil/application';
+export type {
+  IntegrityAuditFindingSeverity,
+  IntegrityAuditFinding,
+  IntegrityAuditReport,
+} from '@drasil/application';
 import { Client, Guild, GuildBan, GuildMember } from 'discord.js';
 import { inject, injectable, optional } from 'inversify';
 import { IConfigService } from '../config/ConfigService';
@@ -48,39 +58,11 @@ const ADMIN_ACTION_EXEMPT_RESOLUTION_SOURCES = new Set<unknown>([
   ModerationOutcomeSource.UNKNOWN_EXTERNAL,
 ]);
 
-export type IntegrityAuditFindingSeverity = 'error' | 'warning' | 'info';
-
 export interface IntegrityAuditOptions {
   readonly scope?: string | null;
   readonly days?: number | null;
   readonly limit?: number | null;
   readonly userId?: string;
-}
-
-export interface IntegrityAuditFinding {
-  readonly severity: IntegrityAuditFindingSeverity;
-  readonly code: string;
-  readonly subject: string;
-  readonly detail: string;
-  readonly userId?: string;
-  readonly verificationEventId?: string;
-}
-
-export interface IntegrityAuditReport {
-  readonly guildId: string;
-  readonly checkedAt: Date;
-  readonly scope: IntegrityAuditScope;
-  readonly days: number;
-  readonly limit: number;
-  readonly userId?: string;
-  readonly candidateCounts: {
-    readonly pendingCases: number;
-    readonly recentResolvedCases: number;
-    readonly caseRoleMembers: number;
-    readonly activeRoleQuarantines: number;
-    readonly queueItems: number;
-  };
-  readonly findings: IntegrityAuditFinding[];
 }
 
 export interface IIntegrityAuditService {

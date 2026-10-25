@@ -1,9 +1,12 @@
+import { ActionDeniedError } from '@drasil/application';
+import { encodeCaptchaEffect } from '../application/captchaContext';
 import { createHash, randomBytes } from 'node:crypto';
 import { inject, injectable, optional } from 'inversify';
 import { IConfigService } from '../config/ConfigService';
 import { TYPES } from '../di/symbols';
 import {
   CaptchaChallengeIssueInput,
+  CaptchaChallengeCaseChangedError,
   ICaptchaChallengeRepository,
 } from '../repositories/CaptchaChallengeRepository';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
@@ -14,7 +17,6 @@ import {
   CaptchaChallengeRequestSource,
   CaptchaChallengeStatus,
   CaseKind,
-  ModerationActionRequestType,
   VerificationEvent,
   VerificationStatus,
 } from '../repositories/types';
@@ -34,6 +36,8 @@ const EXPIRY_SWEEP_INTERVAL_MS = 60_000;
 const DELIVERY_LEASE_MS = 5 * 60_000;
 
 export interface RequestCaptchaChallengeInput {
+  /** Trusted delegated approval revision; native callers retain current-state behavior. */
+  expectedCaseRevision?: number;
   actionRequestId?: string;
   verificationEventId: string;
   requestSource: CaptchaChallengeRequestSource;
@@ -58,6 +62,7 @@ export interface EvaluateCaptchaPassInput {
 }
 
 export interface BypassCaptchaChallengeInput {
+  expectedCaseRevision?: number;
   actionRequestId?: string;
   verificationEventId: string;
   moderatorId: string;
@@ -129,47 +134,69 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     input: RequestCaptchaChallengeInput
   ): Promise<CaptchaChallengeRequestResult> {
     const verificationEvent = await this.requireEligibleCase(input);
+    if (
+      input.expectedCaseRevision !== undefined &&
+      verificationEvent.case_revision !== input.expectedCaseRevision
+    )
+      throw new ActionDeniedError('stale_state');
     const server = await this.config.getServerConfig(verificationEvent.server_id, {
       failOnReadError: true,
       forceRefresh: true,
     });
     const settings = getCaptchaSettings(server.settings);
     const token = randomBytes(TOKEN_BYTES).toString('base64url');
+    if (settings.method === 'none') {
+      throw new Error('This security-check method is not available for delivery.');
+    }
     const challengeInput: CaptchaChallengeIssueInput = {
+      provider: settings.method,
+      methodRevision: settings.methodRevision,
       actionRequestId: input.actionRequestId,
       verificationEventId: verificationEvent.id,
       serverId: verificationEvent.server_id,
       userId: verificationEvent.user_id,
       requestSource: input.requestSource,
       passEffect: selectCaptchaPassEffect(input.requestSource, settings.passAction),
-      caseRevision: verificationEvent.case_revision,
+      caseRevision: input.expectedCaseRevision ?? verificationEvent.case_revision,
       tokenHash: createHash('sha256').update(token).digest('hex'),
       expiresAt: new Date(Date.now() + settings.challengeLifetimeHours * 60 * 60 * 1000),
       requestedBy: input.requestedBy ?? null,
     };
     let challenge: CaptchaChallenge;
-    if (input.retry) {
-      const expectedGeneration = input.expectedGeneration;
-      if (
-        !input.expectedChallengeId ||
-        expectedGeneration === undefined ||
-        !Number.isInteger(expectedGeneration) ||
-        expectedGeneration < 1
-      ) {
-        throw new Error(
-          'The displayed security check is no longer available. Refresh and try again.'
-        );
+    try {
+      if (input.retry) {
+        const expectedGeneration = input.expectedGeneration;
+        if (
+          !input.expectedChallengeId ||
+          expectedGeneration === undefined ||
+          !Number.isInteger(expectedGeneration) ||
+          expectedGeneration < 1
+        ) {
+          throw new Error(
+            'The displayed security check is no longer available. Refresh and try again.'
+          );
+        }
+        challenge = await this.challenges.retry({
+          ...challengeInput,
+          expectedChallengeId: input.expectedChallengeId,
+          expectedGeneration,
+        });
+      } else {
+        challenge = await this.challenges.create(challengeInput);
       }
-      challenge = await this.challenges.retry({
-        ...challengeInput,
-        expectedChallengeId: input.expectedChallengeId,
-        expectedGeneration,
-      });
-    } else {
-      challenge = await this.challenges.create(challengeInput);
+    } catch (error) {
+      if (
+        input.expectedCaseRevision !== undefined &&
+        error instanceof CaptchaChallengeCaseChangedError
+      )
+        throw new ActionDeniedError('stale_state');
+      throw error;
     }
-    const url = buildCaptchaChallengeUrl(token);
-    if (!url) {
+    const destination =
+      challenge.provider === 'discord_image'
+        ? { challengeId: challenge.id, generation: challenge.generation }
+        : buildCaptchaChallengeUrl(token);
+    if (!destination) {
       const recorded = await this.challenges.recordDeliveryFailure(
         challenge.id,
         challenge.generation,
@@ -183,7 +210,10 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     }
 
     try {
-      const deliveryMessageId = await this.threads.sendCaptchaChallenge(verificationEvent, url);
+      const deliveryMessageId = await this.threads.sendCaptchaChallenge(
+        verificationEvent,
+        destination
+      );
       if (!deliveryMessageId) {
         const recorded = await this.challenges.recordDeliveryFailure(
           challenge.id,
@@ -237,6 +267,11 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     ) {
       throw new Error('Only pending standard cases can bypass a security check.');
     }
+    if (
+      input.expectedCaseRevision !== undefined &&
+      verificationEvent.case_revision !== input.expectedCaseRevision
+    )
+      throw new ActionDeniedError('stale_state');
     const challenge = await this.challenges.findByCaseId(input.verificationEventId);
     if (!challenge || challenge.status === CaptchaChallengeStatus.PASSED) {
       throw new Error('This case does not have a bypassable security check.');
@@ -252,9 +287,11 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
       challenge.generation,
       input.moderatorId,
       input.reason,
-      input.actionRequestId
+      input.actionRequestId,
+      input.expectedCaseRevision
     );
     if (!bypassed) {
+      if (input.expectedCaseRevision !== undefined) throw new ActionDeniedError('stale_state');
       throw new Error('The security check changed before it could be bypassed.');
     }
     try {
@@ -269,6 +306,7 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
   }
 
   public async expireChallenges(limit = 50): Promise<CaptchaChallenge[]> {
+    await this.challenges.cleanupImageMaterial(new Date(), limit);
     const disabled = await this.challenges.cancelPendingForDisabledServers(limit);
     const terminal = await this.challenges.cancelPendingForTerminalCases(limit);
     const expired = await this.challenges.expirePending(new Date(), limit);
@@ -307,6 +345,10 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     ]);
     const settings = getCaptchaSettings(server.settings);
     return evaluateCaptchaAutoResolution({
+      currentMethod: settings.method,
+      issuedMethod: challenge.provider,
+      currentMethodRevision: settings.methodRevision,
+      issuedMethodRevision: challenge.method_revision,
       currentMode: settings.mode,
       requestSource: challenge.request_source,
       issuedPassEffect: challenge.pass_effect,
@@ -402,20 +444,7 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     ) {
       return;
     }
-    await this.moderationActionRequests.enqueue({
-      serverId: challenge.server_id,
-      actionType: ModerationActionRequestType.NOTIFY_CAPTCHA_ATTENTION,
-      actorId: 'drasil:captcha',
-      actorSurface: 'captcha',
-      targetUserId: challenge.user_id,
-      verificationEventId: challenge.verification_event_id,
-      idempotencyKey: `captcha:attention:${challenge.id}:${challenge.generation}:${this.attentionReasonKey(reason)}`,
-      metadata: {
-        challenge_id: challenge.id,
-        generation: challenge.generation,
-        reason,
-      },
-    });
+    await this.moderationActionRequests.enqueue(encodeCaptchaEffect(challenge, reason));
   }
 
   private async queueCancelledPresentation(challenge: CaptchaChallenge): Promise<void> {
@@ -433,40 +462,14 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     if (!this.moderationActionRequests) {
       throw new Error('Moderation action requests are unavailable for CAPTCHA presentation.');
     }
-    await this.moderationActionRequests.enqueue({
-      serverId: challenge.server_id,
-      actionType: ModerationActionRequestType.NOTIFY_CAPTCHA_ATTENTION,
-      actorId: 'drasil:captcha',
-      actorSurface: 'captcha',
-      targetUserId: challenge.user_id,
-      verificationEventId: challenge.verification_event_id,
-      idempotencyKey: `captcha:presentation:${challenge.id}:${challenge.generation}:${reason}`,
-      metadata: {
-        challenge_id: challenge.id,
-        generation: challenge.generation,
-        reason,
-      },
-    });
+    await this.moderationActionRequests.enqueue(encodeCaptchaEffect(challenge, reason));
   }
 
   private async queuePassedApplication(challenge: CaptchaChallenge): Promise<void> {
     if (!this.moderationActionRequests) {
       throw new Error('Moderation action requests are unavailable for CAPTCHA completion.');
     }
-    await this.moderationActionRequests.enqueue({
-      serverId: challenge.server_id,
-      actionType: ModerationActionRequestType.APPLY_CAPTCHA_PASS,
-      actorId: 'drasil:captcha',
-      actorSurface: 'captcha',
-      targetUserId: challenge.user_id,
-      verificationEventId: challenge.verification_event_id,
-      idempotencyKey: `captcha:apply:${challenge.id}:${challenge.generation}`,
-      metadata: {
-        challenge_id: challenge.id,
-        generation: challenge.generation,
-        expected_case_revision: challenge.case_revision_at_issue,
-      },
-    });
+    await this.moderationActionRequests.enqueue(encodeCaptchaEffect(challenge, 'pass'));
   }
 
   private async queueDeliveryFailureAttention(
@@ -512,13 +515,6 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
       );
     }
     return current.status === challenge.status;
-  }
-
-  private attentionReasonKey(reason: 'delivery_failed' | 'submission_limit' | 'expired'): string {
-    if (reason === 'delivery_failed') {
-      return 'delivery-failed';
-    }
-    return reason === 'submission_limit' ? 'submission-limit' : 'expired';
   }
 
   private async refreshCaptchaPresentation(
@@ -574,6 +570,7 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     const settings = getCaptchaSettings(server.settings);
     if (
       !canRequestCaptcha({
+        method: settings.method,
         mode: settings.mode,
         requestSource: input.requestSource,
         caseKind: verificationEvent.case_kind ?? CaseKind.STANDARD,

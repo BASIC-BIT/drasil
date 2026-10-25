@@ -1,5 +1,8 @@
 'use server';
 
+import { assertCaptchaProviderConfigured } from '@/lib/turnstile';
+import { captchaImageSecretConfigured } from '@drasil/application';
+
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import {
@@ -10,15 +13,15 @@ import {
   type DetectionResponseMode,
 } from '@drasil/contracts';
 import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
-import { assertCanUpdateAnalyticsConsent } from '@/lib/setupAuthorization';
+import { setupChangesSchema, setupCommandSchema } from '@drasil/application';
+import { createWebSetupActions } from '@/lib/application/adapters/setup';
+import { createWebActionContext } from '@/lib/application/context';
 import { DISCORD_PERMISSIONS, hasPermission, parsePermissions } from '@/lib/discordPermissions';
 import {
-  queueCompleteSetupVerificationRequest,
+  queueCompleteSetupVerificationRequestWithReceipt,
   queueReportInstructionsRepairRequest,
 } from '@/lib/setupArtifactActionQueue';
-import { createSetupDataAdapter } from '@/lib/setupDataAdapter';
 import { createSetupDashboardService } from '@/lib/setupDashboardService';
-import { assertCaptchaProviderConfigured } from '@/lib/turnstile';
 
 function readOptionalFormString(formData: FormData, key: string): string | null | undefined {
   const value = formData.get(key);
@@ -197,11 +200,10 @@ export async function queueCompleteSetupVerification(
     throw new Error('Choose a case role and admin alert channel before queueing core setup.');
   }
 
-  const status = await queueCompleteSetupVerificationRequest({
-    actorId: session.userId,
+  const { status } = await queueCompleteSetupVerificationRequestWithReceipt({
+    context: createWebActionContext({ guildId, userId: session.userId }),
     adminChannelId,
     caseRoleId,
-    guildId,
     reportInstructionsChannelId: readOptionalFormString(formData, 'reportInstructionsChannelId'),
     verificationChannelId: readOptionalFormString(formData, 'verificationChannelId'),
   });
@@ -249,10 +251,13 @@ async function queueReportInstructions(
     throw new Error('Choose an admin or report instructions channel before queueing repair.');
   }
 
-  const status = await queueReportInstructionsRepairRequest({
-    actorId: session.userId,
+  const { status } = await queueReportInstructionsRepairRequest({
+    context: createWebActionContext({
+      guildId,
+      userId: session.userId,
+      requestId: readOptionalFormString(formData, 'reportInstructionsSubmissionId') ?? undefined,
+    }),
     channelId,
-    guildId,
     repost,
     expectedMessageId: readOptionalFormString(formData, 'reportInstructionsMessageId'),
     expectedChannelId: readOptionalFormString(formData, 'reportInstructionsExpectedChannelId'),
@@ -276,10 +281,7 @@ export async function saveGuildSetup(guildId: string, formData: FormData): Promi
   }
 
   const service = createSetupDashboardService();
-  const [guild, currentServer] = await Promise.all([
-    service.assertCanManageGuild(guildId, token.accessToken),
-    createSetupDataAdapter().getServer(guildId),
-  ]);
+  await service.assertCanManageGuild(guildId, token.accessToken);
   const update = guildSetupUpdateSchema.parse({
     guildId,
     updatedBy: session.userId,
@@ -402,19 +404,41 @@ export async function saveGuildSetup(guildId: string, formData: FormData): Promi
     messageDeletionWatchlistEnabled: formData.get('messageDeletionWatchlistEnabled') === 'on',
     messageDeletionWatchlistCustomTerms: readWatchlistCustomTerms(formData),
   });
-  assertCanUpdateAnalyticsConsent({
-    currentLevel: currentServer?.settings.analytics_consent_level,
-    guildOwner: guild.owner,
-    nextLevel: update.analyticsConsentLevel,
-  });
-  assertCaptchaProviderConfigured(update.captchaMode);
-
-  await service.updateGuildSetup(update);
+  const changes = setupChangesSchema.strip().parse(update);
+  const command = setupCommandSchema.parse({ kind: 'update_setup', changes });
+  if (command.kind !== 'update_setup') throw new Error('Setup command mismatch.');
+  const result = await createWebSetupActions().execute(
+    createWebActionContext({ guildId, userId: session.userId }),
+    command
+  );
+  if (result.kind === 'denied') {
+    if (result.code === 'permission_denied')
+      throw new Error(
+        update.analyticsConsentLevel === 'full'
+          ? 'Only the server owner can enable full analytics sharing because it may include raw Discord IDs.'
+          : 'You need Administrator permission to change setup.'
+      );
+    if (result.code === 'policy_disabled') {
+      if (
+        update.captchaMethod === 'discord_image' &&
+        !captchaImageSecretConfigured(process.env.DRASIL_CAPTCHA_IMAGE_ANSWER_SECRET)
+      )
+        throw new Error(
+          'Configure DRASIL_CAPTCHA_IMAGE_ANSWER_SECRET before enabling Discord image CAPTCHA.'
+        );
+      if (update.captchaMethod === 'turnstile') assertCaptchaProviderConfigured('manual');
+      else if (update.captchaMethod === undefined)
+        assertCaptchaProviderConfigured(update.captchaMode);
+      throw new Error('Manual intake requires a separate trigger role before it can be enabled.');
+    }
+    throw new Error(`Setup action denied: ${result.code}`);
+  }
   revalidatePath(`/admin/guild/${guildId}/setup`);
 }
 
 function readCaptchaSettingsFormValues(formData: FormData) {
   return {
+    captchaMethod: readOptionalFormValue(formData, 'captchaMethod'),
     captchaMode: readOptionalFormValue(formData, 'captchaMode'),
     captchaPassAction: readOptionalFormValue(formData, 'captchaPassAction'),
     captchaChallengeLifetimeHours: readOptionalIntegerFormValue(
