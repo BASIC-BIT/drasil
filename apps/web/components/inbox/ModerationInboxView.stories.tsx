@@ -30,6 +30,9 @@ const meta = {
     items: fixtureModerationInboxItems(),
     messageCleanupByCaseId: {
       'case-stale': {
+        loadedAt: '2026-10-25T12:00:00Z',
+        requests: [],
+        returnHref: '/admin/guild/guild-1/inbox',
         combinedBanAction: noopInboxAction,
         combinedJob: null,
         deleteOnlyJob: null,

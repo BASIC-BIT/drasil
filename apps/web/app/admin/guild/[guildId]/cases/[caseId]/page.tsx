@@ -339,6 +339,9 @@ export default async function CaseDetailPage({ params, searchParams }: PageProps
                   findMessageCleanupActionRequest(caseActionRequests, cleanupData.deleteOnlyJob),
                 executeAction: executeCaseMessageCleanup.bind(null, guildId, caseId),
                 previewAction: previewCaseMessageCleanup.bind(null, guildId, caseId),
+                loadedAt: new Date().toISOString(),
+                returnHref: `/admin/guild/${guildId}/cases/${caseId}`,
+                requests: caseActionRequests,
                 workspace: cleanupData.workspace,
               }
             : undefined

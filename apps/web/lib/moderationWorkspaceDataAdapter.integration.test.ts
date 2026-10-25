@@ -371,3 +371,70 @@ it('reads actual configured issuance and durable security intent bindings from P
   const byId = await createModerationActionRequestDataAdapter().getRequest(guildId, requestId);
   expect(byId?.captchaConfiguration).toEqual({ method: 'turnstile', methodRevision: 7 });
 });
+it('projects only the persisted actor/case cleanup intent in selected, case and inbox request reads', async () => {
+  const token = 'execute-intent-123';
+  const jobId = randomUUID();
+  await pool.query(
+    "insert into message_deletion_jobs(id,server_id,user_id,verification_event_id,requested_by,actor_surface,mode,scope,reason,evidence_thread_id) values($1,$2,$3,$4,$5,'web_case','delete_only','source_message','Reviewed','evidence-thread')",
+    [jobId, guildId, targetId, caseId, reporterId]
+  );
+  const idempotency = `message-cleanup:execute_case_message_deletion:${guildId}:${caseId}:${reporterId}:${token}`;
+  await pool.query(
+    "update moderation_action_requests set action_type='execute_case_message_deletion', actor_surface='web_case', idempotency_key=$2, message_deletion_job_id=$3 where id=$1",
+    [requestId, idempotency, jobId]
+  );
+  const reader = createModerationActionRequestDataAdapter();
+  expect((await reader.getRequest(guildId, requestId))?.cleanupIntentToken).toBe(token);
+  expect(
+    (await reader.listCaseRequests(guildId, caseId)).find((value) => value.id === requestId)
+      ?.cleanupIntentToken
+  ).toBe(token);
+  expect(
+    (await reader.listInboxRequests(guildId)).find((value) => value.id === requestId)
+      ?.cleanupIntentToken
+  ).toBe(token);
+  expect(
+    (await adapter().getCaseWorkspaceData({ guildId, caseId }))?.requests.find(
+      (value) => value.id === requestId
+    )?.cleanupIntentToken
+  ).toBe(token);
+  expect(await reader.getRequest(otherGuildId, requestId)).toBeNull();
+  await pool.query('update moderation_action_requests set actor_id=$2 where id=$1', [
+    requestId,
+    targetId,
+  ]);
+  expect((await reader.getRequest(guildId, requestId))?.cleanupIntentToken).toBeUndefined();
+});
+it('retains completed cleanup and failed finalization after the case is banned', async () => {
+  const jobId = randomUUID();
+  await pool.query(
+    "update verification_events set status='banned',private_evidence_thread_id='evidence-thread' where id=$1",
+    [caseId]
+  );
+  await pool.query(
+    "insert into message_deletion_jobs(id,server_id,user_id,verification_event_id,requested_by,actor_surface,mode,scope,reason,evidence_thread_id,status,coverage,ban_status,case_finalization_status,candidate_count,deleted_count,previewed_at) values($1,$2,$3,$4,$5,'web_case','ban_with_cleanup','source_message','Reviewed','evidence-thread','completed','ready','succeeded','failed',1,1,$6)",
+    [jobId, guildId, targetId, caseId, reporterId, eventTime]
+  );
+  await pool.query(
+    "insert into message_deletion_items(job_id,message_id,channel_id,author_id,message_created_at,content_preview,discovery_source,status,evidence_status) values($1,'message','channel',$2,$3,'Reviewed source','source_message','deleted','preserved')",
+    [jobId, targetId, eventTime]
+  );
+  const data = await adapter().getCaseWorkspaceData({ guildId, caseId });
+  expect(data?.detail.status).toBe('banned');
+  expect(data?.cleanup?.workspace).toMatchObject({
+    caseStatus: 'banned',
+    canPreview: false,
+    blockedReason: 'case_not_pending',
+  });
+  expect(data?.cleanup?.jobs[0]).toMatchObject({
+    id: jobId,
+    banStatus: 'succeeded',
+    caseFinalizationStatus: 'failed',
+    execution: { canExecute: true },
+    outcomes: { deletedCount: 1 },
+    items: [{ messageId: 'message', status: 'deleted' }],
+  });
+  const selected = await adapter().getInboxItemDetail({ guildId, itemId: `case:${caseId}` });
+  expect(selected?.kind).toBe('case');
+  if (selected?.kind === 'case') expect(selected.data.cleanup?.jobs[0].id).toBe(jobId);
+});

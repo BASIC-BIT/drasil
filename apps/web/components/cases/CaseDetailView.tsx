@@ -1,3 +1,4 @@
+import type { CaseMessageCleanupIntegration } from '@/components/cases/caseToolBindings';
 import type {
   CaseAction,
   CaseDetail,
@@ -11,7 +12,6 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 import {
   CaseActionControls,
   executableCaseActions,
-  type CaseMessageCleanupIntegration,
   type QueueCaseAction,
 } from './CaseActionControls';
 import { discordDesktopUrlFromWebUrl } from '@/lib/discordUrls';

@@ -4,19 +4,34 @@ import {
   fixtureMessageCleanupCaseWorkspaces,
   fixtureMessageCleanupJobDetails,
 } from '@/lib/messageCleanupFixtures';
-import { CaseMessageCleanupControls } from './CaseMessageCleanupControls';
+import { MessageCleanupPanel } from './MessageCleanupPanel';
 
 const noopAction = async () => completedInboxActionState('Fixture request queued.');
 const workspace = fixtureMessageCleanupCaseWorkspaces[0];
 
 const meta = {
   title: 'Active Triage/Message Cleanup Controls',
-  component: CaseMessageCleanupControls,
+  component: MessageCleanupPanel,
   args: {
-    executeAction: noopAction,
-    jobDetail: null,
-    previewAction: noopAction,
-    workspace: { ...workspace, latestJobs: [] },
+    integration: {
+      workspace: { ...workspace, latestJobs: [] },
+      deleteOnlyJob: null,
+      combinedJob: null,
+      previewAction: noopAction,
+      executeAction: noopAction,
+      combinedBanAction: noopAction,
+      loadedAt: '2026-10-25T12:00:00Z',
+      requests: [],
+      returnHref: '/admin/guild/guild-1/inbox',
+    },
+    policy: {
+      allowedActions: ['ban_user'],
+      canManageCleanup: true,
+      canQueueCaseActions: true,
+      canOpenReportCases: false,
+      kickReasonRequired: true,
+      banReasonRequired: true,
+    },
   },
   decorators: [
     (Story) => (
@@ -25,7 +40,7 @@ const meta = {
       </section>
     ),
   ],
-} satisfies Meta<typeof CaseMessageCleanupControls>;
+} satisfies Meta<typeof MessageCleanupPanel>;
 
 export default meta;
 type Story = StoryObj<typeof meta>;
@@ -34,27 +49,33 @@ export const NewPreview: Story = {};
 
 export const ReadySourceMessage: Story = {
   args: {
-    jobDetail: fixtureMessageCleanupJobDetails[0],
-    workspace,
+    integration: {
+      ...meta.args.integration,
+      workspace,
+      deleteOnlyJob: fixtureMessageCleanupJobDetails[0],
+    },
   },
 };
-
 export const CombinedPartialOutcome: Story = {
   args: {
-    jobDetail: fixtureMessageCleanupJobDetails[1],
-    mode: 'ban_with_cleanup',
-    workspace,
+    integration: {
+      ...meta.args.integration,
+      workspace,
+      combinedJob: fixtureMessageCleanupJobDetails[1],
+    },
   },
 };
-
 export const BlockedCase: Story = {
   args: {
-    workspace: {
-      ...workspace,
-      canPreview: false,
-      blockedReason: 'case_not_pending',
-      caseStatus: 'banned',
-      latestJobs: [],
+    integration: {
+      ...meta.args.integration,
+      workspace: {
+        ...workspace,
+        canPreview: false,
+        blockedReason: 'case_not_pending',
+        caseStatus: 'banned',
+        latestJobs: [],
+      },
     },
   },
 };

@@ -5,6 +5,8 @@ import type { CaseWorkspaceData } from '@/lib/moderationWorkspaceTypes';
 import type { WorkspaceActions, WorkspaceMutation } from '@/lib/workspaceActionTypes';
 import { findAccountQuarantineActionRequests } from '@/lib/inboxActionReceipts';
 import { filterCaseKindActions } from '@/lib/caseActionEligibility';
+import { MessageCleanupPanel } from './MessageCleanupPanel';
+import type { CaseMessageCleanupIntegration } from './caseToolBindings';
 import { BrowserSecurityPanel } from './BrowserSecurityPanel';
 import { AccountQuarantinePanel } from './AccountQuarantinePanel';
 
@@ -13,8 +15,9 @@ export interface CaseToolsProps {
   readonly actions: WorkspaceActions;
   readonly returnHref: string;
   readonly children?: ReactNode;
+  readonly cleanup?: CaseMessageCleanupIntegration;
 }
-export function CaseTools({ data, actions, returnHref, children }: CaseToolsProps) {
+export function CaseTools({ data, actions, returnHref, children, cleanup }: CaseToolsProps) {
   const { detail } = data;
   const caseActions = filterCaseKindActions(detail, detail.allowedActions);
   const quarantine: WorkspaceMutation = (form) => {
@@ -80,6 +83,15 @@ export function CaseTools({ data, actions, returnHref, children }: CaseToolsProp
             ),
         }}
       />
+      {cleanup &&
+      cleanup.workspace.guildId === detail.guildId &&
+      cleanup.workspace.verificationEventId === detail.id &&
+      cleanup.workspace.targetUserId === detail.userId ? (
+        <MessageCleanupPanel
+          integration={{ ...cleanup, loadedAt: data.loadedAt, requests: data.requests, returnHref }}
+          policy={data.policy}
+        />
+      ) : null}
       {children}
     </>
   );

@@ -11,6 +11,7 @@ import {
   type MessageCleanupCommand,
   type MessageCleanupJob,
 } from '@drasil/application';
+import { assertWorkspaceConfirmation, resolveWorkspaceReturnTo } from '@/lib/workspaceConfirmation';
 import { createWebConfirmationPort } from '@/lib/application/context';
 import { randomUUID } from 'node:crypto';
 import { revalidatePath } from 'next/cache';
@@ -129,10 +130,15 @@ function assertConfirmed(formData: FormData): void {
   }
 }
 
-async function cleanupActor(guildId: string, caseId: string): Promise<string> {
+async function cleanupActor(guildId: string, caseId: string, formData: FormData): Promise<string> {
   const [session, token] = await Promise.all([getCurrentAdminSession(), getCurrentDiscordToken()]);
   if (!session || !token) {
-    redirect(`/api/auth/discord?returnTo=/admin/guild/${guildId}/cases/${caseId}`);
+    const returnTo = resolveWorkspaceReturnTo(
+      formData,
+      guildId,
+      `/admin/guild/${guildId}/cases/${caseId}`
+    );
+    redirect(`/api/auth/discord?returnTo=${encodeURIComponent(returnTo)}`);
   }
   const guild = await createSetupDashboardService().assertCanManageGuild(
     guildId,
@@ -187,7 +193,8 @@ async function inTransaction<T>(work: (client: PoolClient) => Promise<T>): Promi
 async function lockPendingCase(
   client: PoolClient,
   guildId: string,
-  caseId: string
+  caseId: string,
+  requirePending = true
 ): Promise<CleanupCaseRow> {
   const result = await client.query<CleanupCaseRow>(
     `select id::text, server_id, user_id, detection_event_id::text,
@@ -199,7 +206,7 @@ async function lockPendingCase(
   );
   const row = result.rows[0];
   if (!row) throw new Error('The moderation case was not found.');
-  if (row.status !== 'pending') {
+  if (requirePending && row.status !== 'pending') {
     throw new Error('Message cleanup is only available while the case is pending.');
   }
   if (!row.user_id) throw new Error('The moderation case does not have a target user.');
@@ -425,7 +432,8 @@ async function queuePreview(
   guildId: string,
   caseId: string,
   actorId: string,
-  values: CleanupFormValues
+  values: CleanupFormValues,
+  formData: FormData
 ): Promise<ModerationActionRequestReceipt> {
   const actionType = 'preview_case_message_deletion' as const;
   const key = messageCleanupSubmissionKey(
@@ -434,6 +442,7 @@ async function queuePreview(
   );
   return inTransaction(async (client) => {
     const caseRow = await lockPendingCase(client, guildId, caseId);
+    assertWorkspaceConfirmation(formData, { recordId: caseRow.id, targetUserId: caseRow.user_id });
     const existing = await findRequest(client, key);
     if (existing) {
       assertRequestMatches(existing, actionType, caseRow.server_id, caseRow.id, actorId);
@@ -504,14 +513,26 @@ async function queueFrozenJob(
     { kind: actionType, caseId }
   );
   return inTransaction(async (client) => {
+    const caseRow = await lockPendingCase(client, guildId, caseId, false);
+    assertWorkspaceConfirmation(formData, { recordId: caseRow.id, targetUserId: caseRow.user_id });
     const existing = await findRequest(client, key);
     if (existing) {
       assertRequestMatches(existing, actionType, guildId, caseId, actorId, jobId);
       return requestReceipt(existing);
     }
 
-    const caseRow = await lockPendingCase(client, guildId, caseId);
     const job = await lockJob(client, jobId);
+    if (
+      caseRow.status !== 'pending' &&
+      !(caseRow.status === 'banned' && isMessageCleanupFinalizationContinuation(projectJob(job)))
+    )
+      throw new Error('Message cleanup is only available while the case is pending.');
+    if (
+      formData.get('expectedCandidateCount') !== String(job.candidate_count) ||
+      formData.get('expectedPreviewedAt') !== (projectJob(job).generation ?? '')
+    ) {
+      throw new Error('The cleanup preview changed. Refresh the case before continuing.');
+    }
     const context = cleanupContext(guildId, actorId, values.idempotencyToken);
     const command = cleanupCommand(actionType, caseRow, jobId, values, projectJob(job).generation);
     if (values.mode !== expectedMode)
@@ -585,8 +606,8 @@ export async function previewCaseMessageCleanup(
     }
     requireUuid(caseId, 'Case id');
     const values = cleanupFormValues(formData);
-    const actorId = await cleanupActor(guildId, caseId);
-    const receipt = await queuePreview(guildId, caseId, actorId, values);
+    const actorId = await cleanupActor(guildId, caseId, formData);
+    const receipt = await queuePreview(guildId, caseId, actorId, values, formData);
     revalidateCleanupPaths(guildId, caseId);
     return queuedInboxActionState(receipt, 'Message cleanup preview queued.');
   } catch (error) {
@@ -614,7 +635,7 @@ export async function executeCaseMessageCleanup(
     assertConfirmed(formData);
     const jobId = requireUuid(requiredFormString(formData, 'jobId'), 'Cleanup job id');
     const values = cleanupFormValues(formData);
-    const actorId = await cleanupActor(guildId, caseId);
+    const actorId = await cleanupActor(guildId, caseId, formData);
     const receipt = await queueFrozenJob(
       guildId,
       caseId,
@@ -652,7 +673,7 @@ export async function banCaseUserWithMessageCleanup(
     assertConfirmed(formData);
     const jobId = requireUuid(requiredFormString(formData, 'jobId'), 'Cleanup job id');
     const values = cleanupFormValues(formData);
-    const actorId = await cleanupActor(guildId, caseId);
+    const actorId = await cleanupActor(guildId, caseId, formData);
     const banActionEnabled = await moderatorBanActionEnabled(guildId);
     const receipt = await queueFrozenJob(
       guildId,

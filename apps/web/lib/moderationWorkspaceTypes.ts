@@ -76,6 +76,7 @@ export const moderationActionRequestSummarySchema: z.ZodType<
   detectionEventId: nullableString,
   failedAt: nullableString,
   lastError: nullableString,
+  cleanupIntentToken: nullableString.optional(),
   messageDeletionJobId: nullableString,
   requestedAt: z.string(),
   reportIntakeId: nullableString,

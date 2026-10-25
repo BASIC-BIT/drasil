@@ -10,6 +10,7 @@ export interface ActionConfirmationProps {
   readonly actionLabel: string;
   readonly description: string;
   readonly reason: string;
+  readonly reasonReadOnly?: boolean;
   readonly reasonRequired: boolean;
   readonly reasonMaxLength?: number;
   readonly blocked: boolean;
@@ -23,6 +24,7 @@ export function ActionConfirmation({
   actionLabel,
   description,
   reason,
+  reasonReadOnly = false,
   reasonRequired,
   reasonMaxLength = 500,
   blocked,
@@ -66,6 +68,7 @@ export function ActionConfirmation({
             aria-label="Reason"
             name="reason"
             value={reason}
+            readOnly={reasonReadOnly}
             required={reasonRequired}
             maxLength={reasonMaxLength}
             rows={3}

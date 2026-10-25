@@ -1,0 +1,51 @@
+.panel {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+  width: 100%;
+  padding-block: 1rem;
+  border-top: 1px solid var(--dr-line, var(--line));
+}
+.panel h2,
+.panel p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+.options label {
+  display: grid;
+  gap: 0.4rem;
+  min-width: 0;
+}
+.options select {
+  color: inherit;
+  background: var(--dr-surface, var(--panel));
+  border: 1px solid var(--dr-line, var(--line));
+  padding: 0.6rem;
+  max-width: 100%;
+}
+.coverage,
+.result {
+  padding-block: 0.75rem;
+  border-block: 1px solid var(--dr-line, var(--line));
+}
+.result {
+  display: grid;
+  gap: 0.5rem;
+}
+.panel :global(.cleanup-message-content) {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 480px) {
+  .panel :global(.cleanup-outcome-grid) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .options {
+    flex-direction: column;
+  }
+}

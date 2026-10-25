@@ -39,6 +39,14 @@ export function deriveWorkspaceActionPresentation({
       message: 'Member banned. Record and notification updates are pending.',
     };
   if (banStatus === 'banned') return { kind: 'completed', message: 'Member banned.' };
+  const activeStatus =
+    durableRequest?.status ?? (localResult?.kind === 'request' ? localResult.receipt.status : null);
+  if (cleanupJob && (activeStatus === 'queued' || activeStatus === 'processing')) {
+    return {
+      kind: 'pending',
+      message: activeStatus === 'queued' ? 'Request queued.' : 'Request processing.',
+    };
+  }
   if (cleanupJob && isMessageCleanupFinalizationRetry(cleanupJob))
     return {
       kind: 'finalization_retry',

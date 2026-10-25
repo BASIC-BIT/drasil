@@ -394,3 +394,25 @@ it('exposes only the persisted repeat security generation for receipt correlatio
   expect(request.captchaBinding).toEqual({ challengeId: 'challenge-1', generation: 2 });
   expect(request.captchaConfiguration).toEqual({ method: 'turnstile', methodRevision: 8 });
 });
+it('preserves the persisted cleanup intent token for exact lost-response correlation', () => {
+  const result = parseModerationActionRequestRow({
+    id: 'request',
+    server_id: 'guild',
+    verification_event_id: 'case',
+    action_type: 'execute_case_message_deletion',
+    actor_surface: 'web_case',
+    actor_id: 'admin',
+    idempotency_key:
+      'message-cleanup:execute_case_message_deletion:guild:case:admin:execute-token-123',
+    completed_at: null,
+    failed_at: null,
+    last_error: null,
+    requested_at: '2026-10-25T12:00:00Z',
+    updated_at: '2026-10-25T12:00:00Z',
+    result: null,
+    status: 'queued',
+    target_user_id: 'user',
+    message_deletion_job_id: 'job',
+  });
+  expect(result.cleanupIntentToken).toBe('execute-token-123');
+});
