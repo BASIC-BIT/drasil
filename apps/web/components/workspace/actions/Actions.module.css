@@ -36,8 +36,13 @@
 }
 .buttons {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 12px;
+}
+.buttons > button {
+  flex-shrink: 0;
+  max-width: 100%;
 }
 .receipt {
   margin-block: 12px !important;

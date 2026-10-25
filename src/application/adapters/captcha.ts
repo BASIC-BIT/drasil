@@ -150,6 +150,9 @@ export function createBotCaptchaRuntime(
           if (committedOnly) throw new ActionDeniedError('reconciliation_denied');
           const result = await service().requestChallenge({
             expectedCaseRevision: expectedRevision,
+            ...(command.expectedConfiguration
+              ? { expectedConfiguration: command.expectedConfiguration }
+              : {}),
             ...(request ? { actionRequestId: request.id } : {}),
             verificationEventId: command.caseId,
             requestSource: CaptchaChallengeRequestSource.MODERATOR,

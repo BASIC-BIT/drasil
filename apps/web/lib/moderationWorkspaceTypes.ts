@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { queuedCommandSchemas } from '@drasil/application';
+import { captchaIssuanceConfigurationSchema, queuedCommandSchemas } from '@drasil/application';
 import {
   caseDetailSchema,
   moderationInboxItemSchema,
@@ -67,6 +67,11 @@ export const moderationActionRequestSummarySchema: z.ZodType<
   actorSurface: z.string(),
   actorUserId: z.string().nullable().optional(),
   accountQuarantinePreviewRequestId: z.string().nullable().optional(),
+  captchaConfiguration: captchaIssuanceConfigurationSchema.nullable().optional(),
+  captchaBinding: z
+    .object({ challengeId: z.string(), generation: z.number().int().positive() })
+    .nullable()
+    .optional(),
   completedAt: nullableString,
   detectionEventId: nullableString,
   failedAt: nullableString,
@@ -112,7 +117,13 @@ export const workspaceActionPolicySchema = z.object({
   kickReasonRequired: z.boolean(),
   banReasonRequired: z.boolean(),
 });
+export const securityCheckConfigurationSchema = z.object({
+  method: z.enum(['turnstile', 'discord_image', 'none']),
+  methodRevision: z.number().int().min(0).max(2147483647),
+});
+export type SecurityCheckConfiguration = z.infer<typeof securityCheckConfigurationSchema>;
 export const caseWorkspaceDataSchema = z.object({
+  securityCheckConfiguration: securityCheckConfigurationSchema.nullable().default(null),
   actorUserId: z.string().nullable().default(null),
   recoveryAttention: z.array(moderationInboxItemSchema).optional(),
   conversationSources: z.array(conversationSourceSchema).optional(),

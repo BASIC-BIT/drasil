@@ -257,3 +257,20 @@ it.each([false, true])(
     expect(repository.fail).not.toHaveBeenCalled();
   }
 );
+
+it('passes the queued issuance configuration through the existing runtime', async () => {
+  const f = arrange();
+  const envelope = {
+    ...request(),
+    metadata: { expected_configuration: { method: 'turnstile', methodRevision: 7 } },
+  };
+  const execution = await prepareQueuedRequest({
+    runtime: f.runtime,
+    request: envelope,
+    analytics: f.analytics,
+  });
+  await execution.execute();
+  expect(f.captcha.requestChallenge).toHaveBeenCalledWith(
+    expect.objectContaining({ expectedConfiguration: { method: 'turnstile', methodRevision: 7 } })
+  );
+});

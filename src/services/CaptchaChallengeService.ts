@@ -1,4 +1,4 @@
-import { ActionDeniedError } from '@drasil/application';
+import { type CaptchaIssuanceConfiguration, ActionDeniedError } from '@drasil/application';
 import { encodeCaptchaEffect } from '../application/captchaContext';
 import { createHash, randomBytes } from 'node:crypto';
 import { inject, injectable, optional } from 'inversify';
@@ -38,6 +38,7 @@ const DELIVERY_LEASE_MS = 5 * 60_000;
 export interface RequestCaptchaChallengeInput {
   /** Trusted delegated approval revision; native callers retain current-state behavior. */
   expectedCaseRevision?: number;
+  expectedConfiguration?: CaptchaIssuanceConfiguration;
   actionRequestId?: string;
   verificationEventId: string;
   requestSource: CaptchaChallengeRequestSource;
@@ -144,6 +145,12 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
       forceRefresh: true,
     });
     const settings = getCaptchaSettings(server.settings);
+    if (
+      input.expectedConfiguration &&
+      (settings.method !== input.expectedConfiguration.method ||
+        settings.methodRevision !== input.expectedConfiguration.methodRevision)
+    )
+      throw new ActionDeniedError('stale_state');
     const token = randomBytes(TOKEN_BYTES).toString('base64url');
     if (settings.method === 'none') {
       throw new Error('This security-check method is not available for delivery.');

@@ -1,4 +1,8 @@
-import { CaptchaMethod, getEffectiveCaptchaMethod } from '@drasil/application';
+import {
+  CaptchaMethod,
+  getEffectiveCaptchaMethod,
+  getCaptchaMethodRevision,
+} from '@drasil/application';
 import type { ServerSettings } from '../repositories/types';
 
 export const CAPTCHA_MODE_SETTING_KEY = 'captcha_mode';
@@ -50,13 +54,7 @@ export function getCaptchaSettings(settings: ServerSettings | unknown): CaptchaS
   const method = getEffectiveCaptchaMethod(settings);
   return {
     method,
-    methodRevision:
-      typeof record.captcha_method_revision === 'number' &&
-      Number.isInteger(record.captcha_method_revision) &&
-      record.captcha_method_revision >= 0 &&
-      record.captcha_method_revision <= 2147483647
-        ? record.captcha_method_revision
-        : 0,
+    methodRevision: getCaptchaMethodRevision(settings),
     mode:
       method === 'none'
         ? 'off'

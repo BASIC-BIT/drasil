@@ -49,6 +49,7 @@ export interface ConfirmedActionProps {
   readonly action: ConfirmedActionDescriptor;
   readonly submit: WorkspaceMutation;
   readonly durableRequest: ModerationActionRequestSummary | null;
+  readonly hideTrigger?: boolean;
   readonly cleanupJob?: MessageCleanupJobDetail | null;
   readonly record?: CaseDetail | ReportDetail | null;
 }
@@ -70,6 +71,7 @@ function ConfirmedActionIntent({
   action,
   submit,
   durableRequest,
+  hideTrigger = false,
   cleanupJob = null,
   record = null,
 }: ConfirmedActionProps) {
@@ -186,17 +188,19 @@ function ConfirmedActionIntent({
   }
   return (
     <div>
-      <ActionButton
-        ref={trigger}
-        tone={action.tone}
-        disabled={blocked}
-        onClick={() => {
-          setOpenedIntent({ action, target, submit });
-          setOpen(true);
-        }}
-      >
-        {submission.kind === 'submitting' ? 'Submitting...' : action.label}
-      </ActionButton>
+      {hideTrigger ? null : (
+        <ActionButton
+          ref={trigger}
+          tone={action.tone}
+          disabled={blocked}
+          onClick={() => {
+            setOpenedIntent({ action, target, submit });
+            setOpen(true);
+          }}
+        >
+          {submission.kind === 'submitting' ? 'Submitting...' : action.label}
+        </ActionButton>
+      )}
       <ActionConfirmation
         open={open}
         targetLabel={intent.target.label}

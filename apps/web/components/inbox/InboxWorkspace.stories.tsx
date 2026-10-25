@@ -150,6 +150,7 @@ function Runnable({
             item: { ...currentItem, kind: 'case' },
             policy: currentPolicy,
             data: {
+              securityCheckConfiguration: null,
               actorUserId: null,
               detail: fixtureCaseDetails[0],
               report: null,

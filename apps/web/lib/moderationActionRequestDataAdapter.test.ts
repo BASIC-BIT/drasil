@@ -370,3 +370,27 @@ it.each(['preparing', 'enforcement_started', 'discord_confirmed', 'reconciliatio
     ).toEqual({ status: 'banned' });
   }
 );
+
+it('exposes only the persisted repeat security generation for receipt correlation', () => {
+  const request = parseModerationActionRequestRow({
+    id: 'retry-2',
+    action_type: 'retry_captcha_challenge',
+    actor_surface: 'web',
+    requested_at: '2026-10-25T11:00:00Z',
+    updated_at: '2026-10-25T11:00:00Z',
+    completed_at: null,
+    failed_at: null,
+    last_error: null,
+    result: null,
+    status: 'queued',
+    target_user_id: 'member-1',
+    verification_event_id: 'case-1',
+    metadata: {
+      expected_challenge_id: 'challenge-1',
+      expected_generation: 2,
+      expected_configuration: { method: 'turnstile', methodRevision: 8 },
+    },
+  });
+  expect(request.captchaBinding).toEqual({ challengeId: 'challenge-1', generation: 2 });
+  expect(request.captchaConfiguration).toEqual({ method: 'turnstile', methodRevision: 8 });
+});

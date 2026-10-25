@@ -160,3 +160,25 @@ describe('buildQueuedCaseCommand', () => {
     });
   });
 });
+
+it.each(['challenge_user', 'retry_captcha'] as const)(
+  'carries captured configured issuance through %s',
+  (action) => {
+    const result = buildQueuedCaseCommand(
+      {
+        action,
+        guildId: 'guild',
+        caseId: 'case',
+        adminId: 'moderator',
+        expectedCaptchaChallengeId: 'challenge',
+        expectedCaptchaGeneration: 2,
+        expectedCaptchaConfiguration: { method: 'discord_image', methodRevision: 8 },
+      },
+      'target'
+    );
+    expect(result).toMatchObject({
+      kind: 'outcome',
+      outcome: { expectedConfiguration: { method: 'discord_image', methodRevision: 8 } },
+    });
+  }
+);

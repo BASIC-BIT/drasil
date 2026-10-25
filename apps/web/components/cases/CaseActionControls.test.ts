@@ -152,6 +152,8 @@ describe('CaseActionControls account quarantine', () => {
         'type="hidden" name="expectedCaptchaChallengeId" value="11111111-1111-4111-8111-111111111111"'
       );
       expect(markup).toContain('type="hidden" name="expectedCaptchaGeneration" value="3"');
+      expect(markup).toContain('name="expectedCaptchaMethod"');
+      expect(markup).toContain('name="expectedCaptchaMethodRevision"');
       expect(markup).toContain(
         'Continue moderator review without treating the security check as passed.'
       );

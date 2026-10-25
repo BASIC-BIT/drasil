@@ -100,6 +100,7 @@ function Interaction({
       : {}),
   } satisfies CaseWorkspaceData['detail'];
   const data: CaseWorkspaceData = {
+    securityCheckConfiguration: null,
     actorUserId: 'moderator-1',
     detail,
     report: null,

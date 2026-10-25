@@ -19,13 +19,19 @@ export function decodeCaptchaCommand(row: QueuedRow): CaptchaCommand | null {
     targetUserId: row.target_user_id,
     caseId: row.verification_event_id,
   };
-  if (row.action_type === 'request_captcha_challenge') return captchaCommandSchema.parse(target);
+  const issuance =
+    metadata.expected_configuration === undefined
+      ? {}
+      : { expectedConfiguration: metadata.expected_configuration };
+  if (row.action_type === 'request_captcha_challenge')
+    return captchaCommandSchema.parse({ ...target, ...issuance });
   if (
     row.action_type === 'retry_captcha_challenge' ||
     row.action_type === 'bypass_captcha_challenge'
   )
     return captchaCommandSchema.parse({
       ...target,
+      ...(row.action_type === 'retry_captcha_challenge' ? issuance : {}),
       expectedChallengeId: metadata.expected_challenge_id,
       expectedGeneration: metadata.expected_generation,
       ...(row.action_type === 'bypass_captcha_challenge' ? { reason: metadata.reason } : {}),
@@ -80,6 +86,9 @@ export function encodeCaptchaAction(context: ActionContext, command: CaptchaComm
     actorId: context.actor.userId,
     idempotencyKey: `${context.source}:case-action:${action}:${context.guildId}:${command.caseId}${command.kind === 'request_captcha_challenge' ? '' : `:${context.requestId}`}`,
     metadata: {
+      ...('expectedConfiguration' in command && command.expectedConfiguration
+        ? { expected_configuration: command.expectedConfiguration }
+        : {}),
       case_action: action,
       requested_surface: context.source,
       ...('expectedChallengeId' in command
