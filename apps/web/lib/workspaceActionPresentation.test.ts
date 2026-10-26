@@ -158,3 +158,55 @@ it('keeps a queued finalization retry pending while the prior job result remains
   });
   expect(result.kind).toBe('pending');
 });
+
+it.each(['ban_outcome_unknown', 'banned_updates_pending', 'banned'] as const)(
+  'keeps durable ban %s ahead of active cleanup and local failures',
+  (status) => {
+    expect(
+      deriveWorkspaceActionPresentation({
+        ...input,
+        cleanupJob: fixtureMessageCleanupJobDetails[1],
+        localResult: { kind: 'failed', message: 'Local failure' },
+        durableRequest: {
+          ...request,
+          observedBanResult:
+            status === 'banned' ? { status } : { status, operationId: 'operation' },
+        },
+      }).kind
+    ).toBe(status === 'banned' ? 'completed' : status);
+  }
+);
+it.each(['queued', 'processing'] as const)(
+  'keeps durable %s ahead of finalization retry and local failure',
+  (status) => {
+    expect(
+      deriveWorkspaceActionPresentation({
+        ...input,
+        cleanupJob: fixtureMessageCleanupJobDetails[1],
+        localResult: { kind: 'failed', message: 'Local failure' },
+        durableRequest: { ...request, status },
+      })
+    ).toEqual({
+      kind: 'pending',
+      message: status === 'queued' ? 'Request queued.' : 'Request processing.',
+    });
+  }
+);
+it('keeps failed finalization ahead of an inactive durable failure', () => {
+  expect(
+    deriveWorkspaceActionPresentation({
+      ...input,
+      cleanupJob: fixtureMessageCleanupJobDetails[1],
+      durableRequest: { ...request, status: 'failed', lastError: 'Request failure' },
+    }).kind
+  ).toBe('finalization_retry');
+});
+it('keeps actual durable failure ahead of local success', () => {
+  expect(
+    deriveWorkspaceActionPresentation({
+      ...input,
+      durableRequest: { ...request, status: 'failed', lastError: 'Actual failure' },
+      localResult: { kind: 'request', receipt: { id: request.id, status: 'completed' } },
+    })
+  ).toEqual({ kind: 'failed_uncertain', message: 'Actual failure' });
+});
