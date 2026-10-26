@@ -7,6 +7,7 @@ import {
 } from './messageCleanupFixtures';
 import { createModerationWorkspaceDataAdapter } from './moderationWorkspaceDataAdapter';
 import { workspaceItemDetailSchema } from './moderationWorkspaceTypes';
+import type { ModerationActionRequestSummary } from './moderationActionRequestDataAdapter';
 const state = vi.hoisted(() => ({
   query: vi.fn(),
   detail: vi.fn(),
@@ -487,3 +488,442 @@ it('reads configured issuance method/revision separately from challenge history 
   });
   expect(unknown?.securityCheckConfiguration).toBeNull();
 });
+
+function caseReadRequest(
+  status: ModerationActionRequestSummary['status'],
+  updatedAt = '2026-10-26T12:00:00.000Z'
+): ModerationActionRequestSummary {
+  return {
+    id: 'case-read-request',
+    guildId: 'guild-1',
+    actionType: 'verify_case_user',
+    actorSurface: 'web',
+    completedAt: status === 'completed' ? updatedAt : null,
+    detectionEventId: null,
+    failedAt: status === 'failed' ? updatedAt : null,
+    lastError: null,
+    messageDeletionJobId: null,
+    requestedAt: '2026-10-26T11:00:00.000Z',
+    reportIntakeId: null,
+    requestedAction: 'verify_user',
+    resultSummary: null,
+    status,
+    targetUserId: 'user-100',
+    updatedAt,
+    verificationEventId: 'case-stale',
+  };
+}
+function supplyCaseReadRequest() {
+  state.query.mockImplementation(async (sql: string) => ({
+    rows: sql.includes('from moderation_action_requests') ? [{ id: 'case-read-request' }] : [],
+  }));
+}
+it.each(['completed', 'failed'] as const)(
+  'an initial %s receipt uses the later authoritative case and dependent reads',
+  async (status) => {
+    supplyCaseReadRequest();
+    let current = fixtureCaseDetails[0];
+    state.detail.mockImplementation(async () => current);
+    state.request.mockImplementation(async () => {
+      current = {
+        ...current,
+        status: status === 'completed' ? 'verified' : 'closed_no_action',
+        allowedActions: [],
+      };
+      return caseReadRequest(status);
+    });
+    state.member.mockImplementation(async () => ({
+      guildId: 'guild-1',
+      userId: 'user-100',
+      membership: {
+        joinDate: null,
+        lastMessageAt: null,
+        messageCount: null,
+        verificationStatus: current.status,
+        caseRoleActive: false,
+        screeningPending: false,
+      },
+    }));
+    state.cleanup.mockImplementation(async () => ({
+      ...fixtureMessageCleanupCaseWorkspaces[0],
+      caseStatus: current.status,
+      latestJobs: [],
+    }));
+    const result = await createModerationWorkspaceDataAdapter(actor).getCaseWorkspaceData({
+      guildId: 'guild-1',
+      caseId: 'case-stale',
+    });
+    expect(result).toMatchObject({
+      detail: { status: current.status },
+      policy: { allowedActions: ['view_case'] },
+      membership: { verificationStatus: current.status },
+      cleanup: { workspace: { caseStatus: current.status } },
+      requests: [{ id: 'case-read-request', status }],
+    });
+    expect(state.detail).toHaveBeenCalledTimes(2);
+    expect(state.request).toHaveBeenCalledTimes(1);
+  }
+);
+it('keeps a queued capture active when completion follows it, then reads the completed case', async () => {
+  supplyCaseReadRequest();
+  let current = fixtureCaseDetails[0];
+  let request = caseReadRequest('queued');
+  state.detail.mockImplementation(async () => current);
+  state.request.mockImplementation(async () => request);
+  state.member.mockImplementation(async () => {
+    current = { ...current, status: 'verified', allowedActions: [] };
+    request = caseReadRequest('completed');
+    return null;
+  });
+  const adapter = createModerationWorkspaceDataAdapter(actor);
+  const input = { guildId: 'guild-1', caseId: 'case-stale' };
+  expect(await adapter.getCaseWorkspaceData(input)).toMatchObject({
+    detail: { status: 'pending' },
+    requests: [{ status: 'queued' }],
+  });
+  expect(await adapter.getCaseWorkspaceData(input)).toMatchObject({
+    detail: { status: 'verified' },
+    policy: { allowedActions: ['view_case'] },
+    requests: [{ status: 'completed' }],
+  });
+  expect(state.request).toHaveBeenCalledTimes(2);
+  expect(state.detail).toHaveBeenCalledTimes(3);
+});
+it('captures each retry version once without retaining terminal state between reads', async () => {
+  supplyCaseReadRequest();
+  state.detail.mockResolvedValue(fixtureCaseDetails[0]);
+  const adapter = createModerationWorkspaceDataAdapter(actor);
+  for (const [index, status] of (
+    ['failed', 'queued', 'processing', 'completed', 'completed'] as const
+  ).entries()) {
+    const updatedAt = `2026-10-26T12:00:0${Math.min(index, 3)}.000Z`;
+    state.request.mockResolvedValue(caseReadRequest(status, updatedAt));
+    const result = await adapter.getCaseWorkspaceData({ guildId: 'guild-1', caseId: 'case-stale' });
+    expect(result?.requests).toEqual([caseReadRequest(status, updatedAt)]);
+    expect(result?.detail.status).toBe('pending');
+  }
+  expect(state.request).toHaveBeenCalledTimes(5);
+  expect(state.detail).toHaveBeenCalledTimes(8);
+});
+it.each([
+  ['missing', null],
+  ['guild', { ...fixtureCaseDetails[0], guildId: 'guild-2' }],
+  ['case', { ...fixtureCaseDetails[0], id: 'another-case' }],
+  ['member', { ...fixtureCaseDetails[0], userId: 'another-member' }],
+])(
+  'rejects %s identity drift after terminal capture before dependent reads',
+  async (_label, changed) => {
+    supplyCaseReadRequest();
+    state.detail.mockResolvedValueOnce(fixtureCaseDetails[0]).mockResolvedValueOnce(changed);
+    state.request.mockResolvedValue(caseReadRequest('completed'));
+    expect(
+      await createModerationWorkspaceDataAdapter(actor).getCaseWorkspaceData({
+        guildId: 'guild-1',
+        caseId: 'case-stale',
+      })
+    ).toBeNull();
+    expect(state.member).not.toHaveBeenCalled();
+    expect(state.cleanup).not.toHaveBeenCalled();
+  }
+);
+it('does not attach another member terminal request or carry it to a foreign scope', async () => {
+  supplyCaseReadRequest();
+  state.detail.mockResolvedValue(fixtureCaseDetails[0]);
+  state.request.mockResolvedValue({
+    ...caseReadRequest('completed'),
+    targetUserId: 'another-member',
+  });
+  const adapter = createModerationWorkspaceDataAdapter(actor);
+  expect(
+    await adapter.getCaseWorkspaceData({ guildId: 'guild-1', caseId: 'case-stale' })
+  ).toMatchObject({ detail: { status: 'pending' }, requests: [] });
+  expect(
+    await adapter.getCaseWorkspaceData({ guildId: 'guild-2', caseId: 'case-stale' })
+  ).toBeNull();
+  expect(state.detail).toHaveBeenCalledTimes(1);
+  expect(state.request).toHaveBeenCalledTimes(1);
+});
+
+it('adjacent report completion does not retain pre-completion status and actions', async () => {
+  let report = fixtureReportDetail('report-1')!;
+  state.report.mockImplementation(async () => report);
+  state.query.mockImplementation(async (sql: string) => ({
+    rows: sql.includes('from moderation_action_requests') ? [{ id: 'report-ban' }] : [],
+  }));
+  state.request.mockImplementation(async () => {
+    report = { ...report, status: 'actioned', allowedActions: ['open_report_thread'] };
+    return {
+      ...caseReadRequest('completed'),
+      id: 'report-ban',
+      actionType: 'ban_observed_detection',
+      requestedAction: 'ban_user',
+      targetUserId: 'user-300',
+      reportIntakeId: 'report-1',
+      verificationEventId: null,
+      detectionEventId: 'det-report-1',
+      observedBanResult: { status: 'banned' },
+    };
+  });
+  const result = await createModerationWorkspaceDataAdapter(actor).getInboxItemDetail({
+    guildId: 'guild-1',
+    itemId: 'report:report-1',
+  });
+  expect(result).toMatchObject({
+    kind: 'submitted_report',
+    report: { status: 'actioned' },
+    requests: [{ id: 'report-ban', status: 'completed' }],
+  });
+  expect(result?.policy.allowedActions).not.toContain('ban_user');
+});
+it('adjacent observed completion does not retain pre-completion alert status and actions', async () => {
+  let row = {
+    id: 'observed-read',
+    server_id: 'guild-1',
+    user_id: 'user-100',
+    detection_type: 'gpt_analysis',
+    confidence: 0.8,
+    detected_at: null,
+    reasons: ['Recorded source'],
+    metadata: {},
+    latest_verification_event_id: null,
+    admin_action: null,
+    admin_action_at: null,
+    admin_action_by: null,
+    channel_id: null,
+    message_id: null,
+    latest_accounting_action_type: null,
+    latest_accounting_action_at: null,
+  };
+  state.query.mockImplementation(async (sql: string) => ({
+    rows: sql.includes('from detection_events de')
+      ? [row]
+      : sql.includes('from moderation_action_requests')
+        ? [{ id: 'observed-ban' }]
+        : [],
+  }));
+  state.request.mockImplementation(async () => {
+    row = { ...row, metadata: { observed_action: 'ban' } };
+    return {
+      ...caseReadRequest('completed'),
+      id: 'observed-ban',
+      actionType: 'ban_observed_detection',
+      requestedAction: 'ban_user',
+      verificationEventId: null,
+      detectionEventId: 'observed-read',
+      observedBanResult: { status: 'banned' },
+    };
+  });
+  const result = await createModerationWorkspaceDataAdapter(actor).getInboxItemDetail({
+    guildId: 'guild-1',
+    itemId: 'detection:observed-read',
+  });
+  expect(result).toMatchObject({
+    kind: 'observed_alert',
+    item: { statusLabel: 'ban' },
+    requests: [{ id: 'observed-ban', status: 'completed' }],
+  });
+  expect(result?.policy.allowedActions).not.toContain('ban_user');
+});
+
+function observedReadRow() {
+  return {
+    id: 'observed-read',
+    server_id: 'guild-1',
+    user_id: 'user-100',
+    detection_type: 'gpt_analysis',
+    confidence: 0.8,
+    detected_at: null,
+    reasons: ['Recorded source'],
+    metadata: {} as Record<string, unknown>,
+    latest_verification_event_id: null as string | null,
+    admin_action: null,
+    admin_action_at: null,
+    admin_action_by: null,
+    channel_id: null,
+    message_id: null,
+    latest_accounting_action_type: null,
+    latest_accounting_action_at: null,
+  };
+}
+function observedReadRequest() {
+  return {
+    ...caseReadRequest('completed'),
+    id: 'opening',
+    actionType: 'open_case_from_observed_detection' as const,
+    requestedAction: 'open_case',
+    verificationEventId: null,
+    detectionEventId: 'observed-read',
+  };
+}
+it('keeps a null-case opening receipt and drops old-case receipts after a report gains a new case', async () => {
+  let current = { ...fixtureReportDetail('report-1')!, latestCaseId: 'case-old' };
+  state.report.mockImplementation(async () => current);
+  state.query.mockImplementation(async (sql: string) => ({
+    rows: sql.includes('from moderation_action_requests')
+      ? [{ id: 'opening' }, { id: 'old-case' }]
+      : [],
+  }));
+  state.request.mockImplementation(async (_guild: string, id: string) => {
+    current = { ...current, latestCaseId: 'case-new', allowedActions: ['open_report_thread'] };
+    return {
+      ...observedReadRequest(),
+      id,
+      reportIntakeId: 'report-1',
+      targetUserId: 'user-300',
+      detectionEventId: 'det-report-1',
+      verificationEventId: id === 'old-case' ? 'case-old' : null,
+    };
+  });
+  const result = await createModerationWorkspaceDataAdapter(actor).getInboxItemDetail({
+    guildId: 'guild-1',
+    itemId: 'report:report-1',
+  });
+  expect(result).toMatchObject({
+    kind: 'submitted_report',
+    report: { latestCaseId: 'case-new' },
+    requests: [{ id: 'opening', verificationEventId: null }],
+  });
+  expect(state.request).toHaveBeenCalledTimes(2);
+});
+it('uses fresh observed case and report links without attaching a no-longer-related receipt', async () => {
+  let current = {
+    ...observedReadRow(),
+    latest_verification_event_id: 'case-old',
+    metadata: { reportIntakeId: 'report-1' },
+  };
+  let linked = {
+    ...fixtureReportDetail('report-1')!,
+    targetUserId: 'user-100',
+    latestDetectionId: 'observed-read',
+  };
+  state.report.mockImplementation(async () => linked);
+  state.query.mockImplementation(async (sql: string) => ({
+    rows: sql.includes('from detection_events de')
+      ? [current]
+      : sql.includes('from moderation_action_requests')
+        ? [{ id: 'opening' }, { id: 'old-case' }, { id: 'old-report' }]
+        : [],
+  }));
+  state.request.mockImplementation(async (_guild: string, id: string) => {
+    current = { ...current, latest_verification_event_id: 'case-new' };
+    linked = { ...linked, latestDetectionId: 'another-detection' };
+    return {
+      ...observedReadRequest(),
+      id,
+      reportIntakeId: id === 'old-report' ? 'report-1' : null,
+      verificationEventId: id === 'old-case' ? 'case-old' : null,
+    };
+  });
+  const result = await createModerationWorkspaceDataAdapter(actor).getInboxItemDetail({
+    guildId: 'guild-1',
+    itemId: 'detection:observed-read',
+  });
+  expect(result).toMatchObject({
+    kind: 'observed_alert',
+    detection: { latestCaseId: 'case-new' },
+    requests: [{ id: 'opening', verificationEventId: null }],
+  });
+  expect(state.request).toHaveBeenCalledTimes(3);
+});
+for (const kind of ['report', 'detection'] as const) {
+  it.each(['missing', 'guild', 'record', 'member'] as const)(
+    `${kind} rejects %s identity drift after terminal capture`,
+    async (change) => {
+      const report = fixtureReportDetail('report-1')!;
+      const row = observedReadRow();
+      let captured = false;
+      state.report.mockImplementation(async () =>
+        !captured
+          ? report
+          : change === 'missing'
+            ? null
+            : {
+                ...report,
+                guildId: change === 'guild' ? 'foreign' : report.guildId,
+                id: change === 'record' ? 'foreign' : report.id,
+                targetUserId: change === 'member' ? 'foreign' : report.targetUserId,
+              }
+      );
+      state.query.mockImplementation(async (sql: string) => ({
+        rows: sql.includes('from detection_events de')
+          ? !captured
+            ? [row]
+            : change === 'missing'
+              ? []
+              : [
+                  {
+                    ...row,
+                    server_id: change === 'guild' ? 'foreign' : row.server_id,
+                    id: change === 'record' ? 'foreign' : row.id,
+                    user_id: change === 'member' ? 'foreign' : row.user_id,
+                  },
+                ]
+          : sql.includes('from moderation_action_requests')
+            ? [{ id: 'opening' }]
+            : [],
+      }));
+      state.request.mockImplementation(async () => {
+        captured = true;
+        return kind === 'report'
+          ? {
+              ...observedReadRequest(),
+              reportIntakeId: 'report-1',
+              targetUserId: 'user-300',
+              detectionEventId: 'det-report-1',
+            }
+          : observedReadRequest();
+      });
+      expect(
+        await createModerationWorkspaceDataAdapter(actor).getInboxItemDetail({
+          guildId: 'guild-1',
+          itemId: kind === 'report' ? 'report:report-1' : 'detection:observed-read',
+        })
+      ).toBeNull();
+    }
+  );
+  it(`${kind} returns its queued capture unchanged and reads the later completed state on the next request`, async () => {
+    let report = fixtureReportDetail('report-1')!;
+    let row = observedReadRow();
+    let status: 'queued' | 'completed' = 'queued';
+    state.report.mockImplementation(async () => report);
+    state.query.mockImplementation(async (sql: string) => ({
+      rows: sql.includes('from detection_events de')
+        ? [row]
+        : sql.includes('from moderation_action_requests')
+          ? [{ id: 'opening' }]
+          : [],
+    }));
+    state.request.mockImplementation(async () => {
+      const captured = {
+        ...observedReadRequest(),
+        status,
+        ...(kind === 'report'
+          ? {
+              reportIntakeId: 'report-1',
+              targetUserId: 'user-300',
+              detectionEventId: 'det-report-1',
+            }
+          : {}),
+      };
+      report = { ...report, status: 'actioned', allowedActions: ['open_report_thread'] };
+      row = { ...row, metadata: { observed_action: 'ban' } };
+      status = 'completed';
+      return captured;
+    });
+    const adapter = createModerationWorkspaceDataAdapter(actor);
+    const input = {
+      guildId: 'guild-1',
+      itemId: kind === 'report' ? 'report:report-1' : 'detection:observed-read',
+    };
+    expect(await adapter.getInboxItemDetail(input)).toMatchObject({
+      requests: [{ status: 'queued' }],
+    });
+    expect(await adapter.getInboxItemDetail(input)).toMatchObject({
+      requests: [{ status: 'completed' }],
+      ...(kind === 'report'
+        ? { report: { status: 'actioned' } }
+        : { item: { statusLabel: 'ban' } }),
+    });
+    expect(state.request).toHaveBeenCalledTimes(2);
+  });
+}
