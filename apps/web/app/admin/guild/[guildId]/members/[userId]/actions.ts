@@ -1,24 +1,23 @@
 'use server';
 
-import { randomUUID } from 'node:crypto';
-import { evaluateCasePolicy, readCasePolicy } from '@drasil/application';
-import { revalidatePath } from 'next/cache';
-import { redirect } from 'next/navigation';
-import type { MemberProfile } from '@drasil/contracts';
+import { createWebActionContext } from '@/lib/application/context';
+import { submitQueuedAction } from '@/lib/application/queuedSubmission';
 import {
   isDetectionAccountingWebAction,
   queueDetectionAccountingActionRequest,
   type DetectionAccountingWebAction,
 } from '@/lib/detectionAccountingActionQueue';
 import { DISCORD_PERMISSIONS, hasPermission, parsePermissions } from '@/lib/discordPermissions';
-import { createWebActionContext } from '@/lib/application/context';
-import { submitQueuedAction } from '@/lib/application/queuedSubmission';
-import { isWebE2eFixtureMode } from '@/lib/e2eFixtures';
 import { createMemberProfileDataAdapter } from '@/lib/memberProfileDataAdapter';
 import { queueObservedAlertUndoActionRequest } from '@/lib/observedAlertActionQueue';
 import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
-import { createSetupDataAdapter } from '@/lib/setupDataAdapter';
 import { createSetupDashboardService } from '@/lib/setupDashboardService';
+import { createSetupDataAdapter } from '@/lib/setupDataAdapter';
+import { evaluateCasePolicy, readCasePolicy } from '@drasil/application';
+import type { MemberProfile } from '@drasil/contracts';
+import { revalidatePath } from 'next/cache';
+import { redirect } from 'next/navigation';
+import { randomUUID } from 'node:crypto';
 
 function isUndoableObservedAction(action: string | null): boolean {
   return action === 'dismiss' || action === 'false_positive';
@@ -176,24 +175,22 @@ export async function queueMemberOpenCaseAction(
     userId: session.userId,
     requestId: readRequestId(formData),
   });
-  const { status } = isWebE2eFixtureMode()
-    ? { status: 'queued' }
-    : await submitQueuedAction({
-        context,
-        command: {
-          kind: 'open_admin_case',
-          intent: 'dashboard_case_open',
-          targetUserId,
-          reason,
-          detectionEventId: sourceMessageInput?.sourceDetectionEventId ?? null,
-          selectedMessage: sourceMessageInput
-            ? {
-                channelId: sourceMessageInput.sourceChannelId,
-                messageId: sourceMessageInput.sourceMessageId,
-              }
-            : null,
-        },
-      });
+  const { status } = await submitQueuedAction({
+    context,
+    command: {
+      kind: 'open_admin_case',
+      intent: 'dashboard_case_open',
+      targetUserId,
+      reason,
+      detectionEventId: sourceMessageInput?.sourceDetectionEventId ?? null,
+      selectedMessage: sourceMessageInput
+        ? {
+            channelId: sourceMessageInput.sourceChannelId,
+            messageId: sourceMessageInput.sourceMessageId,
+          }
+        : null,
+    },
+  });
 
   revalidatePath(`/admin/guild/${guildId}/inbox`);
   revalidatePath(`/admin/guild/${guildId}/cases`);
@@ -238,16 +235,14 @@ export async function queueMemberManualFlagAction(
     userId: session.userId,
     requestId: readRequestId(formData),
   });
-  const { status } = isWebE2eFixtureMode()
-    ? { status: 'queued' }
-    : await submitQueuedAction({
-        context,
-        command: {
-          kind: 'manual_flag_user',
-          targetUserId,
-          reason: readFormString(formData, 'reason'),
-        },
-      });
+  const { status } = await submitQueuedAction({
+    context,
+    command: {
+      kind: 'manual_flag_user',
+      targetUserId,
+      reason: readFormString(formData, 'reason'),
+    },
+  });
 
   revalidatePath(`/admin/guild/${guildId}/inbox`);
   revalidatePath(`/admin/guild/${guildId}/cases`);

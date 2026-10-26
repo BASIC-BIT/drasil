@@ -54,3 +54,24 @@ describe('moderation inbox contracts', () => {
     ).not.toThrow();
   });
 });
+it('sorts inbox records with unknown movement dates last', () => {
+  expect(
+    sortModerationInboxItems([
+      { ...buildItem('unknown', false, '2026-10-21T14:40:00.000Z'), updatedAt: null },
+      buildItem('known', false, '2026-10-21T14:40:00.000Z'),
+    ]).map((item) => item.id)
+  ).toEqual(['known', 'unknown']);
+});
+
+it.each(['2026-06-01T00:00:00.000Z', null])(
+  'breaks equal movement dates %s by record ID independently of input order',
+  (updatedAt) => {
+    const items = ['b', 'a'].map((id) => ({
+      ...buildItem(id, false, '2026-06-01T00:00:00.000Z'),
+      updatedAt,
+    }));
+    for (const input of [items, [...items].reverse()]) {
+      expect(sortModerationInboxItems(input).map((item) => item.id)).toEqual(['a', 'b']);
+    }
+  }
+);

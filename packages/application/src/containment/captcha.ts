@@ -8,6 +8,14 @@ const id = z.string().min(1);
 const target = { caseId: id, targetUserId: id };
 const generation = z.number().int().positive();
 const expected = { expectedChallengeId: id, expectedGeneration: generation };
+export const captchaIssuanceConfigurationSchema = z
+  .object({
+    method: z.enum(['turnstile', 'discord_image']),
+    methodRevision: z.number().int().min(0).max(2147483647),
+  })
+  .strict();
+export type CaptchaIssuanceConfiguration = z.infer<typeof captchaIssuanceConfigurationSchema>;
+const issuance = { expectedConfiguration: captchaIssuanceConfigurationSchema.optional() };
 export const captchaAttentionReasonSchema = z.enum([
   'member_assistance',
   'delivery_failed',
@@ -17,8 +25,10 @@ export const captchaAttentionReasonSchema = z.enum([
   'bypassed',
 ]);
 export const captchaCommandSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('request_captcha_challenge'), ...target }).strict(),
-  z.object({ kind: z.literal('retry_captcha_challenge'), ...target, ...expected }).strict(),
+  z.object({ kind: z.literal('request_captcha_challenge'), ...target, ...issuance }).strict(),
+  z
+    .object({ kind: z.literal('retry_captcha_challenge'), ...target, ...expected, ...issuance })
+    .strict(),
   z
     .object({
       kind: z.literal('bypass_captcha_challenge'),

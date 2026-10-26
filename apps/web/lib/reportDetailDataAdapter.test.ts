@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest';
-import { parseReportDetailRows } from './reportDetailDataAdapter';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { loadReportAttentionRecord, parseReportDetailRows } from './reportDetailDataAdapter';
+
+const db = vi.hoisted(() => ({ query: vi.fn() }));
+vi.mock('./setupDataAdapter', () => ({ getPostgresPool: () => db }));
+beforeEach(() => vi.resetAllMocks());
 
 const baseReportRow = {
   id: 'report-1',
@@ -136,3 +140,71 @@ it('withholds a ban when the latest linked detection belongs to a different targ
   const row = { ...baseReportRow, latest_detection_user_id: 'different-user' };
   expect(parseReportDetailRows(row, []).allowedActions).not.toContain('ban_user');
 });
+it('preserves unknown report and evidence event dates', () => {
+  expect(
+    parseReportDetailRows({ ...baseReportRow, created_at: null, updated_at: null }, [
+      {
+        id: 'unknown',
+        kind: 'reporter_text',
+        source_message_id: null,
+        source_channel_id: null,
+        attachment_id: null,
+        content: 'Complete original text',
+        metadata: {},
+        created_at: null,
+      },
+    ])
+  ).toMatchObject({
+    createdAt: null,
+    updatedAt: null,
+    evidence: [{ createdAt: null, content: 'Complete original text' }],
+  });
+});
+
+it('loads the durable intake schema without attention or reviewed-status conversion', async () => {
+  db.query
+    .mockResolvedValueOnce({
+      rows: [{ ...baseReportRow, status: 'collecting_evidence', confirmed_target_user_id: null }],
+    })
+    .mockResolvedValueOnce({
+      rows: [
+        {
+          id: 'evidence',
+          kind: 'reporter_text',
+          content: 'Exact evidence.\nSecond line.',
+          source_channel_id: 'channel',
+          source_message_id: 'message',
+          attachment_id: null,
+          metadata: {},
+          created_at: null,
+        },
+      ],
+    });
+  expect(await loadReportAttentionRecord('guild-1', 'report-1')).toMatchObject({
+    id: 'report-1',
+    guildId: 'guild-1',
+    status: 'collecting_evidence',
+    targetUserId: null,
+    allowedActions: [],
+    evidence: [
+      {
+        content: 'Exact evidence.\nSecond line.',
+        sourceMessageUrl: 'https://discord.com/channels/guild-1/channel/message',
+      },
+    ],
+  });
+  expect(db.query.mock.calls.map(([, values]) => values)).toEqual([
+    ['report-1', 'guild-1', null],
+    ['report-1', 'guild-1'],
+  ]);
+  expect(db.query.mock.calls.every(([sql]) => !sql.includes('moderation_queue_items'))).toBe(true);
+});
+
+it.each([{ server_id: 'other' }, { id: 'other' }])(
+  'rejects mismatched canonical intake identity %j before reading evidence',
+  async (mismatch) => {
+    db.query.mockResolvedValueOnce({ rows: [{ ...baseReportRow, ...mismatch }] });
+    expect(await loadReportAttentionRecord('guild-1', 'report-1')).toBeNull();
+    expect(db.query).toHaveBeenCalledTimes(1);
+  }
+);

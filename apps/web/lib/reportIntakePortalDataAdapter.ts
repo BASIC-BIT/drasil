@@ -1,6 +1,5 @@
 import type { ActionContext } from '@drasil/application';
 import { discordMessageUrl } from './discordUrls';
-import { fixtureGuildId, fixtureTimestampIso, isWebE2eFixtureMode } from './e2eFixtures';
 import { getPostgresPool } from './setupDataAdapter';
 
 export type OpenReportIntakeStatus =
@@ -87,32 +86,7 @@ export class PostgresReportIntakePortalDataAdapter implements ReportIntakePortal
   }
 }
 
-export class FixtureReportIntakePortalDataAdapter implements ReportIntakePortalDataAdapter {
-  public async getOpenIntakeForReporter(input: {
-    readonly guildId: string;
-    readonly reporterId: string;
-  }): Promise<ReporterOpenReportIntake | null> {
-    if (input.guildId !== fixtureGuildId || input.reporterId !== 'fixture-admin') {
-      return null;
-    }
-
-    return {
-      createdAt: fixtureTimestampIso,
-      guildId: fixtureGuildId,
-      id: '00000000-0000-4000-8000-000000000001',
-      status: 'collecting_evidence',
-      threadId: 'report-thread-1',
-      threadUrl: discordMessageUrl(fixtureGuildId, 'report-thread-1'),
-      updatedAt: fixtureTimestampIso,
-    };
-  }
-}
-
 export function createReportIntakePortalDataAdapter(): ReportIntakePortalDataAdapter {
-  if (isWebE2eFixtureMode()) {
-    return new FixtureReportIntakePortalDataAdapter();
-  }
-
   return new PostgresReportIntakePortalDataAdapter();
 }
 

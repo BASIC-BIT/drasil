@@ -9,6 +9,7 @@ export type ModerationInboxFreshnessFilter = 'all' | 'stale' | 'fresh' | 'attent
 export type ModerationInboxSortMode = 'priority' | 'newest' | 'oldest' | 'stale';
 export type ModerationInboxSavedViewId =
   | 'all'
+  | 'cases'
   | 'stale_cases'
   | 'reports'
   | 'observed_alerts'
@@ -35,6 +36,11 @@ export const moderationInboxSavedViews: readonly ModerationInboxSavedView[] = [
     id: 'all',
     label: 'All',
     controls: { kind: 'all', freshness: 'all', sortMode: 'priority', searchQuery: '' },
+  },
+  {
+    id: 'cases',
+    label: 'Cases',
+    controls: { kind: 'case', freshness: 'all', sortMode: 'priority', searchQuery: '' },
   },
   {
     id: 'stale_cases',
@@ -141,14 +147,22 @@ export function sortModerationInboxItemsForView(
   switch (sortMode) {
     case 'newest':
       return [...items].sort(
-        (left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)
+        (left, right) =>
+          (right.updatedAt ? Date.parse(right.updatedAt) : -Infinity) -
+            (left.updatedAt ? Date.parse(left.updatedAt) : -Infinity) ||
+          left.id.localeCompare(right.id)
       );
     case 'oldest':
       return [...items].sort(
-        (left, right) => Date.parse(left.updatedAt) - Date.parse(right.updatedAt)
+        (left, right) =>
+          (left.updatedAt ? Date.parse(left.updatedAt) : Infinity) -
+            (right.updatedAt ? Date.parse(right.updatedAt) : Infinity) ||
+          left.id.localeCompare(right.id)
       );
     case 'stale':
       return [...items].sort((left, right) => {
+        if (!left.updatedAt || !right.updatedAt)
+          return left.updatedAt ? -1 : right.updatedAt ? 1 : left.id.localeCompare(right.id);
         if (left.stale !== right.stale) {
           return left.stale ? -1 : 1;
         }
@@ -157,7 +171,11 @@ export function sortModerationInboxItemsForView(
           return right.staleHours - left.staleHours;
         }
 
-        return Date.parse(left.updatedAt) - Date.parse(right.updatedAt);
+        return (
+          (left.updatedAt ? Date.parse(left.updatedAt) : Infinity) -
+            (right.updatedAt ? Date.parse(right.updatedAt) : Infinity) ||
+          left.id.localeCompare(right.id)
+        );
       });
     case 'priority':
       return sortModerationInboxItems(items);

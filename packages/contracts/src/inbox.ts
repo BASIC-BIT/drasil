@@ -37,7 +37,7 @@ export const moderationInboxActionSchema = z.enum([
 ]);
 
 export const moderationInboxSubjectSchema = z.object({
-  userId: z.string(),
+  userId: z.string().nullable(),
   displayLabel: z.string(),
   secondaryLabel: z.string().nullable(),
   avatarUrl: z.string().url().nullable(),
@@ -53,6 +53,20 @@ export const moderationInboxItemSchema = z.object({
   guildId: z.string(),
   kind: moderationInboxItemKindSchema,
   sourceId: z.string(),
+  sourceMetadata: z
+    .object({
+      subtype: z.enum(['support_reply', 'recovery_reply', 'quarantine_breach']).nullable(),
+      caseId: z.string().nullable(),
+      reportId: z.string().nullable(),
+      detectionId: z.string().nullable(),
+      sourceThreadId: z.string().nullable(),
+      latestReplyMessageId: z.string().nullable(),
+      eventAt: z.string().nullable(),
+      pendingSince: z.string().nullable(),
+      thresholdDays: z.number().nonnegative().nullable(),
+      lastCheckedAt: z.string().nullable(),
+    })
+    .optional(),
   queueItemId: z.string().nullable(),
   subject: moderationInboxSubjectSchema,
   title: z.string(),
@@ -60,8 +74,8 @@ export const moderationInboxItemSchema = z.object({
   summarySource: z.enum(['ai', 'other']).default('other'),
   statusLabel: z.string(),
   signalLabel: z.string().nullable(),
-  createdAt: z.string(),
-  updatedAt: z.string(),
+  createdAt: z.string().nullable(),
+  updatedAt: z.string().nullable(),
   stale: z.boolean(),
   staleHours: z.number().int().min(0),
   caseKind: z.enum(['standard', 'compromised_account']).optional(),
@@ -81,10 +95,14 @@ export function sortModerationInboxItems(
   items: readonly ModerationInboxItem[]
 ): ModerationInboxItem[] {
   return [...items].sort((left, right) => {
+    if (!left.updatedAt || !right.updatedAt)
+      return left.updatedAt ? -1 : right.updatedAt ? 1 : left.id.localeCompare(right.id);
     if (left.stale !== right.stale) {
       return left.stale ? -1 : 1;
     }
 
-    return Date.parse(left.updatedAt) - Date.parse(right.updatedAt);
+    return (
+      Date.parse(left.updatedAt) - Date.parse(right.updatedAt) || left.id.localeCompare(right.id)
+    );
   });
 }

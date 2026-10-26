@@ -44,6 +44,20 @@ export function getEffectiveCaptchaMethod(settings: unknown): CaptchaMethod {
     : 'none';
 }
 
+export function getCaptchaMethodRevision(settings: unknown): number {
+  if (
+    !settings ||
+    typeof settings !== 'object' ||
+    Array.isArray(settings) ||
+    !('captcha_method_revision' in settings)
+  )
+    return 0;
+  const value = settings.captcha_method_revision;
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 2147483647
+    ? value
+    : 0;
+}
+
 export const captchaPassActionSchema = z.enum(['evidence_only', 'verify_join_only']);
 export const CAPTCHA_DEFAULT_MODE = 'off';
 export const CAPTCHA_DEFAULT_PASS_ACTION = 'evidence_only';

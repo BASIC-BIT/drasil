@@ -1,3 +1,4 @@
+import type { WorkspaceMutationResult } from './workspaceActionTypes';
 import type {
   ModerationActionRequestQueueStatus,
   ModerationActionRequestReceipt,
@@ -42,8 +43,7 @@ export function shouldUseDurableInboxActionState(
   }
   const staleFailedReceipt =
     isInboxActionInFlight(localState.status) &&
-    durableRequest.status === 'failed' &&
-    durableRequest.updatedAt === durableUpdatedAtAtSubmit;
+    isStaleInboxActionFailure(durableRequest, durableUpdatedAtAtSubmit);
   return !staleFailedReceipt;
 }
 
@@ -90,4 +90,45 @@ export function failedInboxActionState(error: unknown): InboxActionState {
     requestId: null,
     status: 'failed',
   };
+}
+
+export function workspaceRequestReceipt(
+  result: WorkspaceMutationResult | null
+): ModerationActionRequestReceipt | null {
+  if (result?.kind === 'request') return result.receipt;
+  if (
+    result?.kind === 'report_open' &&
+    result.result.status === 'queued' &&
+    result.result.requestId
+  )
+    return { id: result.result.requestId, status: 'queued' };
+  return null;
+}
+export function shouldUseDurableWorkspaceActionResult(
+  localResult: WorkspaceMutationResult | null,
+  durableRequest: {
+    readonly id: string;
+    readonly status: InboxActionStatus;
+    readonly updatedAt: string;
+  },
+  durableUpdatedAtAtSubmit: string | null
+): boolean {
+  const receipt = workspaceRequestReceipt(localResult);
+  const state = receipt
+    ? queuedInboxActionState(receipt)
+    : localResult
+      ? failedInboxActionState('')
+      : initialInboxActionState;
+  return shouldUseDurableInboxActionState(state, durableRequest, durableUpdatedAtAtSubmit);
+}
+
+export function isStaleInboxActionFailure(
+  request: { readonly status: InboxActionStatus; readonly updatedAt: string },
+  baseline: string | null
+): boolean {
+  return (
+    request.status === 'failed' &&
+    baseline !== null &&
+    (request.updatedAt === baseline || Date.parse(request.updatedAt) < Date.parse(baseline))
+  );
 }

@@ -26,8 +26,8 @@ export const reportQueueItemSchema = z.object({
   status: reportQueueStatusSchema,
   summary: z.string().nullable(),
   summarySource: reportSummarySourceSchema.default('other'),
-  createdAt: z.string(),
-  updatedAt: z.string(),
+  createdAt: z.string().nullable(),
+  updatedAt: z.string().nullable(),
   stale: z.boolean(),
   staleHours: z.number().int().min(0),
   evidenceCount: z.number().int().min(0),
@@ -59,12 +59,13 @@ export const reportEvidenceItemSchema = z.object({
   id: z.string(),
   kind: reportEvidenceKindSchema,
   content: z.string().nullable(),
-  createdAt: z.string(),
+  createdAt: z.string().nullable(),
   sourceMessageUrl: z.string().url().nullable(),
   attachment: reportEvidenceAttachmentSchema.nullable(),
 });
 
 export const reportDetailSchema = z.object({
+  reporterDisplayName: z.string().nullable().optional(),
   targetDisplayName: z.string().nullable().default(null),
   id: z.string(),
   guildId: z.string(),
@@ -73,8 +74,8 @@ export const reportDetailSchema = z.object({
   status: reportQueueStatusSchema,
   summary: z.string().nullable(),
   summarySource: reportSummarySourceSchema.default('other'),
-  createdAt: z.string(),
-  updatedAt: z.string(),
+  createdAt: z.string().nullable(),
+  updatedAt: z.string().nullable(),
   closedAt: z.string().nullable(),
   reportThreadUrl: z.string().url().nullable(),
   latestDetectionId: z.string().nullable(),
@@ -94,6 +95,7 @@ export type ReportDetail = z.infer<typeof reportDetailSchema>;
 
 export function sortReportQueueItems(reports: readonly ReportQueueItem[]): ReportQueueItem[] {
   return [...reports].sort((left, right) => {
+    if (!left.updatedAt || !right.updatedAt) return left.updatedAt ? -1 : right.updatedAt ? 1 : 0;
     if (left.stale !== right.stale) {
       return left.stale ? -1 : 1;
     }
@@ -101,3 +103,20 @@ export function sortReportQueueItems(reports: readonly ReportQueueItem[]): Repor
     return Date.parse(left.updatedAt) - Date.parse(right.updatedAt);
   });
 }
+
+export const reportIntakeStatusSchema = z.enum([
+  'collecting_evidence',
+  'needs_reporter_confirmation',
+  'needs_admin_confirmation',
+  'submitted',
+  'closed_by_reporter',
+  'actioned',
+  'dismissed',
+  'false_positive',
+  'expired',
+]);
+export const reportAttentionRecordSchema = reportDetailSchema
+  .omit({ status: true })
+  .extend({ status: reportIntakeStatusSchema });
+export type ReportIntakeStatus = z.infer<typeof reportIntakeStatusSchema>;
+export type ReportAttentionRecord = z.infer<typeof reportAttentionRecordSchema>;

@@ -1,9 +1,9 @@
-import './globals.css';
 import type { Metadata } from 'next';
+import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Drasil Setup',
-  description: 'Setup and diagnostics dashboard for the Drasil Discord anti-spam bot.',
+  title: 'Drasil Moderation',
+  description: 'Review reports, cases and account recovery in your Discord server.',
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

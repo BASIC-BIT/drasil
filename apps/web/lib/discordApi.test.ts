@@ -170,3 +170,41 @@ describe('Discord GET recovery integration', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('bounded source-centered pages', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+  it.each(['around', 'before', 'after'] as const)(
+    'sends one bounded %s request without changing snapshot semantics',
+    async (kind) => {
+      vi.stubEnv('DRASIL_WEB_BOT_TOKEN', 'test-token');
+      const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse([]));
+      vi.stubGlobal('fetch', fetchMock);
+      const { fetchBotChannelMessagePage } = await import('./discordApi');
+      await fetchBotChannelMessagePage({
+        channelId: '100000000000000001',
+        page: { kind, cursor: '100000000000000002' },
+        limit: 50,
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const url = new URL(String(fetchMock.mock.calls[0][0]));
+      expect(url.searchParams.get('limit')).toBe('50');
+      expect(url.searchParams.get(kind)).toBe('100000000000000002');
+    }
+  );
+  it('rejects invalid IDs and runtime page sizes before HTTP', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const { fetchBotChannelMessagePage } = await import('./discordApi');
+    await expect(
+      fetchBotChannelMessagePage({
+        channelId: '100000000000000001',
+        page: { kind: 'before', cursor: 'https://evil.example' },
+        limit: 50,
+      })
+    ).rejects.toThrow();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});

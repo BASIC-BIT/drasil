@@ -1,10 +1,12 @@
-import { readFixtureReportBan } from './reportBanFixtures';
+import {
+  captchaIssuanceConfigurationSchema,
+  type CaptchaIssuanceConfiguration,
+} from '@drasil/application';
 import { inboxModerationActionRequestTypes } from './inboxActionRequestTypes';
 import type {
   ModerationActionRequestActionType,
   ModerationActionRequestQueueStatus,
 } from './moderationActionRequestQueue';
-import { isWebE2eFixtureMode, fixtureTimestampIso } from './e2eFixtures';
 import { getPostgresPool } from './setupDataAdapter';
 
 export type ObservedBanResult =
@@ -28,15 +30,21 @@ export function parseObservedBanResult(value: unknown): ObservedBanResult | null
   return null;
 }
 export interface ModerationActionRequestSummary {
+  readonly guildId?: string;
   readonly observedBanResult?: ObservedBanResult | null;
   readonly accountQuarantinePreview?: AccountQuarantinePreviewSummary | null;
   readonly id: string;
   readonly actionType: ModerationActionRequestActionType;
   readonly actorSurface: string;
+  readonly actorUserId?: string | null;
+  readonly accountQuarantinePreviewRequestId?: string | null;
+  readonly captchaConfiguration?: CaptchaIssuanceConfiguration | null;
+  readonly captchaBinding?: { readonly challengeId: string; readonly generation: number } | null;
   readonly completedAt: string | null;
   readonly detectionEventId: string | null;
   readonly failedAt: string | null;
   readonly lastError: string | null;
+  readonly cleanupIntentToken?: string | null;
   readonly messageDeletionJobId: string | null;
   readonly requestedAt: string;
   readonly reportIntakeId: string | null;
@@ -66,6 +74,18 @@ export interface AccountQuarantineRoleSummary {
 }
 
 export interface AccountQuarantinePreviewSummary {
+  readonly lockdownIssues?: readonly {
+    readonly code: string;
+    readonly message: string;
+    readonly severity: string;
+  }[];
+  readonly memberBypasses?: readonly {
+    readonly channelId: string;
+    readonly channelName: string;
+    readonly permissions: readonly string[];
+    readonly subjectId: string;
+    readonly subjectType: string;
+  }[];
   readonly adminNotificationReady: boolean;
   readonly canContain: boolean;
   readonly caseRoleReady: boolean;
@@ -85,6 +105,7 @@ export interface AccountQuarantinePreviewSummary {
 }
 
 export interface ModerationActionRequestDataAdapter {
+  getRequest(guildId: string, requestId: string): Promise<ModerationActionRequestSummary | null>;
   listInboxRequests(
     guildId: string,
     recentLimit?: number
@@ -109,10 +130,13 @@ interface ModerationActionRequestRow {
   readonly id: string;
   readonly action_type: ModerationActionRequestActionType;
   readonly actor_surface: string;
+  readonly actor_id?: string | null;
   readonly completed_at: unknown;
   readonly detection_event_id?: string | null;
   readonly failed_at: unknown;
   readonly last_error: string | null;
+  readonly server_id?: string;
+  readonly idempotency_key?: string | null;
   readonly metadata?: unknown;
   readonly message_deletion_job_id?: string | null;
   readonly requested_at: unknown;
@@ -192,6 +216,14 @@ function readRoleSummary(value: unknown): AccountQuarantineRoleSummary | null {
   return readRoleSummaries(value ? [value] : [])[0] ?? null;
 }
 
+function readDetailRecords(value: unknown): OperationResultRecord[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is OperationResultRecord =>
+        Boolean(item && typeof item === 'object' && !Array.isArray(item))
+      )
+    : [];
+}
+
 function parseAccountQuarantinePreview(result: unknown): AccountQuarantinePreviewSummary | null {
   if (!result || typeof result !== 'object' || Array.isArray(result)) {
     return null;
@@ -201,6 +233,29 @@ function parseAccountQuarantinePreview(result: unknown): AccountQuarantinePrevie
     return null;
   }
   return {
+    lockdownIssues: readDetailRecords(record.lockdown_issues).flatMap((issue) => {
+      const code = readString(issue.code),
+        message = readString(issue.message),
+        severity = readString(issue.severity);
+      return code && message && severity ? [{ code, message, severity }] : [];
+    }),
+    memberBypasses: readDetailRecords(record.member_bypasses).flatMap((bypass) => {
+      const channelId = readString(bypass.channel_id),
+        channelName = readString(bypass.channel_name),
+        subjectId = readString(bypass.subject_id),
+        subjectType = readString(bypass.subject_type);
+      return channelId && channelName && subjectId && subjectType
+        ? [
+            {
+              channelId,
+              channelName,
+              subjectId,
+              subjectType,
+              permissions: readStringArray(bypass.permissions),
+            },
+          ]
+        : [];
+    }),
     adminNotificationReady: readBoolean(record.admin_notification_ready) ?? false,
     canContain: readBoolean(record.can_contain) ?? false,
     caseRoleReady: readBoolean(record.case_role_ready) ?? false,
@@ -389,12 +444,33 @@ function parseSetupRequestInput(
   };
 }
 
+function cleanupIntentToken(row: ModerationActionRequestRow): string | null {
+  if (
+    ![
+      'preview_case_message_deletion',
+      'execute_case_message_deletion',
+      'ban_case_user_with_message_cleanup',
+    ].includes(row.action_type) ||
+    !row.server_id ||
+    !row.verification_event_id ||
+    !row.actor_id
+  )
+    return null;
+  const prefix = `message-cleanup:${row.action_type}:${row.server_id}:${row.verification_event_id}:${row.actor_id}:`;
+  if (!row.idempotency_key?.startsWith(prefix)) return null;
+  const token = row.idempotency_key.slice(prefix.length);
+  return /^[A-Za-z0-9_-]{8,128}$/.test(token) ? token : null;
+}
+
 export function parseModerationActionRequestRow(
   row: ModerationActionRequestRow
 ): ModerationActionRequestSummary {
   const accountQuarantinePreview = parseAccountQuarantinePreview(row.result);
   const setupInput = parseSetupRequestInput(row.action_type, row.metadata);
   const metadata = (row.metadata ?? {}) as Record<string, unknown>;
+  const configuration = captchaIssuanceConfigurationSchema.safeParse(
+    metadata.expected_configuration
+  );
   const parsedBan = parseObservedBanResult(
     (row.result as Record<string, unknown> | null)?.observed_ban_result
   );
@@ -411,15 +487,34 @@ export function parseModerationActionRequestRow(
         }
       : null);
   return {
+    ...(configuration.success ? { captchaConfiguration: configuration.data } : {}),
     ...(accountQuarantinePreview ? { accountQuarantinePreview } : {}),
     ...(setupInput ? { setupInput } : {}),
+    ...(typeof metadata.expected_challenge_id === 'string' &&
+    typeof metadata.expected_generation === 'number' &&
+    Number.isInteger(metadata.expected_generation) &&
+    metadata.expected_generation > 0
+      ? {
+          captchaBinding: {
+            challengeId: metadata.expected_challenge_id,
+            generation: metadata.expected_generation,
+          },
+        }
+      : {}),
     id: row.id,
+    ...(row.server_id ? { guildId: row.server_id } : {}),
     actionType: row.action_type,
     actorSurface: row.actor_surface,
+    actorUserId: row.actor_id ?? null,
+    accountQuarantinePreviewRequestId:
+      row.metadata && typeof row.metadata === 'object'
+        ? readString((row.metadata as OperationResultRecord).preview_request_id)
+        : null,
     completedAt: toNullableIsoString(row.completed_at),
     detectionEventId: row.detection_event_id ?? null,
     failedAt: toNullableIsoString(row.failed_at),
     lastError: row.last_error ?? readString(metadata.report_ban_last_error),
+    ...(cleanupIntentToken(row) ? { cleanupIntentToken: cleanupIntentToken(row) } : {}),
     messageDeletionJobId: row.message_deletion_job_id ?? null,
     requestedAt: toIsoString(row.requested_at),
     reportIntakeId: row.report_intake_id ?? null,
@@ -440,6 +535,16 @@ export function parseModerationActionRequestRow(
 }
 
 export class PostgresModerationActionRequestDataAdapter implements ModerationActionRequestDataAdapter {
+  public async getRequest(
+    guildId: string,
+    requestId: string
+  ): Promise<ModerationActionRequestSummary | null> {
+    const result = await getPostgresPool().query<ModerationActionRequestRow>(
+      `select * from moderation_action_requests where server_id = $1 and id::text = $2 limit 1`,
+      [guildId, requestId]
+    );
+    return result.rows[0] ? parseModerationActionRequestRow(result.rows[0]) : null;
+  }
   public async getSetupRequest(
     guildId: string,
     requestId: string
@@ -449,11 +554,14 @@ export class PostgresModerationActionRequestDataAdapter implements ModerationAct
          id::text,
          action_type::text as action_type,
          actor_surface,
+         actor_id,
          completed_at,
          detection_event_id::text,
          failed_at,
          last_error,
          message_deletion_job_id::text,
+         server_id,
+         idempotency_key,
          metadata,
          requested_at,
          report_intake_id::text,
@@ -504,11 +612,14 @@ export class PostgresModerationActionRequestDataAdapter implements ModerationAct
          id::text,
          action_type::text as action_type,
          actor_surface,
+         actor_id,
          completed_at,
          detection_event_id::text,
          failed_at,
          last_error,
          message_deletion_job_id::text,
+         server_id,
+         idempotency_key,
          metadata,
          requested_at,
          report_intake_id::text,
@@ -555,11 +666,14 @@ export class PostgresModerationActionRequestDataAdapter implements ModerationAct
          requests.id::text,
          requests.action_type::text as action_type,
          requests.actor_surface,
+         requests.actor_id,
          requests.completed_at,
          requests.detection_event_id::text,
          requests.failed_at,
          requests.last_error,
          requests.message_deletion_job_id::text,
+         requests.server_id,
+         requests.idempotency_key,
          requests.metadata,
          requests.requested_at,
          requests.report_intake_id::text,
@@ -578,184 +692,6 @@ export class PostgresModerationActionRequestDataAdapter implements ModerationAct
   }
 }
 
-export class FixtureModerationActionRequestDataAdapter implements ModerationActionRequestDataAdapter {
-  public async getSetupRequest(
-    guildId: string,
-    requestId: string
-  ): Promise<ModerationActionRequestSummary | null> {
-    return (
-      (await this.listSetupRequests(guildId, 25)).find((request) => request.id === requestId) ??
-      null
-    );
-  }
-
-  public async listInboxRequests(
-    guildId: string,
-    recentLimit = 8
-  ): Promise<ModerationActionRequestSummary[]> {
-    const reportBan = await readFixtureReportBan();
-    const requests = await this.listRecentRequests(guildId, recentLimit);
-    return reportBan ? [reportBan, ...requests] : requests;
-  }
-
-  public async listRecentRequests(
-    _guildId: string,
-    _limit = 8
-  ): Promise<ModerationActionRequestSummary[]> {
-    return [
-      {
-        id: 'fixture-action-request-1',
-        actionType: 'sync_moderation_queue',
-        actorSurface: 'web',
-        completedAt: fixtureTimestampIso,
-        detectionEventId: null,
-        failedAt: null,
-        lastError: null,
-        messageDeletionJobId: null,
-        requestedAt: fixtureTimestampIso,
-        reportIntakeId: null,
-        requestedAction: null,
-        resultSummary: 'Queue sync completed.',
-        status: 'completed',
-        targetUserId: null,
-        updatedAt: fixtureTimestampIso,
-        verificationEventId: null,
-      },
-      {
-        id: 'fixture-action-request-2',
-        actionType: 'refresh_case_notification',
-        actorSurface: 'web',
-        completedAt: '2026-06-08T01:11:02.000Z',
-        detectionEventId: null,
-        failedAt: null,
-        lastError: null,
-        messageDeletionJobId: null,
-        requestedAt: '2026-06-08T01:10:02.000Z',
-        reportIntakeId: null,
-        requestedAction: 'refresh_notification',
-        resultSummary: null,
-        status: 'completed',
-        targetUserId: 'user-100',
-        updatedAt: '2026-06-08T01:11:02.000Z',
-        verificationEventId: null,
-      },
-      {
-        id: 'fixture-action-request-3',
-        actionType: 'close_resolved_case_threads',
-        actorSurface: 'web',
-        completedAt: '2026-06-08T01:05:02.000Z',
-        detectionEventId: null,
-        failedAt: null,
-        lastError: null,
-        messageDeletionJobId: null,
-        requestedAt: '2026-06-08T01:04:02.000Z',
-        reportIntakeId: null,
-        requestedAction: null,
-        resultSummary: 'Dry run found 4 closable; already closed 2; missing 1; failed 0.',
-        status: 'completed',
-        targetUserId: null,
-        updatedAt: '2026-06-08T01:05:02.000Z',
-        verificationEventId: null,
-      },
-      {
-        id: 'fixture-action-request-4',
-        actionType: 'audit_case_role_lockdown',
-        actorSurface: 'web',
-        completedAt: '2026-06-08T00:59:02.000Z',
-        detectionEventId: null,
-        failedAt: null,
-        lastError: null,
-        messageDeletionJobId: null,
-        requestedAt: '2026-06-08T00:58:02.000Z',
-        reportIntakeId: null,
-        requestedAction: null,
-        resultSummary: 'Audit found 0 errors, 2 warnings, and 3 planned writes.',
-        status: 'completed',
-        targetUserId: null,
-        updatedAt: '2026-06-08T00:59:02.000Z',
-        verificationEventId: null,
-      },
-      {
-        id: 'fixture-action-request-5',
-        actionType: 'intake_role_members',
-        actorSurface: 'web',
-        completedAt: '2026-06-08T00:51:02.000Z',
-        detectionEventId: null,
-        failedAt: null,
-        lastError: null,
-        messageDeletionJobId: null,
-        requestedAt: '2026-06-08T00:50:02.000Z',
-        reportIntakeId: null,
-        requestedAction: null,
-        resultSummary: 'Dry run Manual Intake: selected 8 of 10; skipped active 1; failed 0.',
-        status: 'completed',
-        targetUserId: null,
-        updatedAt: '2026-06-08T00:51:02.000Z',
-        verificationEventId: null,
-      },
-      {
-        id: 'fixture-action-request-6',
-        actionType: 'complete_setup_verification',
-        actorSurface: 'web',
-        completedAt: '2026-06-08T00:48:02.000Z',
-        detectionEventId: null,
-        failedAt: null,
-        lastError: null,
-        messageDeletionJobId: null,
-        requestedAt: '2026-06-08T00:47:02.000Z',
-        reportIntakeId: null,
-        requestedAction: null,
-        resultSummary: 'Core setup saved; verification channel configured.',
-        status: 'completed',
-        targetUserId: null,
-        updatedAt: '2026-06-08T00:48:02.000Z',
-        verificationEventId: null,
-      },
-      {
-        id: 'fixture-action-request-7',
-        actionType: 'upsert_report_instructions',
-        actorSurface: 'web',
-        completedAt: '2026-06-08T00:46:02.000Z',
-        detectionEventId: null,
-        failedAt: null,
-        lastError: null,
-        messageDeletionJobId: null,
-        requestedAt: '2026-06-08T00:45:02.000Z',
-        reportIntakeId: null,
-        requestedAction: null,
-        resultSummary: 'Report instructions updated in report-channel-1.',
-        status: 'completed',
-        targetUserId: null,
-        updatedAt: '2026-06-08T00:46:02.000Z',
-        verificationEventId: null,
-      },
-    ];
-  }
-
-  public async listSetupRequests(
-    guildId: string,
-    recentLimit = 10
-  ): Promise<ModerationActionRequestSummary[]> {
-    return (await this.listRecentRequests(guildId, recentLimit)).filter(
-      (request) => request.actionType === 'complete_setup_verification'
-    );
-  }
-
-  public async listCaseRequests(
-    guildId: string,
-    verificationEventId: string,
-    limit = 10
-  ): Promise<ModerationActionRequestSummary[]> {
-    return (await this.listRecentRequests(guildId, limit)).filter(
-      (request) => request.verificationEventId === verificationEventId
-    );
-  }
-}
-
 export function createModerationActionRequestDataAdapter(): ModerationActionRequestDataAdapter {
-  if (isWebE2eFixtureMode()) {
-    return new FixtureModerationActionRequestDataAdapter();
-  }
-
   return new PostgresModerationActionRequestDataAdapter();
 }

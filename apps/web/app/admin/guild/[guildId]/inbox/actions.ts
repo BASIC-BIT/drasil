@@ -1,10 +1,13 @@
 'use server';
 
+import { createWebAuthority } from '@/lib/application/adapters/authority';
 import { createWebActionContext } from '@/lib/application/context';
+import { createModerationAttentionDataAdapter } from '@/lib/moderationAttentionDataAdapter';
+import { createModerationWorkspaceDataAdapter } from '@/lib/moderationWorkspaceDataAdapter';
+import type { WorkspaceActions } from '@/lib/workspaceActionTypes';
+import { assertWorkspaceConfirmation } from '@/lib/workspaceConfirmation';
+import type { AttentionOutcome } from '@drasil/application';
 
-import { revalidatePath } from 'next/cache';
-import { redirect } from 'next/navigation';
-import { moderationInboxActionSchema, type ModerationInboxAction } from '@drasil/contracts';
 import { fetchGuildResources } from '@/lib/discordApi';
 import {
   DISCORD_PERMISSIONS,
@@ -12,30 +15,20 @@ import {
   hasPermission,
   parsePermissions,
 } from '@/lib/discordPermissions';
+import { failedInboxActionState } from '@/lib/inboxActionState';
+import type { ModerationActionRequestReceipt } from '@/lib/moderationActionRequestQueue';
 import {
   isObservedAlertWebAction,
   queueObservedAlertActionRequest,
   type ObservedAlertWebAction,
 } from '@/lib/observedAlertActionQueue';
+import { createQueueAttentionActionAdapter } from '@/lib/queueAttentionActionAdapter';
 import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
-import { createSetupDataAdapter } from '@/lib/setupDataAdapter';
 import { createSetupDashboardService } from '@/lib/setupDashboardService';
-import {
-  createQueueAttentionActionAdapter,
-  type QueueAttentionAcknowledgeStatus,
-} from '@/lib/queueAttentionActionAdapter';
-import {
-  completedInboxActionState,
-  failedInboxActionState,
-  queuedInboxActionState,
-  type InboxActionState,
-} from '@/lib/inboxActionState';
-import type { ModerationActionRequestReceipt } from '@/lib/moderationActionRequestQueue';
-import {
-  formatQueueAttentionAcknowledgement,
-  summarizeQueueAttentionAcknowledgements,
-  type QueueAttentionAcknowledgementSummary,
-} from '@/lib/queueAttentionReceipt';
+import { createSetupDataAdapter } from '@/lib/setupDataAdapter';
+import { moderationInboxActionSchema, type ModerationInboxAction } from '@drasil/contracts';
+import { revalidatePath } from 'next/cache';
+import { redirect } from 'next/navigation';
 
 type DestructiveObservedAlertAction = Extract<ObservedAlertWebAction, 'kick_user' | 'ban_user'>;
 
@@ -79,22 +72,6 @@ function assertObservedActorPermission(
 function readFormString(formData: FormData | undefined, key: string): string | null {
   const value = formData?.get(key);
   return typeof value === 'string' && value.trim() ? value.trim() : null;
-}
-
-function readQueueItemIds(formData: FormData): string[] {
-  const seen = new Set<string>();
-  return formData
-    .getAll('queueItemId')
-    .filter((value): value is string => typeof value === 'string')
-    .map((value) => value.trim())
-    .filter((value) => {
-      if (!value || seen.has(value)) {
-        return false;
-      }
-      seen.add(value);
-      return true;
-    })
-    .slice(0, 50);
 }
 
 async function assertCanQueueObservedAlertAction(
@@ -153,10 +130,11 @@ async function assertCanQueueObservedAlertAction(
   return { reason };
 }
 
-export async function acknowledgeQueueAttentionItem(
+async function performAcknowledgeQueueAttentionItem(
   guildId: string,
-  queueItemId: string
-): Promise<QueueAttentionAcknowledgeStatus> {
+  queueItemId: string,
+  workspaceForm: FormData
+): Promise<AttentionOutcome> {
   const [session, token] = await Promise.all([getCurrentAdminSession(), getCurrentDiscordToken()]);
   if (!session || !token) {
     redirect(`/api/auth/discord?returnTo=/admin/guild/${guildId}/inbox`);
@@ -164,6 +142,23 @@ export async function acknowledgeQueueAttentionItem(
 
   const setupService = createSetupDashboardService();
   await setupService.assertCanManageGuild(guildId, token.accessToken);
+  {
+    const detail = await createModerationAttentionDataAdapter().getAttentionDetail({
+      guildId,
+      queueItemId,
+    });
+    if (
+      !detail ||
+      detail.item.guildId !== guildId ||
+      detail.item.queueItemId !== queueItemId ||
+      !detail.item.allowedActions.includes('acknowledge')
+    )
+      throw new Error('Reply is no longer available to acknowledge. Refresh the record.');
+    assertWorkspaceConfirmation(workspaceForm, {
+      recordId: queueItemId,
+      targetUserId: detail.item.subject.userId,
+    });
+  }
   const result = await createQueueAttentionActionAdapter().acknowledgeAttentionItem({
     guildId,
     queueItemId,
@@ -171,76 +166,15 @@ export async function acknowledgeQueueAttentionItem(
   });
 
   revalidatePath(`/admin/guild/${guildId}/inbox`);
-  return result.status;
-}
-
-export async function acknowledgeInboxQueueAttentionItem(
-  guildId: string,
-  queueItemId: string,
-  _previousState: InboxActionState,
-  _formData: FormData
-): Promise<InboxActionState> {
-  try {
-    const status = await acknowledgeQueueAttentionItem(guildId, queueItemId);
-    return completedInboxActionState(
-      formatQueueAttentionAcknowledgement(summarizeQueueAttentionAcknowledgements([status]))
-    );
-  } catch (error) {
-    return failedInboxActionState(error);
-  }
-}
-
-export async function acknowledgeQueueAttentionItems(
-  guildId: string,
-  formData: FormData
-): Promise<QueueAttentionAcknowledgementSummary> {
-  const queueItemIds = readQueueItemIds(formData);
-  if (queueItemIds.length === 0) {
-    return summarizeQueueAttentionAcknowledgements([]);
-  }
-
-  const [session, token] = await Promise.all([getCurrentAdminSession(), getCurrentDiscordToken()]);
-  if (!session || !token) {
-    redirect(`/api/auth/discord?returnTo=/admin/guild/${guildId}/inbox`);
-  }
-
-  const setupService = createSetupDashboardService();
-  await setupService.assertCanManageGuild(guildId, token.accessToken);
-  const adapter = createQueueAttentionActionAdapter();
-  const results = await adapter.acknowledgeAttentionItems({
-    guildId,
-    queueItemIds,
-    actor: { id: session.userId, surface: 'web' },
-  });
-  const statuses = results.map((result) => result.status);
-
-  revalidatePath(`/admin/guild/${guildId}/inbox`);
-  return summarizeQueueAttentionAcknowledgements(statuses);
-}
-
-export async function acknowledgeInboxQueueAttentionItems(
-  guildId: string,
-  _previousState: InboxActionState,
-  formData: FormData
-): Promise<InboxActionState> {
-  try {
-    const queueItemCount = readQueueItemIds(formData).length;
-    if (queueItemCount === 0) {
-      throw new Error('Select at least one reply to acknowledge.');
-    }
-    const summary = await acknowledgeQueueAttentionItems(guildId, formData);
-    return completedInboxActionState(formatQueueAttentionAcknowledgement(summary));
-  } catch (error) {
-    return failedInboxActionState(error);
-  }
+  return result;
 }
 
 async function performQueueObservedAlertAction(
   guildId: string,
-  targetUserId: string,
+  targetUserId: string | null,
   detectionEventId: string,
   action: ModerationInboxAction,
-  formData?: FormData
+  formData: FormData
 ): Promise<ModerationActionRequestReceipt> {
   const [session, token] = await Promise.all([getCurrentAdminSession(), getCurrentDiscordToken()]);
   if (!session || !token) {
@@ -254,6 +188,29 @@ async function performQueueObservedAlertAction(
 
   const setupService = createSetupDashboardService();
   const guild = await setupService.assertCanManageGuild(guildId, token.accessToken);
+  {
+    const actor = await createWebAuthority().loadFresh(guildId, session.userId);
+    if (!actor) throw new Error('Moderator is no longer present in this server.');
+    const detail = await createModerationWorkspaceDataAdapter(actor).getInboxItemDetail({
+      guildId,
+      itemId: `detection:${detectionEventId}`,
+    });
+    if (
+      !detail ||
+      detail.kind !== 'observed_alert' ||
+      detail.item.guildId !== guildId ||
+      detail.item.sourceId !== detectionEventId ||
+      !detail.policy.allowedActions.includes(parsedAction) ||
+      !detail.item.subject.userId
+    )
+      throw new Error('Observed alert action is no longer available. Refresh the record.');
+    targetUserId = detail.item.subject.userId;
+    assertWorkspaceConfirmation(formData ?? new FormData(), {
+      recordId: detectionEventId,
+      targetUserId,
+    });
+  }
+  if (!targetUserId) throw new Error('Observed alert has no current member target.');
   const options = await assertCanQueueObservedAlertAction(parsedAction, guild, formData);
   const receipt = await queueObservedAlertActionRequest({
     action: parsedAction,
@@ -271,44 +228,46 @@ async function performQueueObservedAlertAction(
   revalidatePath(`/admin/guild/${guildId}/cases`);
   revalidatePath(`/admin/guild/${guildId}/reports`);
 
-  if (receipt.status === 'failed') {
-    throw new Error('Observed alert action could not be queued. Refresh the inbox and try again.');
-  }
-
   return receipt;
 }
 
-export async function queueObservedAlertAction(
-  guildId: string,
-  targetUserId: string,
-  detectionEventId: string,
-  action: ModerationInboxAction,
-  formData?: FormData
-): Promise<void> {
-  await performQueueObservedAlertAction(guildId, targetUserId, detectionEventId, action, formData);
-}
-
-export async function queueInboxObservedAlertAction(
-  guildId: string,
-  targetUserId: string,
-  detectionEventId: string,
-  action: ModerationInboxAction,
-  _previousState: InboxActionState,
+export async function submitWorkspaceObservedAction(
+  input: Parameters<WorkspaceActions['observedAction']>[0],
   formData: FormData
-): Promise<InboxActionState> {
+): ReturnType<WorkspaceActions['observedAction']> {
   try {
     const receipt = await performQueueObservedAlertAction(
-      guildId,
-      targetUserId,
-      detectionEventId,
-      action,
+      input.guildId,
+      null,
+      input.detectionId,
+      input.action,
       formData
     );
-    if (receipt.status === 'completed') {
-      return completedInboxActionState('Action was already handled.', receipt.id);
-    }
-    return queuedInboxActionState(receipt);
+    return { kind: 'request', receipt };
   } catch (error) {
-    return failedInboxActionState(error);
+    return {
+      kind: 'failed',
+      message: failedInboxActionState(error).message ?? 'Action response unavailable.',
+    };
+  }
+}
+export async function submitWorkspaceAttentionAction(
+  input: Parameters<WorkspaceActions['attentionAction']>[0],
+  formData: FormData
+): ReturnType<WorkspaceActions['attentionAction']> {
+  try {
+    return {
+      kind: 'attention',
+      result: await performAcknowledgeQueueAttentionItem(
+        input.guildId,
+        input.queueItemId,
+        formData
+      ),
+    };
+  } catch (error) {
+    return {
+      kind: 'failed',
+      message: failedInboxActionState(error).message ?? 'Action response unavailable.',
+    };
   }
 }

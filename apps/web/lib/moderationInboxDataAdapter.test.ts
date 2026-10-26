@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
 import type { CaseSummary, ReportQueueItem } from '@drasil/contracts';
+import { describe, expect, it } from 'vitest';
 import {
   caseSummaryToInboxItem,
   parseModerationQueueRow,
@@ -8,6 +8,7 @@ import {
 } from './moderationInboxDataAdapter';
 
 const baseCase: CaseSummary = {
+  status: 'pending',
   id: 'case-1',
   guildId: 'guild-1',
   userId: 'user-1',
@@ -133,13 +134,7 @@ describe('moderationInboxDataAdapter', () => {
         detailHref: '/admin/guild/guild-1/cases/case-1',
         signalLabel: '91% confidence',
         captchaChallenge: expect.objectContaining({ status: 'pending' }),
-        allowedActions: [
-          'view_case',
-          'view_history',
-          'verify_user',
-          'close_no_action',
-          'refresh_notification',
-        ],
+        allowedActions: ['view_case', 'view_history', 'verify_user', 'refresh_notification'],
       })
     );
   });
@@ -172,7 +167,7 @@ describe('moderationInboxDataAdapter', () => {
 
     expect(item).toEqual(
       expect.objectContaining({
-        id: 'queue:queue-1',
+        id: 'detection:det-observed-1',
         kind: 'observed_alert',
         sourceId: 'det-observed-1',
         queueItemId: 'queue-1',
@@ -272,4 +267,19 @@ describe('moderationInboxDataAdapter', () => {
       })
     );
   });
+});
+
+it('uses a durable detection ID and preserves the detection event date', () => {
+  const item = parseModerationQueueRow(baseQueueRow);
+  expect(item?.id).toBe('detection:det-observed-1');
+  expect(item?.sourceMetadata?.eventAt).toBe('2026-06-01T00:00:00.000Z');
+});
+
+it('labels generated detection summaries without changing original source evidence', () => {
+  expect(caseSummaryToInboxItem({ ...baseCase, latestDetectionType: 'gpt_analysis' }).summary).toBe(
+    'Latest detection: Content analysis.'
+  );
+  expect(
+    caseSummaryToInboxItem({ ...baseCase, latestDetectionType: 'suspicious_content' }).summary
+  ).toBe('Latest detection: Content check.');
 });

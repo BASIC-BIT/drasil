@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import {
-  FixtureReportIntakePortalDataAdapter,
-  parseOpenReportIntakeRow,
-} from './reportIntakePortalDataAdapter';
+import { FixtureReportIntakePortalDataAdapter } from '../e2e/legacy/reportIntakePortalDataAdapter';
+import { parseOpenReportIntakeRow } from './reportIntakePortalDataAdapter';
 
 describe('reportIntakePortalDataAdapter', () => {
   it('parses open report intake rows with Discord thread links', () => {

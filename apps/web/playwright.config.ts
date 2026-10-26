@@ -12,6 +12,7 @@ const processEnv = Object.fromEntries(
 
 const webServerEnv: Record<string, string> = {
   ...processEnv,
+  DRASIL_LEGACY_TEST_BUILD: process.env.DRASIL_MCP_E2E === 'true' ? 'false' : 'true',
   NEXT_PUBLIC_APP_URL: baseURL,
   DISCORD_CLIENT_ID: process.env.DISCORD_CLIENT_ID ?? 'playwright-discord-client',
   DISCORD_CLIENT_SECRET: process.env.DISCORD_CLIENT_SECRET ?? 'playwright-discord-secret',
@@ -26,6 +27,12 @@ const webServerEnv: Record<string, string> = {
 
 export default defineConfig({
   testDir: './e2e',
+  testIgnore: [
+    'moderation-workspace.spec.ts',
+    'case-flow.spec.ts',
+    'report-ban.spec.ts',
+    'message-cleanup.spec.ts',
+  ],
   globalSetup: './e2e/globalSetup.ts',
   fullyParallel: true,
   workers: 1,

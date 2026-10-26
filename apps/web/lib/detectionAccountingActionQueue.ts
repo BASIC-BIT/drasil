@@ -1,6 +1,5 @@
 import type { ActionContext } from '@drasil/application';
 import { submitQueuedAction } from './application/queuedSubmission';
-import { isWebE2eFixtureMode } from './e2eFixtures';
 import type { ModerationActionRequestReceipt } from './moderationActionRequestQueue';
 
 export type DetectionAccountingWebAction = 'ignore_detection' | 'restore_detection';
@@ -23,13 +22,6 @@ export async function queueDetectionAccountingActionRequest(input: {
   readonly reason?: string | null;
   readonly targetUserId: string;
 }): Promise<ModerationActionRequestReceipt> {
-  if (isWebE2eFixtureMode()) {
-    return {
-      id: `fixture-detection-accounting-${input.action}-${input.detectionEventId}`,
-      status: 'queued',
-    };
-  }
-
   return submitQueuedAction({
     context: input.context,
     command: {

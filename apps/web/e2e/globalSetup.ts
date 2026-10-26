@@ -7,15 +7,10 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
   if (!baseURL) throw new Error('Playwright requires a base URL.');
   for (const path of [
     '/admin',
-    '/admin/guild/guild-1/cases',
-    '/admin/guild/guild-1/cases/case-active',
     '/admin/guild/guild-1/members/user-100',
     '/admin/guild/guild-1/history',
     '/admin/guild/guild-1/setup',
-    '/admin/guild/guild-1/reports',
-    '/admin/guild/guild-1/reports/report-1',
     '/admin/guild/guild-1/operations',
-    '/admin/guild/guild-1/inbox',
     '/admin/guild/guild-1/onboarding',
     '/report',
     '/report/guild/guild-1',

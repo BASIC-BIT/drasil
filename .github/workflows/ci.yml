@@ -72,6 +72,9 @@ jobs:
         run: |
           docker build -t drasil-action-boundary:ci .
           docker run --rm --entrypoint node drasil-action-boundary:ci scripts/check-application-imports.mjs
+      - name: Log workspace screenshot differences on failure
+        if: failure()
+        run: node scripts/log-workspace-screenshot-diffs.mjs
       - name: Upload Playwright artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v7.0.1
@@ -82,6 +85,9 @@ jobs:
           path: |
             apps/web/playwright-report
             apps/web/test-results
+            apps/web/workspace-test-results
+            apps/web/storybook-test-results
+            apps/web/storybook-playwright-report
 
   metrics:
     runs-on: ubuntu-latest

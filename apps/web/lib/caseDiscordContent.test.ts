@@ -9,6 +9,7 @@ vi.mock('./discordApi', () => ({
 }));
 
 const baseDetail: CaseDetail = {
+  status: 'pending',
   id: 'case-1',
   guildId: 'guild-1',
   userId: 'user-1',

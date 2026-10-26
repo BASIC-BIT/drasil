@@ -1,12 +1,14 @@
-import { buildQueuedCaseCommand } from './application/caseCommands';
-import { createWebActionContext } from './application/context';
-import { submitQueuedAction } from './application/queuedSubmission';
-import { evaluateCasePolicy, readCasePolicy } from '@drasil/application';
 import {
-  getEffectiveCaptchaMethod,
+  evaluateCasePolicy,
+  readCasePolicy,
+  type CaptchaIssuanceConfiguration,
+} from '@drasil/application';
+import {
   caseDetailSchema,
   caseSummarySchema,
+  getEffectiveCaptchaMethod,
   sortCaseSummariesForQueue,
+  type CaptchaChallengeSummary,
   type CaseAction,
   type CaseDetail,
   type CaseDetectionHistoryItem,
@@ -19,17 +21,16 @@ import {
   type CaseUserIdentity,
 } from '@drasil/contracts';
 import { z } from 'zod';
-import {
-  fixtureActiveCaseDetail,
-  fixtureActiveCaseSummaries,
-  fixtureParkedActiveCaseSummaries,
-  fixtureResolvedCaseCount,
-  fixtureResolvedCaseSummariesForHistory,
-  isWebE2eFixtureMode,
-} from './e2eFixtures';
+import { buildQueuedCaseCommand } from './application/caseCommands';
+import { createWebActionContext } from './application/context';
+import { submitQueuedAction } from './application/queuedSubmission';
+import { filterCaseKindActions } from './caseActionEligibility';
 import { discordDesktopUrl, discordMessageUrl } from './discordUrls';
+import type {
+  ModerationActionRequestQueueStatus,
+  ModerationActionRequestReceipt,
+} from './moderationActionRequestQueue';
 import { getPostgresPool } from './setupDataAdapter';
-import type { ModerationActionRequestQueueStatus } from './moderationActionRequestQueue';
 
 export type WebCaseAction = Extract<
   CaseAction,
@@ -57,6 +58,7 @@ export type CaseActionQueueStatus =
   | 'failed';
 
 export interface CaseActionQueueResult {
+  readonly receipt?: ModerationActionRequestReceipt;
   readonly action: WebCaseAction;
   readonly caseId: string;
   readonly requestId: string | null;
@@ -68,8 +70,11 @@ export interface QueueCaseActionInput {
   readonly adminId: string;
   readonly attemptId?: string | null;
   readonly caseId: string;
+  readonly expectedCaptchaConfiguration?: CaptchaIssuanceConfiguration;
   readonly expectedCaptchaChallengeId?: string | null;
   readonly expectedCaptchaGeneration?: number | null;
+  readonly expectedCaptchaMethod?: CaptchaChallengeSummary['method'] | null;
+  readonly expectedCaptchaMethodRevision?: number | null;
   readonly guildId: string;
   readonly quarantinePhase?: 'preview' | 'execute' | null;
   readonly previewRequestId?: string | null;
@@ -220,10 +225,6 @@ const THREAD_REPAIR_ACTIONS_BY_STATE = [
 ] as const satisfies readonly (readonly (readonly CaseAction[])[])[];
 
 const uuidSchema = z.string().uuid();
-
-function sortCaseSummariesForHistory(cases: readonly CaseSummary[]): CaseSummary[] {
-  return [...cases].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
-}
 
 function toIsoString(value: unknown): string {
   if (value instanceof Date) {
@@ -470,9 +471,7 @@ function resolveAllowedActions(
 }
 
 function resolveCaseKindActions(row: CaseSummaryRow, actions: readonly CaseAction[]): CaseAction[] {
-  return row.case_kind === 'compromised_account'
-    ? actions.filter((action) => action !== 'close_no_action')
-    : [...actions];
+  return filterCaseKindActions({ caseKind: row.case_kind }, actions);
 }
 
 function appendRefreshNotificationAction(
@@ -504,6 +503,7 @@ export function parseCaseSummaryRow(row: CaseSummaryRow, now = new Date()): Case
 
   return caseSummarySchema.parse({
     id: row.id,
+    status: row.status,
     guildId: row.server_id,
     userId: row.user_id,
     userIdentity: resolveUserIdentity(row),
@@ -614,7 +614,7 @@ function parseDetectionHistoryRow(row: DetectionHistoryRow): CaseDetectionHistor
     id: row.id,
     detectionType: row.detection_type,
     confidence: row.confidence,
-    detectedAt: toIsoString(row.detected_at),
+    detectedAt: toNullableIsoString(row.detected_at),
     reasons: row.reasons ?? [],
   };
 }
@@ -728,7 +728,7 @@ const SUMMARY_QUERY = `
   join servers s on s.guild_id = ve.server_id
   left join users u on u.discord_id = ve.user_id
   left join server_members sm on sm.server_id = ve.server_id and sm.user_id = ve.user_id
-  left join captcha_challenges cc on cc.verification_event_id = ve.id
+  left join captcha_challenges cc on cc.verification_event_id = ve.id and cc.server_id = ve.server_id and cc.user_id = ve.user_id
   left join lateral (
     select jsonb_agg(
       jsonb_build_object(
@@ -755,26 +755,26 @@ const SUMMARY_QUERY = `
      and captcha_bypass.generation = captcha_request.generation
     where captcha_request.captcha_challenge_id = cc.id
   ) captcha_history on true
-  left join detection_events opening_de on opening_de.id = ve.detection_event_id
+  left join detection_events opening_de on opening_de.id = ve.detection_event_id and opening_de.server_id = ve.server_id and opening_de.user_id = ve.user_id
   left join lateral (
     select detection_type, confidence, detected_at, metadata, channel_id, message_id
     from detection_events linked_de
-    where linked_de.id = ve.detection_event_id
-       or linked_de.latest_verification_event_id = ve.id
+    where linked_de.server_id = ve.server_id and linked_de.user_id = ve.user_id
+      and (linked_de.id = ve.detection_event_id or linked_de.latest_verification_event_id = ve.id)
     order by detected_at desc nulls last
     limit 1
   ) de on true
   left join lateral (
     select action_type, action_at
     from admin_actions
-    where verification_event_id = ve.id
+    where server_id = ve.server_id and verification_event_id = ve.id
     order by action_at desc nulls last
     limit 1
   ) aa on true
   left join lateral (
     select outcome_type, source
     from moderation_outcomes
-    where verification_event_id = ve.id
+    where server_id = ve.server_id and verification_event_id = ve.id
     order by occurred_at desc nulls last
     limit 1
   ) mo on true
@@ -850,7 +850,7 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
   public async getCaseDetail(guildId: string, caseId: string): Promise<CaseDetail | null> {
     const summaryResult = await getPostgresPool().query<CaseSummaryRow>(
       `${SUMMARY_QUERY}
-       where ve.server_id = $1 and ve.id = $2 and ve.user_id is not null
+       where ve.server_id = $1 and ve.id::text = $2 and ve.user_id is not null
        limit 1`,
       [guildId, caseId]
     );
@@ -874,11 +874,11 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
     const evidenceQuery = reportIntakeId
       ? getPostgresPool().query<CaseEvidenceRow>(
           `select id, kind, source_message_id, source_channel_id, content, metadata, created_at
-           from report_intake_evidence
-           where intake_id = $1
+           from report_intake_evidence evidence
+           where intake_id = $1 and exists (select 1 from report_intakes ri where ri.id = evidence.intake_id and ri.server_id = $2 and ri.confirmed_target_user_id = $3)
            order by created_at asc nulls last
            limit 25`,
-          [reportIntakeId]
+          [reportIntakeId, guildId, row.user_id]
         )
       : Promise.resolve({ rows: [] as CaseEvidenceRow[] });
 
@@ -972,7 +972,11 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
         input.expectedCaptchaGeneration === null ||
         input.expectedCaptchaGeneration === undefined ||
         detail.captchaChallenge?.id !== input.expectedCaptchaChallengeId ||
-        detail.captchaChallenge.generation !== input.expectedCaptchaGeneration)
+        detail.captchaChallenge.generation !== input.expectedCaptchaGeneration ||
+        (input.expectedCaptchaMethod != null &&
+          detail.captchaChallenge.method !== input.expectedCaptchaMethod) ||
+        (input.expectedCaptchaMethodRevision != null &&
+          detail.captchaChallenge.methodRevision !== input.expectedCaptchaMethodRevision))
     ) {
       return { action: input.action, caseId: input.caseId, requestId: null, status: 'not_allowed' };
     }
@@ -995,6 +999,7 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
       action: input.action,
       caseId: input.caseId,
       requestId: receipt.id,
+      receipt,
       status: resolveCaseActionQueueStatus(receipt.status),
     };
   }
@@ -1024,65 +1029,6 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
   }
 }
 
-export class FixtureActiveCaseDataAdapter implements ActiveCaseDataAdapter {
-  public canQueueCaseActions(): boolean {
-    return true;
-  }
-
-  public async listActiveCases(): Promise<CaseSummary[]> {
-    return sortCaseSummariesForQueue(fixtureActiveCaseSummaries());
-  }
-
-  public async listParkedCases(): Promise<CaseSummary[]> {
-    return fixtureParkedActiveCaseSummaries();
-  }
-
-  public async listResolvedCases(_guildId: string): Promise<CaseSummary[]> {
-    return sortCaseSummariesForHistory(fixtureResolvedCaseSummariesForHistory());
-  }
-
-  public async listCasesForMember(_guildId: string, userId: string): Promise<CaseSummary[]> {
-    return sortCaseSummariesForHistory(
-      [...fixtureActiveCaseSummaries(), ...fixtureResolvedCaseSummariesForHistory()].filter(
-        (item) => item.userId === userId
-      )
-    );
-  }
-
-  public async countResolvedCases(): Promise<number> {
-    return fixtureResolvedCaseCount();
-  }
-
-  public async getCaseDetail(_guildId: string, caseId: string): Promise<CaseDetail | null> {
-    return fixtureActiveCaseDetail(caseId);
-  }
-
-  public async queueCaseAction(input: QueueCaseActionInput): Promise<CaseActionQueueResult> {
-    const detail = fixtureActiveCaseDetail(input.caseId);
-    if (!detail) {
-      return {
-        action: input.action,
-        caseId: input.caseId,
-        requestId: null,
-        status: 'case_not_found',
-      };
-    }
-    if (!detail.allowedActions.includes(input.action)) {
-      return { action: input.action, caseId: input.caseId, requestId: null, status: 'not_allowed' };
-    }
-    return {
-      action: input.action,
-      caseId: input.caseId,
-      requestId: `fixture-case-action-${input.action}-${input.caseId}`,
-      status: 'queued',
-    };
-  }
-}
-
 export function createActiveCaseDataAdapter(): ActiveCaseDataAdapter {
-  if (isWebE2eFixtureMode()) {
-    return new FixtureActiveCaseDataAdapter();
-  }
-
   return new PostgresActiveCaseDataAdapter();
 }

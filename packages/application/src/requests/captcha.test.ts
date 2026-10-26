@@ -117,3 +117,35 @@ test.each(commands)('round trips the shipped $kind request', (command) => {
   ).toEqual(command);
   expect(input.metadata).not.toHaveProperty('actor');
 });
+
+test.each([
+  {
+    kind: 'request_captcha_challenge',
+    caseId: 'case',
+    targetUserId: 'target',
+    expectedConfiguration: { method: 'turnstile', methodRevision: 7 },
+  },
+  {
+    kind: 'retry_captcha_challenge',
+    caseId: 'case',
+    targetUserId: 'target',
+    expectedChallengeId: 'challenge',
+    expectedGeneration: 3,
+    expectedConfiguration: { method: 'turnstile', methodRevision: 7 },
+  },
+] as const)('round trips captured issuance configuration on $kind', (command) => {
+  const input = encodeQueuedAction(context, command);
+  expect(input.metadata).toMatchObject({ expected_configuration: command.expectedConfiguration });
+  expect(
+    decodeQueuedAction({
+      id: 'request',
+      server_id: input.serverId,
+      actor_id: input.actorId,
+      actor_surface: input.actorSurface,
+      action_type: input.actionType,
+      target_user_id: input.targetUserId,
+      verification_event_id: input.verificationEventId,
+      metadata: input.metadata,
+    }).command
+  ).toEqual(command);
+});

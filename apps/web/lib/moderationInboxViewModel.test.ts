@@ -197,3 +197,34 @@ describe('moderationInboxViewModel', () => {
     ]);
   });
 });
+it.each(['newest', 'oldest', 'stale', 'priority'] as const)(
+  'keeps unknown dates last in %s order',
+  (sortMode) => {
+    expect(
+      sortModerationInboxItemsForView(
+        [buildItem('unknown', { updatedAt: null }), buildItem('known')],
+        sortMode
+      ).map((item) => item.id)
+    ).toEqual(['known', 'unknown']);
+  }
+);
+
+it.each(['newest', 'oldest', 'stale', 'priority'] as const)(
+  'breaks known and unknown date ties by ID in %s order regardless of input order',
+  (sortMode) => {
+    const items = [
+      buildItem('known-b'),
+      buildItem('unknown-b', { updatedAt: null }),
+      buildItem('known-a'),
+      buildItem('unknown-a', { updatedAt: null }),
+    ];
+    for (const input of [items, [...items].reverse()]) {
+      expect(sortModerationInboxItemsForView(input, sortMode).map((item) => item.id)).toEqual([
+        'known-a',
+        'known-b',
+        'unknown-a',
+        'unknown-b',
+      ]);
+    }
+  }
+);

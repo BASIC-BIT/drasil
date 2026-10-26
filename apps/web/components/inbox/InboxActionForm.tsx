@@ -61,9 +61,9 @@ function statusClass(status: InboxActionStatus): string {
 function defaultMessage(status: InboxActionStatus): string {
   switch (status) {
     case 'completed':
-      return 'Action completed.';
+      return 'Request completed.';
     case 'failed':
-      return 'Action failed.';
+      return 'Request failed. Refresh the record before another attempt.';
     case 'processing':
       return 'Drasil is processing this action.';
     case 'queued':
@@ -136,7 +136,7 @@ export function InboxActionForm({
     if (!requestId) {
       return;
     }
-    setLocalRequestActive(requestId, actionInFlight);
+    setLocalRequestActive(requestId, actionInFlight, durableUpdatedAtAtSubmit.current);
   }, [actionInFlight, requestId, setLocalRequestActive]);
 
   return (
@@ -144,7 +144,11 @@ export function InboxActionForm({
       action={formAction}
       aria-label={`${buttonLabel} action`}
       className={formClassName}
-      onSubmit={() => {
+      onSubmit={(event) => {
+        if (submitting) {
+          event.preventDefault();
+          return;
+        }
         durableUpdatedAtAtSubmit.current = durableRequest?.updatedAt ?? null;
         setSubmitting(true);
       }}

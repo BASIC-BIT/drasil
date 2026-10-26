@@ -91,14 +91,14 @@ describe('inboxActionReceipts', () => {
     expect(findInboxActionRequest([reportRequest], observedItem!, 'open_case')).toBeNull();
   });
 
-  it('reconciles a combined cleanup request with the case ban action', () => {
+  it('does not attach a combined cleanup request to the ordinary case ban action', () => {
     const request = buildRequest({
       actionType: 'ban_case_user_with_message_cleanup',
       messageDeletionJobId: 'cleanup-job-1',
       verificationEventId: caseItem!.sourceId,
     });
 
-    expect(findInboxActionRequest([request], caseItem!, 'ban_user')?.id).toBe(request.id);
+    expect(findInboxActionRequest([request], caseItem!, 'ban_user')).toBeNull();
   });
 
   it('matches cleanup execution receipts to the frozen job', () => {
@@ -196,4 +196,66 @@ it('allows a new explicit action after review but blocks a later unknown attempt
       observedBanResult: { status: 'ban_outcome_unknown', operationId: 'request-1' },
     })
   ).toBe(true);
+});
+
+import { matchesWorkspaceActionRequest } from './inboxActionReceipts';
+it('ignores stale failed snapshots while a local retry is waiting', () => {
+  const ids = new Set(['retry-1']);
+  const request = buildRequest({ id: 'retry-1', status: 'failed', updatedAt: 'old' });
+  expect(reconcileLocalInboxActionRequestIds(ids, [request], new Map([['retry-1', 'old']]))).toBe(
+    ids
+  );
+  expect(
+    reconcileLocalInboxActionRequestIds(
+      ids,
+      [{ ...request, updatedAt: 'new' }],
+      new Map([['retry-1', 'old']])
+    )
+  ).toEqual(new Set());
+});
+it('matches workspace durable requests by record, action and member', () => {
+  const request = buildRequest({
+    actionType: 'ban_observed_detection',
+    detectionEventId: 'detection-1',
+    targetUserId: 'member-1',
+    requestedAction: 'ban_user',
+  });
+  const target = {
+    kind: 'observed_alert',
+    recordId: 'detection-1',
+    targetUserId: 'member-1',
+  } as const;
+  expect(matchesWorkspaceActionRequest(request, target, 'ban_user')).toBe(true);
+  expect(
+    matchesWorkspaceActionRequest(request, { ...target, targetUserId: 'other' }, 'ban_user')
+  ).toBe(false);
+  expect(matchesWorkspaceActionRequest(request, { ...target, recordId: 'other' }, 'ban_user')).toBe(
+    false
+  );
+  expect(matchesWorkspaceActionRequest(request, target, 'kick_user')).toBe(false);
+});
+
+it('retains polling when a delayed failed refresh predates the retry baseline', () => {
+  const ids = new Set(['retry-1']);
+  expect(
+    reconcileLocalInboxActionRequestIds(
+      ids,
+      [buildRequest({ id: 'retry-1', status: 'failed', updatedAt: '2026-10-25T12:00:00.000Z' })],
+      new Map([['retry-1', '2026-10-25T12:01:00.000Z']])
+    )
+  ).toBe(ids);
+});
+
+it('keeps a dedicated cleanup ban receipt out of the ordinary case-ban action', () => {
+  const request = buildRequest({
+    actionType: 'ban_case_user_with_message_cleanup',
+    verificationEventId: 'case-1',
+    targetUserId: 'member',
+    messageDeletionJobId: 'job-1',
+  });
+  const target = { kind: 'case' as const, recordId: 'case-1', targetUserId: 'member' };
+  expect(matchesWorkspaceActionRequest(request, target, 'ban_user')).toBe(false);
+  expect(matchesWorkspaceActionRequest(request, target, 'ban_case_user_with_message_cleanup')).toBe(
+    true
+  );
 });

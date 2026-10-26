@@ -9,6 +9,9 @@ build/
 .next/
 .vercel/
 apps/web/.next/
+apps/web/.next-legacy-test/
+apps/web/workspace-test-results/
+apps/web/storybook-test-results/
 apps/web/.vercel/
 apps/web/playwright-report/
 apps/web/storybook-static/
@@ -94,3 +97,6 @@ Thumbs.db
 repomix-output.xml
 
 .vercel
+
+# Per-plan subagent execution artifacts
+.superpowers/sdd/

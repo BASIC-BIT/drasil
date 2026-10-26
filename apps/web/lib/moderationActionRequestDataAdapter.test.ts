@@ -21,6 +21,8 @@ describe('moderationActionRequestDataAdapter', () => {
       id: 'request-1',
       actionType: 'clear_moderation_queue',
       actorSurface: 'web',
+      actorUserId: null,
+      accountQuarantinePreviewRequestId: null,
       completedAt: '2026-06-08T01:20:00.000Z',
       detectionEventId: null,
       failedAt: null,
@@ -368,3 +370,49 @@ it.each(['preparing', 'enforcement_started', 'discord_confirmed', 'reconciliatio
     ).toEqual({ status: 'banned' });
   }
 );
+
+it('exposes only the persisted repeat security generation for receipt correlation', () => {
+  const request = parseModerationActionRequestRow({
+    id: 'retry-2',
+    action_type: 'retry_captcha_challenge',
+    actor_surface: 'web',
+    requested_at: '2026-10-25T11:00:00Z',
+    updated_at: '2026-10-25T11:00:00Z',
+    completed_at: null,
+    failed_at: null,
+    last_error: null,
+    result: null,
+    status: 'queued',
+    target_user_id: 'member-1',
+    verification_event_id: 'case-1',
+    metadata: {
+      expected_challenge_id: 'challenge-1',
+      expected_generation: 2,
+      expected_configuration: { method: 'turnstile', methodRevision: 8 },
+    },
+  });
+  expect(request.captchaBinding).toEqual({ challengeId: 'challenge-1', generation: 2 });
+  expect(request.captchaConfiguration).toEqual({ method: 'turnstile', methodRevision: 8 });
+});
+it('preserves the persisted cleanup intent token for exact lost-response correlation', () => {
+  const result = parseModerationActionRequestRow({
+    id: 'request',
+    server_id: 'guild',
+    verification_event_id: 'case',
+    action_type: 'execute_case_message_deletion',
+    actor_surface: 'web_case',
+    actor_id: 'admin',
+    idempotency_key:
+      'message-cleanup:execute_case_message_deletion:guild:case:admin:execute-token-123',
+    completed_at: null,
+    failed_at: null,
+    last_error: null,
+    requested_at: '2026-10-25T12:00:00Z',
+    updated_at: '2026-10-25T12:00:00Z',
+    result: null,
+    status: 'queued',
+    target_user_id: 'user',
+    message_deletion_job_id: 'job',
+  });
+  expect(result.cleanupIntentToken).toBe('execute-token-123');
+});

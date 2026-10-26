@@ -59,3 +59,20 @@ describe('report contracts', () => {
     });
   });
 });
+
+import { reportIntakeStatusSchema, reportAttentionRecordSchema } from './reports';
+it('keeps all intake stages separate from reviewed report status', () => {
+  expect(reportIntakeStatusSchema.options).toHaveLength(9);
+  expect(reportIntakeStatusSchema.parse('collecting_evidence')).toBe('collecting_evidence');
+  expect(reportAttentionRecordSchema.shape.status.safeParse('closed_by_reporter').success).toBe(
+    true
+  );
+});
+it('sorts reports with unknown update dates last', () => {
+  expect(
+    sortReportQueueItems([
+      { ...baseReport, id: 'unknown', updatedAt: null },
+      { ...baseReport, id: 'known' },
+    ]).map((item) => item.id)
+  ).toEqual(['known', 'unknown']);
+});

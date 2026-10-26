@@ -1,13 +1,21 @@
+import type { WorkspaceConfirmedActionId } from './workspaceActionTypes';
+import { isStaleInboxActionFailure } from './inboxActionState';
 import type { ModerationInboxAction, ModerationInboxItem } from '@drasil/contracts';
 import type { ModerationActionRequestSummary } from './moderationActionRequestDataAdapter';
 import type { ModerationActionRequestActionType } from './moderationActionRequestQueue';
 import type { MessageCleanupJobSummary } from '@drasil/contracts';
 
 const requestTypeByAction: Partial<
-  Record<ModerationInboxAction, readonly ModerationActionRequestActionType[]>
+  Record<WorkspaceConfirmedActionId, readonly ModerationActionRequestActionType[]>
 > = {
+  preview_case_message_deletion: ['preview_case_message_deletion'],
+  execute_case_message_deletion: ['execute_case_message_deletion'],
+  ban_case_user_with_message_cleanup: ['ban_case_user_with_message_cleanup'],
   ban_by_id: ['ban_case_user_by_id'],
-  ban_user: ['ban_case_user', 'ban_case_user_with_message_cleanup', 'ban_observed_detection'],
+  challenge_user: ['request_captcha_challenge'],
+  retry_captcha: ['retry_captcha_challenge'],
+  bypass_captcha: ['bypass_captcha_challenge'],
+  ban_user: ['ban_case_user', 'ban_observed_detection'],
   close_no_action: ['close_case_no_action'],
   create_thread: ['repair_active_case'],
   dismiss_no_action: ['dismiss_observed_detection'],
@@ -110,10 +118,13 @@ export function hasActiveInboxActionRequests(
 
 export function reconcileLocalInboxActionRequestIds(
   localRequestIds: ReadonlySet<string>,
-  serverRequests: readonly ModerationActionRequestSummary[]
+  serverRequests: readonly ModerationActionRequestSummary[],
+  ignoredFailedSnapshots: ReadonlyMap<string, string | null> = new Map()
 ): ReadonlySet<string> {
   const next = new Set(localRequestIds);
   for (const request of serverRequests) {
+    if (isStaleInboxActionFailure(request, ignoredFailedSnapshots.get(request.id) ?? null))
+      continue;
     if (request.status === 'completed' || request.status === 'failed') {
       next.delete(request.id);
     }
@@ -130,4 +141,35 @@ export function blocksBanResubmission(request: ModerationActionRequestSummary | 
       request.observedBanResult?.status === 'banned_updates_pending' ||
       request.observedBanResult?.status === 'ban_outcome_unknown')
   );
+}
+
+export interface WorkspaceRequestTarget {
+  readonly guildId?: string;
+  readonly kind: 'case' | 'submitted_report' | 'observed_alert' | 'attention';
+  readonly recordId: string;
+  readonly targetUserId: string | null;
+}
+export function matchesWorkspaceActionRequest(
+  request: ModerationActionRequestSummary,
+  target: WorkspaceRequestTarget,
+  action: WorkspaceConfirmedActionId
+): boolean {
+  const types = requestTypeByAction[action];
+  if (
+    (target.guildId && request.guildId && request.guildId !== target.guildId) ||
+    !types?.includes(request.actionType) ||
+    (request.requestedAction && request.requestedAction !== action) ||
+    request.targetUserId !== target.targetUserId
+  )
+    return false;
+  switch (target.kind) {
+    case 'case':
+      return request.verificationEventId === target.recordId;
+    case 'submitted_report':
+      return request.reportIntakeId === target.recordId;
+    case 'observed_alert':
+      return request.reportIntakeId === null && request.detectionEventId === target.recordId;
+    case 'attention':
+      return false;
+  }
 }

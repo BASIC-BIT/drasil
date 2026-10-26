@@ -35,3 +35,15 @@ describe('PostgresModerationActionRequestDataAdapter setup requests', () => {
     expect(parameters).toEqual(['guild-1', 'request-1']);
   });
 });
+
+it('reads an exact moderation request without limiting it to setup or recent results', async () => {
+  mocks.query.mockResolvedValue({ rows: [] });
+  expect(
+    await new PostgresModerationActionRequestDataAdapter().getRequest('guild-2', 'old-request')
+  ).toBeNull();
+  const [sql, parameters] = mocks.query.mock.calls[mocks.query.mock.calls.length - 1];
+  expect(parameters).toEqual(['guild-2', 'old-request']);
+  expect(sql).toContain('server_id = $1');
+  expect(sql).toContain('id::text = $2');
+  expect(sql).not.toContain('complete_setup_verification');
+});

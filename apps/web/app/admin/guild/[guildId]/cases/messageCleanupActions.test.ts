@@ -92,6 +92,10 @@ function cleanupForm(overrides: Record<string, string> = {}): FormData {
   const form = new FormData();
   const values = {
     confirmAction: 'on',
+    confirmedRecordId: CASE_ID,
+    confirmedTargetUserId: 'user-1',
+    expectedCandidateCount: '4',
+    expectedPreviewedAt: readyJob.previewed_at,
     idempotencyKey: 'submission_123456',
     jobId: JOB_ID,
     mode: 'delete_only',
@@ -261,7 +265,7 @@ describe('messageCleanupActions execution', () => {
       'guild-1',
       CASE_ID,
       initialInboxActionState,
-      cleanupForm()
+      cleanupForm({ expectedCandidateCount: '101' })
     );
 
     expect(state.status).toBe('failed');
@@ -386,8 +390,9 @@ describe('messageCleanupActions execution', () => {
     });
   });
 
-  it('returns an existing completed execute receipt before mutable case or job checks', async () => {
+  it('returns an existing completed execute receipt after fresh identity confirmation without rerunning execution eligibility', async () => {
     const { query } = databaseClient((text) => {
+      if (text.includes('from verification_events')) return [{ ...caseRow, status: 'banned' }];
       if (text.includes('where idempotency_key')) {
         return [
           {
@@ -417,11 +422,11 @@ describe('messageCleanupActions execution', () => {
       status: 'completed',
     });
     const statements = query.mock.calls.map(([text]) => text as string);
-    expect(statements.some((text) => text.includes('from verification_events'))).toBe(false);
+    expect(statements.some((text) => text.includes('from verification_events'))).toBe(true);
     expect(statements.some((text) => text.includes('from message_deletion_jobs'))).toBe(false);
   });
 
-  it('returns deterministic fixture receipts before UUID and database checks', async () => {
+  it('runtime fixture flags cannot bypass UUID and database checks', async () => {
     vi.stubEnv('DRASIL_WEB_E2E_FIXTURE_MODE', 'true');
 
     const state = await previewCaseMessageCleanup(
@@ -432,9 +437,9 @@ describe('messageCleanupActions execution', () => {
     );
 
     expect(state).toEqual({
-      message: 'Message cleanup preview queued.',
-      requestId: 'fixture-preview_case_message_deletion-submission_123456',
-      status: 'queued',
+      message: 'Case id is invalid.',
+      requestId: null,
+      status: 'failed',
     });
     expect(mocks.connect).not.toHaveBeenCalled();
   });
@@ -510,4 +515,117 @@ describe('messageCleanupActions execution', () => {
     });
     expect(query.mock.calls.some(([text]) => (text as string).startsWith('update'))).toBe(false);
   });
+});
+
+describe('cleanup contextual intent', () => {
+  it.each([
+    { confirmedRecordId: 'other-case' },
+    { confirmedTargetUserId: 'other-member' },
+    { expectedCandidateCount: '3' },
+    { expectedPreviewedAt: '2026-07-08T17:00:00.000Z' },
+  ])('rejects stale intent before enqueue: %j', async (fields) => {
+    const { query } = databaseClient((text) => {
+      if (text.includes('from verification_events')) return [caseRow];
+      if (text.includes('from message_deletion_jobs')) return [readyJob];
+      if (text.includes('insert into moderation_action_requests'))
+        return [{ id: REQUEST_ID, status: 'queued' }];
+      return [];
+    });
+    const state = await executeCaseMessageCleanup(
+      'guild-1',
+      CASE_ID,
+      initialInboxActionState,
+      cleanupForm(
+        Object.fromEntries(
+          Object.entries(fields).filter(
+            (entry): entry is [string, string] => typeof entry[1] === 'string'
+          )
+        )
+      )
+    );
+    expect(state.status).toBe('failed');
+    expect(
+      query.mock.calls.some(([text]) => text.includes('insert into moderation_action_requests'))
+    ).toBe(false);
+  });
+  it('requires preview confirmation against the freshly locked target', async () => {
+    const { query } = databaseClient((text) => {
+      if (text.includes('from verification_events')) return [caseRow];
+      if (text.includes('insert into message_deletion_jobs')) return [{ id: JOB_ID }];
+      if (text.includes('insert into moderation_action_requests'))
+        return [{ id: REQUEST_ID, status: 'queued' }];
+      return [];
+    });
+    const state = await previewCaseMessageCleanup(
+      'guild-1',
+      CASE_ID,
+      initialInboxActionState,
+      cleanupForm({ confirmedTargetUserId: 'stale-member' })
+    );
+    expect(state.status).toBe('failed');
+    expect(
+      query.mock.calls.some(([text]) => text.includes('insert into message_deletion_jobs'))
+    ).toBe(false);
+  });
+});
+it.each(['', '   ', 'x'.repeat(1001)])(
+  'rejects an invalid cleanup reason before a write (%s)',
+  async (reason) => {
+    const state = await previewCaseMessageCleanup(
+      'guild-1',
+      CASE_ID,
+      initialInboxActionState,
+      cleanupForm({ reason })
+    );
+    expect(state.status).toBe('failed');
+    expect(mocks.connect).not.toHaveBeenCalled();
+  }
+);
+it('continues the same completed job after the case ban was committed but finalization failed', async () => {
+  const { query } = databaseClient((text) => {
+    if (text.includes('from verification_events')) return [{ ...caseRow, status: 'banned' }];
+    if (text.includes('from message_deletion_jobs'))
+      return [
+        {
+          ...readyJob,
+          mode: 'ban_with_cleanup',
+          status: 'completed',
+          ban_status: 'succeeded',
+          case_finalization_status: 'failed',
+        },
+      ];
+    if (text.includes('insert into moderation_action_requests'))
+      return [{ id: REQUEST_ID, messageDeletionJobId: JOB_ID, status: 'queued' }];
+    return [];
+  });
+  const result = await banCaseUserWithMessageCleanup(
+    'guild-1',
+    CASE_ID,
+    initialInboxActionState,
+    cleanupForm({ mode: 'ban_with_cleanup' })
+  );
+  expect(result.status).toBe('queued');
+  const insert = query.mock.calls.find(([text]) =>
+    text.includes('insert into moderation_action_requests')
+  );
+  expect(insert?.[1]).toContain(JOB_ID);
+  expect(
+    query.mock.calls.some(([text]) => text.includes('insert into message_deletion_jobs'))
+  ).toBe(false);
+});
+it('does not execute an ordinary ready cleanup job after the case resolved', async () => {
+  databaseClient((text) =>
+    text.includes('from verification_events')
+      ? [{ ...caseRow, status: 'banned' }]
+      : text.includes('from message_deletion_jobs')
+        ? [readyJob]
+        : []
+  );
+  const result = await executeCaseMessageCleanup(
+    'guild-1',
+    CASE_ID,
+    initialInboxActionState,
+    cleanupForm()
+  );
+  expect(result.status).toBe('failed');
 });

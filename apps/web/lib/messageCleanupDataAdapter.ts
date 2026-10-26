@@ -4,12 +4,12 @@ import {
   getMessageCleanupExecutionEligibility,
   messageCleanupCaseStatusSchema,
   messageCleanupCaseWorkspaceSchema,
+  messageCleanupItemSchema,
   messageCleanupJobDetailSchema,
   messageCleanupJobSummarySchema,
-  messageCleanupItemSchema,
-  type MessageCleanupCaseWorkspace,
   type MessageCleanupBanStatus,
   type MessageCleanupCaseFinalizationStatus,
+  type MessageCleanupCaseWorkspace,
   type MessageCleanupCoverage,
   type MessageCleanupItem,
   type MessageCleanupJobDetail,
@@ -21,11 +21,6 @@ import {
 } from '@drasil/contracts';
 import type { QueryResultRow } from 'pg';
 import { discordMessageUrl } from './discordUrls';
-import { isWebE2eFixtureMode } from './e2eFixtures';
-import {
-  fixtureMessageCleanupCaseWorkspaces,
-  fixtureMessageCleanupJobDetails,
-} from './messageCleanupFixtures';
 import { getPostgresPool } from './setupDataAdapter';
 
 export interface MessageCleanupDataAdapter {
@@ -415,59 +410,6 @@ export class PostgresMessageCleanupDataAdapter implements MessageCleanupDataAdap
   }
 }
 
-export class FixtureMessageCleanupDataAdapter implements MessageCleanupDataAdapter {
-  public async getCaseWorkspace(
-    guildId: string,
-    verificationEventId: string
-  ): Promise<MessageCleanupCaseWorkspace | null> {
-    const workspace = fixtureMessageCleanupCaseWorkspaces.find(
-      (candidate) =>
-        candidate.guildId === guildId && candidate.verificationEventId === verificationEventId
-    );
-    return workspace ? messageCleanupCaseWorkspaceSchema.parse(workspace) : null;
-  }
-
-  public async listCaseWorkspaces(
-    guildId: string,
-    verificationEventIds: readonly string[]
-  ): Promise<MessageCleanupCaseWorkspace[]> {
-    const caseIds = new Set(verificationEventIds);
-    return fixtureMessageCleanupCaseWorkspaces
-      .filter(
-        (workspace) => workspace.guildId === guildId && caseIds.has(workspace.verificationEventId)
-      )
-      .map((workspace) => messageCleanupCaseWorkspaceSchema.parse(workspace));
-  }
-
-  public async listLatestJobs(
-    guildId: string,
-    verificationEventId: string,
-    limit = MESSAGE_CLEANUP_LATEST_JOB_LIMIT
-  ): Promise<MessageCleanupJobSummary[]> {
-    return fixtureMessageCleanupJobDetails
-      .filter((job) => job.guildId === guildId && job.verificationEventId === verificationEventId)
-      .slice(0, toLatestJobLimit(limit))
-      .map((job) => messageCleanupJobSummarySchema.parse(job));
-  }
-
-  public async getJobDetail(
-    guildId: string,
-    verificationEventId: string,
-    jobId: string
-  ): Promise<MessageCleanupJobDetail | null> {
-    const detail = fixtureMessageCleanupJobDetails.find(
-      (candidate) =>
-        candidate.guildId === guildId &&
-        candidate.verificationEventId === verificationEventId &&
-        candidate.id === jobId
-    );
-    return detail ? messageCleanupJobDetailSchema.parse(detail) : null;
-  }
-}
-
 export function createMessageCleanupDataAdapter(): MessageCleanupDataAdapter {
-  if (isWebE2eFixtureMode()) {
-    return new FixtureMessageCleanupDataAdapter();
-  }
   return new PostgresMessageCleanupDataAdapter();
 }

@@ -1,7 +1,6 @@
 import type { ActionResult, AttentionOutcome, QueueActionActor } from '@drasil/application';
-import { createWebApplication, type WebApplication } from './application/createWebApplication';
 import { createWebActionContext } from './application/context';
-import { isWebE2eFixtureMode } from './e2eFixtures';
+import { createWebApplication, type WebApplication } from './application/createWebApplication';
 
 export type { QueueAttentionAcknowledgeStatus } from '@drasil/application';
 interface AttentionInput {
@@ -45,26 +44,6 @@ export class PostgresQueueAttentionActionAdapter implements QueueAttentionAction
     return results.map(unwrap);
   }
 }
-export class FixtureQueueAttentionActionAdapter implements QueueAttentionActionAdapter {
-  public async acknowledgeAttentionItem(input: AttentionInput): Promise<AttentionOutcome> {
-    return {
-      actor: input.actor,
-      itemId: input.queueItemId,
-      status: input.queueItemId === 'queue-support-1' ? 'already_handled' : 'acknowledged',
-    };
-  }
-  public async acknowledgeAttentionItems(
-    input: AttentionBatchInput
-  ): Promise<readonly AttentionOutcome[]> {
-    return Promise.all(
-      input.queueItemIds.map((queueItemId) =>
-        this.acknowledgeAttentionItem({ ...input, queueItemId })
-      )
-    );
-  }
-}
 export function createQueueAttentionActionAdapter(): QueueAttentionActionAdapter {
-  return isWebE2eFixtureMode()
-    ? new FixtureQueueAttentionActionAdapter()
-    : new PostgresQueueAttentionActionAdapter();
+  return new PostgresQueueAttentionActionAdapter();
 }

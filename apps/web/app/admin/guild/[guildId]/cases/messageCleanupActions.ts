@@ -1,20 +1,31 @@
 'use server';
 
+import { createWebConfirmationPort } from '@/lib/application/context';
+import {
+  failedInboxActionState,
+  queuedInboxActionState,
+  type InboxActionState,
+} from '@/lib/inboxActionState';
+import type {
+  ModerationActionRequestActionType,
+  ModerationActionRequestQueueStatus,
+  ModerationActionRequestReceipt,
+} from '@/lib/moderationActionRequestQueue';
+import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
+import { createSetupDashboardService } from '@/lib/setupDashboardService';
+import { createSetupDataAdapter, getPostgresPool } from '@/lib/setupDataAdapter';
+import { assertWorkspaceConfirmation, resolveWorkspaceReturnTo } from '@/lib/workspaceConfirmation';
 import {
   authorizeMessageCleanup,
-  checkMessageCleanupSubmission,
   canSubmitMessageCleanup,
-  isMessageCleanupFinalizationContinuation,
+  checkMessageCleanupSubmission,
   encodeQueuedAction,
+  isMessageCleanupFinalizationContinuation,
   messageCleanupSubmissionKey,
   type ActionContext,
   type MessageCleanupCommand,
   type MessageCleanupJob,
 } from '@drasil/application';
-import { createWebConfirmationPort } from '@/lib/application/context';
-import { randomUUID } from 'node:crypto';
-import { revalidatePath } from 'next/cache';
-import { redirect } from 'next/navigation';
 import {
   MESSAGE_CLEANUP_REASON_MAX_LENGTH,
   messageCleanupJobModeSchema,
@@ -26,21 +37,10 @@ import {
   type MessageCleanupJobStatus,
   type MessageCleanupScope,
 } from '@drasil/contracts';
+import { revalidatePath } from 'next/cache';
+import { redirect } from 'next/navigation';
+import { randomUUID } from 'node:crypto';
 import type { PoolClient, QueryResultRow } from 'pg';
-import {
-  failedInboxActionState,
-  queuedInboxActionState,
-  type InboxActionState,
-} from '@/lib/inboxActionState';
-import type {
-  ModerationActionRequestActionType,
-  ModerationActionRequestQueueStatus,
-  ModerationActionRequestReceipt,
-} from '@/lib/moderationActionRequestQueue';
-import { isWebE2eFixtureMode } from '@/lib/e2eFixtures';
-import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
-import { createSetupDataAdapter, getPostgresPool } from '@/lib/setupDataAdapter';
-import { createSetupDashboardService } from '@/lib/setupDashboardService';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const IDEMPOTENCY_TOKEN_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
@@ -129,10 +129,15 @@ function assertConfirmed(formData: FormData): void {
   }
 }
 
-async function cleanupActor(guildId: string, caseId: string): Promise<string> {
+async function cleanupActor(guildId: string, caseId: string, formData: FormData): Promise<string> {
   const [session, token] = await Promise.all([getCurrentAdminSession(), getCurrentDiscordToken()]);
   if (!session || !token) {
-    redirect(`/api/auth/discord?returnTo=/admin/guild/${guildId}/cases/${caseId}`);
+    const returnTo = resolveWorkspaceReturnTo(
+      formData,
+      guildId,
+      `/admin/guild/${guildId}/cases/${caseId}`
+    );
+    redirect(`/api/auth/discord?returnTo=${encodeURIComponent(returnTo)}`);
   }
   const guild = await createSetupDashboardService().assertCanManageGuild(
     guildId,
@@ -187,7 +192,8 @@ async function inTransaction<T>(work: (client: PoolClient) => Promise<T>): Promi
 async function lockPendingCase(
   client: PoolClient,
   guildId: string,
-  caseId: string
+  caseId: string,
+  requirePending = true
 ): Promise<CleanupCaseRow> {
   const result = await client.query<CleanupCaseRow>(
     `select id::text, server_id, user_id, detection_event_id::text,
@@ -199,7 +205,7 @@ async function lockPendingCase(
   );
   const row = result.rows[0];
   if (!row) throw new Error('The moderation case was not found.');
-  if (row.status !== 'pending') {
+  if (requirePending && row.status !== 'pending') {
     throw new Error('Message cleanup is only available while the case is pending.');
   }
   if (!row.user_id) throw new Error('The moderation case does not have a target user.');
@@ -425,7 +431,8 @@ async function queuePreview(
   guildId: string,
   caseId: string,
   actorId: string,
-  values: CleanupFormValues
+  values: CleanupFormValues,
+  formData: FormData
 ): Promise<ModerationActionRequestReceipt> {
   const actionType = 'preview_case_message_deletion' as const;
   const key = messageCleanupSubmissionKey(
@@ -434,6 +441,7 @@ async function queuePreview(
   );
   return inTransaction(async (client) => {
     const caseRow = await lockPendingCase(client, guildId, caseId);
+    assertWorkspaceConfirmation(formData, { recordId: caseRow.id, targetUserId: caseRow.user_id });
     const existing = await findRequest(client, key);
     if (existing) {
       assertRequestMatches(existing, actionType, caseRow.server_id, caseRow.id, actorId);
@@ -504,14 +512,26 @@ async function queueFrozenJob(
     { kind: actionType, caseId }
   );
   return inTransaction(async (client) => {
+    const caseRow = await lockPendingCase(client, guildId, caseId, false);
+    assertWorkspaceConfirmation(formData, { recordId: caseRow.id, targetUserId: caseRow.user_id });
     const existing = await findRequest(client, key);
     if (existing) {
       assertRequestMatches(existing, actionType, guildId, caseId, actorId, jobId);
       return requestReceipt(existing);
     }
 
-    const caseRow = await lockPendingCase(client, guildId, caseId);
     const job = await lockJob(client, jobId);
+    if (
+      caseRow.status !== 'pending' &&
+      !(caseRow.status === 'banned' && isMessageCleanupFinalizationContinuation(projectJob(job)))
+    )
+      throw new Error('Message cleanup is only available while the case is pending.');
+    if (
+      formData.get('expectedCandidateCount') !== String(job.candidate_count) ||
+      formData.get('expectedPreviewedAt') !== (projectJob(job).generation ?? '')
+    ) {
+      throw new Error('The cleanup preview changed. Refresh the case before continuing.');
+    }
     const context = cleanupContext(guildId, actorId, values.idempotencyToken);
     const command = cleanupCommand(actionType, caseRow, jobId, values, projectJob(job).generation);
     if (values.mode !== expectedMode)
@@ -533,34 +553,6 @@ async function queueFrozenJob(
   });
 }
 
-function fixtureCleanupReceipt(
-  actionType:
-    | 'preview_case_message_deletion'
-    | 'execute_case_message_deletion'
-    | 'ban_case_user_with_message_cleanup',
-  formData: FormData,
-  expectedMode: MessageCleanupJobMode,
-  message: string
-): InboxActionState {
-  const values = cleanupFormValues(formData);
-  if (values.mode !== expectedMode) {
-    throw new Error('The cleanup action does not match the frozen preview mode.');
-  }
-  const submittedJobId = formData.get('jobId');
-  const jobId =
-    typeof submittedJobId === 'string' && submittedJobId.trim()
-      ? submittedJobId.trim()
-      : `fixture-preview-${values.idempotencyToken}`;
-  return queuedInboxActionState(
-    {
-      id: `fixture-${actionType}-${values.idempotencyToken}`,
-      messageDeletionJobId: jobId,
-      status: 'queued',
-    },
-    message
-  );
-}
-
 function revalidateCleanupPaths(guildId: string, caseId: string): void {
   revalidatePath(`/admin/guild/${guildId}/inbox`);
   revalidatePath(`/admin/guild/${guildId}/cases`);
@@ -575,18 +567,10 @@ export async function previewCaseMessageCleanup(
   formData: FormData
 ): Promise<InboxActionState> {
   try {
-    if (isWebE2eFixtureMode()) {
-      return fixtureCleanupReceipt(
-        'preview_case_message_deletion',
-        formData,
-        messageCleanupJobModeSchema.parse(requiredFormString(formData, 'mode')),
-        'Message cleanup preview queued.'
-      );
-    }
     requireUuid(caseId, 'Case id');
     const values = cleanupFormValues(formData);
-    const actorId = await cleanupActor(guildId, caseId);
-    const receipt = await queuePreview(guildId, caseId, actorId, values);
+    const actorId = await cleanupActor(guildId, caseId, formData);
+    const receipt = await queuePreview(guildId, caseId, actorId, values, formData);
     revalidateCleanupPaths(guildId, caseId);
     return queuedInboxActionState(receipt, 'Message cleanup preview queued.');
   } catch (error) {
@@ -601,20 +585,11 @@ export async function executeCaseMessageCleanup(
   formData: FormData
 ): Promise<InboxActionState> {
   try {
-    if (isWebE2eFixtureMode()) {
-      assertConfirmed(formData);
-      return fixtureCleanupReceipt(
-        'execute_case_message_deletion',
-        formData,
-        'delete_only',
-        'Message cleanup queued.'
-      );
-    }
     requireUuid(caseId, 'Case id');
     assertConfirmed(formData);
     const jobId = requireUuid(requiredFormString(formData, 'jobId'), 'Cleanup job id');
     const values = cleanupFormValues(formData);
-    const actorId = await cleanupActor(guildId, caseId);
+    const actorId = await cleanupActor(guildId, caseId, formData);
     const receipt = await queueFrozenJob(
       guildId,
       caseId,
@@ -639,20 +614,11 @@ export async function banCaseUserWithMessageCleanup(
   formData: FormData
 ): Promise<InboxActionState> {
   try {
-    if (isWebE2eFixtureMode()) {
-      assertConfirmed(formData);
-      return fixtureCleanupReceipt(
-        'ban_case_user_with_message_cleanup',
-        formData,
-        'ban_with_cleanup',
-        'Ban and message cleanup queued.'
-      );
-    }
     requireUuid(caseId, 'Case id');
     assertConfirmed(formData);
     const jobId = requireUuid(requiredFormString(formData, 'jobId'), 'Cleanup job id');
     const values = cleanupFormValues(formData);
-    const actorId = await cleanupActor(guildId, caseId);
+    const actorId = await cleanupActor(guildId, caseId, formData);
     const banActionEnabled = await moderatorBanActionEnabled(guildId);
     const receipt = await queueFrozenJob(
       guildId,

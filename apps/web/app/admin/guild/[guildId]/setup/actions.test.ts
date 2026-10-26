@@ -1,3 +1,5 @@
+import * as setupData from '@/lib/setupDataAdapter';
+import { FixtureSetupDataAdapter } from '@/e2e/legacy/setupDataAdapter';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -6,6 +8,16 @@ const mocks = vi.hoisted(() => ({
   assertCanManageGuild: vi.fn(),
   queue: vi.fn(),
 }));
+
+vi.mock('@/lib/application/adapters/authority', () => ({
+  createWebAuthority: () => ({
+    loadFresh: async (guildId: string, userId: string) =>
+      userId === 'fixture-admin'
+        ? { guildId, userId, present: true, owner: true, permissions: '8', roleIds: [] }
+        : null,
+  }),
+}));
+
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 vi.mock('next/navigation', () => ({
   redirect: (path: string) => {
@@ -28,6 +40,10 @@ import {
   queueReportInstructionsRepair,
   queueReportInstructionsRepost,
 } from './actions';
+
+vi.spyOn(setupData, 'createSetupDataAdapter').mockImplementation(
+  () => new FixtureSetupDataAdapter()
+);
 
 describe('report panel setup actions', () => {
   beforeEach(() => {

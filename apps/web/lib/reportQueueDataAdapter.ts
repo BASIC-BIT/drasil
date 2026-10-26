@@ -1,4 +1,10 @@
-import { readFixtureReportBan } from './reportBanFixtures';
+import type {
+  ActionContext,
+  CloseSubmittedReportResult,
+  OpenSubmittedReportCaseResult,
+  ReportClosureAction,
+  ReportReviewActions,
+} from '@drasil/application';
 import {
   reportQueueItemSchema,
   sortReportQueueItems,
@@ -6,18 +12,10 @@ import {
   type ReportQueueItem,
   type ReportQueueStatus,
 } from '@drasil/contracts';
-import type {
-  ActionContext,
-  ReportReviewActions,
-  ReportClosureAction,
-  OpenSubmittedReportCaseResult,
-} from '@drasil/application';
 import { createWebApplication } from './application/createWebApplication';
-import { fixtureSubmittedReports } from './reportFixtures';
 import { discordMessageUrl } from './discordUrls';
-import { isWebE2eFixtureMode } from './e2eFixtures';
-import { getPostgresPool } from './setupDataAdapter';
 import { resolveReportSummarySource } from './reportSummaryProvenance';
+import { getPostgresPool } from './setupDataAdapter';
 
 export type { ReportClosureAction } from '@drasil/application';
 
@@ -31,7 +29,7 @@ export interface ReportQueueDataAdapter {
       reportId: string;
       action: ReportClosureAction;
     }
-  ): Promise<boolean>;
+  ): Promise<CloseSubmittedReportResult>;
   openCaseFromSubmittedReport(
     context: ActionContext,
     input: {
@@ -60,14 +58,14 @@ interface ReportQueueRow {
 
 const DEFAULT_STALE_HOURS = 24;
 
-function toIsoString(value: unknown): string {
+function toIsoString(value: unknown): string | null {
   if (value instanceof Date) {
     return value.toISOString();
   }
   if (typeof value === 'string') {
     return new Date(value).toISOString();
   }
-  return new Date(0).toISOString();
+  return null;
 }
 
 function toEvidenceCount(value: string | number | null): number {
@@ -111,8 +109,10 @@ function resolveAllowedActions(row: ReportQueueRow): ReportQueueAction[] {
 }
 
 export function parseReportQueueRow(row: ReportQueueRow, now = new Date()): ReportQueueItem {
-  const updatedAt = new Date(toIsoString(row.updated_at));
-  const staleHours = Math.max(0, Math.floor((now.getTime() - updatedAt.getTime()) / 3_600_000));
+  const updatedAt = toIsoString(row.updated_at);
+  const staleHours = updatedAt
+    ? Math.max(0, Math.floor((now.getTime() - Date.parse(updatedAt)) / 3_600_000))
+    : 0;
 
   return reportQueueItemSchema.parse({
     id: row.id,
@@ -123,7 +123,7 @@ export function parseReportQueueRow(row: ReportQueueRow, now = new Date()): Repo
     summary: row.summary,
     summarySource: resolveReportSummarySource(row.summary, row.metadata),
     createdAt: toIsoString(row.created_at),
-    updatedAt: updatedAt.toISOString(),
+    updatedAt,
     stale: staleHours >= DEFAULT_STALE_HOURS,
     staleHours,
     evidenceCount: toEvidenceCount(row.evidence_count),
@@ -201,14 +201,14 @@ export class PostgresReportQueueDataAdapter implements ReportQueueDataAdapter {
       reportId: string;
       action: ReportClosureAction;
     }
-  ): Promise<boolean> {
+  ): Promise<CloseSubmittedReportResult> {
     const result = await this.reportReview.close(context, {
       action: input.action,
       reportId: input.reportId,
     });
     if (result.kind === 'denied')
       throw new Error('You need moderation permissions to review reports.');
-    return result.outcome.status === 'closed';
+    return result.outcome;
   }
 
   public async openCaseFromSubmittedReport(
@@ -224,57 +224,6 @@ export class PostgresReportQueueDataAdapter implements ReportQueueDataAdapter {
   }
 }
 
-export class FixtureReportQueueDataAdapter implements ReportQueueDataAdapter {
-  public async listSubmittedReports(): Promise<ReportQueueItem[]> {
-    const request = await readFixtureReportBan();
-    return sortReportQueueItems(
-      fixtureSubmittedReports().filter(
-        (report) =>
-          request?.observedBanResult?.status !== 'banned' || request.reportIntakeId !== report.id
-      )
-    );
-  }
-
-  public async countClosedReports(): Promise<number> {
-    return (await readFixtureReportBan())?.observedBanResult?.status === 'banned' ? 5 : 4;
-  }
-
-  public canOpenSubmittedReportCase(): boolean {
-    return true;
-  }
-
-  public async closeSubmittedReport(): Promise<boolean> {
-    return true;
-  }
-
-  public async openCaseFromSubmittedReport(
-    context: ActionContext,
-    input: {
-      reportId: string;
-    }
-  ): Promise<OpenSubmittedReportCaseResult> {
-    const report = fixtureSubmittedReports().find((item) => item.id === input.reportId);
-    return {
-      actor: {
-        id: context.actor.kind === 'user' ? context.actor.userId : '',
-        surface: context.source,
-      },
-      action: 'open_case',
-      caseId: report?.latestCaseId ?? `fixture-case-${input.reportId}`,
-      detectionEventId: report?.latestDetectionId ?? null,
-      reportId: input.reportId,
-      requestId: `fixture-report-open-case-${input.reportId}`,
-      status: report?.targetUserId && report.latestDetectionId ? 'opened' : 'missing_detection',
-      targetUserId: report?.targetUserId ?? null,
-      queueCleanupStatus: 'skipped',
-    };
-  }
-}
-
 export function createReportQueueDataAdapter(): ReportQueueDataAdapter {
-  if (isWebE2eFixtureMode()) {
-    return new FixtureReportQueueDataAdapter();
-  }
-
   return new PostgresReportQueueDataAdapter();
 }

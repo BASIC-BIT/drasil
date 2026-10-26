@@ -1,12 +1,11 @@
+import { Timestamp } from '@/components/workspace/Timestamp';
+import { WorkspaceShell } from '@/components/workspace/WorkspaceShell';
 import type {
   MessageCleanupAggregateOutcome,
   MessageCleanupItem,
   MessageCleanupJobDetail as MessageCleanupJobDetailContract,
   MessageCleanupJobSummary,
 } from '@drasil/contracts';
-import { AccountControl } from '@/components/AccountControl';
-import { ThemeToggle } from '@/components/ThemeToggle';
-import { formatUtc } from '@/lib/casePresentation';
 import { MessageCleanupJobPoller } from './MessageCleanupJobPoller';
 
 const scopeLabels: Record<MessageCleanupJobSummary['scope'], string> = {
@@ -88,7 +87,13 @@ export function MessageCleanupOutcomes({
   );
 }
 
-function MessageCleanupItemRow({ item }: { readonly item: MessageCleanupItem }) {
+function MessageCleanupItemRow({
+  item,
+  channelNames,
+}: {
+  readonly item: MessageCleanupItem;
+  readonly channelNames?: Readonly<Record<string, string>>;
+}) {
   return (
     <li className="cleanup-message-row">
       <div className="cleanup-message-heading">
@@ -96,8 +101,13 @@ function MessageCleanupItemRow({ item }: { readonly item: MessageCleanupItem }) 
           <span className={`status ${messageCleanupStatusClass(item.status)}`}>
             {itemStatusLabels[item.status]}
           </span>
-          <strong>Channel {item.channelId}</strong>
-          <span className="muted">{formatUtc(item.messageCreatedAt)}</span>
+          <strong>Channel {channelNames?.[item.channelId] ?? item.channelId}</strong>
+          <span>
+            Message {item.messageId} · Author {item.authorId}
+          </span>
+          <span className="muted">
+            <Timestamp value={item.messageCreatedAt} />
+          </span>
         </div>
         <div className="cleanup-message-links">
           {item.sourceMessageUrl ? (
@@ -142,7 +152,9 @@ function MessageCleanupItemRow({ item }: { readonly item: MessageCleanupItem }) 
 
 export function MessageCleanupItemList({
   items,
+  channelNames,
 }: {
+  readonly channelNames?: Readonly<Record<string, string>>;
   readonly items: readonly MessageCleanupItem[];
 }) {
   if (items.length === 0) {
@@ -153,7 +165,7 @@ export function MessageCleanupItemList({
     <section aria-label="Message cleanup preview">
       <ul className="cleanup-message-list">
         {items.map((item) => (
-          <MessageCleanupItemRow item={item} key={item.id} />
+          <MessageCleanupItemRow item={item} key={item.id} channelNames={channelNames} />
         ))}
       </ul>
     </section>
@@ -190,7 +202,9 @@ export function MessageCleanupJobSummaryBlock({ job }: { readonly job: MessageCl
         </div>
         <div>
           <dt>Requested</dt>
-          <dd>{formatUtc(job.createdAt)}</dd>
+          <dd>
+            <Timestamp value={job.createdAt} />
+          </dd>
         </div>
         <div>
           <dt>Requested by</dt>
@@ -218,29 +232,15 @@ export function MessageCleanupJobDetail({
   const active = ['queued', 'discovering', 'executing'].includes(detail.status);
 
   return (
-    <main className="shell stack">
+    <WorkspaceShell
+      guildId={detail.guildId}
+      guildName={guildName}
+      sessionUsername={sessionUsername}
+      currentPage="inbox"
+    >
       <MessageCleanupJobPoller active={active} />
-      <nav className="topbar">
-        <a className="brand" href={caseHref}>
-          <span className="brand-mark" />
-          <span>Drasil</span>
-        </a>
-        <div className="nav-cluster">
-          <a className="button secondary" href={caseHref}>
-            Case
-          </a>
-          <a className="button secondary" href={`/admin/guild/${detail.guildId}/inbox`}>
-            Inbox
-          </a>
-          <a className="button secondary" href={`/admin/guild/${detail.guildId}/operations`}>
-            Operations
-          </a>
-          <ThemeToggle />
-          <AccountControl username={sessionUsername} />
-        </div>
-      </nav>
-
-      <p className="muted">{guildName} Message Cleanup</p>
+      <a href={caseHref}>Back to case</a>
+      <h1>Message cleanup</h1>
       <section className="panel stack">
         <MessageCleanupJobSummaryBlock job={detail} />
         <MessageCleanupOutcomes outcomes={detail.outcomes} />
@@ -265,6 +265,6 @@ export function MessageCleanupJobDetail({
         </div>
         <MessageCleanupItemList items={detail.items} />
       </section>
-    </main>
+    </WorkspaceShell>
   );
 }

@@ -1,14 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { FixtureActiveCaseDataAdapter } from '../e2e/legacy/activeCaseDataAdapter';
 import type { QueueCaseActionInput } from './activeCaseDataAdapter';
-const persistence = vi.hoisted(() => ({ query: vi.fn() }));
-vi.mock('./setupDataAdapter', () => ({ getPostgresPool: () => persistence }));
 import {
-  FixtureActiveCaseDataAdapter,
   PostgresActiveCaseDataAdapter,
   parseCaseSummaryRow,
   resolveCaseActionQueueStatus,
   resolveReportIntakeId,
 } from './activeCaseDataAdapter';
+const persistence = vi.hoisted(() => ({ query: vi.fn() }));
+vi.mock('./setupDataAdapter', () => ({ getPostgresPool: () => persistence }));
 
 const baseRow = {
   id: 'ver-1',
@@ -119,6 +119,29 @@ describe('case action admission and submission', () => {
     expect(persistence.query).not.toHaveBeenCalled();
   });
 
+  it('rejects generation 2 confirmation when the server now holds generation 3 before queueing', async () => {
+    const adapter = arrange();
+    const current = await adapter.getCaseDetail('guild', 'case');
+    vi.mocked(adapter.getCaseDetail).mockResolvedValue({
+      ...current!,
+      captchaChallenge: { ...current!.captchaChallenge!, generation: 3 },
+    });
+    expect((await adapter.queueCaseAction(input)).status).toBe('not_allowed');
+    expect(persistence.query).not.toHaveBeenCalled();
+  });
+
+  it('rejects changed displayed method and revision before queueing', async () => {
+    const adapter = arrange();
+    persistence.query.mockResolvedValue({ rows: [{ id: 'unexpected-queue', status: 'queued' }] });
+    for (const binding of [
+      { expectedCaptchaMethod: 'discord_image', expectedCaptchaMethodRevision: 0 },
+      { expectedCaptchaMethod: 'turnstile', expectedCaptchaMethodRevision: 4 },
+    ] as const) {
+      expect((await adapter.queueCaseAction({ ...input, ...binding })).status).toBe('not_allowed');
+    }
+    expect(persistence.query).not.toHaveBeenCalled();
+  });
+
   it('does not enqueue an unavailable quarantine preview', async () => {
     const adapter = arrange();
     expect(
@@ -154,7 +177,13 @@ describe('case action admission and submission', () => {
       persistence.query.mockResolvedValueOnce({ rows: [{ id: 'request', status: 'queued' }] });
       expect(
         await adapter.queueCaseAction({ ...input, action, attemptId, reason: 'Reviewed evidence' })
-      ).toEqual({ action, caseId: 'case', requestId: 'request', status: 'queued' });
+      ).toEqual({
+        action,
+        caseId: 'case',
+        requestId: 'request',
+        receipt: { id: 'request', status: 'queued' },
+        status: 'queued',
+      });
       expect(persistence.query).toHaveBeenCalledExactlyOnceWith(
         expect.stringContaining('insert into moderation_action_requests'),
         [
@@ -688,6 +717,7 @@ describe('activeCaseDataAdapter', () => {
       action: 'repair_thread',
       caseId: 'case-stale',
       requestId: 'fixture-case-action-repair_thread-case-stale',
+      receipt: { id: 'fixture-case-action-repair_thread-case-stale', status: 'queued' },
       status: 'queued',
     });
     await expect(
@@ -701,6 +731,7 @@ describe('activeCaseDataAdapter', () => {
       action: 'refresh_notification',
       caseId: 'case-stale',
       requestId: 'fixture-case-action-refresh_notification-case-stale',
+      receipt: { id: 'fixture-case-action-refresh_notification-case-stale', status: 'queued' },
       status: 'queued',
     });
     await expect(
@@ -727,6 +758,7 @@ describe('activeCaseDataAdapter', () => {
       action: 'sync_existing_ban',
       caseId: 'case-banned',
       requestId: 'fixture-case-action-sync_existing_ban-case-banned',
+      receipt: { id: 'fixture-case-action-sync_existing_ban-case-banned', status: 'queued' },
       status: 'queued',
     });
   });
@@ -851,4 +883,33 @@ describe('shared case moderation policy availability', () => {
     expect(summary.allowedActions).toContain('ban_user');
     expect(summary.allowedActions).toContain('kick_user');
   });
+});
+it('preserves an unknown case detection date while keeping known dates intact', async () => {
+  persistence.query.mockImplementation(async (sql: string) => ({
+    rows: sql.includes('from verification_events ve')
+      ? [baseRow]
+      : sql.includes('select id, detection_type, confidence, detected_at, reasons')
+        ? [
+            {
+              id: 'unknown',
+              detection_type: 'suspicious_content',
+              confidence: 0.8,
+              detected_at: null,
+              reasons: [],
+            },
+            {
+              id: 'known',
+              detection_type: 'suspicious_content',
+              confidence: 0.8,
+              detected_at: '2026-10-21T14:40:00.000Z',
+              reasons: [],
+            },
+          ]
+        : [],
+  }));
+  const result = await new PostgresActiveCaseDataAdapter().getCaseDetail('guild-1', 'ver-1');
+  expect(result?.detectionHistory.map((item) => item.detectedAt)).toEqual([
+    null,
+    '2026-10-21T14:40:00.000Z',
+  ]);
 });

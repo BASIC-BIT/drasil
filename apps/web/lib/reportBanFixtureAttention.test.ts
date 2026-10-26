@@ -1,12 +1,12 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { FixtureModerationInboxDataAdapter } from '../e2e/legacy/moderationInboxDataAdapter';
+import { FixtureReportQueueDataAdapter } from '../e2e/legacy/reportQueueDataAdapter';
 vi.mock('./reportBanFixtures', () => ({
   readFixtureReportBan: async () => ({
     reportIntakeId: 'report-1',
     observedBanResult: { status: 'banned' },
   }),
 }));
-import { FixtureReportQueueDataAdapter } from './reportQueueDataAdapter';
-import { FixtureModerationInboxDataAdapter } from './moderationInboxDataAdapter';
 describe('completed fixture report ban attention', () => {
   it('removes the handled report from submitted reports', async () => {
     expect(

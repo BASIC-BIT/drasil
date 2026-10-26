@@ -6,6 +6,7 @@ const fixtureAvatarUrl = null;
 export const fixtureCaseDetails: CaseDetail[] = [
   {
     id: 'case-stale',
+    status: 'pending',
     guildId: 'guild-1',
     userId: 'user-100',
     userIdentity: {
@@ -125,6 +126,7 @@ export const fixtureCaseDetails: CaseDetail[] = [
   },
   {
     id: 'case-left',
+    status: 'pending',
     guildId: 'guild-1',
     userId: 'user-200',
     userIdentity: {
@@ -192,6 +194,7 @@ export const fixtureCaseDetails: CaseDetail[] = [
   },
   {
     id: 'case-banned',
+    status: 'pending',
     guildId: 'guild-1',
     userId: 'user-300',
     userIdentity: {
@@ -294,6 +297,7 @@ export const fixtureParkedCaseDetails: CaseDetail[] = [
 export const fixtureResolvedCaseDetails: CaseDetail[] = [
   {
     id: 'case-resolved-ban',
+    status: 'banned',
     guildId: 'guild-1',
     userId: 'user-410',
     userIdentity: {
@@ -353,6 +357,7 @@ export const fixtureResolvedCaseDetails: CaseDetail[] = [
   },
   {
     id: 'case-resolved-verified',
+    status: 'verified',
     guildId: 'guild-1',
     userId: 'user-420',
     userIdentity: {
@@ -410,6 +415,7 @@ export const fixtureResolvedCaseDetails: CaseDetail[] = [
 function summarizeCaseDetail(detail: CaseDetail): CaseSummary {
   return {
     id: detail.id,
+    status: detail.status,
     guildId: detail.guildId,
     userId: detail.userId,
     userIdentity: detail.userIdentity,

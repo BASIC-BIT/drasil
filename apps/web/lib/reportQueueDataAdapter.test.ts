@@ -1,11 +1,11 @@
+import { InboxQueue } from '@/components/inbox/InboxQueue';
+import type { ActionContext } from '@drasil/application';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ModerationInboxView } from '@/components/inbox/ModerationInboxView';
+import { parseInboxLocation } from './inboxLocation';
 import { reportQueueItemToInboxItem } from './moderationInboxDataAdapter';
 import { parseReportDetailRows } from './reportDetailDataAdapter';
-import { initialInboxActionState } from './inboxActionState';
-import type { ActionContext } from '@drasil/application';
 import { PostgresReportQueueDataAdapter, parseReportQueueRow } from './reportQueueDataAdapter';
 
 const db = vi.hoisted(() => ({ query: vi.fn() }));
@@ -135,7 +135,7 @@ describe('reportQueueDataAdapter', () => {
     const adapter = new PostgresReportQueueDataAdapter({ close, openCase: vi.fn() });
     await expect(
       adapter.closeSubmittedReport(context, { reportId: 'report-1', action: 'mark_false_positive' })
-    ).resolves.toBe(true);
+    ).resolves.toMatchObject({ status: 'closed', queueCleanupStatus: 'skipped' });
     expect(close).toHaveBeenCalledWith(context, {
       reportId: 'report-1',
       action: 'mark_false_positive',
@@ -177,7 +177,7 @@ it('keeps a claimed report busy in the SQL close and case-open paths', async () 
       reportId: 'report-1',
       action: 'dismiss_no_action',
     })
-  ).toBe(false);
+  ).toMatchObject({ status: 'busy', reportStatus: 'dismissed' });
   expect(db.query.mock.calls[0][0]).toContain(
     "coalesce(metadata->>'report_ban_operation_id', '') = ''"
   );
@@ -197,30 +197,18 @@ it('suppresses competing report closure and case actions while a report ban owns
 });
 
 function renderInboxReport(report: ReturnType<typeof parseReportQueueRow>): string {
-  const inboxAction = async () => initialInboxActionState;
   return renderToStaticMarkup(
-    createElement(ModerationInboxView, {
-      acknowledgeQueueItemAction: inboxAction,
-      acknowledgeQueueItemsAction: inboxAction,
-      canOpenReportCases: true,
-      canQueueCaseActions: true,
-      closeReportAction: inboxAction,
+    createElement(InboxQueue, {
       guildId: 'guild-1',
-      guildName: 'Fixture Guild',
-      sessionUsername: 'Moderator',
       items: [reportQueueItemToInboxItem(report)],
-      openReportCaseAction: inboxAction,
-      pollActionRequests: false,
-      queueCaseAction: async () => {},
-      queueInboxCaseAction: inboxAction,
-      queueObservedAlertAction: inboxAction,
-      recentActionRequests: [],
+      location: parseInboxLocation(new URLSearchParams()),
+      onSelect: () => undefined,
     })
   );
 }
 
 it.each([null, 'case-1'])(
-  'routes an eligible queue report with linked case %s to the existing ban confirmation',
+  'routes an eligible queue report with linked case %s to its selected inbox record',
   async (caseId) => {
     db.query.mockReset();
     db.query.mockResolvedValueOnce({ rows: [{ ...baseRow, latest_case_id: caseId }] });
@@ -228,9 +216,7 @@ it.each([null, 'case-1'])(
 
     expect(report.allowedActions).toContain('ban_user');
     const markup = renderInboxReport(report);
-    expect(markup).toMatch(
-      /href="\/admin\/guild\/guild-1\/reports\/report-1#report-ban"[^>]*>Review Ban<\/a>/
-    );
+    expect(markup).toContain('selected=report%3Areport-1');
     expect(markup).not.toContain('Confirm Ban');
     const [sql, parameters] = db.query.mock.calls[0];
     expect(parameters).toEqual(['guild-1']);
@@ -327,7 +313,7 @@ it('closes directly with context provenance and clears attention without a reque
       reportId: 'report-1',
       action: 'mark_false_positive',
     })
-  ).resolves.toBe(true);
+  ).resolves.toMatchObject({ status: 'closed', queueCleanupStatus: 'cleared' });
   expect(JSON.parse(db.query.mock.calls[0][1][4])).toMatchObject({
     closed_by: 'admin-1',
     closed_action: 'mark_false_positive',
@@ -335,4 +321,38 @@ it('closes directly with context provenance and clears attention without a reque
   });
   expect(discord.deleteBotMessage).toHaveBeenCalledWith('channel-1', 'message-1');
   expect(db.query).toHaveBeenCalledTimes(2);
+});
+it('keeps missing report queue event dates unknown and fresh', () => {
+  const parsed = parseReportQueueRow({
+    id: 'unknown-dates',
+    server_id: 'guild-1',
+    reporter_id: 'reporter',
+    thread_id: null,
+    status: 'submitted',
+    summary: null,
+    confirmed_target_user_id: null,
+    created_at: null,
+    updated_at: null,
+    evidence_count: 0,
+    latest_detection_id: null,
+    latest_detection_user_id: null,
+    latest_detection_handled: false,
+    latest_case_id: null,
+  });
+  expect(parsed).toMatchObject({ createdAt: null, updatedAt: null, staleHours: 0, stale: false });
+});
+
+it('preserves closed status when Discord queue notification cleanup fails', async () => {
+  db.query.mockReset();
+  db.query
+    .mockResolvedValueOnce({ rows: [{ ...baseRow, status: 'dismissed' }] })
+    .mockResolvedValueOnce({
+      rows: [{ id: 'queue-1', queue_channel_id: 'channel-1', queue_message_id: 'message-1' }],
+    });
+  discord.deleteBotMessage.mockRejectedValueOnce(new Error('Discord unavailable'));
+  const result = await new PostgresReportQueueDataAdapter().closeSubmittedReport(context, {
+    reportId: 'report-1',
+    action: 'dismiss_no_action',
+  });
+  expect(result).toMatchObject({ status: 'closed', queueCleanupStatus: 'failed' });
 });

@@ -1,16 +1,11 @@
 'use server';
 
-import { evaluateCasePolicy, readCasePolicy, type ActionContext } from '@drasil/application';
-import { createWebActionContext, createWebConfirmationPort } from '@/lib/application/context';
-import { randomUUID } from 'node:crypto';
-import { revalidatePath } from 'next/cache';
-import { redirect } from 'next/navigation';
-import { caseActionSchema, getEffectiveCaptchaMethod, type CaseAction } from '@drasil/contracts';
 import {
   createActiveCaseDataAdapter,
   type CaseActionQueueResult,
   type WebCaseAction,
 } from '@/lib/activeCaseDataAdapter';
+import { createWebActionContext, createWebConfirmationPort } from '@/lib/application/context';
 import { fetchGuildResources } from '@/lib/discordApi';
 import {
   DISCORD_PERMISSIONS,
@@ -18,14 +13,23 @@ import {
   hasPermission,
   parsePermissions,
 } from '@/lib/discordPermissions';
+import { failedInboxActionState } from '@/lib/inboxActionState';
 import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
-import { createSetupDataAdapter } from '@/lib/setupDataAdapter';
 import { createSetupDashboardService } from '@/lib/setupDashboardService';
+import { createSetupDataAdapter } from '@/lib/setupDataAdapter';
+import type { WorkspaceActions } from '@/lib/workspaceActionTypes';
+import { assertWorkspaceConfirmation, resolveWorkspaceReturnTo } from '@/lib/workspaceConfirmation';
 import {
-  failedInboxActionState,
-  queuedInboxActionState,
-  type InboxActionState,
-} from '@/lib/inboxActionState';
+  evaluateCasePolicy,
+  getCaptchaMethodRevision,
+  readCasePolicy,
+  type ActionContext,
+  type CaptchaIssuanceConfiguration,
+} from '@drasil/application';
+import { caseActionSchema, getEffectiveCaptchaMethod, type CaseAction } from '@drasil/contracts';
+import { revalidatePath } from 'next/cache';
+import { redirect } from 'next/navigation';
+import { randomUUID } from 'node:crypto';
 
 const queuedCaseActions = new Set<CaseAction>([
   'verify_user',
@@ -58,9 +62,12 @@ type CaptchaCaseAction = Extract<
 >;
 
 interface CaseActionOptions {
+  readonly expectedCaptchaConfiguration?: CaptchaIssuanceConfiguration;
   readonly attemptId: string | null;
   readonly expectedCaptchaChallengeId?: string | null;
   readonly expectedCaptchaGeneration?: number | null;
+  readonly expectedCaptchaMethod?: 'turnstile' | 'discord_image' | null;
+  readonly expectedCaptchaMethodRevision?: number | null;
   readonly quarantinePhase: 'preview' | 'execute' | null;
   readonly previewRequestId: string | null;
   readonly reason: string | null;
@@ -173,6 +180,57 @@ async function assertBotCanRunDestructiveAction(
   }
 }
 
+async function readCaptchaIssuanceConfiguration(
+  guildId: string,
+  formData: FormData | undefined
+): Promise<CaptchaIssuanceConfiguration | undefined> {
+  const server = await createSetupDataAdapter().getServer(guildId);
+  const method = getEffectiveCaptchaMethod(server?.settings);
+  const mode = server?.settings.captcha_mode;
+  if (method === 'none' || (mode !== 'manual' && mode !== 'suspicious_join')) {
+    throw new Error('Browser security checks are disabled for this server.');
+  }
+  const expectedMethod = readFormString(formData, 'expectedCaptchaConfigurationMethod');
+  const revisionText = readFormString(formData, 'expectedCaptchaConfigurationRevision');
+  if (formData?.get('confirmedRecordId') || expectedMethod !== null || revisionText !== null) {
+    const methodRevision = revisionText === null ? -1 : Number(revisionText);
+    if (
+      expectedMethod !== method ||
+      !Number.isInteger(methodRevision) ||
+      methodRevision < 0 ||
+      methodRevision !== getCaptchaMethodRevision(server?.settings)
+    )
+      throw new Error(
+        'The configured security-check method changed. Refresh and review the current method before continuing.'
+      );
+    return { method, methodRevision };
+  }
+}
+
+function readDisplayedCaptchaMethod(
+  formData: FormData | undefined,
+  requiresDisplayedChallenge: boolean
+): Pick<CaseActionOptions, 'expectedCaptchaMethod' | 'expectedCaptchaMethodRevision'> {
+  const method = readFormString(formData, 'expectedCaptchaMethod');
+  const revisionText = readFormString(formData, 'expectedCaptchaMethodRevision');
+  const revision = revisionText === null ? null : Number(revisionText);
+  if (
+    (method !== null && method !== 'turnstile' && method !== 'discord_image') ||
+    (revision !== null && (!Number.isInteger(revision) || revision < 0)) ||
+    (requiresDisplayedChallenge &&
+      formData?.get('confirmedRecordId') &&
+      (!method || revision === null))
+  ) {
+    throw new Error(
+      'The displayed security-check method is no longer available. Refresh and try again.'
+    );
+  }
+  return {
+    expectedCaptchaMethod: method === 'turnstile' || method === 'discord_image' ? method : null,
+    expectedCaptchaMethodRevision: revision,
+  };
+}
+
 async function readCaptchaActionOptions(
   action: CaptchaCaseAction,
   guildId: string,
@@ -181,14 +239,10 @@ async function readCaptchaActionOptions(
   if (formData?.get('confirmAction') !== 'on') {
     throw new Error('Confirm the security-check action before queueing it.');
   }
-  if (action !== 'bypass_captcha') {
-    const server = await createSetupDataAdapter().getServer(guildId);
-    const method = getEffectiveCaptchaMethod(server?.settings);
-    const mode = server?.settings.captcha_mode;
-    if (method === 'none' || (mode !== 'manual' && mode !== 'suspicious_join')) {
-      throw new Error('Browser security checks are disabled for this server.');
-    }
-  }
+  const expectedCaptchaConfiguration =
+    action === 'bypass_captcha'
+      ? undefined
+      : await readCaptchaIssuanceConfiguration(guildId, formData);
   const reason = action === 'bypass_captcha' ? readFormString(formData, 'reason') : null;
   if (action === 'bypass_captcha' && !reason) {
     throw new Error('A reason is required to continue without the security check.');
@@ -203,7 +257,10 @@ async function readCaptchaActionOptions(
   if (requiresDisplayedChallenge && (!expectedCaptchaChallengeId || !expectedCaptchaGeneration)) {
     throw new Error('The displayed security check is no longer available. Refresh and try again.');
   }
+  const displayedMethod = readDisplayedCaptchaMethod(formData, requiresDisplayedChallenge);
   return {
+    expectedCaptchaConfiguration,
+    ...displayedMethod,
     attemptId: action === 'retry_captcha' || action === 'bypass_captcha' ? randomUUID() : null,
     expectedCaptchaChallengeId,
     expectedCaptchaGeneration,
@@ -329,8 +386,8 @@ async function performQueueCaseAction(
   guildId: string,
   caseId: string,
   action: WebCaseAction,
-  formData?: FormData,
-  returnTo = `/admin/guild/${guildId}/cases/${caseId}`
+  formData: FormData,
+  returnTo: string
 ): Promise<CaseActionQueueResult> {
   const [session, token] = await Promise.all([getCurrentAdminSession(), getCurrentDiscordToken()]);
   if (!session || !token) {
@@ -344,6 +401,20 @@ async function performQueueCaseAction(
 
   const setupService = createSetupDashboardService();
   const guild = await setupService.assertCanManageGuild(guildId, token.accessToken);
+  {
+    const detail = await createActiveCaseDataAdapter().getCaseDetail(guildId, caseId);
+    if (
+      !detail ||
+      detail.guildId !== guildId ||
+      detail.id !== caseId ||
+      !detail.allowedActions.includes(parsedAction)
+    )
+      throw new Error('Case action is no longer available. Refresh the case before continuing.');
+    assertWorkspaceConfirmation(formData ?? new FormData(), {
+      recordId: detail.id,
+      targetUserId: detail.userId,
+    });
+  }
   const options = await assertCanQueueCaseAction(
     parsedAction as WebCaseAction,
     guild,
@@ -358,6 +429,9 @@ async function performQueueCaseAction(
     caseId,
     expectedCaptchaChallengeId: options.expectedCaptchaChallengeId,
     expectedCaptchaGeneration: options.expectedCaptchaGeneration,
+    expectedCaptchaConfiguration: options.expectedCaptchaConfiguration,
+    expectedCaptchaMethod: options.expectedCaptchaMethod,
+    expectedCaptchaMethodRevision: options.expectedCaptchaMethodRevision,
     guildId,
     quarantinePhase: options.quarantinePhase,
     previewRequestId: options.previewRequestId,
@@ -369,6 +443,7 @@ async function performQueueCaseAction(
   revalidatePath(`/admin/guild/${guildId}/cases/${caseId}`);
   revalidatePath(`/admin/guild/${guildId}/history`);
 
+  if (result.receipt) return result;
   if (result.status === 'queued') {
     return result;
   }
@@ -378,35 +453,34 @@ async function performQueueCaseAction(
   );
 }
 
-export async function queueCaseAction(
-  guildId: string,
-  caseId: string,
-  action: WebCaseAction,
-  formData?: FormData
-): Promise<void> {
-  await performQueueCaseAction(guildId, caseId, action, formData);
-}
-
-export async function queueInboxCaseAction(
-  guildId: string,
-  caseId: string,
-  action: WebCaseAction,
-  _previousState: InboxActionState,
+export async function submitWorkspaceCaseAction(
+  input: Parameters<WorkspaceActions['caseAction']>[0],
   formData: FormData
-): Promise<InboxActionState> {
+): ReturnType<WorkspaceActions['caseAction']> {
   try {
-    const result = await performQueueCaseAction(
-      guildId,
-      caseId,
-      action,
-      formData,
-      `/admin/guild/${guildId}/inbox`
+    const returnTo = encodeURIComponent(
+      resolveWorkspaceReturnTo(
+        formData,
+        input.guildId,
+        `/admin/guild/${input.guildId}/cases/${input.caseId}`
+      )
     );
-    if (!result.requestId) {
-      return failedInboxActionState('Drasil did not return an action request receipt.');
-    }
-    return queuedInboxActionState({ id: result.requestId, status: 'queued' });
+    const result = await performQueueCaseAction(
+      input.guildId,
+      input.caseId,
+      input.action,
+      formData,
+      returnTo
+    );
+    if (!result.receipt)
+      throw new Error(
+        'Drasil did not return an action request receipt. Refresh durable state before another attempt.'
+      );
+    return { kind: 'request', receipt: result.receipt };
   } catch (error) {
-    return failedInboxActionState(error);
+    return {
+      kind: 'failed',
+      message: failedInboxActionState(error).message ?? 'Action response unavailable.',
+    };
   }
 }

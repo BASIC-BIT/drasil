@@ -300,6 +300,24 @@ function createHarness(
 }
 
 describe('MessageCleanupService', () => {
+  it('returns the same completed job during finalization retry without evidence or deletion effects', async () => {
+    const harness = createHarness({
+      job: buildJob({
+        mode: MessageDeletionJobMode.BAN_WITH_CLEANUP,
+        status: MessageDeletionJobStatus.COMPLETED,
+        ban_status: MessageDeletionBanStatus.SUCCEEDED,
+        case_finalization_status: MessageDeletionCaseFinalizationStatus.FAILED,
+        items: [buildItem({ status: MessageDeletionItemStatus.DELETED })],
+      }),
+    });
+    const result = await harness.service.executeJob('job-1');
+    expect(result).toMatchObject({ jobId: 'job-1', alreadyCompleted: true, deletedCount: 1 });
+    expect(harness.deletionService.preserveMessageEvidence).not.toHaveBeenCalled();
+    expect(harness.deletionService.deleteMessage).not.toHaveBeenCalled();
+    expect(harness.deletionService.bulkDeleteMessages).not.toHaveBeenCalled();
+    expect(harness.channelsFetch).not.toHaveBeenCalled();
+  });
+
   it('resumes a preview already left in discovering state', async () => {
     const source = buildMessage('source-1');
     const detection = {

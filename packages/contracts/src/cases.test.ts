@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   captchaChallengeSummarySchema,
   caseActionSchema,
+  caseSummarySchema,
   caseDetailSchema,
   type CaseSummary,
   sortCaseSummariesForQueue,
@@ -9,6 +10,7 @@ import {
 
 const buildCase = (id: string, stale: boolean, updatedAt: string): CaseSummary => ({
   id,
+  status: 'pending',
   guildId: 'guild-1',
   userId: `user-${id}`,
   userIdentity: {
@@ -35,6 +37,11 @@ const buildCase = (id: string, stale: boolean, updatedAt: string): CaseSummary =
 });
 
 describe('case contracts', () => {
+  it('requires the persisted case status', () => {
+    const summary = buildCase('status', false, '2026-06-01T00:00:00.000Z');
+    expect(caseSummarySchema.safeParse({ ...summary, status: undefined }).success).toBe(false);
+    expect(caseSummarySchema.safeParse({ ...summary, status: 'pending' }).success).toBe(true);
+  });
   it('accepts the compromised-account quarantine action', () => {
     expect(caseActionSchema.parse('quarantine_compromised_account')).toBe(
       'quarantine_compromised_account'

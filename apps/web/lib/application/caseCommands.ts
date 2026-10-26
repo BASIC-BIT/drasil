@@ -22,7 +22,13 @@ function buildRepeatedCaptchaCommand(
     kind: 'outcome',
     outcome:
       input.action === 'retry_captcha'
-        ? { kind: 'retry_captcha_challenge', ...binding }
+        ? {
+            kind: 'retry_captcha_challenge',
+            ...binding,
+            ...(input.expectedCaptchaConfiguration
+              ? { expectedConfiguration: input.expectedCaptchaConfiguration }
+              : {}),
+          }
         : { kind: 'bypass_captcha_challenge', ...binding, reason: input.reason ?? '' },
   };
 }
@@ -55,7 +61,16 @@ export function buildQueuedCaseCommand(
   const destructive = { ...binding, reason: input.reason ?? null, detectionEventId: null };
   switch (input.action) {
     case 'challenge_user':
-      return { kind: 'outcome', outcome: { kind: 'request_captcha_challenge', ...binding } };
+      return {
+        kind: 'outcome',
+        outcome: {
+          kind: 'request_captcha_challenge',
+          ...binding,
+          ...(input.expectedCaptchaConfiguration
+            ? { expectedConfiguration: input.expectedCaptchaConfiguration }
+            : {}),
+        },
+      };
     case 'retry_captcha':
     case 'bypass_captcha':
       return buildRepeatedCaptchaCommand({ ...input, action: input.action }, userId);
