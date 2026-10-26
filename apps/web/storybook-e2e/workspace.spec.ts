@@ -151,6 +151,7 @@ test('browser Back returns to the queue row and preserves application history me
   page,
 }) => {
   await page.goto(story);
+  await expect(page.locator(`[data-inbox-item="${observed}"]`)).toBeVisible();
   await page.evaluate(() =>
     window.history.replaceState(
       { ...window.history.state, applicationEntry: { token: 'keep-me' } },
