@@ -3025,9 +3025,10 @@ integration('shared detection action persistence boundary', () => {
     (f.guild.members.fetch as jest.Mock).mockImplementation(async () => {
       throw { code: 10007 };
     });
-    await f.requests.mergeMetadata(
+    await f.requests.transitionReportBan(
       f.request.id,
       {
+        kind: 'renew_lease',
         report_ban_lease_until: new Date(0).toISOString(),
         report_ban_retry_at: new Date(0).toISOString(),
       },
@@ -3051,9 +3052,10 @@ integration('shared detection action persistence boundary', () => {
     f.config.getServerConfig.mockResolvedValue({
       settings: { moderator_ban_action_enabled: false },
     });
-    await f.requests.mergeMetadata(
+    await f.requests.transitionReportBan(
       f.request.id,
       {
+        kind: 'renew_lease',
         report_ban_lease_until: new Date(0).toISOString(),
         report_ban_retry_at: new Date(0).toISOString(),
       },
