@@ -421,7 +421,8 @@ export class ModerationActionRequestRepository implements IModerationActionReque
       const adopted = [];
       for (const event of locked) {
         const snapshot = ((event.metadata ?? {}) as Prisma.JsonObject).user_snapshot as
-          Prisma.JsonObject | undefined;
+          | Prisma.JsonObject
+          | undefined;
         const joinedAt = snapshot?.joined_at;
         const expectedJoin = metadata.report_ban_membership_joined_at;
         if (
