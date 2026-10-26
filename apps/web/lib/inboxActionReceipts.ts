@@ -144,6 +144,7 @@ export function blocksBanResubmission(request: ModerationActionRequestSummary | 
 }
 
 export interface WorkspaceRequestTarget {
+  readonly guildId?: string;
   readonly kind: 'case' | 'submitted_report' | 'observed_alert' | 'attention';
   readonly recordId: string;
   readonly targetUserId: string | null;
@@ -155,6 +156,7 @@ export function matchesWorkspaceActionRequest(
 ): boolean {
   const types = requestTypeByAction[action];
   if (
+    (target.guildId && request.guildId && request.guildId !== target.guildId) ||
     !types?.includes(request.actionType) ||
     (request.requestedAction && request.requestedAction !== action) ||
     request.targetUserId !== target.targetUserId

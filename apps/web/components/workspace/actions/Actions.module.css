@@ -46,6 +46,11 @@
 }
 .receipt {
   margin-block: 12px !important;
+  max-width: 42rem;
+  overflow-wrap: anywhere;
+}
+.receipt p + p {
+  margin-top: 6px;
 }
 .receipt[data-kind='completed'] {
   color: var(--dr-positive);
@@ -55,6 +60,7 @@
   color: var(--dr-danger);
 }
 .receipt[data-kind='blocked'],
+.receipt[data-kind='ban_reviewed_no_current_ban'],
 .receipt[data-kind='banned_updates_pending'],
 .receipt[data-kind='finalization_retry'] {
   color: var(--dr-warning);

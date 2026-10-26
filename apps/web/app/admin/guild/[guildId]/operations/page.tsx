@@ -8,9 +8,10 @@ import { queueModerationQueueOperationAction } from './actions';
 
 type PageProps = {
   readonly params: Promise<{ readonly guildId: string }>;
+  readonly searchParams: Promise<{ readonly request?: string | string[] }>;
 };
 
-export default async function OperationsPage({ params }: PageProps) {
+export default async function OperationsPage({ params, searchParams }: PageProps) {
   const { guildId } = await params;
   const [session, token] = await Promise.all([getCurrentAdminSession(), getCurrentDiscordToken()]);
   if (!session || !token) {
@@ -29,6 +30,11 @@ export default async function OperationsPage({ params }: PageProps) {
     createOperationsIntegrityDataAdapter().getSnapshot(guildId),
     createModerationActionRequestDataAdapter().listRecentRequests(guildId, 25),
   ]);
+  const requestId = (await searchParams).request;
+  const inspected =
+    typeof requestId === 'string' && !recentRequests.some((request) => request.id === requestId)
+      ? await createModerationActionRequestDataAdapter().getRequest(guildId, requestId)
+      : null;
 
   return (
     <OperationsView
@@ -37,7 +43,7 @@ export default async function OperationsPage({ params }: PageProps) {
       integritySnapshot={integritySnapshot}
       queueChannelLabel={queueChannelLabel}
       queueModerationQueueOperation={queueModerationQueueOperationAction}
-      recentRequests={recentRequests}
+      recentRequests={inspected ? [inspected, ...recentRequests] : recentRequests}
       roles={roles}
       roleIntakeDefaultRoleId={dashboard.server?.settings.manual_intake_role_id ?? null}
       sessionUsername={session.username}

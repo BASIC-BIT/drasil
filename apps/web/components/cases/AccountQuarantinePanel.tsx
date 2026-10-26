@@ -1,5 +1,8 @@
 'use client';
 
+import { verificationEffect } from '@/lib/caseActionEffects';
+import { parseInboxLocation, serializeInboxLocation } from '@/lib/inboxLocation';
+
 import { useEffect, useState } from 'react';
 import type { CaseWorkspaceData, WorkspaceActionPolicy } from '@/lib/moderationWorkspaceTypes';
 import type { AccountQuarantineActionRequests } from '@/lib/inboxActionReceipts';
@@ -166,7 +169,9 @@ export function AccountQuarantinePanel({
       )}
       {data.recoveryAttention?.map((item) => (
         <p key={item.id}>
-          <a href={`/admin/guild/${detail.guildId}/inbox?item=${encodeURIComponent(item.id)}`}>
+          <a
+            href={`/admin/guild/${encodeURIComponent(detail.guildId)}/inbox?${serializeInboxLocation({ ...parseInboxLocation(new URLSearchParams()), selectedItemId: item.id })}`}
+          >
             {item.title}
           </a>{' '}
           · <Timestamp value={item.updatedAt} />
@@ -281,6 +286,11 @@ export function AccountQuarantinePanel({
               description: `Use saved preview ${saved.id}, recorded ${preview.previewedAt ?? 'at an unknown time'}, only if the member and server still match. Remove the previewed roles while retaining the case role and recovery access. Incomplete containment stays in review.`,
               reasonRequired: true,
               disabled: !fresh || running || parked || !allowed('quarantine_compromised_account'),
+              disabledReason: !fresh
+                ? 'The saved quarantine preview is no longer eligible. Refresh the preview before another attempt.'
+                : running
+                  ? 'An account-quarantine request is already running.'
+                  : 'Account quarantine is no longer available for the current case state.',
               fields: [
                 { name: 'quarantinePhase', value: 'execute' },
                 { name: 'previewRequestId', value: saved.id },
@@ -326,8 +336,7 @@ export function AccountQuarantinePanel({
             id: 'verify_user',
             label: 'Verify and release',
             tone: 'positive',
-            description:
-              'Confirm account recovery, release quarantine, restore eligible snapshotted roles under the current role policy, and resolve the verification case.',
+            description: verificationEffect(true),
             disabled: running,
           }}
           submit={submissions.release}

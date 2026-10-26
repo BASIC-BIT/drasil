@@ -121,6 +121,13 @@ An ordinary failed request does not contain typed proof of its execution stage. 
 
 Report closure also has meaningful immediate outcomes: closed, already handled, busy, and queue-message cleanup warnings. The current web adapter collapses these to a boolean. Preserve that information in the new result contract instead of reporting every false result as the same failure. Successful closure can coexist with a failed queue-message cleanup; it should not reopen the report in the UI.
 
+Generic case maintenance requests retain their existing one-completion lifetime per source,
+action, server and case. Refresh notification, repair/create thread, reopen and sync-existing-ban
+show an already completed attempt as a historical receipt with its actual request identity,
+actor and times when recorded. A new confirmation or client token does not make that completed
+request run again. Deliberately repeatable maintenance requires a separate shared command-policy
+design; specialized preview/cleanup renewal and uncertain-enforcement protections remain unchanged.
+
 ## Contracts needed before route adoption
 
 - A selected-item union that retains the queue subtype, separate case/report/detection IDs, event timestamps and actual source references. Current `sourceId` alone is ambiguous for attention records.

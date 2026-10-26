@@ -21,14 +21,18 @@ for (const change of ['generation', 'method', 'revision'])
     await page.goto(url);
     const dialog = await confirm(page, 'Continue without security check');
     await event(page, change);
-    await expect(dialog).toContainText('out of date');
-    await expect(dialog.getByRole('textbox')).toHaveValue('Reviewed directly with this member');
-    await expect(
-      dialog.getByRole('button', { name: 'Confirm Continue without security check' })
-    ).toBeDisabled();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByRole('status')).toContainText(
+      'security check generation or configured method changed'
+    );
+    await expect(page.getByRole('status')).toBeFocused();
     await expect(page.getByTestId('submission-count')).toHaveText('0');
-    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
-    await confirm(page, 'Continue without security check');
+    await page
+      .getByRole('button', { name: 'Continue without security check', exact: true })
+      .click();
+    await expect(page.getByRole('dialog').getByRole('textbox')).toHaveValue(
+      'Reviewed directly with this member'
+    );
     await expect(page.getByRole('dialog')).toContainText(
       change === 'generation'
         ? 'generation 3'
@@ -69,9 +73,11 @@ test('retry invalidates old confirmation and sends only the reviewed generation'
   await page.goto(url);
   let dialog = await confirm(page, 'Retry security check');
   await event(page, 'generation');
-  await expect(dialog.getByRole('button', { name: 'Confirm Retry security check' })).toBeDisabled();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('status')).toContainText(
+    'security check generation or configured method changed'
+  );
   await expect(page.getByTestId('submission-count')).toHaveText('0');
-  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
   dialog = await confirm(page, 'Retry security check');
   await dialog.getByRole('button', { name: 'Confirm Retry security check' }).click();
   await expect(page.getByTestId('submitted-payload')).toContainText(
@@ -173,21 +179,25 @@ for (const { label, change, blocked } of [
     await renewed.getByRole('textbox').fill('Keep this renewed review reason');
     await renewed.evaluate((dialog) => dialog.setAttribute('data-renewed-review', 'retained'));
     await event(page, change);
-    await expect(renewed).toBeVisible();
-    await expect(renewed).toHaveAttribute('data-renewed-review', 'retained');
-    await expect(renewed.getByRole('textbox')).toHaveValue('Keep this renewed review reason');
+
     const submit = renewed.getByRole('button', { name: `Confirm ${label}`, exact: true });
     if (blocked) {
-      await expect(renewed).toContainText('out of date');
-      await expect(submit).toBeDisabled();
+      await expect(renewed).toHaveCount(0);
+      await expect(page.getByRole('status')).toContainText(
+        'security check generation or configured method changed'
+      );
       await expect(page.getByTestId('submission-count')).toHaveText('1');
-      await renewed.getByRole('button', { name: 'Cancel', exact: true }).click();
-      const current = await confirm(page, label);
+      await page.getByRole('button', { name: label, exact: true }).click();
+      const current = page.getByRole('dialog');
+      await expect(current.getByRole('textbox')).toHaveValue('Keep this renewed review reason');
+      await current.getByRole('checkbox').check();
       await expect(current).toContainText(
         change === 'generation' ? 'generation 4' : 'method revision 8'
       );
       await current.getByRole('button', { name: `Confirm ${label}`, exact: true }).click();
     } else {
+      await expect(renewed).toHaveAttribute('data-renewed-review', 'retained');
+      await expect(renewed.getByRole('textbox')).toHaveValue('Keep this renewed review reason');
       await expect(renewed).not.toContainText('out of date');
       await expect(submit).toBeEnabled();
       await submit.click();
@@ -210,10 +220,11 @@ for (const story of ['failed', 'not-issued'])
     const label = story === 'failed' ? 'Retry security check' : 'Request security check';
     const dialog = await confirm(page, label);
     await event(page, 'configuration');
-    await expect(dialog).toContainText('out of date');
-    await expect(dialog.getByRole('button', { name: `Confirm ${label}` })).toBeDisabled();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByRole('status')).toContainText(
+      'security check generation or configured method changed'
+    );
     await expect(page.getByTestId('submission-count')).toHaveText('0');
-    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
     const current = await confirm(page, label);
     await expect(current).toContainText('Discord image CAPTCHA, method revision 8');
     await current.getByRole('button', { name: `Confirm ${label}` }).click();
@@ -266,7 +277,7 @@ test('a different configured issuance cannot reconcile a lost retry response', a
 });
 
 for (const status of ['passed', 'delivered'])
-  test(`a ${status} refresh removes the retry trigger while preserving an open stale review`, async ({
+  test(`a ${status} refresh closes the invalid review and focuses its explanation`, async ({
     page,
   }) => {
     await page.goto(url);
@@ -275,9 +286,7 @@ for (const status of ['passed', 'delivered'])
     await expect(
       page.getByRole('button', { name: 'Retry security check', exact: true })
     ).toHaveCount(0);
-    await expect(dialog).toBeVisible();
-    await expect(
-      dialog.getByRole('button', { name: 'Confirm Retry security check' })
-    ).toBeDisabled();
-    await expect(dialog.getByRole('textbox')).toHaveValue('Reviewed directly with this member');
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByRole('status')).toContainText('is no longer available');
+    await expect(page.getByRole('status')).toBeFocused();
   });

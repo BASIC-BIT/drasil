@@ -66,6 +66,7 @@ export const moderationActionRequestSummarySchema: z.ZodType<
     ),
   actorSurface: z.string(),
   actorUserId: z.string().nullable().optional(),
+  guildId: z.string().optional(),
   accountQuarantinePreviewRequestId: z.string().nullable().optional(),
   captchaConfiguration: captchaIssuanceConfigurationSchema.nullable().optional(),
   captchaBinding: z

@@ -72,8 +72,13 @@ for (const change of ['count', 'generation'])
     await page.goto(url());
     const dialog = await review(page, 'Delete 1 message');
     await event(page, change);
-    await expect(dialog).toContainText('out of date');
-    await expect(dialog.getByRole('button', { name: 'Confirm Delete 1 message' })).toBeDisabled();
+    await expect(dialog).toHaveCount(0);
+    await expect(
+      page.getByRole('status').filter({ hasText: 'message cleanup scope or preview changed' })
+    ).toBeVisible();
+    await expect(
+      page.getByRole('status').filter({ hasText: 'message cleanup scope or preview changed' })
+    ).toBeFocused();
     await expect(page.getByTestId('submission-count')).toHaveText('0');
   });
 for (const story of ['denied', 'indexing', 'partial-window', 'too-many'])
@@ -156,9 +161,10 @@ test('worker failure renews its intent once and unchanged reads preserve the ren
   await event(page, 'read');
   await expect(dialog).not.toContainText('out of date');
   await event(page, 'generation');
-  await expect(dialog).toContainText('out of date');
-  await expect(dialog.getByRole('button', { name: 'Confirm Delete 1 message' })).toBeDisabled();
-  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(
+    page.getByRole('status').filter({ hasText: 'message cleanup scope or preview changed' })
+  ).toBeVisible();
   dialog = await review(page, 'Delete 1 message');
   await dialog.getByRole('button', { name: 'Confirm Delete 1 message' }).click();
   await expect(page.getByTestId('submission-count')).toHaveText('2');
@@ -245,11 +251,10 @@ for (const change of ['scope', 'mode'] as const)
     await dialog.getByRole('textbox').fill('Second reviewed preview');
     await dialog.evaluate((element) => element.setAttribute('data-renewed-intent', 'retained'));
     await page.locator('select[aria-label="Scope"]').selectOption('last_7_days', { force: true });
-    await expect(dialog).toHaveAttribute('data-renewed-intent', 'retained');
-    await expect(dialog.getByRole('textbox')).toHaveValue('Second reviewed preview');
-    await expect(dialog).toContainText('out of date');
-    await expect(dialog.getByRole('button', { name: 'Confirm Preview messages' })).toBeDisabled();
-    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(
+      page.getByRole('status').filter({ hasText: 'message cleanup scope or preview changed' })
+    ).toBeVisible();
     dialog = await review(page, 'Preview messages');
     await expect(dialog.getByRole('textbox')).toHaveValue('Second reviewed preview');
     await dialog.getByRole('button', { name: 'Confirm Preview messages' }).click();

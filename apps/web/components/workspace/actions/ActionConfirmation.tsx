@@ -7,6 +7,7 @@ import styles from './Actions.module.css';
 export interface ActionConfirmationProps {
   readonly open: boolean;
   readonly targetLabel: string;
+  readonly guildId: string;
   readonly actionLabel: string;
   readonly description: string;
   readonly reason: string;
@@ -21,6 +22,7 @@ export interface ActionConfirmationProps {
 export function ActionConfirmation({
   open,
   targetLabel,
+  guildId,
   actionLabel,
   description,
   reason,
@@ -52,7 +54,7 @@ export function ActionConfirmation({
       ref={dialog}
       className={styles.confirmation}
       aria-labelledby={`${id}-title`}
-      aria-describedby={`${id}-description`}
+      aria-describedby={`${id}-context ${id}-description`}
       onCancel={(event) => {
         event.preventDefault();
         onCancel();
@@ -60,7 +62,11 @@ export function ActionConfirmation({
     >
       <form onSubmit={submit}>
         <h2 id={`${id}-title`}>{actionLabel}</h2>
-        <p>{targetLabel}</p>
+        <p id={`${id}-context`}>
+          {targetLabel}
+          <br />
+          Server ID {guildId}
+        </p>
         <p id={`${id}-description`}>{description}</p>
         <label className={styles.field}>
           <span>Reason{reasonRequired ? ' (required)' : ''}</span>

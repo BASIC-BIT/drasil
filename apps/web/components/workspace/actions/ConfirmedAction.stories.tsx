@@ -64,11 +64,14 @@ function Interaction({
       }, 100);
     };
     const changed = (): void => setDisabled(true);
+    const restored = (): void => setDisabled(false);
     window.addEventListener('storybook:router-refresh', refresh);
     window.addEventListener('fixture:eligibility-changed', changed);
+    window.addEventListener('fixture:eligibility-restored', restored);
     return () => {
       window.removeEventListener('storybook:router-refresh', refresh);
       window.removeEventListener('fixture:eligibility-changed', changed);
+      window.removeEventListener('fixture:eligibility-restored', restored);
     };
   }, [mode, deferFirstRefresh]);
   return (

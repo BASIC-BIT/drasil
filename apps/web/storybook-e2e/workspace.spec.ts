@@ -168,7 +168,7 @@ test('browser Back returns to the queue row and preserves application history me
   });
 });
 
-test('eligibility loss retains the open confirmation and draft but disables submission', async ({
+test('eligibility loss closes confirmation and explains the change without submitting', async ({
   page,
 }) => {
   await page.goto(`${story}&selected=${encodeURIComponent(observed)}`);
@@ -180,10 +180,9 @@ test('eligibility loss retains the open confirmation and draft but disables subm
   await page.getByRole('button', { name: 'Revoke selected eligibility' }).evaluate((button) => {
     if (button instanceof HTMLButtonElement) button.click();
   });
-  await expect(
-    dialog.getByRole('button', { name: 'Confirm Ban member', exact: true })
-  ).toBeDisabled();
-  await expect(dialog.getByLabel('Reason', { exact: true })).toHaveValue('Preserve this draft');
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('status')).toContainText('Ban member is no longer available');
+  await expect(page.getByRole('status')).toBeFocused();
   await expect(page.getByTestId('submissions')).toHaveText('0');
 });
 
@@ -198,6 +197,28 @@ test('removal disables retained actions without advancing or discarding evidence
   );
   await expect(page.getByRole('button', { name: 'Ban member', exact: true })).toBeDisabled();
   await expect(page).toHaveURL(new RegExp(`selected=${encodeURIComponent(observed)}`));
+});
+
+test('explicit queue Back focuses the next survivor after row removal on a narrow screen', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(story);
+  await expect(page.locator('[data-inbox-item]')).toHaveCount(6);
+  const ids = await page
+    .locator('[data-inbox-item]')
+    .evaluateAll((rows) => rows.map((row) => row.getAttribute('data-inbox-item')));
+  await page.locator(`[data-inbox-item="${observed}"]`).click();
+  await page.getByRole('button', { name: 'Remove observed row' }).click();
+  await expect(page.getByRole('region', { name: 'Selected inbox item' })).toContainText(
+    'Complete detection source text'
+  );
+  await page.getByRole('button', { name: 'Back to inbox', exact: true }).click();
+  const index = ids.indexOf(observed);
+  await expect(
+    page.locator(`[data-inbox-item="${ids[index + 1] ?? ids[index - 1]}"]`)
+  ).toBeFocused();
+  await expect(page.getByRole('region', { name: 'Inbox queue' })).toBeVisible();
 });
 
 test('session restoration contains ordering, focus and scroll only, with controls authoritative in the URL', async ({
@@ -491,9 +512,7 @@ test('case tools retain their draft, request result and polling through disclosu
   await expect(page.getByTestId('refreshes')).toHaveText(completedCount ?? '');
 });
 
-test('case tools preserve an open confirmation and reason when eligibility disappears', async ({
-  page,
-}) => {
+test('case tools close invalid confirmation with a visible explanation', async ({ page }) => {
   await page.goto(`${story}&selected=case%3Acase-stale`);
   await page.getByRole('button', { name: 'Case tools', exact: true }).click();
   await page.getByRole('button', { name: 'Refresh notification', exact: true }).click();
@@ -503,11 +522,10 @@ test('case tools preserve an open confirmation and reason when eligibility disap
   await page.getByRole('button', { name: 'Revoke selected eligibility' }).evaluate((element) => {
     if (element instanceof HTMLButtonElement) element.click();
   });
-  await expect(
-    dialog.getByRole('button', { name: 'Confirm Refresh notification', exact: true })
-  ).toBeDisabled();
-  await expect(dialog.getByLabel('Reason', { exact: true })).toHaveValue(
-    'Keep this contextual review'
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('status')).toContainText(
+    'Refresh notification is no longer available'
   );
+  await expect(page.getByRole('status')).toBeFocused();
   await expect(page.getByTestId('submissions')).toHaveText('0');
 });

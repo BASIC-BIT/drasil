@@ -11,6 +11,238 @@ test.beforeAll(() => fixtures.start());
 test.afterAll(() => fixtures.stop());
 test.beforeEach(async ({ context, baseURL }) => fixtures.reset(context, baseURL!));
 
+for (const surface of ['inbox', 'canonical'] as const)
+  test(`${surface} confirmation explains all pending cases and shared server context`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width: surface === 'inbox' ? 320 : 1440, height: 1000 });
+    await fixtures.pool.query(
+      "insert into verification_events(id,server_id,user_id,status) values('91000000-0000-4000-8000-000000000021',$1,$2,'pending')",
+      [id.guild, id.member]
+    );
+    const destination = surface === 'inbox' ? `inbox?selected=case:${id.case}` : `cases/${id.case}`;
+    await page.goto(`/admin/guild/${id.guild}/${destination}`);
+    for (const label of ['Verify member', 'Close case']) {
+      await page.getByRole('button', { name: label, exact: true }).click();
+      const dialog = page.getByRole('dialog');
+      await expect(dialog).toContainText(`Server ID ${id.guild}`);
+      await expect(dialog).toContainText('all pending cases for this member in this server');
+      await expect(dialog).toContainText(
+        'restore eligible snapshotted roles under current role policy'
+      );
+      if (label === 'Close case')
+        await expect(dialog).toContainText(
+          'Close cannot release active compromised-account quarantine'
+        );
+      await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+    }
+    await fixtures.pool.query(
+      "update verification_events set case_kind='compromised_account' where id=$1",
+      [id.case]
+    );
+    await page.reload();
+    await page.getByRole('button', { name: 'Verify and release', exact: true }).first().click();
+    await expect(page.getByRole('dialog')).toContainText('Confirm account recovery');
+    await expect(page.getByRole('dialog')).toContainText(
+      'all pending cases for this member in this server'
+    );
+    await expect(page.getByRole('dialog')).toContainText(`Server ID ${id.guild}`);
+    await page.screenshot({ path: testInfo.outputPath('confirmation.png'), fullPage: true });
+  });
+
+test('recovery and breach links select actual attention records with labelled source dates', async ({
+  page,
+}) => {
+  await fixtures.pool.query(
+    "update verification_events set case_kind='compromised_account' where id=$1",
+    [id.case]
+  );
+  await fixtures.pool.query(
+    "update moderation_queue_items set metadata=$2,updated_at='2026-10-25T12:00:00Z' where id=any($1::uuid[])",
+    [
+      [id.support, id.breach],
+      {
+        latest_message_at: '2026-10-01T12:00:00Z',
+        latest_message_url: `https://discord.com/channels/${id.guild}/${id.channel}/${id.message}`,
+      },
+    ]
+  );
+  for (const [queueId, label] of [
+    [id.support, 'Recovery reply'],
+    [id.breach, 'Containment breach'],
+  ]) {
+    await page.goto(`/admin/guild/${id.guild}/cases/${id.case}`);
+    const recovery = page.getByRole('region', { name: 'Account containment and recovery' });
+    await recovery.locator(`a[href*="selected=queue%3A${queueId}"]`).click();
+    await expect(page).toHaveURL(new RegExp(`selected=queue%3A${queueId}`));
+    await expect(page.getByRole('region', { name: 'Selected inbox item' })).toContainText(
+      new RegExp(label, 'i')
+    );
+    const row = page.locator(`[data-inbox-item="queue:${queueId}"]`);
+    await expect(row).toContainText(label);
+    await expect(row).toContainText(queueId === id.breach ? 'Posted' : 'Reply sent');
+    await expect(row.locator('time').first()).toHaveAttribute(
+      'datetime',
+      '2026-10-01T12:00:00.000Z'
+    );
+    await expect(row).toContainText('Queue updated');
+    if (queueId === id.breach) {
+      await expect(row).toContainText(id.channel);
+      await expect(row).not.toContainText('Recovery thread');
+      await expect(row.locator('[data-severity="danger"]')).toBeVisible();
+    }
+  }
+});
+
+for (const surface of ['inbox', 'canonical'] as const)
+  test(`${surface} keeps unknown and reviewed ban receipts inspectable with exact identity`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width: surface === 'inbox' ? 320 : 1440, height: 1000 });
+    const result = await fixtures.pool.query(
+      "insert into moderation_action_requests(server_id,actor_id,actor_surface,action_type,target_user_id,report_intake_id,detection_event_id,idempotency_key,status,result,requested_at,failed_at,updated_at) values($1,$2,'web','ban_observed_detection',$3,$4,$5,'review-ban','failed',$6,'2026-10-24T12:00:00Z','2026-10-25T12:00:00Z','2026-10-25T12:00:00Z') returning id",
+      [
+        id.guild,
+        id.actor,
+        id.member,
+        id.report,
+        id.reportDetection,
+        { observed_ban_result: { status: 'ban_outcome_unknown', operationId: 'review-operation' } },
+      ]
+    );
+    const requestId = result.rows[0].id as string;
+    await page.goto(
+      `/admin/guild/${id.guild}/${surface === 'inbox' ? `inbox?selected=report:${id.report}` : `reports/${id.report}`}`
+    );
+    const receipt = page.getByRole('status').filter({ hasText: 'Ban outcome unknown' });
+    await expect(receipt).toContainText('Operation review-operation');
+    await expect(receipt).toContainText(`/review-report-ban operation:review-operation`);
+    await expect(receipt).toContainText(`Requested by ${id.actor}`);
+    await expect(receipt.locator('time').first()).toHaveAttribute(
+      'datetime',
+      '2026-10-24T12:00:00.000Z'
+    );
+    await expect(receipt.getByRole('link', { name: `Request ${requestId}` })).toHaveAttribute(
+      'href',
+      `/admin/guild/${id.guild}/operations?request=${requestId}#request-${requestId}`
+    );
+    await expect(page.getByRole('button', { name: 'Ban member', exact: true })).toBeDisabled();
+    await page.screenshot({ path: testInfo.outputPath('unknown-receipt.png'), fullPage: true });
+    await fixtures.pool.query(
+      'update moderation_action_requests set result=$2,updated_at=now() where id=$1',
+      [
+        requestId,
+        {
+          observed_ban_result: {
+            status: 'ban_reviewed_no_current_ban',
+            operationId: 'review-operation',
+          },
+        },
+      ]
+    );
+    await page.reload();
+    const reviewed = page.getByRole('status').filter({ hasText: 'Reviewed: no current ban' });
+    await expect(reviewed).toContainText('historical outcome remains uncertain');
+    await expect(reviewed).toContainText(`Request ${requestId}`);
+    await expect(reviewed).toContainText('Matching claims released.');
+    await page.screenshot({ path: testInfo.outputPath('reviewed-receipt.png'), fullPage: true });
+    await fixtures.pool.query(
+      "insert into moderation_action_requests(server_id,actor_id,actor_surface,action_type,target_user_id,verification_event_id,idempotency_key,status) select $1,$2,'web','refresh_case_notification',$3,$4,'newer-'||n,'completed' from generate_series(1,26) n",
+      [id.guild, id.actor, id.member, id.case]
+    );
+    await reviewed.getByRole('link', { name: `Request ${requestId}` }).click();
+    await expect(page.locator(`[id="request-${requestId}"]`)).toBeVisible();
+  });
+
+test('completed generic maintenance stays historical after reload', async ({ page }) => {
+  const result = await fixtures.pool.query(
+    "insert into moderation_action_requests(server_id,actor_id,actor_surface,action_type,target_user_id,verification_event_id,idempotency_key,status,completed_at,result) values($1,$2,'web','refresh_case_notification',$3,$4,'maintenance-completed','completed','2026-10-24T12:00:00Z',$5) returning id",
+    [id.guild, id.actor, id.member, id.case, { action_type: 'refresh_case_notification' }]
+  );
+  await page.goto(`/admin/guild/${id.guild}/cases/${id.case}`);
+  await page.reload();
+  await page.getByRole('button', { name: 'Case tools', exact: true }).click();
+  const trigger = page.getByRole('button', { name: 'Refresh notification', exact: true });
+  await expect(trigger).toBeDisabled();
+  const receipt = page
+    .getByRole('status')
+    .filter({ hasText: 'This request already completed for this case.' });
+  await expect(receipt).toContainText(`Request ${result.rows[0].id}`);
+  await expect(receipt).toContainText(`Requested by ${id.actor}`);
+  await expect(receipt.locator('time').last()).toHaveAttribute(
+    'datetime',
+    '2026-10-24T12:00:00.000Z'
+  );
+});
+
+for (const via of ['canonical', 'history'] as const)
+  for (const remaining of ['next', 'previous', 'empty', 'arrival'] as const)
+    test(`explicit ${via} return continues to ${remaining} after selected case resolves`, async ({
+      page,
+    }) => {
+      const previous = '91000000-0000-4000-8000-000000000021';
+      const next = '91000000-0000-4000-8000-000000000022';
+      const arrival = '91000000-0000-4000-8000-000000000023';
+      await fixtures.pool.query(
+        "insert into verification_events(id,server_id,user_id,status,created_at) values($1,$3,$4,'pending','2026-10-20T14:40:00Z'),($2,$3,$4,'pending','2026-10-22T14:40:00Z')",
+        [previous, next, id.guild, id.member]
+      );
+      await fixtures.pool.query(
+        'update verification_events set updated_at=created_at where server_id=$1',
+        [id.guild]
+      );
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.goto(`/admin/guild/${id.guild}/inbox?kind=case&freshness=all&sort=oldest`);
+      await page.locator(`[data-inbox-item="case:${id.case}"]`).click();
+      await expect(page.getByRole('region', { name: 'Selected inbox item' })).toBeFocused();
+      await page.getByRole('link', { name: 'Open case', exact: true }).click();
+      const resolve =
+        remaining === 'next'
+          ? [id.case]
+          : remaining === 'previous'
+            ? [id.case, next]
+            : [id.case, next, previous];
+      await fixtures.pool.query(
+        "update verification_events set status='verified',resolved_at=now() where id=any($1::uuid[])",
+        [resolve]
+      );
+      if (remaining === 'arrival')
+        await fixtures.pool.query(
+          "insert into verification_events(id,server_id,user_id,status,created_at) values($1,$2,$3,'pending','2026-10-19T14:40:00Z')",
+          [arrival, id.guild, id.member]
+        );
+      if (via === 'canonical')
+        await page
+          .getByRole('link', { name: /Back to inbox/ })
+          .first()
+          .click();
+      else await page.goBack();
+      await expect(
+        page.getByRole('combobox', { name: 'Inbox kind', includeHidden: true })
+      ).toHaveValue('case');
+      await expect(
+        page.getByRole('combobox', { name: 'Inbox sort', includeHidden: true })
+      ).toHaveValue('oldest');
+      if (remaining === 'empty') {
+        await expect(page).not.toHaveURL(/selected=/);
+        await expect(
+          page.getByText('No inbox items match these filters.', { exact: true })
+        ).toHaveCount(1);
+        await expect(page.getByRole('region', { name: 'Selected inbox item' })).toHaveCount(0);
+        await expect(page.getByRole('heading', { name: /^Inbox/ })).toBeFocused();
+      } else {
+        const selected =
+          remaining === 'next' ? next : remaining === 'previous' ? previous : arrival;
+        await expect(page).toHaveURL(new RegExp(`selected=case%3A${selected}`));
+        await expect(page.getByRole('region', { name: 'Selected inbox item' })).toBeFocused();
+        await page.reload();
+        await expect(page).toHaveURL(new RegExp(`selected=case%3A${selected}`));
+        await page.getByRole('button', { name: 'Back to inbox', exact: true }).click();
+        await expect(page.locator(`[data-inbox-item="case:${selected}"]`)).toBeFocused();
+        await expect(page.getByRole('region', { name: 'Inbox queue' })).toBeVisible();
+      }
+    });
+
 // This journey runs against the application routes. Provider/worker effects belong
 // to the controlled test environment; the browser never replaces workspace reads.
 test('review report, cancel then confirm dismissal, explicitly continue to a case and return', async ({
@@ -36,7 +268,9 @@ test('review report, cancel then confirm dismissal, explicitly continue to a cas
   await selected.getByRole('button', { name: 'Dismiss report', exact: true }).click();
   await page.getByRole('checkbox').check();
   await page.getByRole('button', { name: 'Confirm Dismiss report', exact: true }).click();
-  await expect(selected.getByText(/dismissed|closed without/i)).toBeVisible();
+  await expect(
+    selected.getByRole('status').filter({ hasText: /dismissed|closed without/i })
+  ).toBeVisible();
   await expect(page).toHaveURL(/selected=/);
   await page.getByRole('button', { name: 'Next item', exact: true }).click();
   await page.getByRole('combobox', { name: 'Inbox kind' }).selectOption('case');
@@ -73,6 +307,11 @@ test('review report, cancel then confirm dismissal, explicitly continue to a cas
     .click();
   await expect(page.getByRole('combobox', { name: 'Inbox kind' })).toHaveValue('case');
   await expect(page.getByRole('combobox', { name: 'Inbox sort' })).toHaveValue('oldest');
+  await expect(page).not.toHaveURL(/selected=/);
+  await expect(page.getByText('No inbox items match these filters.', { exact: true })).toHaveCount(
+    1
+  );
+  await expect(page.getByRole('heading', { name: /^Inbox/ })).toBeFocused();
   expect(errors).toEqual([]);
 });
 
@@ -258,6 +497,10 @@ for (const foreign of [true, false])
     );
     await expect(page).not.toHaveURL(/request=/);
     await expect(page.getByRole('button', { name: 'Ban member', exact: true })).toBeEnabled();
+    if (foreign) {
+      await page.goto(`/admin/guild/${id.guild}/operations?request=${result.rows[0].id}`);
+      await expect(page.locator(`[id="request-${result.rows[0].id}"]`)).toHaveCount(0);
+    }
   });
 
 for (const outcome of ['failed', 'unknown'] as const)
