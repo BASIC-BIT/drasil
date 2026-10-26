@@ -404,11 +404,13 @@ function SelectedDetail({
     () => detailActions(detail).filter((action) => isAllowed(detail, action)),
     [detail]
   );
-  const [offered, setOffered] = useState(currentActions);
-  const [pendingTrack, setPendingTrack] = useState<string | null>(null);
-  const retainedActions = detailActions(detail).filter(
-    (action) => offered.includes(action) || currentActions.includes(action)
+  const [offered, setOffered] = useState(() =>
+    currentActions.map((action) => ({ action, detail }))
   );
+  const [pendingTrack, setPendingTrack] = useState<string | null>(null);
+  const retainedActions = [
+    ...new Set([...offered.map((entry) => entry.action), ...currentActions]),
+  ];
   const primaryActions =
     detail.kind === 'case'
       ? retainedActions.filter((action) => routineCaseActions.includes(action))
@@ -420,11 +422,16 @@ function SelectedDetail({
   const scopedRequests = useMemo(() => matchingInboxRequests(detail), [detail]);
   useEffect(() => {
     setOffered((previous) =>
-      currentActions.every((id) => previous.includes(id))
+      currentActions.every((action) => previous.some((entry) => entry.action === action))
         ? previous
-        : [...new Set([...previous, ...currentActions])]
+        : [
+            ...previous,
+            ...currentActions
+              .filter((action) => !previous.some((entry) => entry.action === action))
+              .map((action) => ({ action, detail })),
+          ]
     );
-  }, [currentActions]);
+  }, [currentActions, detail]);
   useEffect(() => {
     if (
       pendingTrack &&
@@ -469,8 +476,12 @@ function SelectedDetail({
             ? `${prefix}/cases/${encodeURIComponent(detail.caseData?.detail.id ?? item.sourceMetadata?.caseId ?? '')}`
             : item.detailHref;
   function renderAction(action: ModerationInboxAction) {
-    const submit = bindAction(detail, action, actions);
+    // Keep an offered action's real target mounted after its queue association disappears.
+    // Fresh eligibility still gates submission; a replacement queue row cannot retarget this result.
+    const offeredDetail = offered.find((entry) => entry.action === action)?.detail ?? detail;
+    const submit = bindAction(offeredDetail, action, actions);
     if (!submit) return null;
+    const actionTarget = { ...target, ...requestTarget(offeredDetail) };
     const matching = scopedRequests.filter((request) =>
       matchesWorkspaceActionRequest(request, target, action)
     );
@@ -479,13 +490,18 @@ function SelectedDetail({
     return (
       <ConfirmedAction
         key={action}
-        target={target}
+        target={actionTarget}
         action={{
           id: action,
           tone: actionTone(action),
           label: actionLabel(action, detail),
           description: `${target.label}. ${action === 'verify_user' && detail.kind === 'case' && detail.data.detail.caseKind === 'compromised_account' ? 'Confirm account recovery, release quarantine, restore eligible snapshotted roles under current role policy, and resolve this case.' : actionEffect(action, detail)}`,
-          disabled: !available || !isAllowed(detail, action),
+          disabled:
+            !available ||
+            !isAllowed(detail, action) ||
+            actionTarget.recordId !== target.recordId ||
+            actionTarget.kind !== target.kind ||
+            actionTarget.targetUserId !== target.targetUserId,
           reasonRequired:
             action === 'kick_user'
               ? detail.policy.kickReasonRequired

@@ -114,6 +114,45 @@ test('early reporter reply and breach preserve distinct identities; screening ha
   await expect(selected.getByRole('button')).toHaveCount(0);
 });
 
+test('canonical early report retains evidence and acknowledgment after attention disappears', async ({
+  page,
+}) => {
+  const evidence = 'Unconfirmed report evidence stays readable after acknowledging the reply.';
+  await fixtures.pool.query(
+    "insert into report_intake_evidence(intake_id,kind,content) values($1,'reporter_text',$2)",
+    [id.early, evidence]
+  );
+  await page.goto(`/admin/guild/${id.guild}/inbox?selected=queue:${id.reportAttention}`);
+  await page.getByRole('link', { name: 'Open report', exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/reports/${id.early}`));
+  await expect(page.getByText(evidence, { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Acknowledge reply', exact: true }).click();
+  await page.getByRole('dialog').getByRole('checkbox').check();
+  await page.getByRole('button', { name: 'Confirm Acknowledge reply', exact: true }).click();
+  await expect(page.getByText('Reply acknowledged.', { exact: true })).toBeVisible();
+  // Fresh server props must remove eligibility without replacing the report or its action instance.
+  await expect(page.getByRole('button', { name: 'Acknowledge reply', exact: true })).toBeDisabled();
+  await expect
+    .poll(
+      async () =>
+        (
+          await fixtures.pool.query('select id from moderation_queue_items where id=$1', [
+            id.reportAttention,
+          ])
+        ).rowCount
+    )
+    .toBe(0);
+  await expect(
+    page.getByText('Reporter follow-up · collecting evidence', { exact: true })
+  ).toBeVisible();
+  await expect(page.getByText(evidence, { exact: true })).toBeVisible();
+  await expect(page.getByText('Reply acknowledged.', { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByText(evidence, { exact: true })).toBeVisible();
+  await expect(page.getByText('Target not confirmed', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Acknowledge reply', exact: true })).toHaveCount(0);
+});
+
 test('direct resolved case and vanished pending rows remain readable after reload', async ({
   page,
 }) => {

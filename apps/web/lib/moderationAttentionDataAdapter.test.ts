@@ -57,11 +57,13 @@ const intake = {
 beforeEach(() => {
   vi.resetAllMocks();
   db.query.mockImplementation(async (sql: string) => ({
-    rows: sql.includes('from moderation_queue_items mqi')
-      ? [row]
-      : sql.includes('from report_intakes ri')
-        ? [intake]
-        : [],
+    rows: sql.includes('from report_intake_evidence')
+      ? []
+      : sql.includes('from moderation_queue_items mqi')
+        ? [row]
+        : sql.includes('from report_intakes ri')
+          ? [intake]
+          : [],
   }));
 });
 it('reads early intake without casting it to ReportDetail and keeps the actual reply destination', async () => {
@@ -99,9 +101,10 @@ it('retains separate linkage IDs and guild-scopes all joined records and evidenc
   const evidenceCall = db.query.mock.calls.find(([query]) =>
     query.includes('from report_intake_evidence')
   );
-  expect(evidenceCall?.[1]).toEqual(['guild-1', 'intake']);
-  expect(evidenceCall?.[0]).toContain('join report_intakes ri on ri.id = e.intake_id');
-  expect(evidenceCall?.[0]).toContain('ri.server_id = $1 and ri.id::text = $2');
+  expect(evidenceCall?.[1]).toEqual(['intake', 'guild-1']);
+  expect(evidenceCall?.[0]).toContain('ri.id = evidence.intake_id');
+  expect(evidenceCall?.[0]).toContain('intake_id = $1');
+  expect(evidenceCall?.[0]).toContain('ri.server_id = $2');
   expect(evidenceCall?.[0]).not.toContain('de.');
 });
 it('retains a quarantine breach subtype without calling the posting location the recovery thread', async () => {

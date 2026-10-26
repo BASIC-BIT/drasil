@@ -3,7 +3,6 @@ import { createWebAuthority } from './application/adapters/authority';
 import { createModerationWorkspaceDataAdapter } from './moderationWorkspaceDataAdapter';
 import { getCurrentAdminSession, getCurrentDiscordToken } from './session';
 import { createSetupDashboardService } from './setupDashboardService';
-import { getPostgresPool } from './setupDataAdapter';
 import { resolveWorkspaceReturnTo } from './workspaceConfirmation';
 
 export async function loadWorkspaceRoute(guildId: string, path: string) {
@@ -34,13 +33,5 @@ export async function loadReportWorkspace(
   reportId: string,
   adapter: ReturnType<typeof createModerationWorkspaceDataAdapter>
 ) {
-  const submitted = await adapter.getInboxItemDetail({ guildId, itemId: `report:${reportId}` });
-  if (submitted) return submitted;
-  const result = await getPostgresPool().query<{ id: string }>(
-    "select id::text from moderation_queue_items where server_id=$1 and report_intake_id::text=$2 and item_type='report_thread_attention' order by updated_at desc nulls last limit 1",
-    [guildId, reportId]
-  );
-  return result.rows[0]
-    ? adapter.getInboxItemDetail({ guildId, itemId: `queue:${result.rows[0].id}` })
-    : null;
+  return adapter.getInboxItemDetail({ guildId, itemId: `report:${reportId}` });
 }

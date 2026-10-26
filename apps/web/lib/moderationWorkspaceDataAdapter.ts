@@ -23,7 +23,10 @@ import {
   type MemberProfileDetection,
 } from '@drasil/contracts';
 import { createActiveCaseDataAdapter } from './activeCaseDataAdapter';
-import { createReportDetailDataAdapter } from './reportDetailDataAdapter';
+import {
+  createReportDetailDataAdapter,
+  loadReportAttentionRecord,
+} from './reportDetailDataAdapter';
 import { createReportQueueDataAdapter } from './reportQueueDataAdapter';
 import { createMemberProfileDataAdapter, parseDetectionRow } from './memberProfileDataAdapter';
 import {
@@ -290,6 +293,59 @@ export function createModerationWorkspaceDataAdapter(
         : null,
     });
   }
+  async function getEarlyReportDetail(
+    guildId: string,
+    reportId: string
+  ): Promise<WorkspaceItemDetail | null> {
+    const intake = await loadReportAttentionRecord(guildId, reportId);
+    if (!intake) return null;
+    const result = await getPostgresPool().query<{ id: string }>(
+      "select id::text from moderation_queue_items where server_id=$1 and report_intake_id::text=$2 and item_type='report_thread_attention' order by updated_at desc nulls last, id limit 1",
+      [guildId, reportId]
+    );
+    const selected = result.rows[0]
+      ? await getInboxItemDetail({ guildId, itemId: `queue:${result.rows[0].id}` })
+      : null;
+    const attention =
+      selected?.kind === 'report_attention' && selected.intake.id === reportId ? selected : null;
+    const item = moderationInboxItemSchema.parse({
+      id: `report:${intake.id}`,
+      guildId: intake.guildId,
+      kind: 'report_attention',
+      sourceId: intake.id,
+      queueItemId: attention?.item.queueItemId ?? null,
+      sourceMetadata: attention?.item.sourceMetadata,
+      subject: {
+        userId: intake.reporterId,
+        displayLabel: intake.reporterDisplayName ?? intake.reporterId,
+        secondaryLabel: null,
+        avatarUrl: null,
+      },
+      title: 'Report',
+      summary: intake.summary,
+      summarySource: intake.summarySource,
+      statusLabel: attention ? 'needs attention' : intake.status,
+      signalLabel: null,
+      createdAt: intake.createdAt,
+      updatedAt: intake.updatedAt,
+      stale: attention?.item.stale ?? false,
+      staleHours: attention?.item.staleHours ?? 0,
+      detailHref: `/admin/guild/${encodeURIComponent(guildId)}/reports/${encodeURIComponent(reportId)}`,
+      links: intake.reportThreadUrl
+        ? [{ label: 'Report thread', url: intake.reportThreadUrl }]
+        : [],
+      allowedActions:
+        attention?.item.allowedActions ?? (intake.reportThreadUrl ? ['open_discord'] : []),
+    });
+    const effectivePolicy = await policy(item);
+    return workspaceItemDetailSchema.parse({
+      kind: 'report_attention',
+      item: { ...item, allowedActions: effectivePolicy.allowedActions },
+      policy: effectivePolicy,
+      intake,
+      reply: attention?.reply ?? { kind: 'unavailable', sourceUrl: intake.reportThreadUrl },
+    });
+  }
   async function getInboxItemDetail({
     guildId,
     itemId,
@@ -313,7 +369,8 @@ export function createModerationWorkspaceDataAdapter(
     }
     if (kind === 'report') {
       const report = await reports.getReportDetail(guildId, id);
-      if (!report || report.guildId !== guildId || report.id !== id) return null;
+      if (!report) return getEarlyReportDetail(guildId, id);
+      if (report.guildId !== guildId || report.id !== id) return null;
       const item = reportItem(report);
       const [effectivePolicy, matchingRequests] = await Promise.all([
         policy(item),

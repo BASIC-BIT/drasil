@@ -187,10 +187,13 @@ export function parseReportAttentionRows(
   });
 }
 
-export class PostgresReportDetailDataAdapter implements ReportDetailDataAdapter {
-  public async getReportDetail(guildId: string, reportId: string): Promise<ReportDetail | null> {
-    const reportResult = await getPostgresPool().query<ReportDetailRow>(
-      `select
+async function readReportRows(
+  guildId: string,
+  reportId: string,
+  statuses: readonly ReportQueueStatus[] | null
+) {
+  const reportResult = await getPostgresPool().query<ReportDetailRow>(
+    `select
          ri.id,
          ri.server_id,
          ri.reporter_id,
@@ -221,23 +224,38 @@ export class PostgresReportDetailDataAdapter implements ReportDetailDataAdapter 
          limit 1
        ) de on true
        left join verification_events linked_case on linked_case.id = de.latest_verification_event_id and linked_case.server_id = ri.server_id and linked_case.user_id = ri.confirmed_target_user_id
-       where ri.id::text = $1 and ri.server_id = $2 and ri.status = any($3::report_intake_status[])
+       where ri.id::text = $1 and ri.server_id = $2 and ($3::report_intake_status[] is null or ri.status = any($3::report_intake_status[]))
        limit 1`,
-      [reportId, guildId, reviewedReportStatuses]
-    );
-    const report = reportResult.rows[0];
-    if (!report) {
-      return null;
-    }
+    [reportId, guildId, statuses]
+  );
+  const report = reportResult.rows[0];
+  if (!report || report.server_id !== guildId || report.id !== reportId) {
+    return null;
+  }
 
-    const evidenceResult = await getPostgresPool().query<ReportEvidenceRow>(
-      `select id, kind, source_message_id, source_channel_id, attachment_id, content, metadata, created_at
+  const evidenceResult = await getPostgresPool().query<ReportEvidenceRow>(
+    `select id, kind, source_message_id, source_channel_id, attachment_id, content, metadata, created_at
        from report_intake_evidence evidence
        where intake_id = $1 and exists (select 1 from report_intakes ri where ri.id = evidence.intake_id and ri.server_id = $2)
        order by created_at asc`,
-      [reportId, guildId]
-    );
-    return parseReportDetailRows(report, evidenceResult.rows);
+    [reportId, guildId]
+  );
+  return { report, evidence: evidenceResult.rows };
+}
+
+/** Durable intake read, including stages before a target or reviewed report exists. */
+export async function loadReportAttentionRecord(
+  guildId: string,
+  reportId: string
+): Promise<ReportAttentionRecord | null> {
+  const rows = await readReportRows(guildId, reportId, null);
+  return rows ? parseReportAttentionRows(rows.report, rows.evidence) : null;
+}
+
+export class PostgresReportDetailDataAdapter implements ReportDetailDataAdapter {
+  public async getReportDetail(guildId: string, reportId: string): Promise<ReportDetail | null> {
+    const rows = await readReportRows(guildId, reportId, reviewedReportStatuses);
+    return rows ? parseReportDetailRows(rows.report, rows.evidence) : null;
   }
 }
 
