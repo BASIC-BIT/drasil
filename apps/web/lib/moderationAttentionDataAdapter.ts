@@ -1,12 +1,8 @@
 import { z } from 'zod';
-import {
-  type ModerationInboxItem,
-  type ReportAttentionRecord,
-  reportAttentionRecordSchema,
-} from '@drasil/contracts';
+import { type ModerationInboxItem, type ReportAttentionRecord } from '@drasil/contracts';
 import { getPostgresPool } from './setupDataAdapter';
 import { parseModerationQueueRow, type ModerationQueueRow } from './moderationInboxDataAdapter';
-import { parseReportAttentionRows } from './reportDetailDataAdapter';
+import { loadReportAttentionRecord } from './reportDetailDataAdapter';
 import { discordMessageUrl } from './discordUrls';
 import type { ReplyReadState, SupportAttentionSubtype } from './moderationWorkspaceTypes';
 
@@ -66,31 +62,8 @@ export function createModerationAttentionDataAdapter(): ModerationAttentionDataA
         return null;
       let intake: ReportAttentionRecord | null = null;
       if (item.kind === 'report_attention' && row.report_intake_id) {
-        const report = await getPostgresPool().query<
-          Parameters<typeof parseReportAttentionRows>[0]
-        >(
-          `select ri.*, target.username as target_display_name, reporter.username as reporter_display_name, de.id as latest_detection_id, linked_case.id as latest_case_id
-           from report_intakes ri
-           left join users target on target.discord_id = ri.confirmed_target_user_id
-           left join users reporter on reporter.discord_id = ri.reporter_id
-           left join lateral (select id, latest_verification_event_id from detection_events
-             where server_id = ri.server_id and user_id = ri.confirmed_target_user_id and metadata->>'reportIntakeId' = ri.id::text
-             order by detected_at desc nulls last limit 1) de on true
-           left join verification_events linked_case on linked_case.id = de.latest_verification_event_id and linked_case.server_id = ri.server_id and linked_case.user_id = ri.confirmed_target_user_id
-           where ri.server_id = $1 and ri.id::text = $2 limit 1`,
-          [guildId, row.report_intake_id]
-        );
-        const record = report.rows[0];
-        if (!record || record.server_id !== guildId || record.id !== row.report_intake_id)
-          return null;
-        const evidence = await getPostgresPool().query<
-          Parameters<typeof parseReportAttentionRows>[1][number]
-        >(
-          `select e.* from report_intake_evidence e join report_intakes ri on ri.id = e.intake_id
-           where ri.server_id = $1 and ri.id::text = $2 order by e.created_at asc`,
-          [guildId, row.report_intake_id]
-        );
-        intake = reportAttentionRecordSchema.parse(parseReportAttentionRows(record, evidence.rows));
+        intake = await loadReportAttentionRecord(guildId, row.report_intake_id);
+        if (!intake) return null;
       }
       return {
         queueType: attentionQueueTypeSchema.parse(row.item_type),

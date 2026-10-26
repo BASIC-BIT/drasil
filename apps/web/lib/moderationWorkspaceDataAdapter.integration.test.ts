@@ -438,3 +438,55 @@ it('retains completed cleanup and failed finalization after the case is banned',
   expect(selected?.kind).toBe('case');
   if (selected?.kind === 'case') expect(selected.data.cleanup?.jobs[0].id).toBe(jobId);
 });
+
+it('reads a canonical early intake independently of disposable attention and scopes its source identities', async () => {
+  await pool.query(
+    "insert into report_intake_evidence(intake_id,kind,content,source_channel_id,source_message_id) values($1,'reporter_text',$2,'source-channel','source-message')",
+    [intakeId, fullEvidenceText]
+  );
+  const read = () => adapter().getInboxItemDetail({ guildId, itemId: `report:${intakeId}` });
+  const before = await read();
+  expect(before).toMatchObject({
+    kind: 'report_attention',
+    item: {
+      id: `report:${intakeId}`,
+      guildId,
+      sourceId: intakeId,
+      queueItemId: reportQueueId,
+      allowedActions: ['acknowledge', 'open_discord'],
+    },
+    intake: {
+      id: intakeId,
+      guildId,
+      status: 'collecting_evidence',
+      targetUserId: null,
+      evidence: [
+        {
+          content: fullEvidenceText,
+          sourceMessageUrl: `https://discord.com/channels/${guildId}/source-channel/source-message`,
+        },
+      ],
+    },
+  });
+  await pool.query('delete from moderation_queue_items where id=$1', [reportQueueId]);
+  expect(await read()).toMatchObject({
+    kind: 'report_attention',
+    item: { id: `report:${intakeId}`, guildId, sourceId: intakeId, queueItemId: null },
+    intake: {
+      id: intakeId,
+      status: 'collecting_evidence',
+      targetUserId: null,
+      evidence: [{ content: fullEvidenceText }],
+    },
+  });
+  expect((await read())?.item.allowedActions).not.toContain('acknowledge');
+  expect(
+    await adapter().getInboxItemDetail({ guildId, itemId: `report:${foreignIntakeId}` })
+  ).toBeNull();
+  expect(
+    await adapter().getInboxItemDetail({
+      guildId: otherGuildId,
+      itemId: `report:${foreignIntakeId}`,
+    })
+  ).toBeNull();
+});
