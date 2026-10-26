@@ -1,6 +1,7 @@
 import {
   reportBanPhases,
-  parseReportBanState,
+  parseReportBanOwnershipFence,
+  parseReportBanObservationEvidence,
   parseReportBanAdmissionFence,
 } from '../utils/reportBanState';
 import { randomUUID } from 'crypto';
@@ -1498,7 +1499,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
     persistedMetadata: Prisma.JsonObject,
     event: VerificationEvent
   ): boolean {
-    const metadata = parseReportBanState(persistedMetadata);
+    const metadata = parseReportBanOwnershipFence(persistedMetadata);
     if (!metadata.report_ban_phase || metadata.report_ban_phase === 'preparing') return false;
     const snapshot = ((event.metadata ?? {}) as Prisma.JsonObject).user_snapshot as
       | Prisma.JsonObject
@@ -1699,7 +1700,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
       if (data.status === VerificationStatus.BANNED && data.resolved_at) {
         for (const operation of owners) {
           if (operation.requested_at && operation.requested_at > data.resolved_at) continue;
-          const state = parseReportBanState(operation.metadata);
+          const state = parseReportBanObservationEvidence(operation.metadata);
           const prior = state.report_ban_observed_ban;
           const evidence = (data.metadata ?? {}) as Prisma.JsonObject;
           const observation = {

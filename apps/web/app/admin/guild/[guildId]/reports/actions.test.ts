@@ -104,11 +104,9 @@ describe('banSubmittedReport', () => {
     expect(await banSubmittedReport('guild-1', 'report-1', idle, form({ reason }))).toMatchObject({
       status: 'queued',
     });
-    expect(m.queue).toHaveBeenCalledWith(
-      expect.objectContaining({
-        metadata: { reason: '', requested_action: 'ban_user' },
-      })
-    );
+    expect(m.queue).toHaveBeenCalledTimes(1);
+    const values = m.queue.mock.calls[0][1];
+    expect(values[10]).toBe(JSON.stringify({ reason: '', requested_action: 'ban_user' }));
   });
   it.each([{ confirmAction: '' }, { reason: '' }, { confirmedTargetUserId: 'changed' }])(
     'rejects invalid confirmation %j',

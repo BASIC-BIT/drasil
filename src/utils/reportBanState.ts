@@ -68,6 +68,31 @@ export function parseReportBanAdmissionFence(
   return reportBanAdmissionFenceSchema.parse(metadata ?? {});
 }
 
+const reportBanOwnershipFenceSchema = reportBanStateSchema.pick({
+  report_ban_phase: true,
+  report_ban_confirmed_at: true,
+  report_ban_membership_joined_at: true,
+});
+const observedBanEvidenceSchema = reportBanStateSchema.shape.report_ban_observed_ban
+  .unwrap()
+  .unwrap()
+  .pick({ uncertain_result: true });
+const reportBanObservationEvidenceSchema = reportBanStateSchema
+  .pick({ report_ban_attempt_token: true, report_ban_membership_joined_at: true })
+  .extend({ report_ban_observed_ban: observedBanEvidenceSchema.nullish() });
+
+export function parseReportBanOwnershipFence(
+  metadata: unknown
+): z.infer<typeof reportBanOwnershipFenceSchema> {
+  return reportBanOwnershipFenceSchema.parse(metadata ?? {});
+}
+
+export function parseReportBanObservationEvidence(
+  metadata: unknown
+): z.infer<typeof reportBanObservationEvidenceSchema> {
+  return reportBanObservationEvidenceSchema.parse(metadata ?? {});
+}
+
 export type ReportBanState = z.infer<typeof reportBanStateSchema>;
 export type ReportBanPatch = Omit<ReportBanState, 'report_ban_observed_ban'>;
 export type ReportBanCaseSnapshot = z.infer<typeof caseSnapshot>;
