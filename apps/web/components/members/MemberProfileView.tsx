@@ -1,3 +1,4 @@
+import { LegacyWorkspacePage } from '@/components/workspace/LegacyWorkspacePage';
 import type {
   CaseSummary,
   MemberProfile,
@@ -5,8 +6,6 @@ import type {
   MemberProfileOutcome,
   MemberProfileReport,
 } from '@drasil/contracts';
-import { AccountControl } from '@/components/AccountControl';
-import { ThemeToggle } from '@/components/ThemeToggle';
 import { DiscordExternalLink } from '@/components/cases/DiscordExternalLink';
 import { CaseIdentity } from '@/components/cases/CaseIdentity';
 import {
@@ -572,33 +571,12 @@ export function MemberProfileView({
   sessionUsername,
 }: MemberProfileViewProps) {
   return (
-    <main className="shell stack">
-      <nav className="topbar">
-        <a className="brand" href={`/admin/guild/${guildId}/members/${profile.userId}`}>
-          <span className="brand-mark" />
-          <span>Drasil</span>
-        </a>
-        <div className="nav-cluster">
-          <a className="button secondary" href={`/admin/guild/${guildId}/inbox`}>
-            Inbox
-          </a>
-          <a className="button secondary" href={`/admin/guild/${guildId}/cases`}>
-            Case Queue
-          </a>
-          <a className="button secondary" href={`/admin/guild/${guildId}/reports`}>
-            Reports
-          </a>
-          <a className="button secondary" href={`/admin/guild/${guildId}/history`}>
-            History
-          </a>
-          <a className="button secondary" href={`/admin/guild/${guildId}/setup`}>
-            Setup
-          </a>
-          <ThemeToggle />
-          <AccountControl username={sessionUsername} />
-        </div>
-      </nav>
-
+    <LegacyWorkspacePage
+      guildId={guildId}
+      guildName={guildName}
+      sessionUsername={sessionUsername}
+      currentPage="history"
+    >
       <p className="muted">{guildName} Member History</p>
       <MemberSummary
         guildId={guildId}
@@ -623,6 +601,6 @@ export function MemberProfileView({
         userId={profile.userId}
       />
       <OutcomeRows guildId={guildId} outcomes={profile.outcomes} />
-    </main>
+    </LegacyWorkspacePage>
   );
 }

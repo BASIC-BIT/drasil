@@ -33,15 +33,18 @@ export function WorkspaceReadFailure({
   code,
   returnTo,
   onRetry,
+  headingLevel = 2,
 }: {
   readonly code: WorkspaceReadFailureCode;
   readonly returnTo: string;
   readonly onRetry: () => void;
+  readonly headingLevel?: 1 | 2;
 }) {
   const message = messages[code];
+  const Heading = headingLevel === 1 ? 'h1' : 'h2';
   return (
     <section className={styles.failure} role="alert">
-      <h2>{message.title}</h2>
+      <Heading>{message.title}</Heading>
       <p>{message.description}</p>
       <div className={styles.actions}>
         {code === 'authentication_required' ? (
@@ -66,6 +69,7 @@ export function WorkspaceAccessFailure({
       <main className={styles.page}>
         <DrasilBrand href="/admin" />
         <WorkspaceReadFailure
+          headingLevel={1}
           code={code}
           returnTo="/admin"
           onRetry={() => window.location.reload()}

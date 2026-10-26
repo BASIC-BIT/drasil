@@ -1,67 +1,42 @@
 import Link from 'next/link';
-import { ThemeToggle } from '@/components/ThemeToggle';
+import { PublicShell } from '@/components/workspace/PublicShell';
+import styles from './page.module.css';
 
 export default function HomePage() {
   return (
-    <main className="shell">
-      <nav className="topbar">
-        <div className="brand">
-          <span className="brand-mark" />
-          <span>Drasil</span>
-        </div>
-        <div className="nav-cluster">
-          <ThemeToggle />
-          <Link className="button secondary" href="/api/auth/discord?returnTo=/admin">
-            Admin sign in
-          </Link>
-        </div>
-      </nav>
-      <section className="hero">
-        <div className="hero-copy">
-          <span className="eyebrow">Discord anti-spam operations</span>
-          <h1>Review scams.</h1>
+    <PublicShell actions={<Link href="/api/auth/discord?returnTo=/admin">Admin sign in</Link>}>
+      <main className={`shell ${styles.home}`}>
+        <section className={styles.introduction}>
+          <p className="muted">Discord moderation</p>
+          <h1>Shared protection.</h1>
           <p className="lede">
-            Drasil turns reports, cases, verification, and triage into Discord-linked cases without
-            replacing moderator judgment.
+            Bring reports, cases and verification into one moderation workspace. Review evidence,
+            follow up in Discord and choose how Drasil responds in your server.
           </p>
           <div className="actions">
             <Link className="button" href="/api/auth/discord?returnTo=/admin">
-              Open setup dashboard
+              Open moderation workspace
             </Link>
             <Link className="button secondary" href="/api/auth/discord?returnTo=/report">
               Report a user
             </Link>
-            <a
-              className="button secondary"
-              href="https://github.com/BASIC-BIT/drasil/blob/main/docs/workflow.md"
-            >
+          </div>
+        </section>
+        <section className={styles.links} aria-label="Drasil resources">
+          <div>
+            <h2>Moderation with context</h2>
+            <p className="muted">Review reports and case history with links to Discord evidence.</p>
+            <a href="https://github.com/BASIC-BIT/drasil/blob/main/docs/workflow.md">
               Read workflow
             </a>
           </div>
-        </div>
-        <aside className="panel stack">
           <div>
-            <span className="status info">Setup dashboard</span>
-            <h2>Ready before the first alert.</h2>
-            <p className="muted">
-              Sign in with Discord, choose a guild, and compare live server state with Drasil&apos;s
-              saved configuration.
-            </p>
+            <h2>Your server settings</h2>
+            <p className="muted">Configure detection responses and reporting for your community.</p>
+            <Link href="/api/auth/discord?returnTo=/admin">Open server settings</Link>
           </div>
-          <div className="grid">
-            <div className="card">
-              <h3>Evidence stays visible</h3>
-              <p className="muted">Case links point back to Discord threads and messages.</p>
-            </div>
-            <div className="card">
-              <h3>Policy stays explicit</h3>
-              <p className="muted">
-                Tune detection response modes without changing bot code or losing provenance.
-              </p>
-            </div>
-          </div>
-        </aside>
-      </section>
-    </main>
+        </section>
+      </main>
+    </PublicShell>
   );
 }

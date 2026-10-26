@@ -1,9 +1,8 @@
 'use client';
 
+import { LegacyWorkspacePage } from '@/components/workspace/LegacyWorkspacePage';
 import { useEffect, useMemo, useRef, useState, type Ref } from 'react';
 import type { CaseSummary } from '@drasil/contracts';
-import { AccountControl } from '@/components/AccountControl';
-import { ThemeToggle } from '@/components/ThemeToggle';
 import { CaseIdentity } from './CaseIdentity';
 import { DiscordExternalLink } from './DiscordExternalLink';
 import {
@@ -231,37 +230,16 @@ export function CaseHistoryView({
   const retainedCount = visibleCases.filter((item) => item.presenceState === 'in_server').length;
 
   return (
-    <main className="shell stack">
-      <nav className="topbar">
-        <a className="brand" href={`/admin/guild/${guildId}/history`}>
-          <span className="brand-mark" />
-          <span>Drasil</span>
-        </a>
-        <div className="nav-cluster">
-          <a className="button secondary" href={`/admin/guild/${guildId}/inbox`}>
-            Inbox
-          </a>
-          <a className="button secondary" href={`/admin/guild/${guildId}/cases`}>
-            Case Queue
-          </a>
-          <a className="button secondary" href={`/admin/guild/${guildId}/reports`}>
-            Reports
-          </a>
-          <a className="button secondary" href={`/admin/guild/${guildId}/setup`}>
-            Setup
-          </a>
-          <ThemeToggle />
-          <AccountControl username={sessionUsername} />
-        </div>
-      </nav>
-
+    <LegacyWorkspacePage
+      guildId={guildId}
+      guildName={guildName}
+      sessionUsername={sessionUsername}
+      currentPage="history"
+    >
       <section className="panel stack">
         <div className="section-heading">
-          <h1 className="page-title">{guildName} Case History</h1>
-          <p className="lede">
-            Inspect resolved cases, outcomes, and Discord provenance without reopening or mutating
-            the case state.
-          </p>
+          <h1 className="page-title">History</h1>
+          <p className="lede">Review resolved cases, outcomes and past moderation decisions.</p>
         </div>
         <div className="case-meta compact">
           <div>
@@ -312,6 +290,6 @@ export function CaseHistoryView({
           ))}
         </section>
       )}
-    </main>
+    </LegacyWorkspacePage>
   );
 }

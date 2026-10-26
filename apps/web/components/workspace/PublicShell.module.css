@@ -1,0 +1,61 @@
+.header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px 24px;
+  padding: 16px max(20px, calc((100% - 1180px) / 2));
+  border-bottom: 1px solid var(--dr-line);
+}
+.header > button {
+  grid-column: 3;
+}
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  min-width: 0;
+}
+.actions > a {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+}
+.actions :global(.account-control) {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  min-width: 0;
+  width: auto;
+  max-width: 100%;
+}
+.actions :global(.account-label),
+.actions :global(.account-avatar) {
+  display: none;
+}
+.actions :global(.account-name) {
+  max-width: none;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  font-weight: 400;
+}
+@media (max-width: 499px) {
+  .header {
+    padding-block: 10px;
+    gap: 8px;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .header > button {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .actions {
+    gap: 8px 20px;
+    grid-row: 2;
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+}

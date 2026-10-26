@@ -1,11 +1,11 @@
 import { expect, test } from '@playwright/test';
 
-test('landing page explains the setup dashboard', async ({ page }) => {
+test('landing page opens the moderation workspace', async ({ page }) => {
   await page.goto('/');
 
   await expect(page).toHaveTitle(/Drasil Moderation/);
-  await expect(page.getByRole('heading', { name: /review scams/i })).toBeVisible();
-  await expect(page.getByRole('link', { name: /open setup dashboard/i })).toHaveAttribute(
+  await expect(page.getByRole('heading', { name: /shared protection/i })).toBeVisible();
+  await expect(page.getByRole('link', { name: /open moderation workspace/i })).toHaveAttribute(
     'href',
     '/api/auth/discord?returnTo=/admin'
   );
@@ -85,6 +85,14 @@ test('guided onboarding shows readiness and keeps apply actions administrator-on
   await page.goto('/admin/guild/guild-1/onboarding');
   await expect(page.getByRole('heading', { name: /review and finish/i })).toBeVisible();
   await expect(page.getByText('Drasil passed all core setup checks.')).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Open Inbox', exact: true })).toHaveAttribute(
+    'href',
+    '/admin/guild/guild-1/inbox'
+  );
+  await expect(page.getByRole('link', { name: 'Open full settings', exact: true })).toHaveAttribute(
+    'href',
+    '/admin/guild/guild-1/setup'
+  );
   await expect(page.getByText('Review these warnings')).toBeVisible();
   await expect(
     page.getByText(/#drasil-admin grants View Channel directly to member member-1/)
@@ -184,7 +192,7 @@ test('operations queues moderation queue maintenance through the shared action p
 }) => {
   await page.goto('/admin/guild/guild-1/operations');
 
-  await expect(page.getByRole('heading', { name: /fixture guild operations/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Operations', exact: true })).toBeVisible();
   await expect(page.getByText('#moderation-queue')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Deployment Runtime' })).toBeVisible();
   await expect(page.getByText('.github/workflows/deploy-prod.yml')).toBeVisible();
@@ -200,7 +208,7 @@ test('operations queues moderation queue maintenance through the shared action p
   await expect(recentRequests.getByText('Dry run Manual Intake')).toBeVisible();
 
   await page.getByRole('button', { name: 'Sync Queue' }).click();
-  await expect(page.getByRole('heading', { name: /fixture guild operations/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Operations', exact: true })).toBeVisible();
 
   const clearQueueAction = page.locator('details.destructive-action').filter({
     hasText: 'Clear Queue',
@@ -208,10 +216,10 @@ test('operations queues moderation queue maintenance through the shared action p
   await clearQueueAction.getByText('Clear Queue', { exact: true }).click();
   await clearQueueAction.getByLabel('Confirm Clear Queue').check();
   await clearQueueAction.getByRole('button', { name: 'Queue Clear Queue' }).click();
-  await expect(page.getByRole('heading', { name: /fixture guild operations/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Operations', exact: true })).toBeVisible();
 
   await page.getByRole('button', { name: 'Dry Run Thread Sweep' }).click();
-  await expect(page.getByRole('heading', { name: /fixture guild operations/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Operations', exact: true })).toBeVisible();
 
   const closeThreadsAction = page.locator('details.destructive-action').filter({
     hasText: 'Close Threads',
@@ -219,10 +227,10 @@ test('operations queues moderation queue maintenance through the shared action p
   await closeThreadsAction.getByText('Close Threads', { exact: true }).click();
   await closeThreadsAction.getByLabel('Confirm Close Resolved Threads').check();
   await closeThreadsAction.getByRole('button', { name: 'Queue Close Threads' }).click();
-  await expect(page.getByRole('heading', { name: /fixture guild operations/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Operations', exact: true })).toBeVisible();
 
   await page.getByRole('button', { name: 'Audit Lockdown' }).click();
-  await expect(page.getByRole('heading', { name: /fixture guild operations/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Operations', exact: true })).toBeVisible();
 
   const applyLockdownAction = page.locator('details.destructive-action').filter({
     hasText: 'Apply Lockdown',
@@ -231,10 +239,10 @@ test('operations queues moderation queue maintenance through the shared action p
   await applyLockdownAction.getByLabel('Unsync Allowed Channels').check();
   await applyLockdownAction.getByLabel('Confirm Apply Lockdown').check();
   await applyLockdownAction.getByRole('button', { name: 'Queue Apply Lockdown' }).click();
-  await expect(page.getByRole('heading', { name: /fixture guild operations/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Operations', exact: true })).toBeVisible();
 
   await page.getByRole('button', { name: 'Dry Run Role Intake' }).click();
-  await expect(page.getByRole('heading', { name: /fixture guild operations/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Operations', exact: true })).toBeVisible();
 
   const executeRoleIntakeAction = page.locator('details.destructive-action').filter({
     hasText: 'Execute Role Intake',
@@ -242,7 +250,7 @@ test('operations queues moderation queue maintenance through the shared action p
   await executeRoleIntakeAction.getByText('Execute Role Intake', { exact: true }).click();
   await executeRoleIntakeAction.getByLabel('Confirm Execute Role Intake').check();
   await executeRoleIntakeAction.getByRole('button', { name: 'Queue Execute Role Intake' }).click();
-  await expect(page.getByRole('heading', { name: /fixture guild operations/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Operations', exact: true })).toBeVisible();
 });
 
 test('member history queues observed alert undo through the shared action path', async ({

@@ -126,7 +126,7 @@ test('cross-guild detail cannot expose an action', async ({ page }) => {
     `${story.replace('--mixed', '--wrong-identity')}&selected=${encodeURIComponent(observed)}`
   );
   await expect(page.getByRole('region', { name: 'Selected inbox item' })).toContainText(
-    'Item unavailable'
+    'Unable to verify server access'
   );
   await expect(page.getByRole('button', { name: 'Ban member', exact: true })).toHaveCount(0);
 });
@@ -247,7 +247,7 @@ test('session restoration contains ordering, focus and scroll only, with control
 test('a matching envelope with a foreign payload is unavailable', async ({ page }) => {
   await page.goto(`${story.replace('--mixed', '--wrong-payload')}&selected=report%3Areport-1`);
   await expect(page.getByRole('region', { name: 'Selected inbox item' })).toContainText(
-    'Item unavailable'
+    'Unable to verify server access'
   );
   await expect(page.getByRole('button', { name: 'Dismiss report', exact: true })).toHaveCount(0);
 });

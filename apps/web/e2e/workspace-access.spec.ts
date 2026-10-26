@@ -173,8 +173,9 @@ test('authorized foreign and absent records remain missing', async ({ page }) =>
   expect(response.status()).toBe(404);
   expect(await response.json()).toEqual({ code: 'not_found' });
   for (const path of [`cases/${foreignCase}`, 'reports/91000000-0000-4000-8000-000000000099']) {
-    await page.goto(`/admin/guild/${id.guild}/${path}`);
-    await expect(page.getByRole('heading', { name: '404', exact: true })).toBeVisible();
+    const missing = await page.goto(`/admin/guild/${id.guild}/${path}`);
+    expect(missing?.status()).toBe(404);
+    await expect(page.getByRole('heading', { name: 'Page not found', exact: true })).toBeVisible();
     await expect(page.getByText('Server access required', { exact: true })).toHaveCount(0);
   }
 });

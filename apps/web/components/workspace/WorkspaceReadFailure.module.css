@@ -12,6 +12,7 @@
 .page .failure {
   margin-top: 2rem;
 }
+.failure h1,
 .failure h2 {
   font-size: 1.25rem;
   font-weight: 600;

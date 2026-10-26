@@ -24,7 +24,7 @@ async function expectVisualSchemes(page: Page, name: string): Promise<void> {
 test('case history mixed story visual baseline @storybook-visual', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'light' });
   await gotoStory(page, 'active-triage-case-history--mixed-history');
-  await expect(page.getByRole('heading', { name: /fixture guild case history/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History', exact: true })).toBeVisible();
   await expectVisualSchemes(page, 'storybook-case-history-mixed');
 });
 

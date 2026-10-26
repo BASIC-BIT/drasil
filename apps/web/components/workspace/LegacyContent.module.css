@@ -1,0 +1,147 @@
+.bridge {
+  --bg: var(--dr-canvas);
+  --bg-alt: var(--dr-canvas);
+  --panel: var(--dr-surface);
+  --panel-strong: var(--dr-raised);
+  --panel-muted: var(--dr-canvas);
+  --field-bg: var(--dr-surface);
+  --line: var(--dr-line);
+  --line-strong: var(--dr-boundary);
+  --text: var(--dr-text);
+  --muted: var(--dr-muted);
+  --muted-strong: var(--dr-text);
+  --accent: var(--dr-positive);
+  --accent-strong: var(--dr-positive);
+  --accent-soft: var(--dr-raised);
+  --accent-line: var(--dr-boundary);
+  --on-accent: var(--dr-surface);
+  --ok: var(--dr-positive);
+  --ok-bg: var(--dr-surface);
+  --ok-line: var(--dr-positive);
+  --warn: var(--dr-warning);
+  --warn-bg: var(--dr-surface);
+  --warn-line: var(--dr-warning);
+  --danger: var(--dr-danger);
+  --danger-bg: var(--dr-surface);
+  --danger-line: var(--dr-danger);
+  --info: var(--dr-muted);
+  --info-bg: var(--dr-surface);
+  --info-line: var(--dr-line);
+  --discord: var(--dr-muted);
+  --discord-bg: var(--dr-surface);
+  --discord-line: var(--dr-boundary);
+  --neutral-status: var(--dr-muted);
+  --neutral-status-bg: var(--dr-surface);
+  --neutral-status-line: var(--dr-line);
+  --signal-low: var(--dr-warning);
+  --signal-low-bg: var(--dr-surface);
+  --signal-low-line: var(--dr-warning);
+  --signal-medium: var(--dr-warning);
+  --signal-medium-bg: var(--dr-surface);
+  --signal-medium-line: var(--dr-warning);
+  --signal-high: var(--dr-danger);
+  --signal-high-bg: var(--dr-surface);
+  --signal-high-line: var(--dr-danger);
+  --shadow-panel: none;
+  --shadow-control: none;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.gutter {
+  padding: 32px clamp(20px, 3vw, 40px) 56px;
+}
+.bridge :global(.shell) {
+  width: min(1180px, calc(100% - 40px));
+  padding-block: 32px 56px;
+}
+.bridge :global(.panel) {
+  padding: 24px 0;
+  border: 0;
+  border-top: 1px solid var(--dr-line);
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+}
+.bridge :global(.panel:first-child) {
+  padding-top: 0;
+  border-top: 0;
+}
+.bridge :global(.card) {
+  background: transparent;
+  border-radius: 0;
+  box-shadow: none;
+}
+.bridge :global(.panel .card) {
+  border-width: 0 0 1px;
+  padding-inline: 0;
+}
+.bridge :global(.case-card),
+.bridge :global(.case-avatar-placeholder) {
+  background: var(--dr-surface);
+}
+.bridge :global(.section-heading) {
+  border-bottom-width: 1px;
+}
+.bridge :global(.page-title) {
+  font-size: clamp(24px, 3vw, 32px);
+  line-height: 1.3;
+  letter-spacing: -0.025em;
+}
+.bridge :global(.button) {
+  background: transparent;
+  color: var(--dr-positive);
+  border-color: var(--dr-positive);
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: none;
+}
+.bridge :global(.button.danger-button) {
+  color: var(--dr-danger);
+  border-color: var(--dr-danger);
+  background: transparent;
+}
+.bridge :global(.button.secondary),
+.bridge :global(.icon-button) {
+  background: transparent;
+  color: var(--dr-text);
+  border-color: var(--dr-boundary);
+}
+.bridge :global(.button:hover:not(:disabled)),
+.bridge :global(.icon-button:hover) {
+  background: var(--dr-raised);
+}
+.bridge :global(.public-flow-shell) {
+  min-height: 0;
+  padding: 48px 20px;
+}
+.bridge :global(.public-flow-panel) {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.bridge :global(.mcp-shell) {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 32px 20px 56px;
+  background: transparent;
+}
+.bridge :global(.mcp-shell h1) {
+  margin-top: 0;
+}
+.bridge :global(.mcp-shell > p),
+.bridge :global(.mcp-shell > dl) {
+  margin-top: 16px;
+}
+@media (max-width: 699px) {
+  .gutter {
+    padding-top: 24px;
+  }
+  .bridge :global(.section-heading) {
+    min-width: 0;
+  }
+  .bridge :global(.server-row) {
+    gap: 16px;
+  }
+}

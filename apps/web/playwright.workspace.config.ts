@@ -7,6 +7,7 @@ export default defineConfig({
   testMatch: [
     'moderation-workspace.spec.ts',
     'workspace-access.spec.ts',
+    'workspace-entrypoints.spec.ts',
     'case-flow.spec.ts',
     'report-ban.spec.ts',
     'message-cleanup.spec.ts',

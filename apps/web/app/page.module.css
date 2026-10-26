@@ -1,0 +1,35 @@
+.home {
+  display: grid;
+  gap: 56px;
+}
+.introduction {
+  display: grid;
+  gap: 24px;
+  padding-top: clamp(24px, 6vw, 72px);
+  max-width: 760px;
+}
+.introduction h1 {
+  font-size: clamp(40px, 6vw, 64px);
+  line-height: 1.1;
+  letter-spacing: -0.04em;
+}
+.links {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 32px;
+  border-top: 1px solid var(--dr-line);
+  padding-top: 28px;
+}
+.links > div {
+  display: grid;
+  gap: 12px;
+}
+.links h2 {
+  font-size: 18px;
+  font-weight: 600;
+}
+@media (max-width: 699px) {
+  .links {
+    grid-template-columns: 1fr;
+  }
+}
