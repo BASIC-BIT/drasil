@@ -26,7 +26,11 @@ import {
   VerificationStatus,
   type MessageDeletionJobWithItems,
 } from '../../repositories/types';
-import type { IModerationActionRequestRepository } from '../../repositories/ModerationActionRequestRepository';
+import {
+  getReportBanAttemptToken,
+  type IModerationActionRequestRepository,
+} from '../../repositories/ModerationActionRequestRepository';
+import { parseReportBanState } from '../../utils/reportBanState';
 import { buildAccountQuarantinePreviewFingerprint } from '../../utils/accountQuarantinePreview';
 
 const baseRequest: ModerationActionRequest = {
@@ -639,6 +643,10 @@ class FakeModerationActionRequestRepository implements IModerationActionRequestR
     return { ...baseRequest, id, status: ModerationActionRequestStatus.PROCESSING };
   }
 
+  public async transitionReportBan(): Promise<ModerationActionRequest | null> {
+    throw new Error('not used');
+  }
+
   public async mergeMetadata(
     id: string,
     metadata: Prisma.JsonObject
@@ -1236,6 +1244,57 @@ describe('ModerationActionRequestService', () => {
     };
   }
 
+  it.each([true, false])(
+    'contains malformed report-ban state at the worker boundary (heartbeat: %s)',
+    async (runHeartbeat) => {
+      jest.useFakeTimers();
+      const metadata = {
+        reason: 'Observed ban reason.',
+        report_ban_attempt_token: 'owned-attempt',
+        report_ban_retry_count: 'bad',
+        report_ban_case_ids: ['owned-case'],
+        evidence: { message_id: 'retained-message' },
+      };
+      const request = { ...banObservedRequest, metadata };
+      const { repository, securityActionService, service, guild } = buildService([request]);
+      const heartbeat = jest.spyOn(repository, 'heartbeat');
+      const fail = jest.spyOn(repository, 'fail');
+      securityActionService.banObservedDetection.mockImplementation(async () => {
+        if (runHeartbeat) {
+          expect(() => jest.advanceTimersByTime(60_000)).not.toThrow();
+        }
+        parseReportBanState(request.metadata);
+        return { status: 'banned' };
+      });
+
+      try {
+        await expect(service.processPendingRequests()).resolves.toBe(1);
+        if (runHeartbeat) {
+          expect(heartbeat).toHaveBeenCalledWith(request.id, 'owned-attempt');
+        }
+        expect(fail).toHaveBeenCalledWith(
+          request.id,
+          expect.stringContaining('report_ban_retry_count'),
+          'owned-attempt'
+        );
+        expect(repository.completed).toEqual([]);
+        expect(guild.bans.create).not.toHaveBeenCalled();
+        expect(repository.byId.get(request.id)?.metadata).toEqual(metadata);
+        expect(jest.getTimerCount()).toBe(0);
+      } finally {
+        jest.useRealTimers();
+      }
+    }
+  );
+
+  it.each([{}, { report_ban_attempt_token: null }, { report_ban_attempt_token: 42 }])(
+    'reads no attempt token from %p without weakening full-state validation',
+    (metadata) => {
+      expect(getReportBanAttemptToken({ ...baseRequest, metadata })).toBeUndefined();
+      expect(() => parseReportBanState({ ...metadata, report_ban_retry_count: 'bad' })).toThrow();
+    }
+  );
+
   it('runs bounded MCP maintenance while disabled and isolates its failure from ordinary moderation', async () => {
     const { application, repository, productAnalyticsService } = buildService();
     const previous = process.env.DRASIL_MCP_ENABLED;
@@ -1758,6 +1817,30 @@ describe('ModerationActionRequestService', () => {
     ]);
     expect(repository.failed).toEqual([]);
   });
+
+  it.each(['web_report', 'discord_interaction'] as const)(
+    'defaults an empty optional %s ban reason at execution',
+    async (actor_surface) => {
+      const request = {
+        ...banObservedRequest,
+        actor_surface,
+        metadata: { report_ban_attempt_token: 'attempt-1', reason: '' },
+      };
+      const { member, moderator, repository, securityActionService, service } = buildService([
+        request,
+      ]);
+      await expect(service.processPendingRequests()).resolves.toBe(1);
+      expect(securityActionService.banObservedDetection).toHaveBeenCalledWith(
+        member,
+        'det-1',
+        moderator,
+        'Banned from observed suspicious notification',
+        request
+      );
+      expect(repository.failed).toEqual([]);
+      expect(repository.completed).toHaveLength(1);
+    }
+  );
 
   it('bans observed alert users through the logged-in bot Discord client', async () => {
     const { member, moderator, repository, securityActionService, service } = buildService([
@@ -3450,26 +3533,38 @@ describe('ModerationActionRequestService', () => {
     ]);
   });
 
-  it('fails observed destructive requests when a required reason is missing', async () => {
-    const { repository, securityActionService, service } = buildService(
-      [{ ...banObservedRequest, metadata: { report_ban_attempt_token: 'attempt-1' } }],
-      {
-        moderator_ban_action_requires_reason: true,
-      }
-    );
+  it.each([
+    { actor_surface: 'web_report', metadata: {} },
+    { actor_surface: 'web_report', metadata: { reason: '' } },
+    { actor_surface: 'discord_interaction', metadata: { reason: '' } },
+  ])(
+    'rejects a queued ban without a reason when current policy requires one: %j',
+    async ({ actor_surface, metadata }) => {
+      const { repository, securityActionService, service } = buildService(
+        [
+          {
+            ...banObservedRequest,
+            actor_surface,
+            metadata: { report_ban_attempt_token: 'attempt-1', ...metadata },
+          },
+        ],
+        {
+          moderator_ban_action_requires_reason: true,
+        }
+      );
+      await expect(service.processPendingRequests()).resolves.toBe(1);
 
-    await expect(service.processPendingRequests()).resolves.toBe(1);
-
-    expect(securityActionService.banObservedDetection).not.toHaveBeenCalled();
-    expect(securityActionService.banObservedDetectionById).not.toHaveBeenCalled();
-    expect(repository.completed).toEqual([]);
-    expect(repository.failed).toEqual([
-      {
-        id: 'ban-observed-request-1',
-        error: 'Detection action denied: reason_required',
-      },
-    ]);
-  });
+      expect(securityActionService.banObservedDetection).not.toHaveBeenCalled();
+      expect(securityActionService.banObservedDetectionById).not.toHaveBeenCalled();
+      expect(repository.completed).toEqual([]);
+      expect(repository.failed).toEqual([
+        {
+          id: 'ban-observed-request-1',
+          error: 'Detection action denied: reason_required',
+        },
+      ]);
+    }
+  );
 
   it('fails open-admin-case requests when a required reason is missing', async () => {
     const { repository, securityActionService, service } = buildService(

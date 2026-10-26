@@ -13,7 +13,10 @@ import { AdminActionType, DetectionType, VerificationStatus } from '../../reposi
 import { getPrismaClient } from '../testDb';
 import { INotificationManager } from '../../services/NotificationManager';
 import { IThreadManager } from '../../services/ThreadManager';
-import { IUserModerationService } from '../../services/UserModerationService';
+import {
+  ICombinedBanLifecycleService,
+  IUserModerationService,
+} from '../../services/UserModerationService';
 
 const buildMember = (guildId: string, userId: string): GuildMember =>
   ({
@@ -49,7 +52,7 @@ describeIntegration('SecurityActionService (integration)', () => {
 
   let notificationManager: jest.Mocked<INotificationManager>;
   let threadManager: jest.Mocked<IThreadManager>;
-  let userModerationService: jest.Mocked<IUserModerationService>;
+  let userModerationService: jest.Mocked<IUserModerationService & ICombinedBanLifecycleService>;
 
   beforeEach(() => {
     prisma = getPrismaClient();
@@ -128,6 +131,13 @@ describeIntegration('SecurityActionService (integration)', () => {
       recordObservedDiscordKick: jest.fn().mockResolvedValue(0),
       findLatestKickOutcome: jest.fn().mockResolvedValue(null),
       recordMemberLeftGuild: jest.fn().mockResolvedValue(0),
+      finalizeObservedBan: jest.fn().mockResolvedValue(undefined),
+      markCombinedBanCleanupPending: jest.fn(),
+      performDiscordMemberBan: jest.fn().mockResolvedValue(undefined),
+      performDiscordBanById: jest.fn().mockResolvedValue(undefined),
+      finalizeSuccessfulMemberBan: jest.fn().mockResolvedValue(true),
+      finalizeSuccessfulCombinedBan: jest.fn().mockResolvedValue(true),
+      clearCombinedBanCleanupMarker: jest.fn().mockResolvedValue(true),
     };
   });
 

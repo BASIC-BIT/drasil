@@ -3890,7 +3890,6 @@ export class InteractionHandler implements IInteractionHandler {
       return;
     }
 
-    const reason = providedReason || null;
     try {
       if (!this.actionRequests || !this.detectionEventsRepository)
         throw new Error('Moderation request queue is unavailable.');
@@ -3928,7 +3927,7 @@ export class InteractionHandler implements IInteractionHandler {
         kind: 'ban_observed_detection' as const,
         targetUserId: parsed.userId,
         detectionEventId: parsed.detectionEventId,
-        reason,
+        reason: providedReason,
         subject: reportId ? { kind: 'report' as const, reportId } : { kind: 'observed' as const },
       };
       const encoded = encodeQueuedAction(

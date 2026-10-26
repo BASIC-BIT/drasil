@@ -48,7 +48,18 @@ integration('report ban claims and reconciliation (Postgres)', () => {
       idempotencyKey: 'report-ban',
     });
     const attemptToken = getReportBanAttemptToken(request)!;
-    await requests.mergeMetadata(request.id, { report_ban_phase: 'preparing' }, attemptToken);
+    await requests.transitionReportBan(
+      request.id,
+      {
+        kind: 'prepare',
+        report_ban_preparation_id: 'preparation',
+        report_ban_reason: 'Test',
+        report_ban_source_detail: null,
+        report_ban_membership_joined_at: null,
+        report_ban_lease_until: new Date().toISOString(),
+      },
+      attemptToken
+    );
     const claim = {
       reportId: report.id,
       serverId: 'guild',
@@ -84,6 +95,80 @@ integration('report ban claims and reconciliation (Postgres)', () => {
       moderation_evidence: { captured_at: '2026-10-15T00:00:00Z' },
     });
   });
+  it('uses explicit transitions, fences stale attempts, and retains unrelated metadata', async () => {
+    const f = await fixture();
+    await f.requests.mergeMetadata(f.request.id, {
+      evidence: { retained: true },
+      observed_ban_reviews: [{ reason: 'retained' }],
+    });
+    await expect(
+      f.requests.mergeMetadata(f.request.id, { report_ban_phase: null })
+    ).rejects.toThrow('transitionReportBan');
+    await f.requests.transitionReportBan(
+      f.request.id,
+      { kind: 'confirm_discord', report_ban_confirmed_at: '2026-10-19T12:00:00Z' },
+      'stale'
+    );
+    expect((await f.requests.findById(f.request.id))?.metadata).toMatchObject({
+      report_ban_phase: 'preparing',
+    });
+    await f.requests.transitionReportBan(
+      f.request.id,
+      { kind: 'confirm_discord', report_ban_confirmed_at: '2026-10-19T12:00:00Z' },
+      f.claim.attemptToken
+    );
+    await f.requests.transitionReportBan(
+      f.request.id,
+      { kind: 'confirm_discord', report_ban_confirmed_at: '2026-10-20T12:00:00Z' },
+      f.claim.attemptToken
+    );
+    await f.requests.transitionReportBan(
+      f.request.id,
+      {
+        kind: 'prepare_cases',
+        report_ban_cases: [{ id: 'other' }],
+        report_ban_attempt_id: 'other',
+      },
+      f.claim.attemptToken
+    );
+    const saved = (await f.requests.findById(f.request.id))!;
+    expect(saved.metadata).toMatchObject({
+      report_ban_phase: 'discord_confirmed',
+      report_ban_confirmed_at: '2026-10-19T12:00:00Z',
+      evidence: { retained: true },
+      observed_ban_reviews: [{ reason: 'retained' }],
+      report_ban_attempt_token: f.claim.attemptToken,
+    });
+    expect(saved.metadata).not.toHaveProperty('report_ban_attempt_id');
+    await f.requests.complete(
+      f.request.id,
+      { observed_ban_result: { status: 'banned' } },
+      f.claim.attemptToken
+    );
+    await f.requests.transitionReportBan(f.request.id, { kind: 'finish' }, f.claim.attemptToken);
+    expect((await f.requests.findById(f.request.id))?.metadata).toMatchObject({
+      report_ban_phase: null,
+      report_ban_confirmed_at: '2026-10-19T12:00:00Z',
+      evidence: { retained: true },
+    });
+  });
+  it.each([
+    { report_ban_phase: 1 },
+    { report_ban_confirmed_at: false },
+    { report_ban_attempt_token: 1 },
+    { report_ban_cases: [{ id: false }] },
+  ])('rejects malformed persisted state without changing it: %p', async (malformed) => {
+    const f = await fixture();
+    const metadata = { report_ban_attempt_token: f.claim.attemptToken, ...malformed };
+    await f.prisma.moderation_action_requests.update({
+      where: { id: f.request.id },
+      data: { metadata },
+    });
+    await expect(
+      f.requests.transitionReportBan(f.request.id, { kind: 'finish' }, f.claim.attemptToken)
+    ).rejects.toThrow();
+    expect((await f.requests.findById(f.request.id))?.metadata).toEqual(metadata);
+  });
   it('rejects closed, foreign, wrong-target, and unrelated-detection claims', async () => {
     const f = await fixture();
     expect(await f.reports.claimBan({ ...f.claim, serverId: 'foreign' })).toBeNull();
@@ -103,10 +188,13 @@ integration('report ban claims and reconciliation (Postgres)', () => {
   it('leases completed pending receipts once, respects retry time, and recovers an expired lease', async () => {
     const f = await fixture();
     const due = new Date('2026-10-15T12:00:00Z');
-    await f.requests.mergeMetadata(
+    await f.requests.transitionReportBan(
       f.request.id,
       {
+        kind: 'schedule_reconciliation',
         report_ban_phase: 'discord_confirmed',
+        report_ban_retry_count: 1,
+        report_ban_last_error: 'Pending',
         report_ban_retry_at: due.toISOString(),
         report_ban_lease_until: due.toISOString(),
       },

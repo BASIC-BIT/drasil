@@ -455,8 +455,13 @@ integration('report-ban stale worker recovery with real services and Postgres', 
       await getPrismaClient().moderation_action_requests.update({
         where: { id: f.request.id },
         data: {
+          requested_at: new Date(0),
+          failed_at: new Date(0),
+          last_error: 'Previous failure',
           metadata: {
             ...(completed.metadata as Record<string, never>),
+            report_ban_retry_at: new Date(0).toISOString(),
+            retained_context: 'Keep audit context',
             observed_ban_reviews: [{ reason: 'retained review' }],
           },
         },
@@ -474,15 +479,21 @@ integration('report-ban stale worker recovery with real services and Postgres', 
         expect(getReportBanAttemptToken(fresh)).not.toBe('untrusted-token');
         expect(fresh).toMatchObject({
           actor_id: 'new-moderator',
+          actor_surface: 'web',
+          failed_at: null,
+          last_error: null,
           result: {},
           completed_at: null,
           started_at: null,
           attempts: 0,
           metadata: {
             reason: 'Fresh explicit decision',
+            retained_context: 'Keep audit context',
             observed_ban_reviews: [{ reason: 'retained review' }],
           },
         });
+        expect(fresh.requested_at!.getTime()).toBeGreaterThan(0);
+        expect(fresh.metadata).not.toHaveProperty('report_ban_retry_at');
         await requeue();
         expect(getReportBanAttemptToken((await f.requests.findById(fresh.id))!)).toBe(
           getReportBanAttemptToken(fresh)
@@ -2315,10 +2326,10 @@ integration('report-ban stale worker recovery with real services and Postgres', 
       if (change === 'operation') f.reference.targetUserId = 'other-user';
       if (change === 'version') await f.requests.heartbeat(f.request.id, f.reference.attemptToken);
       if (change === 'confirmed')
-        await f.requests.mergeMetadata(
+        await f.requests.transitionReportBan(
           f.request.id,
           {
-            report_ban_phase: 'discord_confirmed',
+            kind: 'confirm_discord',
             report_ban_confirmed_at: new Date().toISOString(),
           },
           f.reference.attemptToken
@@ -2471,9 +2482,9 @@ integration('report-ban stale worker recovery with real services and Postgres', 
         resume = resolve;
       });
       if (boundary === 'preparing observer') {
-        const merge = f.requests.mergeMetadata.bind(f.requests);
-        jest.spyOn(f.requests, 'mergeMetadata').mockImplementation(async (...args) => {
-          if (args[1].report_ban_phase === 'enforcement_started') {
+        const merge = f.requests.transitionReportBan.bind(f.requests);
+        jest.spyOn(f.requests, 'transitionReportBan').mockImplementation(async (...args) => {
+          if (args[1].kind === 'start_enforcement') {
             reached();
             await gate;
           }
@@ -2555,9 +2566,10 @@ integration('report-ban stale worker recovery with real services and Postgres', 
           last_status_change: rejoinedAt,
           join_date: rejoinedAt,
         });
-        await f.requests.mergeMetadata(
+        await f.requests.transitionReportBan(
           f.request.id,
           {
+            kind: 'renew_lease',
             report_ban_lease_until: new Date(0).toISOString(),
             report_ban_retry_at: new Date(0).toISOString(),
           },
@@ -2664,10 +2676,10 @@ integration('report-ban stale worker recovery with real services and Postgres', 
     const gate = new Promise<void>((resolve) => {
       resume = resolve;
     });
-    const merge = f.requests.mergeMetadata.bind(f.requests);
-    jest.spyOn(f.requests, 'mergeMetadata').mockImplementation(async (...args) => {
+    const merge = f.requests.transitionReportBan.bind(f.requests);
+    jest.spyOn(f.requests, 'transitionReportBan').mockImplementation(async (...args) => {
       const patch = args[1];
-      if (patch.report_ban_phase === 'enforcement_started') {
+      if (patch.kind === 'start_enforcement') {
         reached();
         await gate;
       }
@@ -2725,10 +2737,10 @@ integration('report-ban stale worker recovery with real services and Postgres', 
     const enforcementGate = new Promise<void>((resolve) => {
       continueEnforcement = resolve;
     });
-    const merge = f.requests.mergeMetadata.bind(f.requests);
-    jest.spyOn(f.requests, 'mergeMetadata').mockImplementation(async (...args) => {
+    const merge = f.requests.transitionReportBan.bind(f.requests);
+    jest.spyOn(f.requests, 'transitionReportBan').mockImplementation(async (...args) => {
       const patch = args[1];
-      if (patch.report_ban_phase === 'enforcement_started') {
+      if (patch.kind === 'start_enforcement') {
         prepared();
         await enforcementGate;
       }
@@ -2801,10 +2813,10 @@ integration('report-ban stale worker recovery with real services and Postgres', 
     const gateB = new Promise<void>((resolve) => {
       resumeB = resolve;
     });
-    const merge = f.requests.mergeMetadata.bind(f.requests);
+    const merge = f.requests.transitionReportBan.bind(f.requests);
     let transitions = 0;
-    jest.spyOn(f.requests, 'mergeMetadata').mockImplementation(async (...args) => {
-      if (pausePoint === 'enforcement' && args[1].report_ban_phase === 'enforcement_started') {
+    jest.spyOn(f.requests, 'transitionReportBan').mockImplementation(async (...args) => {
+      if (pausePoint === 'enforcement' && args[1].kind === 'start_enforcement') {
         transitions++;
         if (transitions === 1) {
           reached();
@@ -3013,9 +3025,10 @@ integration('shared detection action persistence boundary', () => {
     (f.guild.members.fetch as jest.Mock).mockImplementation(async () => {
       throw { code: 10007 };
     });
-    await f.requests.mergeMetadata(
+    await f.requests.transitionReportBan(
       f.request.id,
       {
+        kind: 'renew_lease',
         report_ban_lease_until: new Date(0).toISOString(),
         report_ban_retry_at: new Date(0).toISOString(),
       },
@@ -3039,9 +3052,10 @@ integration('shared detection action persistence boundary', () => {
     f.config.getServerConfig.mockResolvedValue({
       settings: { moderator_ban_action_enabled: false },
     });
-    await f.requests.mergeMetadata(
+    await f.requests.transitionReportBan(
       f.request.id,
       {
+        kind: 'renew_lease',
         report_ban_lease_until: new Date(0).toISOString(),
         report_ban_retry_at: new Date(0).toISOString(),
       },
