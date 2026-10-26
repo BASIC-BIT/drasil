@@ -333,7 +333,7 @@ describe('private Discord image CAPTCHA interactions', () => {
   it.each([
     [{ kind: 'invalid', remainingAttempts: 3 }, '3 attempts left'],
     [{ kind: 'failed' }, 'moderator'],
-    [{ kind: 'stale' }, 'moderator'],
+    [{ kind: 'stale' }, 'no longer active'],
     [{ kind: 'rate_limited' }, 'try again'],
   ] as const)('presents %s accurately', async (outcome, copy) => {
     const f = fixture('answer', true);

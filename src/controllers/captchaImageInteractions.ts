@@ -55,7 +55,7 @@ function controls(
   return [row];
 }
 const unavailable = 'CAPTCHA unavailable. Try opening it again or get help.';
-const stale = 'Ask a moderator for a new CAPTCHA.';
+const stale = 'This CAPTCHA is no longer active.';
 function submitCopy(outcome: ImageSubmitOutcome): string {
   switch (outcome.kind) {
     case 'passed':
