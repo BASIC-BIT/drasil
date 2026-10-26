@@ -1,3 +1,4 @@
+import { queueObservedAlertActionRequest as legacyQueue } from '../e2e/legacy/observedAlertActionQueue';
 import { vi, test, expect, afterEach } from 'vitest';
 import {
   queueObservedAlertActionRequest,
@@ -100,11 +101,11 @@ test.each(['ignore_detection', 'restore_detection'] as const)(
 
 test('keeps observed dismissal completed and other observed fixture actions queued without persistence', async () => {
   mocks.fixture = true;
-  expect(await queueObservedAlertActionRequest({ ...input, action: 'dismiss_no_action' })).toEqual({
+  expect(await legacyQueue({ ...input, action: 'dismiss_no_action' })).toEqual({
     id: 'fixture-observed-action-dismiss_no_action-detection',
     status: 'completed',
   });
-  expect(await queueObservedAlertActionRequest({ ...input, action: 'ban_user' })).toEqual({
+  expect(await legacyQueue({ ...input, action: 'ban_user' })).toEqual({
     id: 'fixture-observed-action-ban_user-detection',
     status: 'queued',
   });

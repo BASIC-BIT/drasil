@@ -1,12 +1,11 @@
+import { Timestamp } from '@/components/workspace/Timestamp';
+import { WorkspaceShell } from '@/components/workspace/WorkspaceShell';
 import type {
   MessageCleanupAggregateOutcome,
   MessageCleanupItem,
   MessageCleanupJobDetail as MessageCleanupJobDetailContract,
   MessageCleanupJobSummary,
 } from '@drasil/contracts';
-import { AccountControl } from '@/components/AccountControl';
-import { ThemeToggle } from '@/components/ThemeToggle';
-import { Timestamp } from '@/components/workspace/Timestamp';
 import { MessageCleanupJobPoller } from './MessageCleanupJobPoller';
 
 const scopeLabels: Record<MessageCleanupJobSummary['scope'], string> = {
@@ -233,29 +232,15 @@ export function MessageCleanupJobDetail({
   const active = ['queued', 'discovering', 'executing'].includes(detail.status);
 
   return (
-    <main className="shell stack">
+    <WorkspaceShell
+      guildId={detail.guildId}
+      guildName={guildName}
+      sessionUsername={sessionUsername}
+      currentPage="inbox"
+    >
       <MessageCleanupJobPoller active={active} />
-      <nav className="topbar">
-        <a className="brand" href={caseHref}>
-          <span className="brand-mark" />
-          <span>Drasil</span>
-        </a>
-        <div className="nav-cluster">
-          <a className="button secondary" href={caseHref}>
-            Case
-          </a>
-          <a className="button secondary" href={`/admin/guild/${detail.guildId}/inbox`}>
-            Inbox
-          </a>
-          <a className="button secondary" href={`/admin/guild/${detail.guildId}/operations`}>
-            Operations
-          </a>
-          <ThemeToggle />
-          <AccountControl username={sessionUsername} />
-        </div>
-      </nav>
-
-      <p className="muted">{guildName} Message Cleanup</p>
+      <a href={caseHref}>Back to case</a>
+      <h1>Message cleanup</h1>
       <section className="panel stack">
         <MessageCleanupJobSummaryBlock job={detail} />
         <MessageCleanupOutcomes outcomes={detail.outcomes} />
@@ -280,6 +265,6 @@ export function MessageCleanupJobDetail({
         </div>
         <MessageCleanupItemList items={detail.items} />
       </section>
-    </main>
+    </WorkspaceShell>
   );
 }

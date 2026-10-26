@@ -1,0 +1,8 @@
+.tools {
+  display: grid;
+  gap: 16px;
+}
+.toggle {
+  justify-self: start;
+  gap: 6px;
+}

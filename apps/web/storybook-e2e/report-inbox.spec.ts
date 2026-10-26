@@ -440,10 +440,12 @@ test('mobile workspace menu exposes destinations and closes with Escape or an ou
     return (await window.axe.run(root)).violations;
   });
   expect(violations).toEqual([]);
-  for (const destination of ['Cases', 'Reports', 'History', 'Setup', 'Operations']) {
+  for (const destination of ['Inbox', 'History', 'Settings', 'Operations']) {
     await expect(navigation.getByRole('link', { name: destination, exact: true })).toHaveAttribute(
       'href',
-      `/admin/guild/guild-1/${destination.toLowerCase()}`
+      destination === 'Inbox'
+        ? '#inbox'
+        : `/admin/guild/guild-1/${destination === 'Settings' ? 'setup' : destination.toLowerCase()}`
     );
   }
   await page.keyboard.press('Tab');

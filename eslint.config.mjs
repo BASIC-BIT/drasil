@@ -9,6 +9,7 @@ import prettier from 'eslint-plugin-prettier';
 const configs = [
   {
     ignores: [
+      '.superpowers/sdd/**',
       'coverage/**',
       'dist/**',
       'build/**',

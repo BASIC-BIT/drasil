@@ -122,7 +122,7 @@ test('ordinary case keeps submitted evidence and current member context together
   await expect(
     page
       .getByRole('navigation', { name: 'Workspace', exact: true })
-      .getByRole('link', { name: 'Cases', exact: true })
+      .getByRole('link', { name: 'Inbox', exact: true })
   ).toHaveAttribute('aria-current', 'page');
   await expect(page.getByText('Drasil checks', { exact: true })).toHaveCount(0);
 });
@@ -182,7 +182,6 @@ test('a completed request does not invent a refreshed member outcome', async ({ 
     .click();
   await expect(page.getByRole('status')).toContainText('Ban request completed');
   const context = page.getByRole('region', { name: 'Member context' });
-  await expect(context).toContainText('Member state from last case load');
   await expect(context).toContainText('In server');
   await expect(context).not.toContainText('Banned');
 });
@@ -198,7 +197,9 @@ test('busy case separates saved excerpts, submitted evidence, checks and recorde
       { exact: true }
     )
   ).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Drasil checks', exact: true })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'Member detection history', exact: true })
+  ).toBeVisible();
   await expect(
     page.getByText('Repeated prize language and a short-link ask in a new account context.', {
       exact: true,

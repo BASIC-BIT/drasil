@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { submitWorkspaceReportAction } from './actions';
 const m = vi.hoisted(() => ({
   fixture: false,
   cookies: { set: vi.fn() },
@@ -42,13 +43,12 @@ vi.mock('@/lib/reportQueueDataAdapter', () => ({
     openCaseFromSubmittedReport: m.open,
   }),
 }));
-import { banSubmittedReport } from './actions';
-const idle = { status: 'idle', message: null, requestId: null } as const;
 function form(changes: Partial<Record<string, string>> = {}) {
   const data = new FormData();
   for (const [key, value] of Object.entries({
     confirmAction: 'on',
     confirmedTargetUserId: 'user-1',
+    confirmedRecordId: 'report-1',
     reason: 'Reviewed spam',
     ...changes,
   }))
@@ -76,13 +76,18 @@ beforeEach(() => {
   });
   m.queue.mockResolvedValue({ rows: [{ id: 'request-1', status: 'queued' }] });
 });
-describe('banSubmittedReport', () => {
+describe('confirmed report ban', () => {
   it('reloads the report and queues its server-side target with a receipt', async () => {
     const data = form();
     data.set('targetUserId', 'attacker');
-    expect(await banSubmittedReport('guild-1', 'report-1', idle, data)).toMatchObject({
-      status: 'queued',
-      requestId: 'request-1',
+    expect(
+      await submitWorkspaceReportAction(
+        { guildId: 'guild-1', reportId: 'report-1', action: 'ban_user' },
+        data
+      )
+    ).toMatchObject({
+      kind: 'request',
+      receipt: { status: 'queued', id: 'request-1' },
     });
     const values = m.queue.mock.calls[0][1];
     expect(values).toEqual([
@@ -109,8 +114,13 @@ describe('banSubmittedReport', () => {
   it.each([{ confirmAction: '' }, { reason: '' }, { confirmedTargetUserId: 'changed' }])(
     'rejects invalid confirmation %j',
     async (changes) => {
-      expect(await banSubmittedReport('guild-1', 'report-1', idle, form(changes))).toMatchObject({
-        status: 'failed',
+      expect(
+        await submitWorkspaceReportAction(
+          { guildId: 'guild-1', reportId: 'report-1', action: 'ban_user' },
+          form(changes)
+        )
+      ).toMatchObject({
+        kind: 'failed',
       });
       expect(m.queue).not.toHaveBeenCalled();
     }
@@ -121,32 +131,56 @@ describe('banSubmittedReport', () => {
     { status: 'submitted', allowedActions: [] },
   ])('rejects a stale or busy report %j', async (detail) => {
     m.detail.mockResolvedValue(detail);
-    expect(await banSubmittedReport('guild-1', 'report-1', idle, form())).toMatchObject({
-      status: 'failed',
+    expect(
+      await submitWorkspaceReportAction(
+        { guildId: 'guild-1', reportId: 'report-1', action: 'ban_user' },
+        form()
+      )
+    ).toMatchObject({
+      kind: 'failed',
     });
     expect(m.queue).not.toHaveBeenCalled();
   });
   it('returns to the same report after authentication', async () => {
     m.session.mockResolvedValue(null);
-    await expect(banSubmittedReport('guild-1', 'report-1', idle, form())).rejects.toThrow(
-      '/api/auth/discord?returnTo=/admin/guild/guild-1/reports/report-1'
-    );
+    await expect(
+      submitWorkspaceReportAction(
+        { guildId: 'guild-1', reportId: 'report-1', action: 'ban_user' },
+        form()
+      )
+    ).rejects.toThrow('/api/auth/discord?returnTo=%2Fadmin%2Fguild%2Fguild-1%2Freports%2Freport-1');
   });
   it('requires Ban Members independently of guild management', async () => {
     m.guild.mockResolvedValue({ id: 'guild-1', owner: false, permissions: '32' });
-    expect(await banSubmittedReport('guild-1', 'report-1', idle, form())).toMatchObject({
-      status: 'failed',
+    expect(
+      await submitWorkspaceReportAction(
+        { guildId: 'guild-1', reportId: 'report-1', action: 'ban_user' },
+        form()
+      )
+    ).toMatchObject({
+      kind: 'failed',
     });
     expect(m.queue).not.toHaveBeenCalled();
   });
   it('allows recovery after queue failure', async () => {
     m.queue.mockRejectedValueOnce(new Error('Queue unavailable'));
-    expect(await banSubmittedReport('guild-1', 'report-1', idle, form())).toMatchObject({
-      status: 'failed',
+    expect(
+      await submitWorkspaceReportAction(
+        { guildId: 'guild-1', reportId: 'report-1', action: 'ban_user' },
+        form()
+      )
+    ).toMatchObject({
+      kind: 'failed',
       message: 'Queue unavailable',
     });
-    expect(await banSubmittedReport('guild-1', 'report-1', idle, form())).toMatchObject({
-      status: 'queued',
+    expect(
+      await submitWorkspaceReportAction(
+        { guildId: 'guild-1', reportId: 'report-1', action: 'ban_user' },
+        form()
+      )
+    ).toMatchObject({
+      kind: 'request',
+      receipt: { status: 'queued' },
     });
   });
   it.each(['disabled', 'bot-permission', 'long-reason'])(
@@ -157,30 +191,13 @@ describe('banSubmittedReport', () => {
       if (kind === 'bot-permission')
         m.resources.mockResolvedValue({ botMember: { roles: [] }, roles: [] });
       expect(
-        await banSubmittedReport(
-          'guild-1',
-          'report-1',
-          idle,
+        await submitWorkspaceReportAction(
+          { guildId: 'guild-1', reportId: 'report-1', action: 'ban_user' },
           form(kind === 'long-reason' ? { reason: 'x'.repeat(501) } : {})
         )
-      ).toMatchObject({ status: 'failed' });
+      ).toMatchObject({ kind: 'failed' });
       expect(m.queue).not.toHaveBeenCalled();
     }
-  );
-});
-
-it('keeps fixture report-ban feedback queued and records its report identity without persistence', async () => {
-  m.fixture = true;
-  await expect(banSubmittedReport('guild-1', 'report-1', idle, form())).resolves.toMatchObject({
-    status: 'queued',
-    requestId: 'fixture-report-ban-report-1',
-    message: 'Ban queued for Drasil.',
-  });
-  expect(m.queue).not.toHaveBeenCalled();
-  expect(m.cookies.set).toHaveBeenCalledWith(
-    'drasil-fixture-report-ban',
-    expect.stringContaining('"reportId":"report-1"'),
-    expect.objectContaining({ httpOnly: true, path: '/admin' })
   );
 });
 

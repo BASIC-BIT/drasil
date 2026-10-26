@@ -30,7 +30,9 @@
     "**/*.tsx",
     "app/.well-known/**/*.ts",
     ".next/types/**/*.ts",
-    ".next/dev/types/**/*.ts"
+    ".next/dev/types/**/*.ts",
+    ".next-legacy-test/types/**/*.ts",
+    ".next-legacy-test/dev/types/**/*.ts"
   ],
   "exclude": ["node_modules"]
 }

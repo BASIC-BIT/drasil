@@ -1,13 +1,12 @@
 import {
-  type QueuedReportCommand,
   createReportRequestSubmission,
   type ActionContext,
   type ConfirmationPort,
+  type QueuedReportCommand,
   type ReportAdmissionFacts,
 } from '@drasil/application';
-import { isWebE2eFixtureMode } from './e2eFixtures';
-import type { ModerationActionRequestQueueStatus } from './moderationActionRequestQueue';
 import { submitQueuedAction } from './application/queuedSubmission';
+import type { ModerationActionRequestQueueStatus } from './moderationActionRequestQueue';
 import { getPostgresPool } from './setupDataAdapter';
 
 async function ensureReportTargetUser(input: {
@@ -42,7 +41,7 @@ export async function submitReportRequest(input: {
     queue: {
       async enqueue(context, command) {
         if (context.actor.kind !== 'user') throw new Error('Reporter session is unavailable.');
-        if (isWebE2eFixtureMode()) return 'queued';
+
         if (command.kind === 'submit_user_report') {
           await ensureReportTargetUser({
             actorId: context.actor.userId,

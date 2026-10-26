@@ -24,6 +24,13 @@ export function CaseEvidenceRecord({ record }: { readonly record: EvidenceSource
       <div className={styles.messageBody}>
         <header>
           <h4>{record.label}</h4>
+          <span>
+            {record.origin === 'case_evidence'
+              ? 'Saved with case'
+              : record.origin === 'report_evidence'
+                ? 'Submitted with report'
+                : 'Saved member preview'}
+          </span>
           <Timestamp value={record.createdAt} prefix="Recorded" />
         </header>
         {record.content !== null ? (

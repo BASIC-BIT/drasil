@@ -1,6 +1,5 @@
 import { fetchDiscordRead } from './discordReadRecovery';
 import { readOptionalEnv, requireEnv } from './env';
-import { fixtureGuildResources, fixtureGuilds, isWebE2eFixtureMode } from './e2eFixtures';
 
 const DEFAULT_DISCORD_API_BASE_URL = 'https://discord.com/api/v10';
 const DISCORD_GUILD_PAGE_LIMIT = 200;
@@ -142,10 +141,6 @@ export async function fetchDiscordUser(accessToken: string): Promise<DiscordUser
 }
 
 export async function fetchDiscordGuilds(accessToken: string): Promise<DiscordGuildSummary[]> {
-  if (isWebE2eFixtureMode()) {
-    return fixtureGuilds();
-  }
-
   const guilds: DiscordGuildSummary[] = [];
   let after: string | null = null;
 
@@ -187,9 +182,6 @@ async function fetchBotJson<T>(path: string): Promise<T> {
 }
 
 export async function fetchDiscordBotUser(): Promise<DiscordUser> {
-  if (isWebE2eFixtureMode()) {
-    return fixtureGuildResources().botUser;
-  }
   return fetchBotJson<DiscordUser>('/users/@me');
 }
 
@@ -221,10 +213,6 @@ export async function fetchGuildResources(
   guildId: string,
   knownBotUser?: DiscordUser
 ): Promise<DiscordGuildResources> {
-  if (isWebE2eFixtureMode()) {
-    return fixtureGuildResources();
-  }
-
   const botUser = knownBotUser ?? (await fetchDiscordBotUser());
   const [botMember, roles, channels] = await Promise.all([
     fetchBotJson<DiscordGuildMember>(`/guilds/${guildId}/members/${botUser.id}`),

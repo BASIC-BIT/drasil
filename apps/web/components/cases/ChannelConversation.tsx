@@ -1,13 +1,13 @@
 'use client';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Timestamp } from '@/components/workspace/Timestamp';
 import {
   conversationReadResultSchema,
-  type ConversationSource,
   type ConversationQuery,
   type ConversationReadResult,
+  type ConversationSource,
 } from '@/lib/conversationTypes';
 import { mergeConversationWindow, type ConversationWindow } from '@/lib/conversationWindow';
-import { Timestamp } from '@/components/workspace/Timestamp';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import styles from './ChannelConversation.module.css';
 export interface ChannelConversationProps {
   readonly source: ConversationSource;
@@ -203,7 +203,9 @@ function ConversationReader({
           <p role="status">{unavailable[status]}</p>
         ) : null}
         {!extent.sourcePresent ? <p>Source message is no longer available in this page.</p> : null}
-        {window.atLimit ? <p>200-message limit reached. Continue in Discord.</p> : null}
+        {window.atLimit ? (
+          <p>Loading another page would exceed the 200-message limit. Continue in Discord.</p>
+        ) : null}
       </div>
       <nav className={styles.paging} aria-label="Conversation pages">
         <button
@@ -225,7 +227,13 @@ function ConversationReader({
           Load later
         </button>
         {status === 'upstream' ? (
-          <button type="button" onClick={() => void page('around')}>
+          <button
+            type="button"
+            onClick={() => {
+              heading.current?.focus({ preventScroll: true });
+              void page('around');
+            }}
+          >
             Try again
           </button>
         ) : null}

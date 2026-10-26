@@ -1,24 +1,25 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { moderationInboxItemKindSchema, type ModerationInboxItem } from '@drasil/contracts';
+import type { CaseCleanupActions } from '@/components/cases/CaseWorkspaceController';
+import { ActionButton } from '@/components/workspace/Foundation';
+import { chooseInboxContinuation } from '@/lib/inboxContinuation';
 import {
   parseInboxLocation,
   serializeInboxLocation,
   type InboxLocation,
 } from '@/lib/inboxLocation';
-import { chooseInboxContinuation } from '@/lib/inboxContinuation';
 import {
   getModerationInboxVisibleItems,
-  moderationInboxSavedViews,
   isModerationInboxSavedViewActive,
+  moderationInboxSavedViews,
 } from '@/lib/moderationInboxViewModel';
 import type { WorkspaceItemDetail } from '@/lib/moderationWorkspaceTypes';
 import type { WorkspaceActions } from '@/lib/workspaceActionTypes';
-import { ActionButton } from '@/components/workspace/Foundation';
+import { moderationInboxItemKindSchema, type ModerationInboxItem } from '@drasil/contracts';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { InboxActionRequestPollingProvider } from './InboxActionRequestPoller';
-import { InboxQueue, inboxKindLabels } from './InboxQueue';
 import { InboxItemDetail, inboxDetailRequests, matchingInboxRequests } from './InboxItemDetail';
+import { InboxQueue, inboxKindLabels } from './InboxQueue';
 import styles from './InboxWorkspace.module.css';
 
 export interface InboxWorkspaceProps {
@@ -27,6 +28,7 @@ export interface InboxWorkspaceProps {
   readonly initialLocation: InboxLocation;
   readonly loadDetail: (itemId: string, signal: AbortSignal) => Promise<WorkspaceItemDetail>;
   readonly actions: WorkspaceActions;
+  readonly cleanupActions?: CaseCleanupActions;
 }
 export type InboxDetailState =
   | { readonly kind: 'loading'; readonly guildId: string; readonly itemId: string }
@@ -141,6 +143,7 @@ function GuildInboxWorkspace({
   initialLocation,
   loadDetail,
   actions,
+  cleanupActions,
 }: InboxWorkspaceProps) {
   const [location, setLocation] = useState(initialLocation);
   const [detailState, setDetailState] = useState<InboxDetailState | null>(null);
@@ -192,7 +195,13 @@ function GuildInboxWorkspace({
       const url = new URL(window.location.href);
       for (const key of locationKeys) url.searchParams.delete(key);
       serializeInboxLocation(next).forEach((value, key) => url.searchParams.set(key, value));
-      window.history[replace ? 'replaceState' : 'pushState'](window.history.state, '', url);
+      // Next copies its router state into external native-history updates. Passing
+      // its internal-write markers would skip that synchronization, letting a
+      // server-action refresh restore the URL from before this selection.
+      const historyState = { ...window.history.state };
+      delete historyState.__NA;
+      delete historyState._N;
+      window.history[replace ? 'replaceState' : 'pushState'](historyState, '', url);
       setLocation(next);
     },
     [saveRestoration]
@@ -445,6 +454,13 @@ function GuildInboxWorkspace({
         {location.selectedItemId ? (
           <div>
             <div className={styles.toolbar}>
+              {selected?.detail.kind === 'case' ? (
+                <a
+                  href={`/admin/guild/${encodeURIComponent(guildId)}/cases/${encodeURIComponent(selected.detail.data.detail.id)}?${new URLSearchParams({ returnTo: returnHref })}`}
+                >
+                  Open case
+                </a>
+              ) : null}
               <ActionButton onClick={back}>Back to inbox</ActionButton>
               <ActionButton onClick={next}>Next item</ActionButton>
               <ActionButton onClick={() => setRefresh((value) => value + 1)}>
@@ -472,6 +488,7 @@ function GuildInboxWorkspace({
                     returnHref={returnHref}
                     trackedRequestId={location.trackedRequestId}
                     actions={actions}
+                    cleanupActions={cleanupActions}
                     available={items.some(
                       (item) => item.guildId === guildId && item.id === selected.itemId
                     )}

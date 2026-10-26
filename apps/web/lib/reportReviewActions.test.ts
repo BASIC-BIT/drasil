@@ -1,10 +1,23 @@
+import { submitWorkspaceReportAction } from '@/app/admin/guild/[guildId]/reports/actions';
 import { beforeEach, expect, it, vi } from 'vitest';
-import {
-  closeInboxSubmittedReport,
-  openInboxSubmittedReportCase,
-} from '@/app/admin/guild/[guildId]/reports/actions';
 import { PostgresQueuedReportCaseOpener } from './application/adapters/reportReview';
-import { initialInboxActionState } from './inboxActionState';
+function confirmed(): FormData {
+  const form = new FormData();
+  form.set('confirmAction', 'on');
+  form.set('confirmedRecordId', 'report-1');
+  form.set('confirmedTargetUserId', 'user-1');
+  return form;
+}
+vi.mock('@/lib/reportDetailDataAdapter', () => ({
+  createReportDetailDataAdapter: () => ({
+    getReportDetail: async () => ({
+      id: 'report-1',
+      guildId: 'guild-1',
+      targetUserId: 'user-1',
+      allowedActions: ['mark_actioned', 'open_case'],
+    }),
+  }),
+}));
 
 const runtime = vi.hoisted(() => ({
   query: vi.fn(),
@@ -44,36 +57,28 @@ beforeEach(() => {
 });
 it('retains the Manage Server dashboard gate before report closure', async () => {
   runtime.assertCanManageGuild.mockRejectedValue(new Error('Manage Server required'));
-  const result = await closeInboxSubmittedReport(
-    'guild-1',
-    'report-1',
-    'mark_actioned',
-    initialInboxActionState,
-    new FormData()
+  const result = await submitWorkspaceReportAction(
+    { guildId: 'guild-1', reportId: 'report-1', action: 'mark_actioned' },
+    confirmed()
   );
-  expect(result).toMatchObject({ status: 'failed', message: 'Manage Server required' });
+  expect(result).toMatchObject({ kind: 'failed', message: 'Manage Server required' });
   expect(runtime.closeSubmittedReport).not.toHaveBeenCalled();
 });
 it('retains the dashboard gate before report-case submission', async () => {
   runtime.assertCanManageGuild.mockRejectedValue(new Error('Manage Server required'));
-  const result = await openInboxSubmittedReportCase(
-    'guild-1',
-    'report-1',
-    initialInboxActionState,
-    new FormData()
+  const result = await submitWorkspaceReportAction(
+    { guildId: 'guild-1', reportId: 'report-1', action: 'open_case' },
+    confirmed()
   );
-  expect(result.status).toBe('failed');
+  expect(result.kind).toBe('failed');
   expect(runtime.openCaseFromSubmittedReport).not.toHaveBeenCalled();
 });
 it('uses the session identity for direct closure and retains queued case receipts', async () => {
-  const closure = await closeInboxSubmittedReport(
-    'guild-1',
-    'report-1',
-    'mark_actioned',
-    initialInboxActionState,
-    new FormData()
+  const closure = await submitWorkspaceReportAction(
+    { guildId: 'guild-1', reportId: 'report-1', action: 'mark_actioned' },
+    confirmed()
   );
-  expect(closure).toMatchObject({ status: 'completed', requestId: null });
+  expect(closure).toMatchObject({ kind: 'report_closure', result: { status: 'closed' } });
   expect(runtime.closeSubmittedReport).toHaveBeenCalledWith(
     expect.objectContaining({
       guildId: 'guild-1',
@@ -83,13 +88,14 @@ it('uses the session identity for direct closure and retains queued case receipt
     { reportId: 'report-1', action: 'mark_actioned' }
   );
   expect(
-    await openInboxSubmittedReportCase(
-      'guild-1',
-      'report-1',
-      initialInboxActionState,
-      new FormData()
+    await submitWorkspaceReportAction(
+      { guildId: 'guild-1', reportId: 'report-1', action: 'open_case' },
+      confirmed()
     )
-  ).toMatchObject({ status: 'queued', requestId: 'queued-request-1' });
+  ).toMatchObject({
+    kind: 'report_open',
+    result: { status: 'queued', requestId: 'queued-request-1' },
+  });
 });
 
 it.each(['queued', 'completed', 'failed'] as const)(

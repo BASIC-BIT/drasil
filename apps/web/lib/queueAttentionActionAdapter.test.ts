@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAttentionActions, type QueueAttentionItemRecord } from '@drasil/application';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { submitWorkspaceAttentionAction } from '../app/admin/guild/[guildId]/inbox/actions';
 import { PostgresQueueAttentionActionAdapter } from './queueAttentionActionAdapter';
-import { acknowledgeQueueAttentionItem } from '../app/admin/guild/[guildId]/inbox/actions';
 
 const runtime = vi.hoisted(() => ({ query: vi.fn(), deleteMessage: vi.fn(), roles: vi.fn() }));
 vi.mock('./setupDataAdapter', async (load) => ({
@@ -35,15 +35,15 @@ describe('direct web attention acknowledgement', () => {
     runtime.deleteMessage.mockResolvedValue(true);
   });
   it('allows_discord_moderator_but_keeps_web_entry_gate', async () => {
-    let webEntryDenied = false;
-    try {
-      await acknowledgeQueueAttentionItem('guild-1', 'item-1');
-    } catch (error) {
-      webEntryDenied =
-        error instanceof Error &&
-        error.message === 'You do not have permission to manage this guild.';
-    }
-    expect(webEntryDenied).toBe(true);
+    expect(
+      await submitWorkspaceAttentionAction(
+        { guildId: 'guild-1', queueItemId: 'item-1' },
+        new FormData()
+      )
+    ).toMatchObject({
+      kind: 'failed',
+      message: 'You do not have permission to manage this guild.',
+    });
     expect(runtime.query).not.toHaveBeenCalled();
   });
   it('executes directly without inserting a durable request row', async () => {

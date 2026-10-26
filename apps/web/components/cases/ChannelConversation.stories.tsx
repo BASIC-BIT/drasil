@@ -1,10 +1,10 @@
+import { Foundation } from '@/components/workspace/Foundation';
+import { TimestampClock } from '@/components/workspace/Timestamp';
+import type { CaseDiscordMessage } from '@/lib/caseDiscordContent';
+import type { ConversationReadResult, ConversationSource } from '@/lib/conversationTypes';
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { useRef, useState } from 'react';
 import { ChannelConversation } from './ChannelConversation';
-import type { ConversationSource, ConversationReadResult } from '@/lib/conversationTypes';
-import type { CaseDiscordMessage } from '@/lib/caseDiscordContent';
-import { Foundation } from '@/components/workspace/Foundation';
-import { TimestampClock } from '@/components/workspace/Timestamp';
 const guildId = '100000000000000001',
   channelId = '100000000000000002';
 const messageId = (n: number) => String(100000000000000000n + BigInt(n));
@@ -39,8 +39,13 @@ function message(n: number): CaseDiscordMessage {
         : [],
   };
 }
-function Scenario({ scenario = 'available' }: { scenario?: 'available' | 'deleted' | 'denied' }) {
+function Scenario({
+  scenario = 'available',
+}: {
+  scenario?: 'available' | 'deleted' | 'denied' | 'upstream';
+}) {
   const [open, setOpen] = useState(false);
+  const attempts = useRef(0);
   const trigger = useRef<HTMLButtonElement>(null);
   return (
     <TimestampClock>
@@ -58,6 +63,8 @@ function Scenario({ scenario = 'available' }: { scenario?: 'available' | 'delete
               trigger.current?.focus();
             }}
             loadPage={async (_guildId, query): Promise<ConversationReadResult> => {
+              if (scenario === 'upstream' && attempts.current++ === 0)
+                return { kind: 'unavailable', reason: 'upstream' };
               if (scenario === 'denied') return { kind: 'unavailable', reason: 'denied' };
               const cursor =
                 query.page.kind === 'around'
@@ -199,3 +206,5 @@ export const ReplacePendingChannel: Story = {
 export const ReplacePendingMessage: Story = {
   render: () => <SourceReplacement change="message" pending />,
 };
+
+export const RetryUpstream: Story = { args: { scenario: 'upstream' } };

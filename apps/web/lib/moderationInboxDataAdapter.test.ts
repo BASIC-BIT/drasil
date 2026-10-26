@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
 import type { CaseSummary, ReportQueueItem } from '@drasil/contracts';
+import { describe, expect, it } from 'vitest';
 import {
   caseSummaryToInboxItem,
   parseModerationQueueRow,
@@ -273,4 +273,13 @@ it('uses a durable detection ID and preserves the detection event date', () => {
   const item = parseModerationQueueRow(baseQueueRow);
   expect(item?.id).toBe('detection:det-observed-1');
   expect(item?.sourceMetadata?.eventAt).toBe('2026-06-01T00:00:00.000Z');
+});
+
+it('labels generated detection summaries without changing original source evidence', () => {
+  expect(caseSummaryToInboxItem({ ...baseCase, latestDetectionType: 'gpt_analysis' }).summary).toBe(
+    'Latest detection: Content analysis.'
+  );
+  expect(
+    caseSummaryToInboxItem({ ...baseCase, latestDetectionType: 'suspicious_content' }).summary
+  ).toBe('Latest detection: Content check.');
 });

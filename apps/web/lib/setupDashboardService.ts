@@ -7,13 +7,13 @@ import {
   type SetupServerRecord,
 } from '@drasil/contracts';
 import {
-  type DiscordChannel,
   DiscordApiError,
+  fetchDiscordGuilds,
+  fetchGuildResources,
+  type DiscordChannel,
   type DiscordGuildResources,
   type DiscordGuildSummary,
   type DiscordRole,
-  fetchDiscordGuilds,
-  fetchGuildResources,
 } from './discordApi';
 import {
   DISCORD_PERMISSIONS,
@@ -23,7 +23,6 @@ import {
   hasPermission,
   parsePermissions,
 } from './discordPermissions';
-import { fixtureTimestampIso, isWebE2eFixtureMode } from './e2eFixtures';
 import { createSetupDataAdapter, type SetupDataAdapter } from './setupDataAdapter';
 
 export interface ManageableGuild {
@@ -766,6 +765,6 @@ export class SetupDashboardService {
 }
 
 export function createSetupDashboardService(): SetupDashboardService {
-  const clock = isWebE2eFixtureMode() ? () => new Date(fixtureTimestampIso) : undefined;
+  const clock = undefined;
   return new SetupDashboardService(createSetupDataAdapter(), clock);
 }

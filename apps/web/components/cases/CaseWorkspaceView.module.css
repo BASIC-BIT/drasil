@@ -96,7 +96,7 @@
   color: var(--dr-muted);
   font-size: 10px;
 }
-.actionBar:has(form),
+.actionBar:has(form:not(dialog:not([open]) form)),
 .actionBar:has([role='status']),
 .actionBar:has([role='alert']) {
   position: static;

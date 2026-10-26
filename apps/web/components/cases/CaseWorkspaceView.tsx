@@ -37,19 +37,25 @@ export function CaseWorkspaceView({
 }: CaseWorkspaceViewProps) {
   const { detail, report, membership } = data;
   const id = useId();
-  const identity = useRef<HTMLElement>(null);
+  const identity = useRef<HTMLHeadingElement>(null);
   const bar = useRef<HTMLDivElement>(null);
   const root = useRef<HTMLElement>(null);
   const [identityOutside, setIdentityOutside] = useState(false);
   const [returnSource, setReturnSource] = useState<string | null>(null);
   const thread = detail.surfaces.find((surface) => surface.kind === 'verification_thread');
   useEffect(() => {
-    if (!identity.current) return;
-    const observer = new IntersectionObserver(([entry]) =>
-      setIdentityOutside(!entry.isIntersecting && entry.boundingClientRect.bottom <= 0)
-    );
-    observer.observe(identity.current);
-    return () => observer.disconnect();
+    const element = identity.current;
+    if (!element) return;
+    // Source/context jumps can cross the headline before observer delivery. Read
+    // current geometry on scroll so the sticky actions always retain their target.
+    const update = (): void => setIdentityOutside(element.getBoundingClientRect().bottom <= 0);
+    update();
+    window.addEventListener('scroll', update, { passive: true });
+    window.addEventListener('resize', update);
+    return () => {
+      window.removeEventListener('scroll', update);
+      window.removeEventListener('resize', update);
+    };
   }, [detail.id]);
   useEffect(() => {
     const element = bar.current;
@@ -83,9 +89,9 @@ export function CaseWorkspaceView({
         <a href={returnHref}>← Back to inbox</a>
         <span>Case · {detail.id}</span>
       </div>
-      <header ref={identity} className={styles.header}>
+      <header className={styles.header}>
         <div className={styles.identity}>
-          <h1>{detail.userIdentity.displayLabel}</h1>
+          <h1 ref={identity}>{detail.userIdentity.displayLabel}</h1>
           <p>
             Opened <Timestamp value={detail.createdAt} />
           </p>
@@ -136,7 +142,9 @@ export function CaseWorkspaceView({
               ...(conversation
                 ? [{ id: `${id}-conversation`, label: 'Conversation', content: conversation }]
                 : []),
-              ...(tools ? [{ id: `${id}-tools`, label: 'Case tools', content: tools }] : []),
+              ...(tools
+                ? [{ id: `${id}-tools`, label: 'Case tools', content: tools, afterSources: true }]
+                : []),
             ]}
             contextLinks={[
               ...(checks.length

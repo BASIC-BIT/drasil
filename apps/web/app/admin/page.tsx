@@ -1,9 +1,9 @@
-import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { AccountControl } from '@/components/AccountControl';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
 import { createSetupDashboardService } from '@/lib/setupDashboardService';
+import Link from 'next/link';
+import { redirect } from 'next/navigation';
 
 const READINESS_LABELS = {
   not_installed: 'Install Drasil',
@@ -36,9 +36,7 @@ export default async function AdminPage() {
       <section className="panel stack">
         <div className="section-heading server-list-heading">
           <h1 className="page-title">Choose a Server</h1>
-          <p className="lede">
-            Select a server to review setup health, active cases, and moderation policy.
-          </p>
+          <p className="lede">Select a server to review moderation, history and settings.</p>
         </div>
         {guilds.length === 0 ? (
           <div className="card">
@@ -51,16 +49,12 @@ export default async function AdminPage() {
               <article className="server-row" key={guild.id}>
                 <div className="server-row-body">
                   <h2>{guild.name}</h2>
-                  <p className="muted">Open setup diagnostics or review active moderation cases.</p>
+                  <p className="muted">
+                    Review reports, cases and replies in the moderation inbox.
+                  </p>
                   <div className="actions">
                     <Link className="button" href={`/admin/guild/${guild.id}/inbox`}>
                       Inbox
-                    </Link>
-                    <Link className="button secondary" href={`/admin/guild/${guild.id}/cases`}>
-                      Active Cases
-                    </Link>
-                    <Link className="button secondary" href={`/admin/guild/${guild.id}/reports`}>
-                      Reports
                     </Link>
                     <Link className="button secondary" href={`/admin/guild/${guild.id}/history`}>
                       History

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { FixtureMemberProfileDataAdapter, parseReportRow } from './memberProfileDataAdapter';
+import { FixtureMemberProfileDataAdapter } from '../e2e/legacy/memberProfileDataAdapter';
+import { parseReportRow } from './memberProfileDataAdapter';
 
 describe('memberProfileDataAdapter', () => {
   it('builds fixture member profiles from case and report history', async () => {

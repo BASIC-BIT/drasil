@@ -7,6 +7,7 @@ const reuseExistingServer = process.env.PLAYWRIGHT_REUSE_STORYBOOK_SERVER === 't
 
 export default defineConfig({
   testDir: './storybook-e2e',
+  outputDir: 'storybook-test-results',
   fullyParallel: true,
   workers: 1,
   timeout: 30_000,

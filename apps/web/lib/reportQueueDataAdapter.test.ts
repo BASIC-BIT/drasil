@@ -1,11 +1,11 @@
+import { InboxQueue } from '@/components/inbox/InboxQueue';
+import type { ActionContext } from '@drasil/application';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ModerationInboxView } from '@/components/inbox/ModerationInboxView';
+import { parseInboxLocation } from './inboxLocation';
 import { reportQueueItemToInboxItem } from './moderationInboxDataAdapter';
 import { parseReportDetailRows } from './reportDetailDataAdapter';
-import { initialInboxActionState } from './inboxActionState';
-import type { ActionContext } from '@drasil/application';
 import { PostgresReportQueueDataAdapter, parseReportQueueRow } from './reportQueueDataAdapter';
 
 const db = vi.hoisted(() => ({ query: vi.fn() }));
@@ -197,30 +197,18 @@ it('suppresses competing report closure and case actions while a report ban owns
 });
 
 function renderInboxReport(report: ReturnType<typeof parseReportQueueRow>): string {
-  const inboxAction = async () => initialInboxActionState;
   return renderToStaticMarkup(
-    createElement(ModerationInboxView, {
-      acknowledgeQueueItemAction: inboxAction,
-      acknowledgeQueueItemsAction: inboxAction,
-      canOpenReportCases: true,
-      canQueueCaseActions: true,
-      closeReportAction: inboxAction,
+    createElement(InboxQueue, {
       guildId: 'guild-1',
-      guildName: 'Fixture Guild',
-      sessionUsername: 'Moderator',
       items: [reportQueueItemToInboxItem(report)],
-      openReportCaseAction: inboxAction,
-      pollActionRequests: false,
-      queueCaseAction: async () => {},
-      queueInboxCaseAction: inboxAction,
-      queueObservedAlertAction: inboxAction,
-      recentActionRequests: [],
+      location: parseInboxLocation(new URLSearchParams()),
+      onSelect: () => undefined,
     })
   );
 }
 
 it.each([null, 'case-1'])(
-  'routes an eligible queue report with linked case %s to the existing ban confirmation',
+  'routes an eligible queue report with linked case %s to its selected inbox record',
   async (caseId) => {
     db.query.mockReset();
     db.query.mockResolvedValueOnce({ rows: [{ ...baseRow, latest_case_id: caseId }] });
@@ -228,9 +216,7 @@ it.each([null, 'case-1'])(
 
     expect(report.allowedActions).toContain('ban_user');
     const markup = renderInboxReport(report);
-    expect(markup).toMatch(
-      /href="\/admin\/guild\/guild-1\/reports\/report-1#report-ban"[^>]*>Review Ban<\/a>/
-    );
+    expect(markup).toContain('selected=report%3Areport-1');
     expect(markup).not.toContain('Confirm Ban');
     const [sql, parameters] = db.query.mock.calls[0];
     expect(parameters).toEqual(['guild-1']);

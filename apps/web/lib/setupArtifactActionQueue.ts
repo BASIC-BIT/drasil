@@ -1,6 +1,5 @@
 import { queuedSetupCommandSchema, type ActionContext } from '@drasil/application';
 import { submitQueuedAction, submitSerializedSetupAction } from './application/queuedSubmission';
-import { isWebE2eFixtureMode } from './e2eFixtures';
 import type { ModerationActionRequestReceipt } from './moderationActionRequestQueue';
 
 export async function queueReportInstructionsRepairRequest(input: {
@@ -11,10 +10,6 @@ export async function queueReportInstructionsRepairRequest(input: {
   readonly expectedChannelId?: string | null;
   readonly submissionId?: string;
 }): Promise<ModerationActionRequestReceipt> {
-  if (isWebE2eFixtureMode()) {
-    return { id: `fixture-report-instructions-${input.channelId}`, status: 'queued' };
-  }
-
   return submitQueuedAction({
     context: input.context,
     command: queuedSetupCommandSchema.parse({
@@ -43,10 +38,6 @@ export async function queueCompleteSetupVerificationRequestWithReceipt(input: {
   readonly submissionId?: string;
   readonly onboardingWizard?: boolean;
 }): Promise<ModerationActionRequestReceipt> {
-  if (isWebE2eFixtureMode()) {
-    return { id: input.submissionId ?? 'fixture-setup-request', status: 'queued' };
-  }
-
   return submitSerializedSetupAction({
     context: input.context,
     command: {

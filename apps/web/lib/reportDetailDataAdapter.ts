@@ -1,7 +1,6 @@
-import { readFixtureReportBan } from './reportBanFixtures';
 import {
-  reportDetailSchema,
   reportAttentionRecordSchema,
+  reportDetailSchema,
   type ReportAttentionRecord,
   type ReportDetail,
   type ReportEvidenceAttachment,
@@ -10,10 +9,8 @@ import {
   type ReportQueueStatus,
 } from '@drasil/contracts';
 import { discordMessageUrl } from './discordUrls';
-import { isWebE2eFixtureMode } from './e2eFixtures';
-import { fixtureReportDetail } from './reportFixtures';
-import { getPostgresPool } from './setupDataAdapter';
 import { resolveReportSummarySource } from './reportSummaryProvenance';
+import { getPostgresPool } from './setupDataAdapter';
 
 export interface ReportDetailDataAdapter {
   getReportDetail(guildId: string, reportId: string): Promise<ReportDetail | null>;
@@ -244,30 +241,6 @@ export class PostgresReportDetailDataAdapter implements ReportDetailDataAdapter 
   }
 }
 
-export class FixtureReportDetailDataAdapter implements ReportDetailDataAdapter {
-  public async getReportDetail(_guildId: string, reportId: string): Promise<ReportDetail | null> {
-    const detail = fixtureReportDetail(reportId);
-    const request = await readFixtureReportBan();
-    if (
-      detail &&
-      request?.reportIntakeId === reportId &&
-      request.observedBanResult?.status === 'banned'
-    ) {
-      return {
-        ...detail,
-        status: 'actioned',
-        closedAt: request.completedAt,
-        allowedActions: ['open_report_thread'],
-      };
-    }
-    return detail;
-  }
-}
-
 export function createReportDetailDataAdapter(): ReportDetailDataAdapter {
-  if (isWebE2eFixtureMode()) {
-    return new FixtureReportDetailDataAdapter();
-  }
-
   return new PostgresReportDetailDataAdapter();
 }

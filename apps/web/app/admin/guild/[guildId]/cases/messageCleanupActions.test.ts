@@ -426,7 +426,7 @@ describe('messageCleanupActions execution', () => {
     expect(statements.some((text) => text.includes('from message_deletion_jobs'))).toBe(false);
   });
 
-  it('returns deterministic fixture receipts before UUID and database checks', async () => {
+  it('runtime fixture flags cannot bypass UUID and database checks', async () => {
     vi.stubEnv('DRASIL_WEB_E2E_FIXTURE_MODE', 'true');
 
     const state = await previewCaseMessageCleanup(
@@ -437,9 +437,9 @@ describe('messageCleanupActions execution', () => {
     );
 
     expect(state).toEqual({
-      message: 'Message cleanup preview queued.',
-      requestId: 'fixture-preview_case_message_deletion-submission_123456',
-      status: 'queued',
+      message: 'Case id is invalid.',
+      requestId: null,
+      status: 'failed',
     });
     expect(mocks.connect).not.toHaveBeenCalled();
   });

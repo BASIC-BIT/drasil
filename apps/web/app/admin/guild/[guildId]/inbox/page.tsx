@@ -1,99 +1,34 @@
-import { redirect } from 'next/navigation';
-import { ModerationInboxView } from '@/components/inbox/ModerationInboxView';
-import { createActiveCaseDataAdapter } from '@/lib/activeCaseDataAdapter';
+import { ModerationInboxRoute } from '@/components/workspace/ModerationWorkspaceRoute';
+import { WorkspaceShell } from '@/components/workspace/WorkspaceShell';
+import { parseInboxLocation } from '@/lib/inboxLocation';
 import { createModerationInboxDataAdapter } from '@/lib/moderationInboxDataAdapter';
-import { createModerationActionRequestDataAdapter } from '@/lib/moderationActionRequestDataAdapter';
-import { createReportQueueDataAdapter } from '@/lib/reportQueueDataAdapter';
-import { isWebE2eFixtureMode } from '@/lib/e2eFixtures';
-import { DISCORD_PERMISSIONS, hasPermission, parsePermissions } from '@/lib/discordPermissions';
-import { createMessageCleanupDataAdapter } from '@/lib/messageCleanupDataAdapter';
-import { findMessageCleanupActionRequest } from '@/lib/inboxActionReceipts';
-import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
-import { createSetupDashboardService } from '@/lib/setupDashboardService';
-import {
-  acknowledgeInboxQueueAttentionItem,
-  acknowledgeInboxQueueAttentionItems,
-  queueInboxObservedAlertAction,
-} from './actions';
-import { queueCaseAction, queueInboxCaseAction } from '../cases/actions';
-import {
-  banCaseUserWithMessageCleanup,
-  executeCaseMessageCleanup,
-  previewCaseMessageCleanup,
-} from '../cases/messageCleanupActions';
-import { closeInboxSubmittedReport, openInboxSubmittedReportCase } from '../reports/actions';
+import { loadWorkspaceRoute } from '@/lib/workspaceRouteData';
 
-type PageProps = {
+export default async function ModerationInboxPage({
+  params,
+  searchParams,
+}: {
   readonly params: Promise<{ readonly guildId: string }>;
-};
-
-export default async function ModerationInboxPage({ params }: PageProps) {
+  readonly searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const { guildId } = await params;
-  const [session, token] = await Promise.all([getCurrentAdminSession(), getCurrentDiscordToken()]);
-  if (!session || !token) {
-    redirect(`/api/auth/discord?returnTo=/admin/guild/${guildId}/inbox`);
-  }
-
-  const setupService = createSetupDashboardService();
-  const guild = await setupService.assertCanManageGuild(guildId, token.accessToken);
-  const inboxAdapter = createModerationInboxDataAdapter();
-  const activeCaseAdapter = createActiveCaseDataAdapter();
-  const actionRequestAdapter = createModerationActionRequestDataAdapter();
-  const reportQueueAdapter = createReportQueueDataAdapter();
-  const [items, recentActionRequests] = await Promise.all([
-    inboxAdapter.listInboxItems(guildId),
-    actionRequestAdapter.listInboxRequests(guildId, 25),
-  ]);
-  const isAdministrator =
-    guild.owner ||
-    hasPermission(parsePermissions(guild.permissions), DISCORD_PERMISSIONS.Administrator);
-  const cleanupAdapter = createMessageCleanupDataAdapter();
-  const caseIds = [
-    ...new Set(items.filter((item) => item.kind === 'case').map((item) => item.sourceId)),
-  ];
-  const cleanupWorkspaces = isAdministrator
-    ? await cleanupAdapter.listCaseWorkspaces(guildId, caseIds)
-    : [];
-  const cleanupEntries = cleanupWorkspaces.map((workspace) => {
-    const caseId = workspace.verificationEventId;
-    const deleteOnlyJob = workspace.latestJobs.find((job) => job.mode === 'delete_only') ?? null;
-    const combinedJob = workspace.latestJobs.find((job) => job.mode === 'ban_with_cleanup') ?? null;
-    return [
-      caseId,
-      {
-        combinedBanAction: banCaseUserWithMessageCleanup.bind(null, guildId, caseId),
-        combinedJob: null,
-        combinedRequest: findMessageCleanupActionRequest(recentActionRequests, combinedJob),
-        deleteOnlyJob: null,
-        deleteOnlyRequest: findMessageCleanupActionRequest(recentActionRequests, deleteOnlyJob),
-        executeAction: executeCaseMessageCleanup.bind(null, guildId, caseId),
-        previewAction: previewCaseMessageCleanup.bind(null, guildId, caseId),
-        loadedAt: new Date().toISOString(),
-        returnHref: `/admin/guild/${guildId}/inbox`,
-        requests: recentActionRequests.filter((request) => request.verificationEventId === caseId),
-        workspace,
-      },
-    ] as const;
-  });
-
+  const { guild, session } = await loadWorkspaceRoute(guildId, `/admin/guild/${guildId}/inbox`);
+  const items = await createModerationInboxDataAdapter().listInboxItems(guildId);
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(await searchParams))
+    if (typeof value === 'string') query.set(key, value);
   return (
-    <ModerationInboxView
-      acknowledgeQueueItemAction={acknowledgeInboxQueueAttentionItem}
-      acknowledgeQueueItemsAction={acknowledgeInboxQueueAttentionItems}
-      canOpenReportCases={reportQueueAdapter.canOpenSubmittedReportCase()}
-      canQueueCaseActions={activeCaseAdapter.canQueueCaseActions()}
-      closeReportAction={closeInboxSubmittedReport}
+    <WorkspaceShell
       guildId={guildId}
       guildName={guild.name}
-      items={items}
-      messageCleanupByCaseId={Object.fromEntries(cleanupEntries)}
-      openReportCaseAction={openInboxSubmittedReportCase}
-      pollActionRequests={!isWebE2eFixtureMode()}
-      queueCaseAction={queueCaseAction}
-      queueInboxCaseAction={queueInboxCaseAction}
-      queueObservedAlertAction={queueInboxObservedAlertAction}
-      recentActionRequests={recentActionRequests}
       sessionUsername={session.username}
-    />
+      currentPage="inbox"
+    >
+      <ModerationInboxRoute
+        guildId={guildId}
+        items={items}
+        initialLocation={parseInboxLocation(query)}
+      />
+    </WorkspaceShell>
   );
 }

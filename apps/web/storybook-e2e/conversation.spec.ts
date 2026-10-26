@@ -35,7 +35,11 @@ for (const width of [320, 390, 1440]) {
     await later.click();
     await expect(reader.getByText(/200 messages loaded/)).toBeVisible();
     await expect(later).toBeFocused();
-    await expect(reader.getByText('200-message limit reached. Continue in Discord.')).toBeVisible();
+    await expect(
+      reader.getByText(
+        'Loading another page would exceed the 200-message limit. Continue in Discord.'
+      )
+    ).toBeVisible();
     await expect(earlier).toHaveAttribute('aria-disabled', 'true');
     await context.route('https://cdn.discordapp.com/attachments/example/proof.png', (route) =>
       route.fulfill({ contentType: 'text/html', body: '<title>Proof attachment</title>' })
@@ -139,3 +143,12 @@ for (const state of ['loaded', 'pending']) {
     });
   }
 }
+
+test('keyboard retry transfers focus to the visible conversation heading', async ({ page }) => {
+  await page.goto(story.replace('--available', '--retry-upstream'));
+  await page.getByRole('button', { name: 'View conversation' }).click();
+  await page.getByRole('button', { name: 'Try again', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('heading', { name: 'Conversation · #general' })).toBeFocused();
+  await expect(page.getByText(/50 messages loaded/)).toBeVisible();
+});

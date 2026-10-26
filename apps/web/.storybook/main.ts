@@ -31,6 +31,10 @@ const config: StorybookConfig = {
           '**/storybook-static/**',
           '**/storybook-playwright-report/**',
           '**/test-results/**',
+          '**/workspace-test-results/**',
+          '**/storybook-test-results/**',
+          '**/.next-legacy-test/**',
+          '**/.next/**',
         ],
       },
     };

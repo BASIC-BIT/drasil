@@ -1,16 +1,12 @@
-import { filterCaseKindActions } from './caseActionEligibility';
-import { buildQueuedCaseCommand } from './application/caseCommands';
-import { createWebActionContext } from './application/context';
-import { submitQueuedAction } from './application/queuedSubmission';
 import {
-  type CaptchaIssuanceConfiguration,
   evaluateCasePolicy,
   readCasePolicy,
+  type CaptchaIssuanceConfiguration,
 } from '@drasil/application';
 import {
-  getEffectiveCaptchaMethod,
   caseDetailSchema,
   caseSummarySchema,
+  getEffectiveCaptchaMethod,
   sortCaseSummariesForQueue,
   type CaptchaChallengeSummary,
   type CaseAction,
@@ -25,20 +21,16 @@ import {
   type CaseUserIdentity,
 } from '@drasil/contracts';
 import { z } from 'zod';
-import {
-  fixtureActiveCaseDetail,
-  fixtureActiveCaseSummaries,
-  fixtureParkedActiveCaseSummaries,
-  fixtureResolvedCaseCount,
-  fixtureResolvedCaseSummariesForHistory,
-  isWebE2eFixtureMode,
-} from './e2eFixtures';
+import { buildQueuedCaseCommand } from './application/caseCommands';
+import { createWebActionContext } from './application/context';
+import { submitQueuedAction } from './application/queuedSubmission';
+import { filterCaseKindActions } from './caseActionEligibility';
 import { discordDesktopUrl, discordMessageUrl } from './discordUrls';
-import { getPostgresPool } from './setupDataAdapter';
 import type {
-  ModerationActionRequestReceipt,
   ModerationActionRequestQueueStatus,
+  ModerationActionRequestReceipt,
 } from './moderationActionRequestQueue';
+import { getPostgresPool } from './setupDataAdapter';
 
 export type WebCaseAction = Extract<
   CaseAction,
@@ -233,10 +225,6 @@ const THREAD_REPAIR_ACTIONS_BY_STATE = [
 ] as const satisfies readonly (readonly (readonly CaseAction[])[])[];
 
 const uuidSchema = z.string().uuid();
-
-function sortCaseSummariesForHistory(cases: readonly CaseSummary[]): CaseSummary[] {
-  return [...cases].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
-}
 
 function toIsoString(value: unknown): string {
   if (value instanceof Date) {
@@ -1041,66 +1029,6 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
   }
 }
 
-export class FixtureActiveCaseDataAdapter implements ActiveCaseDataAdapter {
-  public canQueueCaseActions(): boolean {
-    return true;
-  }
-
-  public async listActiveCases(): Promise<CaseSummary[]> {
-    return sortCaseSummariesForQueue(fixtureActiveCaseSummaries());
-  }
-
-  public async listParkedCases(): Promise<CaseSummary[]> {
-    return fixtureParkedActiveCaseSummaries();
-  }
-
-  public async listResolvedCases(_guildId: string): Promise<CaseSummary[]> {
-    return sortCaseSummariesForHistory(fixtureResolvedCaseSummariesForHistory());
-  }
-
-  public async listCasesForMember(_guildId: string, userId: string): Promise<CaseSummary[]> {
-    return sortCaseSummariesForHistory(
-      [...fixtureActiveCaseSummaries(), ...fixtureResolvedCaseSummariesForHistory()].filter(
-        (item) => item.userId === userId
-      )
-    );
-  }
-
-  public async countResolvedCases(): Promise<number> {
-    return fixtureResolvedCaseCount();
-  }
-
-  public async getCaseDetail(_guildId: string, caseId: string): Promise<CaseDetail | null> {
-    return fixtureActiveCaseDetail(caseId);
-  }
-
-  public async queueCaseAction(input: QueueCaseActionInput): Promise<CaseActionQueueResult> {
-    const detail = fixtureActiveCaseDetail(input.caseId);
-    if (!detail) {
-      return {
-        action: input.action,
-        caseId: input.caseId,
-        requestId: null,
-        status: 'case_not_found',
-      };
-    }
-    if (!detail.allowedActions.includes(input.action)) {
-      return { action: input.action, caseId: input.caseId, requestId: null, status: 'not_allowed' };
-    }
-    return {
-      action: input.action,
-      caseId: input.caseId,
-      requestId: `fixture-case-action-${input.action}-${input.caseId}`,
-      receipt: { id: `fixture-case-action-${input.action}-${input.caseId}`, status: 'queued' },
-      status: 'queued',
-    };
-  }
-}
-
 export function createActiveCaseDataAdapter(): ActiveCaseDataAdapter {
-  if (isWebE2eFixtureMode()) {
-    return new FixtureActiveCaseDataAdapter();
-  }
-
   return new PostgresActiveCaseDataAdapter();
 }

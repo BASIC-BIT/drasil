@@ -1,14 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { FixtureActiveCaseDataAdapter } from '../e2e/legacy/activeCaseDataAdapter';
 import type { QueueCaseActionInput } from './activeCaseDataAdapter';
-const persistence = vi.hoisted(() => ({ query: vi.fn() }));
-vi.mock('./setupDataAdapter', () => ({ getPostgresPool: () => persistence }));
 import {
-  FixtureActiveCaseDataAdapter,
   PostgresActiveCaseDataAdapter,
   parseCaseSummaryRow,
   resolveCaseActionQueueStatus,
   resolveReportIntakeId,
 } from './activeCaseDataAdapter';
+const persistence = vi.hoisted(() => ({ query: vi.fn() }));
+vi.mock('./setupDataAdapter', () => ({ getPostgresPool: () => persistence }));
 
 const baseRow = {
   id: 'ver-1',

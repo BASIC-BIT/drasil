@@ -1,5 +1,3 @@
-import { filterCaseKindActions } from './caseActionEligibility';
-import { readFixtureReportBan } from './reportBanFixtures';
 import {
   moderationInboxItemSchema,
   sortModerationInboxItems,
@@ -12,13 +10,13 @@ import {
   type ReportQueueAction,
   type ReportQueueItem,
 } from '@drasil/contracts';
-import { discordMessageUrl } from './discordUrls';
-import { isWebE2eFixtureMode } from './e2eFixtures';
 import { createActiveCaseDataAdapter } from './activeCaseDataAdapter';
+import { filterCaseKindActions } from './caseActionEligibility';
+import { discordMessageUrl } from './discordUrls';
+import { recordLabel } from './recordLabel';
 import { createReportQueueDataAdapter } from './reportQueueDataAdapter';
 import { resolveReportSummarySource } from './reportSummaryProvenance';
 import { getPostgresPool } from './setupDataAdapter';
-import { fixtureModerationInboxItems } from './inboxFixtures';
 
 export interface ModerationInboxDataAdapter {
   listInboxItems(guildId: string): Promise<ModerationInboxItem[]>;
@@ -259,7 +257,7 @@ export function caseSummaryToInboxItem(item: CaseSummary): ModerationInboxItem {
     },
     title: item.status === 'pending' ? 'Pending moderation case' : 'Moderation case',
     summary: item.latestDetectionType
-      ? `Latest detection: ${item.latestDetectionType}.`
+      ? `Latest detection: ${recordLabel(item.latestDetectionType)}.`
       : item.status === 'pending'
         ? 'Pending case needs moderator review.'
         : null,
@@ -511,22 +509,6 @@ export class PostgresModerationInboxDataAdapter implements ModerationInboxDataAd
   }
 }
 
-export class FixtureModerationInboxDataAdapter implements ModerationInboxDataAdapter {
-  public async listInboxItems(guildId: string): Promise<ModerationInboxItem[]> {
-    const request = await readFixtureReportBan();
-    return fixtureModerationInboxItems(guildId).filter(
-      (item) =>
-        request?.observedBanResult?.status !== 'banned' ||
-        item.kind !== 'submitted_report' ||
-        item.sourceId !== request.reportIntakeId
-    );
-  }
-}
-
 export function createModerationInboxDataAdapter(): ModerationInboxDataAdapter {
-  if (isWebE2eFixtureMode()) {
-    return new FixtureModerationInboxDataAdapter();
-  }
-
   return new PostgresModerationInboxDataAdapter();
 }
