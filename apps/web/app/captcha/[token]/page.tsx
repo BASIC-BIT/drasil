@@ -11,25 +11,15 @@ import { TurnstileChallengeForm } from '@/components/captcha/TurnstileChallengeF
 
 export const dynamic = 'force-dynamic';
 
-function resultMessage(result: string | undefined): string | null {
-  switch (result) {
-    case 'invalid':
-      return 'CAPTCHA not accepted. Try again.';
-    case 'provider_error':
-    case 'service':
-      return 'CAPTCHA unavailable. Try again.';
-    case 'rate_limited':
-      return 'Too many attempts. Wait a minute, then try again.';
-    case 'authenticate':
-      return 'Sign in with Discord again to continue.';
-    case 'retry':
-      return "Couldn't submit the CAPTCHA. Try again.";
-    case 'stale':
-      return 'This CAPTCHA has changed. Open the latest link in Discord.';
-    default:
-      return null;
-  }
-}
+const resultMessages = new Map([
+  ['invalid', 'CAPTCHA not accepted. Try again.'],
+  ['provider_error', 'CAPTCHA unavailable. Try again.'],
+  ['service', 'CAPTCHA unavailable. Try again.'],
+  ['rate_limited', 'Too many attempts. Wait a minute, then try again.'],
+  ['authenticate', 'Sign in with Discord again to continue.'],
+  ['retry', "Couldn't submit the CAPTCHA. Try again."],
+  ['stale', 'This CAPTCHA has changed. Open the latest link in Discord.'],
+]);
 
 export default async function CaptchaChallengePage({
   params,
@@ -90,7 +80,7 @@ export default async function CaptchaChallengePage({
       ? 'This CAPTCHA belongs to a different Discord account.'
       : query.auth === 'failed'
         ? 'Discord sign-in failed. Try again.'
-        : resultMessage(query.result);
+        : resultMessages.get(query.result ?? '');
   const formConfiguration = identityMatches
     ? getCaptchaFormConfiguration(challenge.id, challenge.generation)
     : null;
