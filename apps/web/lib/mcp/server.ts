@@ -19,7 +19,6 @@ import {
 import {
   acceptedContent,
   CLIENT_CAPABILITIES_META_KEY,
-  createRequestStateCodec,
   hostHeaderValidationResponse,
   inputRequired,
   inputResponse,
@@ -41,6 +40,7 @@ import { createContainmentTools } from './tools/containment';
 import { createApprovalTools } from './tools/approvals';
 import { confirmationInputSchema } from './intents';
 import { parseMcpInvocation } from './tools/bindings';
+import { createObservedRequestStateCodec } from './continuationDiagnostics';
 export const MCP_RESOURCE_METADATA_PATH = '/.well-known/oauth-protected-resource/api/mcp';
 export function createMcpToolCatalog(deps: {
   service: DelegatedActionService;
@@ -101,7 +101,7 @@ export function createMcpHandler(
     if (!principal) throw new Error('Authentication required.');
     return principal;
   }
-  const codec = createRequestStateCodec({
+  const codec = createObservedRequestStateCodec({
     key: createHmac('sha256', deps.config.authSecret).update('drasil.mcp.continuation.v1').digest(),
     ttlSeconds: 600,
     bind: (ctx) => canonicalDigest({ method: ctx.mcpReq.method, principal: principalFor(ctx) }),

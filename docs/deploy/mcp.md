@@ -26,6 +26,26 @@ The bounded GET recovery implementation has local composition and transport cove
 
 For recovery defaults, public outcomes and safe correlation fields, see [temporary read failures](../dev/mcp.md#temporary-read-failures). OAuth refresh/revoke, UI confirmation, mutations and ingress acceptance remain separate gates.
 
+## Continuation diagnostics
+
+`mcp_continuation` events observe the bounded HTTP body and the maintained SDK request-state codec. `wire` records present `params.requestState` before the SDK validates its type. `mint` records codec success or failure while preparing native confirmation. `verify` records codec success or failure on continuation. A non-string state produces a `wire` event with `malformed` and no `verify` event because the SDK rejects it before the hook. A string produces a `wire` event with `none`; this reports presence, not validity. Invalid JSON, absent state, rejected oversized bodies and state in other locations produce no wire event.
+
+| Reason      | Interpretation                                                                                  |
+| ----------- | ----------------------------------------------------------------------------------------------- |
+| `none`      | Wire string observed, or codec operation succeeded, according to the stage/outcome.             |
+| `malformed` | Wire state is non-string, or the SDK codec rejected its format.                                 |
+| `mac`       | SDK signature verification failed. A changed value or a different signing key can cause this.   |
+| `expired`   | SDK rejected the signed expiry.                                                                 |
+| `bind`      | SDK rejected the context binding.                                                               |
+| `context`   | The existing binding callback threw while obtaining or digesting its context.                   |
+| `unknown`   | An exception outside the recognized SDK categories occurred. Raw exception details are omitted. |
+
+Each HTTP request receives a fresh server-generated `correlationId`. Its wire and verify events share that ID. Mint and continuation occur on separate requests and have different IDs, including across fresh handler instances. Correlation IDs cannot link an action or principal across requests. Outside an HTTP request context the ID is the fixed value `unavailable`.
+
+Events include only fixed event/stage/outcome/reason values, an allowlisted protocol revision or `unknown`, a state type category, and string byte length capped at four MiB. Non-string values report zero bytes. They never contain state values, signatures, tokens, principals, guild IDs, commands, summaries or raw errors. Observation is best effort; a failing sink cannot change codec results, thrown values or public SDK errors. Codec success does not prove that saved-action validation or action acceptance succeeded.
+
+This instrumentation does not fix or establish the cause of the hosted continuation failure. Deployment and another live acceptance test require separately reviewed authorization through the normal release process. The SDK codec, ten-minute TTL, principal/method binding, permission checks and saved-action validation remain in effect.
+
 ## Metadata permits
 
 Shared `mcp_metadata_permits` rows count outstanding maintained metadata HTTP message work, including discovery-owned JWKS. A permit survives headers until streamed EOF, proven body cancellation/error, or transport rejection. The maintained HEAD/204/205/304 null-body contract is semantic HTTP-message completion and releases a permit; this is not a bound on TCP teardown/socket lifetime. Unexpected null bodies fail closed. Both pinned consumers reject non-200/non-304 status, redirects and non-JSON media before reading; the wrapper cancels those bodies before returning the unchanged response. It retains the provider's validation/errors and transport protections.
