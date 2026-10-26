@@ -57,3 +57,17 @@ export function serializeInboxLocation(location: InboxLocation): URLSearchParams
   }
   return params;
 }
+
+/** Only an explicit, same-guild return carries continuation intent. Consumed on arrival. */
+export function explicitInboxReturnHref(guildId: string, href: string): string {
+  const url = new URL(href, 'https://internal.invalid');
+  if (
+    url.origin !== 'https://internal.invalid' ||
+    url.pathname !== `/admin/guild/${encodeURIComponent(guildId)}/inbox`
+  )
+    return href;
+  const selected = parseInboxLocation(url.searchParams).selectedItemId;
+  if (!selected) return href;
+  url.searchParams.set('resume', selected);
+  return `${url.pathname}${url.search}`;
+}

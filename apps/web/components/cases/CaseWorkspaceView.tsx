@@ -9,6 +9,7 @@ import type { CaseEvidenceReaderProps } from './CaseEvidenceReader';
 import { CaseChecks } from './CaseChecks';
 import { CaseHistory } from './CaseHistory';
 import { recordLabel } from './caseRecordLabel';
+import { explicitInboxReturnHref } from '@/lib/inboxLocation';
 import styles from './CaseWorkspaceView.module.css';
 
 export interface CaseWorkspaceViewProps {
@@ -86,7 +87,7 @@ export function CaseWorkspaceView({
   return (
     <article ref={root} className={styles.main}>
       <div className={styles.location}>
-        <a href={returnHref}>← Back to inbox</a>
+        <a href={explicitInboxReturnHref(detail.guildId, returnHref)}>← Back to inbox</a>
         <span>Case · {detail.id}</span>
       </div>
       <header className={styles.header}>

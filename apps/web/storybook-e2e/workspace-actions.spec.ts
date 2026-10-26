@@ -73,16 +73,25 @@ test('response loss reconciles matching pending request and reload retains it', 
   await expect(page.getByRole('button', { name: 'Ban member', exact: true })).toBeDisabled();
 });
 
-test('another moderator changing eligibility blocks an open confirmation', async ({ page }) => {
+test('another moderator changing eligibility closes confirmation with explanation, focus and retained draft', async ({
+  page,
+}) => {
   await page.goto(story);
   await page.getByRole('button', { name: 'Ban member', exact: true }).click();
   await page.getByRole('dialog').getByLabel('Reason', { exact: true }).fill('Reviewed');
   await page.getByRole('dialog').getByLabel('Confirm Ban member').check();
   await page.evaluate(() => window.dispatchEvent(new Event('fixture:eligibility-changed')));
-  await expect(
-    page.getByRole('dialog').getByRole('button', { name: 'Confirm Ban member', exact: true })
-  ).toBeDisabled();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  const explanation = page.getByRole('status');
+  await expect(explanation).toContainText('Ban member is no longer available for this record');
+  await expect(explanation).toBeFocused();
   await expect(page.getByTestId('submission-count')).toHaveText('0');
+  await page.evaluate(() => window.dispatchEvent(new Event('fixture:eligibility-restored')));
+  await page.getByRole('button', { name: 'Ban member', exact: true }).click();
+  await expect(page.getByRole('dialog').getByLabel('Reason', { exact: true })).toHaveValue(
+    'Reviewed'
+  );
+  await expect(page.getByRole('dialog').getByRole('checkbox')).not.toBeChecked();
 });
 
 test('active request polling stops when the consumer unmounts', async ({ page }) => {

@@ -14,7 +14,7 @@ import { submitWorkspaceReportAction } from '@/app/admin/guild/[guildId]/reports
 import { InboxActionRequestPollingProvider } from '@/components/inbox/InboxActionRequestPoller';
 import { InboxItemDetail, matchingInboxRequests } from '@/components/inbox/InboxItemDetail';
 import { InboxWorkspace } from '@/components/inbox/InboxWorkspace';
-import type { InboxLocation } from '@/lib/inboxLocation';
+import { explicitInboxReturnHref, type InboxLocation } from '@/lib/inboxLocation';
 import {
   workspaceItemDetailSchema,
   type WorkspaceItemDetail,
@@ -77,7 +77,9 @@ export function ModerationRecordRoute({
 }) {
   return (
     <InboxActionRequestPollingProvider enabled serverRequests={matchingInboxRequests(detail)}>
-      {detail.kind !== 'case' ? <a href={returnHref}>← Back to inbox</a> : null}
+      {detail.kind !== 'case' ? (
+        <a href={explicitInboxReturnHref(detail.item.guildId, returnHref)}>← Back to inbox</a>
+      ) : null}
       <InboxItemDetail
         detail={detail}
         loadedAt={loadedAt}

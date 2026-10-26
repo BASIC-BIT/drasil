@@ -131,7 +131,15 @@ function matchesDetailIdentity(
       return true;
   }
 }
-const locationKeys = ['view', 'kind', 'freshness', 'sort', 'q', 'selected', 'request'];
+const locationKeys = ['view', 'kind', 'freshness', 'sort', 'q', 'selected', 'request', 'resume'];
+
+// A document restored from browser history can contain the old queue snapshot.
+// Fetch fresh route data once, carrying only explicit continuation intent in the URL.
+function refreshHistoryReturn(): void {
+  const url = new URL(window.location.href);
+  url.searchParams.set('resume', parseInboxLocation(url.searchParams).selectedItemId ?? '');
+  window.location.replace(url);
+}
 
 export function InboxWorkspace(props: InboxWorkspaceProps) {
   // A guild change discards asynchronous and action state even for an empty queue.
@@ -158,6 +166,8 @@ function GuildInboxWorkspace({
   const initialRestore = useRef(true);
   const locationRef = useRef(location);
   locationRef.current = location;
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
   const visible = useMemo(
     () =>
       getModerationInboxVisibleItems(
@@ -206,18 +216,61 @@ function GuildInboxWorkspace({
     },
     [saveRestoration]
   );
+  const focusQueue = useCallback((id: string | null) => {
+    const rows = queue.current?.querySelectorAll<HTMLAnchorElement>('[data-inbox-item]');
+    const target =
+      Array.from(rows ?? []).find((row) => row.dataset.inboxItem === id) ??
+      queue.current?.querySelector<HTMLHeadingElement>('h2');
+    target?.focus({ preventScroll: true });
+    // Preserve restored scroll when the row remains visible; reveal surviving focus otherwise.
+    if (target && queue.current) {
+      const bounds = target.getBoundingClientRect();
+      const container = queue.current.getBoundingClientRect();
+      if (
+        bounds.top < Math.max(0, container.top) ||
+        bounds.bottom > Math.min(window.innerHeight, container.bottom)
+      )
+        target.scrollIntoView({ block: 'center' });
+    }
+  }, []);
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
     const stored = readRestoration(storageKey, guildId);
     if (initialRestore.current || !location.selectedItemId) {
       ordering.current = stored?.ordering.length ? stored.ordering : visible.map((item) => item.id);
       focusId.current = stored?.focusId ?? location.selectedItemId;
     }
     if (queue.current) queue.current.scrollTop = stored?.scrollTop ?? 0;
-    const restoreFocus = focusId.current;
-    if (initialRestore.current && !location.selectedItemId && restoreFocus) {
-      queue.current?.querySelectorAll<HTMLAnchorElement>('[data-inbox-item]').forEach((row) => {
-        if (row.dataset.inboxItem === restoreFocus) row.focus({ preventScroll: true });
-      });
+    if (
+      initialRestore.current &&
+      !params.has('resume') &&
+      (performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined)
+        ?.type === 'back_forward'
+    ) {
+      refreshHistoryReturn();
+      return;
+    }
+    if (initialRestore.current && params.has('resume')) {
+      const validated = params.get('resume') === (location.selectedItemId ?? '');
+      const nextId = validated
+        ? chooseInboxContinuation({
+            previousIds: ordering.current,
+            selectedId: location.selectedItemId ?? focusId.current,
+            currentItems: visible,
+          })
+        : location.selectedItemId;
+      focusId.current = nextId;
+      navigate(
+        {
+          ...location,
+          selectedItemId: location.selectedItemId ? nextId : null,
+          trackedRequestId: nextId === location.selectedItemId ? location.trackedRequestId : null,
+        },
+        true
+      );
+      if (!location.selectedItemId || !nextId) requestAnimationFrame(() => focusQueue(nextId));
+    } else if (initialRestore.current && !location.selectedItemId && focusId.current) {
+      focusQueue(focusId.current);
     }
     initialRestore.current = false;
     // Keep the review's captured order while filters change or a resolved row disappears.
@@ -231,25 +284,42 @@ function GuildInboxWorkspace({
         ordering.current = stored.ordering;
         focusId.current = stored.focusId;
       }
-      setLocation(restored);
+      const current = getModerationInboxVisibleItems(
+        itemsRef.current.filter((item) => item.guildId === guildId),
+        restored.controls
+      );
+      const nextId = chooseInboxContinuation({
+        previousIds: ordering.current,
+        selectedId: restored.selectedItemId ?? focusId.current,
+        currentItems: current,
+      });
+      focusId.current = nextId;
+      navigate(
+        {
+          ...restored,
+          selectedItemId: restored.selectedItemId ? nextId : null,
+          trackedRequestId: nextId === restored.selectedItemId ? restored.trackedRequestId : null,
+        },
+        true
+      );
       requestAnimationFrame(() => {
         if (queue.current && stored) queue.current.scrollTop = stored.scrollTop;
       });
-      if (!restored.selectedItemId)
-        requestAnimationFrame(() => {
-          queue.current?.querySelectorAll<HTMLAnchorElement>('[data-inbox-item]').forEach((row) => {
-            if (row.dataset.inboxItem === focusId.current) row.focus({ preventScroll: true });
-          });
-        });
+      if (!restored.selectedItemId || !nextId) requestAnimationFrame(() => focusQueue(nextId));
     };
     const save = () => saveRestoration();
+    const show = (event: PageTransitionEvent) => {
+      if (event.persisted) refreshHistoryReturn();
+    };
     window.addEventListener('popstate', pop);
     window.addEventListener('pagehide', save);
+    window.addEventListener('pageshow', show);
     return () => {
       window.removeEventListener('popstate', pop);
       window.removeEventListener('pagehide', save);
+      window.removeEventListener('pageshow', show);
     };
-  }, [saveRestoration, guildId]);
+  }, [saveRestoration, guildId, navigate, focusQueue]);
   useEffect(() => {
     const itemId = location.selectedItemId;
     if (!itemId) return;
@@ -317,14 +387,14 @@ function GuildInboxWorkspace({
     navigate({ ...location, selectedItemId: id, trackedRequestId: null });
   }
   function back(): void {
-    focusId.current = location.selectedItemId;
+    focusId.current = chooseInboxContinuation({
+      previousIds: ordering.current,
+      selectedId: location.selectedItemId,
+      currentItems: visible,
+    });
     focusedDetail.current = null;
     navigate({ ...location, selectedItemId: null, trackedRequestId: null });
-    requestAnimationFrame(() =>
-      queue.current?.querySelectorAll<HTMLAnchorElement>('[data-inbox-item]').forEach((row) => {
-        if (row.dataset.inboxItem === focusId.current) row.focus({ preventScroll: true });
-      })
-    );
+    requestAnimationFrame(() => focusQueue(focusId.current));
   }
   function next(): void {
     const id = chooseInboxContinuation({

@@ -20,6 +20,7 @@ import {
   workspaceRequestReceipt,
 } from '@/lib/inboxActionState';
 import { deriveWorkspaceActionPresentation } from '@/lib/workspaceActionPresentation';
+import { caseMaintenanceActions } from '@/lib/caseActionEffects';
 import { useInboxActionRequestPolling } from '@/components/inbox/InboxActionRequestPoller';
 import { ActionButton } from '../Foundation';
 import { ActionConfirmation } from './ActionConfirmation';
@@ -42,6 +43,7 @@ export interface ConfirmedActionDescriptor {
   readonly reasonRequired?: boolean;
   readonly reasonMaxLength?: number;
   readonly disabled?: boolean;
+  readonly disabledReason?: string;
   /** Existing preview, security generation or cleanup bindings, resolved again by the server. */
   readonly fields?: readonly { readonly name: string; readonly value: string }[];
 }
@@ -78,6 +80,8 @@ function ConfirmedActionIntent({
 }: ConfirmedActionProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
+  const [invalidation, setInvalidation] = useState<string | null>(null);
+  const invalidationNotice = useRef<HTMLParagraphElement>(null);
   const [openedIntent, setOpenedIntent] = useState<{
     readonly action: ConfirmedActionDescriptor;
     readonly target: ConfirmedActionTarget;
@@ -144,6 +148,44 @@ function ConfirmedActionIntent({
     blocksBanResubmission(durable)
   );
   useEffect(() => {
+    if (!open || !blocked) return;
+    const changedBinding = ['challenge_user', 'retry_captcha', 'bypass_captcha'].includes(action.id)
+      ? 'The security check generation or configured method changed.'
+      : action.id === 'quarantine_compromised_account'
+        ? 'The reviewed quarantine preview changed.'
+        : [
+              'preview_case_message_deletion',
+              'execute_case_message_deletion',
+              'ban_case_user_with_message_cleanup',
+            ].includes(action.id)
+          ? 'The reviewed message cleanup scope or preview changed.'
+          : 'The reviewed action details changed.';
+    setInvalidation(
+      intentChanged
+        ? `${changedBinding} Review the current action before confirming.`
+        : action.disabled
+          ? (action.disabledReason ?? `${action.label} is no longer available for this record.`)
+          : 'This action has a recorded request. Review its result before continuing.'
+    );
+    setOpen(false);
+  }, [
+    open,
+    blocked,
+    intentChanged,
+    action.id,
+    action.label,
+    action.disabled,
+    action.disabledReason,
+  ]);
+  useEffect(() => {
+    if (!invalidation) return;
+    const frame = requestAnimationFrame(() => {
+      invalidationNotice.current?.focus({ preventScroll: true });
+      invalidationNotice.current?.scrollIntoView({ block: 'center' });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [invalidation]);
+  useEffect(() => {
     if (!relevantRequestId || !active) return;
     setLocalRequestActive(relevantRequestId, true, atSubmit.current.updatedAt);
     return () => setLocalRequestActive(relevantRequestId, false);
@@ -208,6 +250,7 @@ function ConfirmedActionIntent({
           tone={action.tone}
           disabled={blocked}
           onClick={() => {
+            setInvalidation(null);
             setOpenedIntent({ action, target, submit });
             setOpen(true);
           }}
@@ -218,8 +261,9 @@ function ConfirmedActionIntent({
       <ActionConfirmation
         open={open}
         targetLabel={intent.target.label}
+        guildId={intent.target.guildId}
         actionLabel={intent.action.label}
-        description={`${intent.action.description}${intentChanged ? ' This confirmation is out of date. Cancel and review the current action before continuing.' : ''}`}
+        description={intent.action.description}
         reason={intent.action.frozenReason ?? reason}
         reasonReadOnly={intent.action.frozenReason !== undefined}
         reasonRequired={intent.action.reasonRequired ?? false}
@@ -231,7 +275,20 @@ function ConfirmedActionIntent({
           void confirm(data);
         }}
       />
-      <ActionReceipt {...presentationInput} />
+      {invalidation ? (
+        <p ref={invalidationNotice} tabIndex={-1} role="status">
+          {invalidation}
+        </p>
+      ) : null}
+      <ActionReceipt
+        {...presentationInput}
+        guildId={target.guildId}
+        historicalCompletion={
+          durable?.status === 'completed' &&
+          target.kind === 'case' &&
+          caseMaintenanceActions.some((id) => id === action.id)
+        }
+      />
       {uncertain && submission.kind === 'uncertain' ? (
         <ActionButton
           disabled={submission.refreshRequested}

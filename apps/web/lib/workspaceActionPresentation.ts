@@ -12,6 +12,7 @@ export type WorkspaceActionPresentation = {
     | 'failed_uncertain'
     | 'banned_updates_pending'
     | 'ban_outcome_unknown'
+    | 'ban_reviewed_no_current_ban'
     | 'finalization_retry';
   readonly message: string;
 };
@@ -31,6 +32,12 @@ export function deriveWorkspaceActionPresentation({
   record,
 }: WorkspaceActionPresentationInput): WorkspaceActionPresentation {
   const banStatus = durableRequest?.observedBanResult?.status;
+  if (banStatus === 'ban_reviewed_no_current_ban')
+    return {
+      kind: 'ban_reviewed_no_current_ban',
+      message:
+        'Reviewed: no current ban. The historical outcome remains uncertain. Any new action requires fresh eligibility and confirmation.',
+    };
   if (banStatus === 'ban_outcome_unknown')
     return {
       kind: 'ban_outcome_unknown',

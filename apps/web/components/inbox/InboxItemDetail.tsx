@@ -13,6 +13,11 @@ import {
 } from '@/components/workspace/actions/ConfirmedAction';
 import { Timestamp } from '@/components/workspace/Timestamp';
 import { filterCaseKindActions } from '@/lib/caseActionEligibility';
+import {
+  caseMaintenanceActions,
+  closeCaseEffect,
+  verificationEffect,
+} from '@/lib/caseActionEffects';
 import type { ConversationSource } from '@/lib/conversationTypes';
 import {
   matchesWorkspaceActionRequest,
@@ -47,6 +52,7 @@ export function inboxDetailRequests(
 }
 function requestTarget(detail: WorkspaceItemDetail): WorkspaceRequestTarget {
   return {
+    guildId: detail.item.guildId,
     kind:
       detail.kind === 'report_attention' ||
       detail.kind === 'support_attention' ||
@@ -154,11 +160,13 @@ function actionEffect(action: ModerationInboxAction, detail: WorkspaceItemDetail
     case 'kick_user':
       return 'Remove this member from the server.';
     case 'verify_user':
-      return 'Verify the member and remove the case role.';
+      return verificationEffect(
+        detail.kind === 'case' && detail.data.detail.caseKind === 'compromised_account'
+      );
     case 'open_case':
       return 'Open a moderation case and apply the configured case role.';
     case 'close_no_action':
-      return 'Close this case without recording an enforcement decision.';
+      return closeCaseEffect;
     case 'dismiss_no_action':
       return 'Close this record without taking moderation action.';
     case 'mark_false_positive':
@@ -400,16 +408,28 @@ function SelectedDetail({
   cleanupActions,
 }: InboxItemDetailProps) {
   const { item } = detail;
-  const currentActions = useMemo(
-    () => detailActions(detail).filter((action) => isAllowed(detail, action)),
-    [detail]
-  );
+  const displayedActions = useMemo(() => {
+    const eligible = detailActions(detail).filter((action) => isAllowed(detail, action));
+    const historical =
+      detail.kind === 'case'
+        ? caseMaintenanceActions.filter((action) =>
+            detail.data.requests.some(
+              (request) =>
+                request.status === 'completed' &&
+                // Both labels dispatch repair_active_case; unknown historical intent uses Repair only.
+                (action !== 'create_thread' || request.requestedAction === 'create_thread') &&
+                matchesWorkspaceActionRequest(request, requestTarget(detail), action)
+            )
+          )
+        : [];
+    return [...new Set([...eligible, ...historical])];
+  }, [detail]);
   const [offered, setOffered] = useState(() =>
-    currentActions.map((action) => ({ action, detail }))
+    displayedActions.map((action) => ({ action, detail }))
   );
   const [pendingTrack, setPendingTrack] = useState<string | null>(null);
   const retainedActions = [
-    ...new Set([...offered.map((entry) => entry.action), ...currentActions]),
+    ...new Set([...offered.map((entry) => entry.action), ...displayedActions]),
   ];
   const primaryActions =
     detail.kind === 'case'
@@ -422,16 +442,16 @@ function SelectedDetail({
   const scopedRequests = useMemo(() => matchingInboxRequests(detail), [detail]);
   useEffect(() => {
     setOffered((previous) =>
-      currentActions.every((action) => previous.some((entry) => entry.action === action))
+      displayedActions.every((action) => previous.some((entry) => entry.action === action))
         ? previous
         : [
             ...previous,
-            ...currentActions
+            ...displayedActions
               .filter((action) => !previous.some((entry) => entry.action === action))
               .map((action) => ({ action, detail })),
           ]
     );
-  }, [currentActions, detail]);
+  }, [displayedActions, detail]);
   useEffect(() => {
     if (
       pendingTrack &&
@@ -495,7 +515,10 @@ function SelectedDetail({
           id: action,
           tone: actionTone(action),
           label: actionLabel(action, detail),
-          description: `${target.label}. ${action === 'verify_user' && detail.kind === 'case' && detail.data.detail.caseKind === 'compromised_account' ? 'Confirm account recovery, release quarantine, restore eligible snapshotted roles under current role policy, and resolve this case.' : actionEffect(action, detail)}`,
+          description: actionEffect(action, detail),
+          disabledReason: !available
+            ? 'This item is no longer pending in the inbox. Review its recorded result.'
+            : `${actionLabel(action, detail)} is no longer available for this record. Review its current status.`,
           disabled:
             !available ||
             !isAllowed(detail, action) ||

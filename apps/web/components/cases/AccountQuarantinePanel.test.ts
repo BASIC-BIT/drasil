@@ -6,6 +6,8 @@ import type { CaseWorkspaceData } from '@/lib/moderationWorkspaceTypes';
 import type { AccountQuarantineActionRequests } from '@/lib/inboxActionReceipts';
 import type { WorkspaceMutation } from '@/lib/workspaceActionTypes';
 import { AccountQuarantinePanel } from './AccountQuarantinePanel';
+import { fixtureModerationInboxItems } from '@/lib/inboxFixtures';
+import { parseInboxLocation } from '@/lib/inboxLocation';
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh() {} }) }));
 const submit: WorkspaceMutation = async () => ({ kind: 'failed', message: 'unused' });
 const policy: CaseWorkspaceData['policy'] = {
@@ -78,6 +80,28 @@ it('blocks duplicate containment while the case is in progress', () => {
   const html = render({ ...data, detail: { ...data.detail, containmentStatus: 'in_progress' } });
   expect(html).toMatch(/disabled=""[^>]*>Preview account quarantine/);
 });
+
+it.each(['recovery_reply', 'quarantine_breach'] as const)(
+  'links %s to its selected concrete attention record',
+  (subtype) => {
+    const item = {
+      ...fixtureModerationInboxItems()[0],
+      id: `queue:${subtype}`,
+      title: subtype,
+      kind: 'support_attention' as const,
+      subtype,
+    };
+    const html = render({
+      ...data,
+      detail: { ...fixtureParkedCaseDetails[0], guildId: 'guild/one' },
+      recoveryAttention: [item],
+    });
+    const href = html.match(/href="([^"]+inbox[^"]+)"/)?.[1].replace(/&amp;/g, '&');
+    const url = new URL(href!, 'https://test.invalid');
+    expect(url.pathname).toBe('/admin/guild/guild%2Fone/inbox');
+    expect(parseInboxLocation(url.searchParams).selectedItemId).toBe(item.id);
+  }
+);
 
 function preview(ageMinutes = 1): NonNullable<AccountQuarantineActionRequests['preview']> {
   const at = new Date(Date.now() - ageMinutes * 60000).toISOString();

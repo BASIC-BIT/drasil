@@ -79,7 +79,7 @@ export function BrowserSecurityPanel({
   const available = (['challenge_user', 'retry_captcha', 'bypass_captcha'] as const).filter(
     allowed
   );
-  // Keep an already-open confirmation mounted when refreshed eligibility changes.
+  // Retain action identity and drafts; the shared control closes invalid confirmations.
   const [offered, setOffered] = useState<readonly SecurityAction[]>(available);
   useEffect(() => {
     setOffered((previous) =>
@@ -345,7 +345,13 @@ export function BrowserSecurityPanel({
               key={`${id}:${attemptKeys[id] ?? 'initial'}`}
               target={target}
               hideTrigger={!allowed(id)}
-              action={{ ...descriptors[id], disabled: !allowed(id) || running }}
+              action={{
+                ...descriptors[id],
+                disabled: !allowed(id) || running,
+                disabledReason: running
+                  ? 'A security-check request is already running for this case.'
+                  : `${descriptors[id].label} is no longer available. ${challenge ? `The security check is ${formatCaptchaStatus(challenge.status).toLowerCase()}.` : 'Review the current case and security-check configuration.'}`,
+              }}
               submit={async (form) => {
                 const generation = Number(form.get('expectedCaptchaGeneration'));
                 const challengeId = form.get('expectedCaptchaChallengeId');

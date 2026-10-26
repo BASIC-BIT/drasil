@@ -30,6 +30,7 @@ export function parseObservedBanResult(value: unknown): ObservedBanResult | null
   return null;
 }
 export interface ModerationActionRequestSummary {
+  readonly guildId?: string;
   readonly observedBanResult?: ObservedBanResult | null;
   readonly accountQuarantinePreview?: AccountQuarantinePreviewSummary | null;
   readonly id: string;
@@ -501,6 +502,7 @@ export function parseModerationActionRequestRow(
         }
       : {}),
     id: row.id,
+    ...(row.server_id ? { guildId: row.server_id } : {}),
     actionType: row.action_type,
     actorSurface: row.actor_surface,
     actorUserId: row.actor_id ?? null,

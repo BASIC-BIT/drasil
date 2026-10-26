@@ -1,7 +1,30 @@
 import { describe, expect, it } from 'vitest';
-import { parseInboxLocation, serializeInboxLocation } from './inboxLocation';
+import {
+  explicitInboxReturnHref,
+  parseInboxLocation,
+  serializeInboxLocation,
+} from './inboxLocation';
 
 describe('inbox location', () => {
+  it('marks only a same-guild explicit return and keeps ordinary deep links unchanged', () => {
+    const href = '/admin/guild/guild%2Fone/inbox?kind=case&sort=oldest&selected=case%3AB';
+    const result = new URL(explicitInboxReturnHref('guild/one', href), 'https://internal.invalid');
+    expect(result.searchParams.get('resume')).toBe('case:B');
+    expect(parseInboxLocation(result.searchParams)).toEqual(
+      parseInboxLocation(new URL(href, result.origin).searchParams)
+    );
+    for (const value of [
+      '/admin/guild/foreign/inbox?selected=B',
+      'https://outside.invalid/admin/guild/guild%2Fone/inbox?selected=B',
+      '/admin/guild/guild%2Fone/inbox',
+    ])
+      expect(explicitInboxReturnHref('guild/one', value)).toBe(value);
+    expect(
+      serializeInboxLocation(parseInboxLocation(new URLSearchParams('selected=case%3AB'))).has(
+        'resume'
+      )
+    ).toBe(false);
+  });
   it('uses named presets, including all cases, and explicit valid controls override them', () => {
     expect(parseInboxLocation(new URLSearchParams('view=cases')).controls).toEqual({
       kind: 'case',

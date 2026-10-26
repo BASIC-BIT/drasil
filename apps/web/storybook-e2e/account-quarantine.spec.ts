@@ -60,13 +60,16 @@ test('a changed preview cannot silently retarget an open confirmation', async ({
   await dialog.getByLabel('Reason', { exact: true }).fill('Reviewed preview one');
   await dialog.getByLabel('Confirm Attempt account quarantine', { exact: true }).check();
   await page.evaluate(() => window.dispatchEvent(new Event('fixture:replace-preview')));
-  await expect(
-    dialog.getByRole('button', { name: 'Confirm Attempt account quarantine', exact: true })
-  ).toBeDisabled();
-  await expect(dialog).toContainText('preview-1');
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('status')).toContainText('reviewed quarantine preview changed');
+  await expect(page.getByRole('status')).toBeFocused();
   await expect(page.getByTestId('submission-count')).toHaveText('0');
-  await dialog.getByRole('button', { name: 'Cancel' }).click();
-  await confirm(page, 'Attempt account quarantine');
+  await page.getByRole('button', { name: 'Attempt account quarantine', exact: true }).click();
+  await expect(page.getByRole('dialog').getByRole('textbox')).toHaveValue('Reviewed preview one');
+  await page.getByRole('dialog').getByRole('checkbox').check();
+  await page
+    .getByRole('button', { name: 'Confirm Attempt account quarantine', exact: true })
+    .click();
   await expect(page.getByTestId('submitted-payload')).toContainText(
     '"previewRequestId":"preview-2"'
   );
@@ -93,7 +96,7 @@ test('parked recovery shows recorded effects and eligible release without close'
   await expect(page.getByRole('button', { name: 'Close case', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Verify and release', exact: true }).click();
   await expect(page.getByRole('dialog')).toContainText(
-    'eligible snapshotted roles under the current role policy'
+    'eligible snapshotted roles under current role policy'
   );
   await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click();
   await expect(page.getByTestId('submission-count')).toHaveText('0');
@@ -121,16 +124,15 @@ for (const mode of ['breach', 'reply'])
     await expect(page.getByTestId('submission-count')).toHaveText('0');
   });
 
-test('preview expiration disables an already-open confirmation', async ({ page }) => {
+test('preview expiration closes an already-open confirmation with an explanation', async ({
+  page,
+}) => {
   await page.clock.install();
   await page.goto(story('fresh'));
   await page.getByRole('button', { name: 'Attempt account quarantine', exact: true }).click();
   await page.clock.fastForward(9 * 60_000 + 1);
-  await expect(
-    page
-      .getByRole('dialog')
-      .getByRole('button', { name: 'Confirm Attempt account quarantine', exact: true })
-  ).toBeDisabled();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByRole('status')).toContainText('preview is no longer eligible');
   await expect(page.getByTestId('submission-count')).toHaveText('0');
 });
 test('a pending execution keeps its own receipt when the saved preview is replaced', async ({
