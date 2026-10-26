@@ -1,3 +1,9 @@
+import {
+  reportBanPhases,
+  parseReportBanOwnershipFence,
+  parseReportBanObservationEvidence,
+  parseReportBanAdmissionFence,
+} from '../utils/reportBanState';
 import { randomUUID } from 'crypto';
 import { injectable, inject } from 'inversify';
 import {
@@ -1490,15 +1496,11 @@ export class VerificationEventRepository implements IVerificationEventRepository
   }
 
   private activeReportBanMayOwnCase(
-    metadata: Prisma.JsonObject,
+    persistedMetadata: Prisma.JsonObject,
     event: VerificationEvent
   ): boolean {
-    if (
-      !['enforcement_started', 'discord_confirmed', 'reconciliation_required'].includes(
-        String(metadata.report_ban_phase)
-      )
-    )
-      return false;
+    const metadata = parseReportBanOwnershipFence(persistedMetadata);
+    if (!metadata.report_ban_phase || metadata.report_ban_phase === 'preparing') return false;
     const snapshot = ((event.metadata ?? {}) as Prisma.JsonObject).user_snapshot as
       Prisma.JsonObject | undefined;
     const operationJoin = metadata.report_ban_membership_joined_at;
@@ -1548,8 +1550,9 @@ export class VerificationEventRepository implements IVerificationEventRepository
           const joinedAt = (metadata as Prisma.JsonObject | null)?.user_snapshot as
             Prisma.JsonObject | undefined;
           for (const request of requests) {
-            const confirmed = request.metadata?.report_ban_confirmed_at;
-            const expectedJoin = request.metadata?.report_ban_membership_joined_at;
+            const state = parseReportBanAdmissionFence(request.metadata);
+            const confirmed = state.report_ban_confirmed_at;
+            const expectedJoin = state.report_ban_membership_joined_at;
             if (
               typeof confirmed === 'string' &&
               admissionAt <= new Date(confirmed) &&
@@ -1673,7 +1676,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
             SELECT id, metadata, result, requested_at FROM moderation_action_requests
             WHERE server_id = ${binding.server_id} AND target_user_id = ${binding.user_id}
               AND action_type = 'ban_observed_detection'
-              AND metadata->>'report_ban_phase' IN ('preparing', 'enforcement_started', 'discord_confirmed', 'reconciliation_required')
+              AND metadata->>'report_ban_phase' IN (${Prisma.join([...reportBanPhases])})
             ORDER BY id FOR UPDATE`;
       const rows = await transaction.$queryRaw<VerificationEvent[]>`
             SELECT * FROM verification_events WHERE id = ${id}::uuid FOR UPDATE`;
@@ -1695,17 +1698,18 @@ export class VerificationEventRepository implements IVerificationEventRepository
       if (data.status === VerificationStatus.BANNED && data.resolved_at) {
         for (const operation of owners) {
           if (operation.requested_at && operation.requested_at > data.resolved_at) continue;
-          const prior = operation.metadata.report_ban_observed_ban as Prisma.JsonObject | undefined;
+          const state = parseReportBanObservationEvidence(operation.metadata);
+          const prior = state.report_ban_observed_ban;
           const evidence = (data.metadata ?? {}) as Prisma.JsonObject;
           const observation = {
             id: randomUUID(),
-            attempt_token: operation.metadata.report_ban_attempt_token,
+            attempt_token: state.report_ban_attempt_token,
             occurred_at: data.resolved_at.toISOString(),
             source: evidence.moderation_outcome_source ?? null,
             source_detail: evidence.source_detail ?? null,
             actor_id: evidence.moderation_outcome_actor_id ?? null,
             audit_log_entry_id: evidence.audit_log_entry_id ?? null,
-            membership_joined_at: operation.metadata.report_ban_membership_joined_at ?? null,
+            membership_joined_at: state.report_ban_membership_joined_at ?? null,
             case_id: current.id,
             case_revision: current.case_revision,
             uncertain_result: prior?.uncertain_result ?? operation.result,

@@ -130,7 +130,7 @@ async function performBanSubmittedReport(
       targetUserId: detail.targetUserId,
       detectionEventId: detail.latestDetectionId,
       subject: { kind: 'report', reportId },
-      reason: reason || null,
+      reason,
     },
   });
   revalidatePath(`/admin/guild/${guildId}/reports/${reportId}`);

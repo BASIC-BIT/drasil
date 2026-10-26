@@ -3280,6 +3280,8 @@ describe('InteractionHandler (unit)', () => {
 
   it.each([
     'submitted',
+    'empty-reason',
+    'whitespace-reason',
     'dismissed',
     'foreign',
     'changed',
@@ -3353,7 +3355,10 @@ describe('InteractionHandler (unit)', () => {
             : 'report-thread',
       guildId: 'guild-1',
       user: { id: 'admin-1' },
-      fields: { getTextInputValue: () => 'Confirmed spam' },
+      fields: {
+        getTextInputValue: () =>
+          state === 'empty-reason' ? '' : state === 'whitespace-reason' ? '   ' : 'Confirmed spam',
+      },
       reply: jest.fn().mockResolvedValue(undefined),
       followUp: jest.fn(),
       replied: false,
@@ -3364,14 +3369,17 @@ describe('InteractionHandler (unit)', () => {
     const errors = jest.spyOn(console, 'error').mockImplementation(() => {});
     try {
       await handler.handleModalSubmit(interaction);
-      if (state === 'submitted') {
+      if (['submitted', 'empty-reason', 'whitespace-reason'].includes(state)) {
         expect(requests.enqueue).toHaveBeenCalledWith(
           expect.objectContaining({
             actionType: 'ban_observed_detection',
             targetUserId: 'user-1',
             detectionEventId: 'det-1',
             reportIntakeId: 'report-1',
-            metadata: { reason: 'Confirmed spam', requested_action: 'ban_user' },
+            metadata: {
+              reason: state === 'submitted' ? 'Confirmed spam' : '',
+              requested_action: 'ban_user',
+            },
           })
         );
         expect(interaction.reply).toHaveBeenCalledWith(
@@ -3381,7 +3389,9 @@ describe('InteractionHandler (unit)', () => {
         );
       } else expect(requests.enqueue).not.toHaveBeenCalled();
       expect(securityActionService.banObservedDetection).not.toHaveBeenCalled();
-      expect(errors).toHaveBeenCalledTimes(state === 'submitted' ? 0 : 1);
+      expect(errors).toHaveBeenCalledTimes(
+        ['submitted', 'empty-reason', 'whitespace-reason'].includes(state) ? 0 : 1
+      );
     } finally {
       errors.mockRestore();
     }
