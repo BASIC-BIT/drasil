@@ -21,6 +21,7 @@ import {
 } from '@/lib/moderationWorkspaceTypes';
 import type { CaseSummary, ModerationInboxItem } from '@drasil/contracts';
 import { useCallback } from 'react';
+import { workspaceResponseError } from '@/lib/workspaceReadFailure';
 
 const actions = {
   caseAction: submitWorkspaceCaseAction,
@@ -51,7 +52,7 @@ export function ModerationInboxRoute({
         `/api/admin/guild/${encodeURIComponent(guildId)}/inbox/${encodeURIComponent(itemId)}`,
         { cache: 'no-store', signal }
       );
-      if (!response.ok) throw new Error('Item unavailable.');
+      if (!response.ok) throw await workspaceResponseError(response);
       return workspaceItemDetailSchema.parse(await response.json());
     },
     [guildId]

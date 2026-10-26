@@ -1,20 +1,21 @@
-import { notFound, redirect } from 'next/navigation';
-import { createWebAuthority } from './application/adapters/authority';
+import { redirect } from 'next/navigation';
+import { loadWorkspaceAccess } from './workspaceAccess';
 import { createModerationWorkspaceDataAdapter } from './moderationWorkspaceDataAdapter';
 import { getCurrentAdminSession, getCurrentDiscordToken } from './session';
-import { createSetupDashboardService } from './setupDashboardService';
 import { resolveWorkspaceReturnTo } from './workspaceConfirmation';
 
 export async function loadWorkspaceRoute(guildId: string, path: string) {
   const [session, token] = await Promise.all([getCurrentAdminSession(), getCurrentDiscordToken()]);
-  if (!session || !token) redirect(`/api/auth/discord?${new URLSearchParams({ returnTo: path })}`);
-  const guild = await createSetupDashboardService().assertCanManageGuild(
-    guildId,
-    token.accessToken
-  );
-  const actor = await createWebAuthority().loadFresh(guildId, session.userId);
-  if (!actor || !actor.present || actor.guildId !== guildId) notFound();
-  return { guild, session, adapter: createModerationWorkspaceDataAdapter(actor) };
+  const access = await loadWorkspaceAccess(guildId, session, token);
+  if (access.kind === 'authentication_required' || !session)
+    redirect(`/api/auth/discord?${new URLSearchParams({ returnTo: path })}`);
+  if (access.kind !== 'ready') return access;
+  return {
+    kind: 'ready' as const,
+    guild: access.guild,
+    session,
+    adapter: createModerationWorkspaceDataAdapter(access.actor),
+  };
 }
 
 export function workspaceReturnHref(guildId: string, value: string | string[] | undefined): string {

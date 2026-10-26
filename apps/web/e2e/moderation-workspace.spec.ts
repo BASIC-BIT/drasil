@@ -847,9 +847,11 @@ test('selected reads and confirmed mutations reauthorize after initial page acce
 }) => {
   await page.goto(`/admin/guild/${id.guild}/cases/${id.case}`);
   await page.getByRole('button', { name: 'Verify member', exact: true }).click();
-  fixtures.setUnauthorized(true);
+  fixtures.setSelectedAuthority(false, '0');
   const response = await page.request.get(`/api/admin/guild/${id.guild}/inbox/case:${id.case}`);
   expect(response.status()).toBe(403);
+  fixtures.setSelectedAuthority(true, '8');
+  fixtures.setUnauthorized(true);
   await page.getByRole('dialog').getByRole('checkbox').check();
   await page.getByRole('button', { name: 'Confirm Verify member', exact: true }).click();
   await expect(page.getByRole('alert')).toBeVisible();

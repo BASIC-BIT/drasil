@@ -6,6 +6,7 @@ export default defineConfig({
   outputDir: 'workspace-test-results',
   testMatch: [
     'moderation-workspace.spec.ts',
+    'workspace-access.spec.ts',
     'case-flow.spec.ts',
     'report-ban.spec.ts',
     'message-cleanup.spec.ts',

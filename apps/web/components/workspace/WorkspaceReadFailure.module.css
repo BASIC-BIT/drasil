@@ -1,0 +1,28 @@
+.page {
+  max-width: 48rem;
+  margin: 0 auto;
+  padding: clamp(1rem, 5vw, 4rem);
+}
+.failure {
+  padding: 1.5rem 0;
+  display: grid;
+  gap: 0.75rem;
+  border-top: 1px solid var(--dr-line);
+}
+.page .failure {
+  margin-top: 2rem;
+}
+.failure h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+.failure p {
+  max-width: 65ch;
+  color: var(--dr-muted);
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+}
