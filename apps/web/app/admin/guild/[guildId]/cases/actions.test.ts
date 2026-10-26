@@ -363,3 +363,53 @@ describe('workspace case confirmation boundary', () => {
     );
   });
 });
+
+describe('security-check option guard ordering', () => {
+  it.each([
+    ['expectedCaptchaMethod', 'none'],
+    ['expectedCaptchaMethodRevision', '-1'],
+    ['expectedCaptchaMethodRevision', '1.5'],
+    ['expectedCaptchaMethodRevision', 'not-a-number'],
+  ])('rejects invalid displayed %s=%s before queueing', async (field, value) => {
+    const form = confirmedForm();
+    form.set(field, value);
+    await expectDenied('case', 'bypass_captcha', form, 'displayed security-check method');
+    expect(mocks.queue).not.toHaveBeenCalled();
+    expect(mocks.getServer).not.toHaveBeenCalled();
+  });
+  it('checks bypass reason before challenge identity, then method binding', async () => {
+    const form = confirmedForm();
+    form.delete('reason');
+    form.delete('expectedCaptchaChallengeId');
+    form.set('expectedCaptchaMethod', 'none');
+    await expectDenied('case', 'bypass_captcha', form, 'A reason is required');
+    form.set('reason', 'Reviewed');
+    await expectDenied(
+      'case',
+      'bypass_captcha',
+      form,
+      'displayed security check is no longer available'
+    );
+    form.set('expectedCaptchaChallengeId', challengeId);
+    await expectDenied('case', 'bypass_captcha', form, 'displayed security-check method');
+    expect(mocks.queue).not.toHaveBeenCalled();
+  });
+  it('rejects stale issuance configuration before displayed retry challenge validation', async () => {
+    mocks.getServer.mockResolvedValue({
+      settings: { captcha_mode: 'manual', captcha_method_revision: 2 },
+    });
+    const form = confirmedForm();
+    form.set('expectedCaptchaConfigurationMethod', 'turnstile');
+    form.set('expectedCaptchaConfigurationRevision', '1');
+    form.delete('expectedCaptchaChallengeId');
+    await expectDenied('case', 'retry_captcha', form, 'configured security-check method changed');
+    form.set('expectedCaptchaConfigurationRevision', '2');
+    await expectDenied(
+      'case',
+      'retry_captcha',
+      form,
+      'displayed security check is no longer available'
+    );
+    expect(mocks.queue).not.toHaveBeenCalled();
+  });
+});

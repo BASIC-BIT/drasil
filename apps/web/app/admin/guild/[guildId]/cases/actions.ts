@@ -180,52 +180,37 @@ async function assertBotCanRunDestructiveAction(
   }
 }
 
-async function readCaptchaActionOptions(
-  action: CaptchaCaseAction,
+async function readCaptchaIssuanceConfiguration(
   guildId: string,
   formData: FormData | undefined
-): Promise<CaseActionOptions> {
-  if (formData?.get('confirmAction') !== 'on') {
-    throw new Error('Confirm the security-check action before queueing it.');
+): Promise<CaptchaIssuanceConfiguration | undefined> {
+  const server = await createSetupDataAdapter().getServer(guildId);
+  const method = getEffectiveCaptchaMethod(server?.settings);
+  const mode = server?.settings.captcha_mode;
+  if (method === 'none' || (mode !== 'manual' && mode !== 'suspicious_join')) {
+    throw new Error('Browser security checks are disabled for this server.');
   }
-  let expectedCaptchaConfiguration: CaptchaIssuanceConfiguration | undefined;
-  if (action !== 'bypass_captcha') {
-    const server = await createSetupDataAdapter().getServer(guildId);
-    const method = getEffectiveCaptchaMethod(server?.settings);
-    const mode = server?.settings.captcha_mode;
-    if (method === 'none' || (mode !== 'manual' && mode !== 'suspicious_join')) {
-      throw new Error('Browser security checks are disabled for this server.');
-    }
-    const expectedMethod = readFormString(formData, 'expectedCaptchaConfigurationMethod');
-    const revisionText = readFormString(formData, 'expectedCaptchaConfigurationRevision');
-    if (formData?.get('confirmedRecordId') || expectedMethod !== null || revisionText !== null) {
-      const methodRevision = revisionText === null ? -1 : Number(revisionText);
-      if (
-        expectedMethod !== method ||
-        !Number.isInteger(methodRevision) ||
-        methodRevision < 0 ||
-        methodRevision !== getCaptchaMethodRevision(server?.settings)
-      )
-        throw new Error(
-          'The configured security-check method changed. Refresh and review the current method before continuing.'
-        );
-      expectedCaptchaConfiguration = { method, methodRevision };
-    }
+  const expectedMethod = readFormString(formData, 'expectedCaptchaConfigurationMethod');
+  const revisionText = readFormString(formData, 'expectedCaptchaConfigurationRevision');
+  if (formData?.get('confirmedRecordId') || expectedMethod !== null || revisionText !== null) {
+    const methodRevision = revisionText === null ? -1 : Number(revisionText);
+    if (
+      expectedMethod !== method ||
+      !Number.isInteger(methodRevision) ||
+      methodRevision < 0 ||
+      methodRevision !== getCaptchaMethodRevision(server?.settings)
+    )
+      throw new Error(
+        'The configured security-check method changed. Refresh and review the current method before continuing.'
+      );
+    return { method, methodRevision };
   }
-  const reason = action === 'bypass_captcha' ? readFormString(formData, 'reason') : null;
-  if (action === 'bypass_captcha' && !reason) {
-    throw new Error('A reason is required to continue without the security check.');
-  }
-  const requiresDisplayedChallenge = action === 'retry_captcha' || action === 'bypass_captcha';
-  const expectedCaptchaChallengeId = requiresDisplayedChallenge
-    ? readFormString(formData, 'expectedCaptchaChallengeId')
-    : null;
-  const expectedCaptchaGeneration = requiresDisplayedChallenge
-    ? readFormPositiveInteger(formData, 'expectedCaptchaGeneration')
-    : null;
-  if (requiresDisplayedChallenge && (!expectedCaptchaChallengeId || !expectedCaptchaGeneration)) {
-    throw new Error('The displayed security check is no longer available. Refresh and try again.');
-  }
+}
+
+function readDisplayedCaptchaMethod(
+  formData: FormData | undefined,
+  requiresDisplayedChallenge: boolean
+): Pick<CaseActionOptions, 'expectedCaptchaMethod' | 'expectedCaptchaMethodRevision'> {
   const method = readFormString(formData, 'expectedCaptchaMethod');
   const revisionText = readFormString(formData, 'expectedCaptchaMethodRevision');
   const revision = revisionText === null ? null : Number(revisionText);
@@ -241,9 +226,41 @@ async function readCaptchaActionOptions(
     );
   }
   return {
-    expectedCaptchaConfiguration,
     expectedCaptchaMethod: method === 'turnstile' || method === 'discord_image' ? method : null,
     expectedCaptchaMethodRevision: revision,
+  };
+}
+
+async function readCaptchaActionOptions(
+  action: CaptchaCaseAction,
+  guildId: string,
+  formData: FormData | undefined
+): Promise<CaseActionOptions> {
+  if (formData?.get('confirmAction') !== 'on') {
+    throw new Error('Confirm the security-check action before queueing it.');
+  }
+  const expectedCaptchaConfiguration =
+    action === 'bypass_captcha'
+      ? undefined
+      : await readCaptchaIssuanceConfiguration(guildId, formData);
+  const reason = action === 'bypass_captcha' ? readFormString(formData, 'reason') : null;
+  if (action === 'bypass_captcha' && !reason) {
+    throw new Error('A reason is required to continue without the security check.');
+  }
+  const requiresDisplayedChallenge = action === 'retry_captcha' || action === 'bypass_captcha';
+  const expectedCaptchaChallengeId = requiresDisplayedChallenge
+    ? readFormString(formData, 'expectedCaptchaChallengeId')
+    : null;
+  const expectedCaptchaGeneration = requiresDisplayedChallenge
+    ? readFormPositiveInteger(formData, 'expectedCaptchaGeneration')
+    : null;
+  if (requiresDisplayedChallenge && (!expectedCaptchaChallengeId || !expectedCaptchaGeneration)) {
+    throw new Error('The displayed security check is no longer available. Refresh and try again.');
+  }
+  const displayedMethod = readDisplayedCaptchaMethod(formData, requiresDisplayedChallenge);
+  return {
+    expectedCaptchaConfiguration,
+    ...displayedMethod,
     attemptId: action === 'retry_captcha' || action === 'bypass_captcha' ? randomUUID() : null,
     expectedCaptchaChallengeId,
     expectedCaptchaGeneration,
