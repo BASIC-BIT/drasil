@@ -288,7 +288,7 @@ describe('ThreadManager (unit)', () => {
     expect(thread.members.fetch).toHaveBeenCalledWith('user-1');
     expect(thread.send).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: 'Complete this browser check to confirm access to your Discord account.',
+        content: 'Complete the CAPTCHA.',
       })
     );
   });
@@ -315,7 +315,7 @@ describe('ThreadManager (unit)', () => {
     expect(extractComponentCustomIds([...(payload.components ?? [])])).toEqual([
       'captcha:image:open:00000000-0000-4000-8000-000000000001:3',
     ]);
-    expect(payload.content).toContain('Completing this check does not itself verify your account.');
+    expect(payload.content).toContain('Complete the CAPTCHA.');
   });
 
   it('does not deliver a CAPTCHA challenge when the subject cannot access the case thread', async () => {

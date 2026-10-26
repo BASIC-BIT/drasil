@@ -2226,7 +2226,7 @@ describe('ModerationActionRequestService', () => {
     });
     expect(threadManager.sendCaptchaStatus).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'ver-1' }),
-      'Security check completed.'
+      'CAPTCHA passed.'
     );
     expect(userModerationService.resolveCaptchaCase).toHaveBeenCalledWith(member, {
       challengeId: 'challenge-1',
@@ -2611,7 +2611,7 @@ describe('ModerationActionRequestService', () => {
 
     expect(threadManager.sendCaptchaStatus).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'ver-1' }),
-      'This security check reached its attempt limit. Ask a moderator to issue a new check.'
+      'Too many incorrect attempts. Ask a moderator for a new CAPTCHA.'
     );
     expect(notificationManager.notifyCaptchaAttention).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'ver-1' }),
@@ -2718,7 +2718,7 @@ describe('ModerationActionRequestService', () => {
     expect(threadManager.sendCaptchaStatus).toHaveBeenCalledTimes(1);
     expect(threadManager.sendCaptchaStatus).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'ver-1' }),
-      'This security check expired. Ask a moderator to issue a new check.'
+      'CAPTCHA expired. Ask a moderator for a new one.'
     );
     expect(repository.metadataMerges).toContainEqual({
       id: notifyExpiredCaptchaAttentionRequest.id,
@@ -2807,7 +2807,7 @@ describe('ModerationActionRequestService', () => {
 
     expect(threadManager.sendCaptchaStatus).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'ver-1' }),
-      'This security check could not be delivered. Ask a moderator to retry.'
+      'CAPTCHA delivery failed. Ask a moderator to retry.'
     );
     expect(notificationManager.notifyCaptchaAttention).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'ver-1' }),
@@ -2841,7 +2841,7 @@ describe('ModerationActionRequestService', () => {
     expect(notificationManager.updateCaptchaChallengePresentation).toHaveBeenCalled();
     expect(threadManager.sendCaptchaStatus).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'ver-1' }),
-      'This security check is no longer active.'
+      'This CAPTCHA is no longer active.'
     );
     expect(notificationManager.notifyCaptchaAttention).not.toHaveBeenCalled();
     expect(repository.completed[0]).toEqual({

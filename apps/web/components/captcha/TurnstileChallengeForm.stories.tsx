@@ -14,7 +14,7 @@ const meta = {
     (Story) => (
       <main className="public-flow-shell">
         <section className="public-flow-panel">
-          <h1>Discord security check</h1>
+          <h1>CAPTCHA</h1>
           <Story />
         </section>
       </main>

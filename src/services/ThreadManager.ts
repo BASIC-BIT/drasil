@@ -284,17 +284,14 @@ export class ThreadManager implements IThreadManager {
       if (channel.archived) {
         await channel.setArchived(false, 'Deliver CAPTCHA case challenge');
       }
-      const button = new ButtonBuilder().setLabel('Open security check');
+      const button = new ButtonBuilder().setLabel('Open CAPTCHA');
       if (typeof destination === 'string') button.setStyle(ButtonStyle.Link).setURL(destination);
       else
         button
           .setStyle(ButtonStyle.Primary)
           .setCustomId(`captcha:image:open:${destination.challengeId}:${destination.generation}`);
       const message = await channel.send({
-        content:
-          typeof destination === 'string'
-            ? 'Complete this browser check to confirm access to your Discord account.'
-            : 'Complete this security check in Discord. Completing this check does not itself verify your account.',
+        content: 'Complete the CAPTCHA.',
         components: [new ActionRowBuilder<ButtonBuilder>().addComponents(button)],
       });
       return message.id;

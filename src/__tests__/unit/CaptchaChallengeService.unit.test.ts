@@ -368,7 +368,7 @@ describe('CaptchaChallengeService', () => {
     );
     expect(threads.sendCaptchaStatus).toHaveBeenCalledWith(
       expect.objectContaining({ status: VerificationStatus.VERIFIED }),
-      'This security check is no longer active.'
+      'This CAPTCHA is no longer active.'
     );
     expect(threads.closeResolvedVerificationThreads).toHaveBeenCalledWith(
       expect.objectContaining({ status: VerificationStatus.VERIFIED }),
