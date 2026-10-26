@@ -271,7 +271,7 @@ export class CaptchaEffects {
       await this.requireCaptchaThreadStatus(
         request,
         claimed,
-        'Security check completed.',
+        'CAPTCHA passed.',
         attemptId,
         `Failed to deliver CAPTCHA completion for case ${claimed.id}.`
       );
@@ -455,7 +455,7 @@ export class CaptchaEffects {
         await this.requireCaptchaThreadStatus(
           request,
           claimed,
-          'This security check is no longer active.',
+          'This CAPTCHA is no longer active.',
           attemptId,
           `Failed to deliver cancelled CAPTCHA status for case ${claimed.id}.`
         );
@@ -466,10 +466,10 @@ export class CaptchaEffects {
           request,
           claimed,
           reason === 'delivery_failed'
-            ? 'This security check could not be delivered. Ask a moderator to retry.'
+            ? 'CAPTCHA delivery failed. Ask a moderator to retry.'
             : reason === 'expired'
-              ? 'This security check expired. Ask a moderator to issue a new check.'
-              : 'This security check reached its attempt limit. Ask a moderator to issue a new check.',
+              ? 'CAPTCHA expired. Ask a moderator for a new one.'
+              : 'Too many incorrect attempts. Ask a moderator for a new CAPTCHA.',
           attemptId,
           `Failed to deliver CAPTCHA status for case ${claimed.id}.`
         );

@@ -252,7 +252,7 @@ export class CaptchaChallengeService implements ICaptchaChallengeService {
     if (!current) {
       return;
     }
-    await this.threads.sendCaptchaStatus(current, 'This security check is no longer active.');
+    await this.threads.sendCaptchaStatus(current, 'This CAPTCHA is no longer active.');
     if (current.status !== VerificationStatus.PENDING) {
       await this.threads.closeResolvedVerificationThreads(current, { execute: true });
     }
