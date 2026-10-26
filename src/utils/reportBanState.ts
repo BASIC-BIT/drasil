@@ -56,6 +56,18 @@ const reportBanStateSchema = z.object({
     .nullish(),
 });
 
+const reportBanAdmissionFenceSchema = reportBanStateSchema.pick({
+  report_ban_confirmed_at: true,
+  report_ban_membership_joined_at: true,
+});
+
+// Admission reads historical requests, so only its confirmation fence is authoritative here.
+export function parseReportBanAdmissionFence(
+  metadata: unknown
+): z.infer<typeof reportBanAdmissionFenceSchema> {
+  return reportBanAdmissionFenceSchema.parse(metadata ?? {});
+}
+
 export type ReportBanState = z.infer<typeof reportBanStateSchema>;
 export type ReportBanPatch = Omit<ReportBanState, 'report_ban_observed_ban'>;
 export type ReportBanCaseSnapshot = z.infer<typeof caseSnapshot>;

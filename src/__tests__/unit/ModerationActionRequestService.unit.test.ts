@@ -1827,7 +1827,11 @@ describe('ModerationActionRequestService', () => {
   it.each(['web_report', 'discord_interaction'] as const)(
     'defaults an empty optional %s ban reason at execution',
     async (actor_surface) => {
-      const request = { ...banObservedRequest, actor_surface, metadata: { reason: '' } };
+      const request = {
+        ...banObservedRequest,
+        actor_surface,
+        metadata: { report_ban_attempt_token: 'attempt-1', reason: '' },
+      };
       const { member, moderator, repository, securityActionService, service } = buildService([
         request,
       ]);
@@ -3543,7 +3547,13 @@ describe('ModerationActionRequestService', () => {
     'rejects a queued ban without a reason when current policy requires one: %j',
     async ({ actor_surface, metadata }) => {
       const { repository, securityActionService, service } = buildService(
-        [{ ...banObservedRequest, actor_surface, metadata }],
+        [
+          {
+            ...banObservedRequest,
+            actor_surface,
+            metadata: { report_ban_attempt_token: 'attempt-1', ...metadata },
+          },
+        ],
         {
           moderator_ban_action_requires_reason: true,
         }

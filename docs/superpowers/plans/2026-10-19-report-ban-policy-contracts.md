@@ -40,14 +40,12 @@
 
 ## Task 2: Share retry eligibility and reset policy
 
-**Files:** `src/repositories/ModerationActionRequestRepository.ts`, `apps/web/lib/moderationActionRequestQueue.ts`, a small dependency-free shared module in `packages/contracts/src/`, and the relevant queue/persistence tests. Follow the existing bot CommonJS source-import convention rather than changing package loading.
+**Current implementation:** Main now shares enqueue SQL through `packages/application/src/postgres/enqueue.ts`. Both `src/repositories/ModerationActionRequestRepository.ts` and `apps/web/lib/moderationActionRequestQueue.ts` call `buildEnqueueStatement`. Keep that implementation and remove the unused `reportBanRetrySql.ts` modules from this branch.
 
-**Interfaces:** Both adapters consume the same fixed SQL retry predicate and report-ban retry/reset expressions. Static SQL must not accept caller-controlled SQL or interpolate user input; values remain parameterized by each adapter.
+**Interfaces:** The shared application module owns retry/reset SQL, parameter binding and enqueue conditions. Preserve its transaction, receipt and report-ban fencing behavior. No additional retry-policy extraction is needed.
 
-- [ ] Identify every enqueue caller, current reset assignment and adapter-specific condition. Add or extend focused tests proving fresh completed no-op retry resets the expected fields, while changed targets, active phases, uncertain outcomes and confirmed bans remain fenced.
-- [ ] Record the existing behavior with tests before extraction. Use existing real-Postgres coverage for the SQL semantics and adapter-equivalence coverage where useful.
-- [ ] Extract only shared retry/reset policy. Keep transaction ownership, SQL parameters, receipts, and adapter-specific enqueue conditions in their current adapters. Remove duplicated definitions.
-- [ ] Run affected queue tests and available integration tests, format touched files, self-review, and commit.
+- [ ] Confirm both adapters call the shared application implementation and no callers use the duplicate modules, then delete those modules.
+- [ ] Run the applicable unit, build and static checks. Use hosted integration checks when an owned disposable local database is unavailable.
 
 ## Task 3: Type report-ban state and name its transitions
 

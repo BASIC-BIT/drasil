@@ -1,4 +1,8 @@
-import { reportBanPhases, parseReportBanState } from '../utils/reportBanState';
+import {
+  reportBanPhases,
+  parseReportBanState,
+  parseReportBanAdmissionFence,
+} from '../utils/reportBanState';
 import { randomUUID } from 'crypto';
 import { injectable, inject } from 'inversify';
 import {
@@ -1547,7 +1551,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
             | Prisma.JsonObject
             | undefined;
           for (const request of requests) {
-            const state = parseReportBanState(request.metadata);
+            const state = parseReportBanAdmissionFence(request.metadata);
             const confirmed = state.report_ban_confirmed_at;
             const expectedJoin = state.report_ban_membership_joined_at;
             if (
