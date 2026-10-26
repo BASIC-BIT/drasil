@@ -1,11 +1,7 @@
 export const VERIFICATION_ACTION_FAILURES_METADATA_KEY = 'action_failures';
 
 export type VerificationActionFailureKind =
-  | 'case_role'
-  | 'restrict'
-  | 'thread'
-  | 'private_evidence_thread'
-  | 'role_quarantine';
+  'case_role' | 'restrict' | 'thread' | 'private_evidence_thread' | 'role_quarantine';
 
 export interface VerificationActionFailure {
   action: VerificationActionFailureKind;

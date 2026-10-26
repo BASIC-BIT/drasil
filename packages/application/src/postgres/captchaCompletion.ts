@@ -44,12 +44,7 @@ interface CaptchaAttemptRow extends Record<string, unknown> {
   readonly discord_user_id: string | null;
   readonly id: string;
   readonly validation_state:
-    | 'started'
-    | 'identity_mismatch'
-    | 'invalid'
-    | 'passed'
-    | 'provider_error'
-    | 'stale';
+    'started' | 'identity_mismatch' | 'invalid' | 'passed' | 'provider_error' | 'stale';
 }
 
 const toPublicChallenge = (row: CaptchaChallengeRow): CaptchaPublicChallenge => {

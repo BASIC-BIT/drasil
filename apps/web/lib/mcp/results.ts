@@ -4,12 +4,7 @@ import { assertIntentSummary, type PublicActionResult } from '@drasil/applicatio
 
 export const MCP_RESULT_BYTES = 65_536;
 export type JsonValue =
-  | null
-  | boolean
-  | number
-  | string
-  | JsonValue[]
-  | { [key: string]: JsonValue };
+  null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 export type JsonRecord = { [key: string]: JsonValue };
 /** Task 13 must return this envelope unchanged: clipping after pagination would lose rows.
  * Legacy clients receive the same data as structured clients, including continuation cursors.

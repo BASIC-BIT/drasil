@@ -60,10 +60,7 @@ export interface SetupPersistenceChange {
   readonly columns?: SetupChanges;
   readonly settings: SettingsChanges;
   readonly resetSettings?: readonly (
-    | 'verification_prompt_template'
-    | 'server_about'
-    | 'verification_context'
-    | 'expected_topics'
+    'verification_prompt_template' | 'server_about' | 'verification_context' | 'expected_topics'
   )[];
 }
 export interface SetupHeuristics {

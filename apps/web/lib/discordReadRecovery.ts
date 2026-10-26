@@ -28,8 +28,7 @@ export interface DiscordReadDependencies {
 }
 
 type AttemptResult<T> =
-  | { kind: 'success'; value: T }
-  | { kind: 'recoverable'; delayMs: number | undefined };
+  { kind: 'success'; value: T } | { kind: 'recoverable'; delayMs: number | undefined };
 class AttemptTimeoutError extends Error {}
 
 function transportFailure(error: unknown): boolean {

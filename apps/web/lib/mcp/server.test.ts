@@ -22,6 +22,7 @@ import { createMcpQueries, type QueryRow } from './queries';
 import { MCP_RESULT_METADATA_BYTES, MCP_SERVER_RESULT_META } from './protocol';
 import { toMcpQueryResult } from './results';
 import { readReliabilityFixture } from './readReliabilityFixtures';
+import { wrapMcpBody } from './body';
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
@@ -38,6 +39,7 @@ async function fixture(
     currentKeywords?: string[];
     completionFailure?: 'before_write' | 'after_write';
     readQueries?: ReturnType<typeof createMcpQueries>;
+    freshHandlers?: boolean;
   } = {}
 ) {
   const h = accessFixture();
@@ -202,37 +204,40 @@ async function fixture(
     authSecret: 'a'.repeat(40),
     cursorSecret: 'b'.repeat(40),
   };
-  const handler = createMcpHandler({
-    config,
-    tools,
-    service,
-    loadIntent: store.loadIntent,
-    verifyBearer: async (request) => {
-      const token = request.headers.get('authorization')?.slice(7);
-      if (!token || token === 'invalid') throw new Error('private token error');
-      return {
-        principal:
-          token === 'user'
-            ? { ...actor, userId: 'other' }
-            : token === 'client'
-              ? { ...actor, clientId: 'other' }
-              : token === 'grant'
-                ? { ...actor, grantVersion: 2 }
-                : token === 'scopes'
-                  ? { ...actor, scopes: ['drasil:read', 'drasil:configure'] }
-                  : token === 'other'
-                    ? { ...actor, connectionId: 'other' }
-                    : token === 'read'
-                      ? { ...actor, scopes: ['drasil:read'] }
-                      : token === 'configure'
-                        ? { ...actor, scopes: ['drasil:configure'] }
-                        : token === 'moderate'
-                          ? { ...actor, scopes: ['drasil:moderate'] }
-                          : actor,
-        expiresAt: Math.floor(Date.now() / 1000) + 600,
-      };
-    },
-  });
+  const buildHandler = () =>
+    createMcpHandler({
+      config,
+      tools,
+      service,
+      loadIntent: store.loadIntent,
+      wrapBody: wrapMcpBody,
+      verifyBearer: async (request) => {
+        const token = request.headers.get('authorization')?.slice(7);
+        if (!token || token === 'invalid') throw new Error('private token error');
+        return {
+          principal:
+            token === 'user'
+              ? { ...actor, userId: 'other' }
+              : token === 'client'
+                ? { ...actor, clientId: 'other' }
+                : token === 'grant'
+                  ? { ...actor, grantVersion: 2 }
+                  : token === 'scopes'
+                    ? { ...actor, scopes: ['drasil:read', 'drasil:configure'] }
+                    : token === 'other'
+                      ? { ...actor, connectionId: 'other' }
+                      : token === 'read'
+                        ? { ...actor, scopes: ['drasil:read'] }
+                        : token === 'configure'
+                          ? { ...actor, scopes: ['drasil:configure'] }
+                          : token === 'moderate'
+                            ? { ...actor, scopes: ['drasil:moderate'] }
+                            : actor,
+          expiresAt: Math.floor(Date.now() / 1000) + 600,
+        };
+      },
+    });
+  const handler = buildHandler();
   const http = createServer(async (req, res) => {
     try {
       const chunks: Buffer[] = [];
@@ -243,7 +248,7 @@ async function fixture(
           body: JSON.parse(body),
           headers: Object.fromEntries(Object.entries(req.headers).map(([k, v]) => [k, String(v)])),
         });
-      const response = await handler(
+      const response = await (fixtureOptions.freshHandlers ? buildHandler() : handler)(
         new Request(`https://127.0.0.1${req.url}`, {
           method: req.method,
           headers: req.headers as Record<string, string>,
@@ -526,6 +531,157 @@ it('rejects editable approval arguments and foreign receipts without leaking thr
 function data(result: { structuredContent?: unknown }): Record<string, unknown> {
   return result.structuredContent as Record<string, unknown>;
 }
+
+it.each(['drasil_update_setup', 'drasil_ban_user'])(
+  'observes native %s confirmation across fresh HTTP handlers with separate request correlations',
+  async (name) => {
+    const lines: string[] = [];
+    vi.spyOn(console, 'info').mockImplementation((line: string) => lines.push(line));
+    const h = await fixture({ freshHandlers: true, summary: 'SUMMARY_SENTINEL' });
+    const c = await h.client(
+      { ...modern, capabilities: { elicitation: { form: {} } } },
+      { action: 'accept', content: { confirm: true } },
+      name === 'drasil_update_setup' ? 'configure' : 'moderate'
+    );
+    const result = await c.callTool({
+      name,
+      arguments:
+        name === 'drasil_update_setup'
+          ? args
+          : {
+              guildId,
+              idempotencyKey: 'queued',
+              targetUserId: '200000000000000002',
+              reason: 'COMMAND_SENTINEL',
+            },
+    });
+    expect(data(result).state).toBe(name === 'drasil_update_setup' ? 'completed' : 'queued');
+    expect(h.accepted).toHaveBeenCalledTimes(1);
+    const events = lines
+      .map((line) => JSON.parse(line))
+      .filter((event) => event.event === 'mcp_continuation');
+    expect(events.map((event) => [event.stage, event.outcome, event.reason])).toEqual([
+      ['mint', 'success', 'none'],
+      ['wire', 'present', 'none'],
+      ['verify', 'success', 'none'],
+    ]);
+    expect(events[0].correlationId).not.toBe(events[1].correlationId);
+    expect(events[1].correlationId).toBe(events[2].correlationId);
+    expect(events.every((event) => event.protocol === '2026-07-28')).toBe(true);
+    expect(JSON.stringify(events)).not.toMatch(/SUMMARY_SENTINEL|COMMAND_SENTINEL/);
+    expect(JSON.stringify(events)).not.toContain(guildId);
+    expect(JSON.stringify(events)).not.toContain(h.actor.userId);
+  }
+);
+
+it('observes rejected wire states before SDK denial without accepting an action', async () => {
+  const lines: string[] = [];
+  vi.spyOn(console, 'info').mockImplementation((line: string) => lines.push(line));
+  const h = await fixture({ freshHandlers: true });
+  const c = await h.client({ ...modern, capabilities: { elicitation: { form: {} } } });
+  c.setRequestHandler('elicitation/create', async () => {
+    const original = [...h.wire].reverse().find((entry) => entry.body.method === 'tools/call')!;
+    const required = h.responses
+      .map((text) => JSON.parse(text))
+      .find((body) => body.result?.inputRequests).result;
+    const signatureOffset = required.requestState.lastIndexOf('.') + 1;
+    const signature = Buffer.from(required.requestState.slice(signatureOffset), 'base64url');
+    const corruptedSignature = Buffer.from(signature);
+    corruptedSignature[0] ^= 1;
+    const foreign =
+      required.requestState.slice(0, signatureOffset) + corruptedSignature.toString('base64url');
+    expect(Buffer.from(foreign.slice(signatureOffset), 'base64url')).not.toEqual(signature);
+    const scenarios = [
+      { state: null, reason: 'malformed', verify: false },
+      { state: false, reason: 'malformed', verify: false },
+      { state: 42, reason: 'malformed', verify: false },
+      { state: [], reason: 'malformed', verify: false },
+      { state: { private: 'STATE_SENTINEL' }, reason: 'malformed', verify: false },
+      { state: 'STATE_SENTINEL', reason: 'malformed', verify: true },
+      { state: foreign, reason: 'mac', verify: true },
+      { state: required.requestState, reason: 'bind', verify: true, token: 'other' },
+      { state: required.requestState, reason: 'expired', verify: true, expired: true },
+      { state: required.requestState, reason: 'unknown', verify: true, cryptoFailure: true },
+    ];
+    for (const scenario of scenarios) {
+      lines.length = 0;
+      const body = structuredClone(original.body);
+      const params = body.params as Record<string, unknown>;
+      params.requestState = scenario.state;
+      params.inputResponses = { confirm: { action: 'accept', content: { confirm: true } } };
+      const clock = scenario.expired
+        ? vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 601_000)
+        : undefined;
+      const cryptoFailure = scenario.cryptoFailure
+        ? vi.spyOn(crypto.subtle, 'verify').mockRejectedValueOnce(new Error('RAW_ERROR_SENTINEL'))
+        : undefined;
+      const response = await h.handler(
+        new Request('https://127.0.0.1/api/mcp', {
+          method: 'POST',
+          headers: { ...original.headers, authorization: `Bearer ${scenario.token ?? 'actor'}` },
+          body: JSON.stringify(body),
+        })
+      );
+      clock?.mockRestore();
+      cryptoFailure?.mockRestore();
+      expect(await response.json()).toMatchObject({
+        error: {
+          code: -32602,
+          message: 'Invalid or expired requestState',
+          data: { reason: 'invalid_request_state' },
+        },
+      });
+      const events = lines
+        .map((line) => JSON.parse(line))
+        .filter((event) => event.event === 'mcp_continuation');
+      expect(events.map((event) => event.stage)).toEqual(
+        scenario.verify ? ['wire', 'verify'] : ['wire']
+      );
+      expect(events.at(-1)).toMatchObject({ reason: scenario.reason });
+      expect(new Set(events.map((event) => event.correlationId)).size).toBe(1);
+      expect(JSON.stringify(events)).not.toContain(required.requestState);
+      expect(JSON.stringify(events)).not.toContain('STATE_SENTINEL');
+      expect(JSON.stringify(events)).not.toContain('RAW_ERROR_SENTINEL');
+      expect(h.accepted).not.toHaveBeenCalled();
+      expect(h.enforcement).not.toHaveBeenCalled();
+      expect([...h.intents.values()][0].state).toBe('pending');
+    }
+    return { action: 'decline' };
+  });
+  expect(data(await c.callTool({ name: 'drasil_update_setup', arguments: args })).state).toBe(
+    'denied'
+  );
+  expect(h.accepted).not.toHaveBeenCalled();
+});
+
+it('preserves native success and SDK denial when the diagnostic sink throws', async () => {
+  vi.spyOn(console, 'info').mockImplementation(() => {
+    throw new Error('PRIVATE_SINK');
+  });
+  const h = await fixture({ freshHandlers: true });
+  const c = await h.client(
+    { ...modern, capabilities: { elicitation: { form: {} } } },
+    { action: 'accept', content: { confirm: true } }
+  );
+  expect(data(await c.callTool({ name: 'drasil_update_setup', arguments: args })).state).toBe(
+    'completed'
+  );
+  expect(h.accepted).toHaveBeenCalledTimes(1);
+  const original = [...h.wire].reverse().find((entry) => entry.body.method === 'tools/call')!;
+  const body = structuredClone(original.body);
+  (body.params as Record<string, unknown>).requestState = 'STATE_SENTINEL';
+  const response = await h.handler(
+    new Request('https://127.0.0.1/api/mcp', {
+      method: 'POST',
+      headers: original.headers,
+      body: JSON.stringify(body),
+    })
+  );
+  expect(await response.json()).toMatchObject({
+    error: { code: -32602, data: { reason: 'invalid_request_state' } },
+  });
+  expect(h.accepted).toHaveBeenCalledTimes(1);
+});
 
 it('reserves native SDK metadata before the last emitted query row and cursor', async () => {
   const rows = Array.from({ length: 9 }, (_, n) => ({

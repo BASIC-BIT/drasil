@@ -28,19 +28,20 @@
     "test:e2e:workspace": "playwright test -c playwright.workspace.config.ts"
   },
   "dependencies": {
+    "@drasil/application": "file:../../packages/application",
     "@drasil/contracts": "file:../../packages/contracts",
-    "next": "16.3.0",
+    "@drasil/mcp-runtime": "file:lib/mcp/runtime",
+    "next": "^16.4.3",
     "pg": "^8.20.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "zod": "^3.25.76",
-    "@drasil/application": "file:../../packages/application",
-    "@drasil/mcp-runtime": "file:lib/mcp/runtime",
-    "zod-to-json-schema": "3.25.1"
+    "zod-to-json-schema": "^3.25.2"
   },
   "devDependencies": {
     "@eslint/js": "^9.23.0",
-    "@playwright/test": "^1.59.1",
+    "@modelcontextprotocol/client": "2.3.1",
+    "@playwright/test": "1.60.0",
     "@storybook/addon-a11y": "^10.4.2",
     "@storybook/react-vite": "^10.4.2",
     "@types/node": "^22.0.0",
@@ -53,7 +54,6 @@
     "storybook": "^10.4.6",
     "typescript": "^5.5.4",
     "typescript-eslint": "^8.28.0",
-    "vitest": "^4.1.0",
-    "@modelcontextprotocol/client": "2.3.1"
+    "vitest": "^4.1.0"
   }
 }

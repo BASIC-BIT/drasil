@@ -51,11 +51,7 @@ export type WebCaseAction = Extract<
 >;
 
 export type CaseActionQueueStatus =
-  | 'queued'
-  | 'already_handled'
-  | 'case_not_found'
-  | 'not_allowed'
-  | 'failed';
+  'queued' | 'already_handled' | 'case_not_found' | 'not_allowed' | 'failed';
 
 export interface CaseActionQueueResult {
   readonly receipt?: ModerationActionRequestReceipt;

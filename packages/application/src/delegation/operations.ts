@@ -4,8 +4,7 @@ import type { WorkflowId } from './commands';
 export type LimitDecision = { kind: 'allowed' } | { kind: 'limited'; retryAfterSeconds: number };
 export type LimitCategory = 'read' | 'submission' | 'new_intent' | 'registration';
 export type LimitSubject =
-  | (DelegatedPrincipal & { guildId?: string })
-  | { registrationIpHash: string };
+  (DelegatedPrincipal & { guildId?: string }) | { registrationIpHash: string };
 export interface McpOperationalPort {
   checkMcpLimit(subject: LimitSubject, category: LimitCategory): Promise<LimitDecision>;
   recordMcpAudit(event: McpAuditEvent): Promise<void>;

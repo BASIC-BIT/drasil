@@ -10,7 +10,7 @@ it('renders a bounded PNG without embedding the answer as metadata', async () =>
   expect(png.readUInt32BE(20)).toBe(100);
   expect(png.length).toBeLessThanOrEqual(256 * 1024);
   const chunks: string[] = [];
-  for (let offset = 8; offset < png.length; ) {
+  for (let offset = 8; offset < png.length;) {
     const size = png.readUInt32BE(offset);
     chunks.push(png.toString('ascii', offset + 4, offset + 8));
     offset += size + 12;

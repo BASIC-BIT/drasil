@@ -8,13 +8,7 @@ export type ModerationInboxKindFilter = 'all' | ModerationInboxItemKind;
 export type ModerationInboxFreshnessFilter = 'all' | 'stale' | 'fresh' | 'attention';
 export type ModerationInboxSortMode = 'priority' | 'newest' | 'oldest' | 'stale';
 export type ModerationInboxSavedViewId =
-  | 'all'
-  | 'cases'
-  | 'stale_cases'
-  | 'reports'
-  | 'observed_alerts'
-  | 'reply_attention'
-  | 'screening';
+  'all' | 'cases' | 'stale_cases' | 'reports' | 'observed_alerts' | 'reply_attention' | 'screening';
 
 export interface ModerationInboxViewControls {
   readonly kind: ModerationInboxKindFilter;

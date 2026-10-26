@@ -50,12 +50,10 @@ class ReviewFixture {
     ),
   };
   public readonly reportCaseOpener = {
-    openObservedDetectionCase: jest.fn(
-      async (): Promise<ReportCaseOpenResult> => ({
-        status: 'queued' as const,
-        requestId: 'request-1',
-      })
-    ),
+    openObservedDetectionCase: jest.fn(async (): Promise<ReportCaseOpenResult> => ({
+      status: 'queued' as const,
+      requestId: 'request-1',
+    })),
   };
   public readonly queueRepository = {
     deleteReportThreadAttention: jest.fn(async () => [

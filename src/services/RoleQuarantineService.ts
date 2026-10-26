@@ -34,10 +34,7 @@ export type RoleQuarantineRestoreStatus =
   | 'restored';
 export type RoleQuarantineAbandonStatus = 'no_active_snapshot' | 'abandoned';
 export type RoleQuarantineActiveCaseUpdateStatus =
-  | 'off'
-  | 'audit_only'
-  | 'no_new_roles'
-  | 'enforced';
+  'off' | 'audit_only' | 'no_new_roles' | 'enforced';
 
 export interface RoleQuarantineAppliedEffects {
   readonly snapshot: RoleQuarantineSnapshot;

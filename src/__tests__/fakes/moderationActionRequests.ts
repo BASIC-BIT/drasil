@@ -107,8 +107,7 @@ export class InMemoryModerationActionRequestRepository implements IModerationAct
     if (!current || getReportBanAttemptToken(current) !== token) return false;
     const metadata = current.metadata as Prisma.JsonObject;
     const result = (current.result as Prisma.JsonObject).observed_ban_result as
-      | Prisma.JsonObject
-      | undefined;
+      Prisma.JsonObject | undefined;
     if (result?.status !== 'banned' || metadata.report_ban_analytics_claimed_at) return false;
     this.rows.set(id, {
       ...current,
@@ -200,11 +199,9 @@ export class InMemoryModerationActionRequestRepository implements IModerationAct
     )
       return row;
     const receipt = (row.result as Prisma.JsonObject).observed_ban_result as
-      | Prisma.JsonObject
-      | undefined;
+      Prisma.JsonObject | undefined;
     const incoming = (result as Prisma.JsonObject).observed_ban_result as
-      | Prisma.JsonObject
-      | undefined;
+      Prisma.JsonObject | undefined;
     if (
       receipt?.status === 'banned' ||
       (receipt?.status === 'banned_updates_pending' && incoming?.status === 'ban_outcome_unknown')
@@ -233,8 +230,7 @@ export class InMemoryModerationActionRequestRepository implements IModerationAct
     )
       return row;
     const receipt = (row.result as Prisma.JsonObject).observed_ban_result as
-      | Prisma.JsonObject
-      | undefined;
+      Prisma.JsonObject | undefined;
     if (
       parseReportBanState(row.metadata).report_ban_phase ||
       ['banned', 'banned_updates_pending', 'ban_outcome_unknown'].includes(String(receipt?.status))
