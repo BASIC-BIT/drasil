@@ -584,8 +584,13 @@ it('observes rejected wire states before SDK denial without accepting an action'
     const required = h.responses
       .map((text) => JSON.parse(text))
       .find((body) => body.result?.inputRequests).result;
+    const signatureOffset = required.requestState.lastIndexOf('.') + 1;
+    const signature = Buffer.from(required.requestState.slice(signatureOffset), 'base64url');
+    const corruptedSignature = Buffer.from(signature);
+    corruptedSignature[0] ^= 1;
     const foreign =
-      required.requestState.slice(0, -1) + (required.requestState.endsWith('A') ? 'B' : 'A');
+      required.requestState.slice(0, signatureOffset) + corruptedSignature.toString('base64url');
+    expect(Buffer.from(foreign.slice(signatureOffset), 'base64url')).not.toEqual(signature);
     const scenarios = [
       { state: null, reason: 'malformed', verify: false },
       { state: false, reason: 'malformed', verify: false },
