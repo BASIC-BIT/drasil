@@ -909,3 +909,180 @@ test('ordinary case reads saved sources first and keeps inactive tools and their
   );
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
 });
+
+for (const surface of ['inbox', 'canonical'] as const)
+  for (const outcome of ['ban_outcome_unknown', 'banned_updates_pending'] as const)
+    test(`${surface} restores claimed report ${outcome} after reload and reopen`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: surface === 'inbox' ? 390 : 1440, height: 1000 });
+      const result = await fixtures.pool.query<{ id: string }>(
+        "insert into moderation_action_requests(server_id,actor_id,actor_surface,action_type,target_user_id,report_intake_id,detection_event_id,idempotency_key,status,completed_at) values($1,$2,'web','ban_observed_detection',$3,$4,$5,'claimed-report-ban','completed',now()) returning id",
+        [id.guild, id.actor, id.member, id.report, id.reportDetection]
+      );
+      const requestId = result.rows[0].id;
+      await fixtures.pool.query(
+        'update moderation_action_requests set result=$2,metadata=$3 where id=$1',
+        [
+          requestId,
+          { observed_ban_result: { status: outcome, operationId: requestId } },
+          {
+            report_ban_phase:
+              outcome === 'ban_outcome_unknown' ? 'reconciliation_required' : 'discord_confirmed',
+            report_ban_retry_count: 1,
+            report_ban_retry_at: '2026-10-26T12:00:00Z',
+            report_ban_lease_until: '2026-10-26T12:00:00Z',
+            report_ban_last_error: 'Controlled provider interruption',
+          },
+        ]
+      );
+      await fixtures.pool.query(
+        "update report_intakes set metadata=coalesce(metadata,'{}'::jsonb)||$2::jsonb where id=$1",
+        [id.report, { report_ban_operation_id: requestId }]
+      );
+      await fixtures.pool.query(
+        "update detection_events set metadata=coalesce(metadata,'{}'::jsonb)||$2::jsonb where id=$1",
+        [id.reportDetection, { report_ban_operation_id: requestId, observed_action: 'ban' }]
+      );
+      const href = `/admin/guild/${id.guild}/${surface === 'inbox' ? `inbox?selected=report:${id.report}` : `reports/${id.report}`}`;
+      const assertReceipt = async () => {
+        const receipt = page.getByRole('status').filter({ hasText: `Operation ${requestId}` });
+        await expect(receipt).toContainText(
+          outcome === 'ban_outcome_unknown'
+            ? 'Ban outcome unknown'
+            : 'Record and notification updates are pending.'
+        );
+        await expect(receipt).toContainText(`Requested by ${id.actor}`);
+        await expect(receipt.getByRole('link', { name: `Request ${requestId}` })).toHaveAttribute(
+          'href',
+          `/admin/guild/${id.guild}/operations?request=${requestId}#request-${requestId}`
+        );
+        if (outcome === 'ban_outcome_unknown')
+          await expect(receipt).toContainText(`/review-report-ban operation:${requestId}`);
+        await expect(page.getByRole('button', { name: 'Ban member', exact: true })).toBeDisabled();
+        await expect(page.getByRole('button', { name: 'Dismiss report', exact: true })).toHaveCount(
+          0
+        );
+      };
+      await page.goto(href);
+      await assertReceipt();
+      await page.reload();
+      await assertReceipt();
+      await page.goto(`/admin/guild/${id.guild}/history`);
+      await page.goto(href);
+      await assertReceipt();
+      await page.getByRole('link', { name: `Request ${requestId}` }).click();
+      await expect(page.locator(`[id="request-${requestId}"]`)).toBeVisible();
+    });
+
+for (const empty of [false, true])
+  test(`parked recovery remains discoverable with ${empty ? 'empty' : 'active'} inbox after return and reload`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width: empty ? 390 : 1440, height: 1000 });
+    const foreignCase = '91000000-0000-4000-8000-000000000031';
+    await fixtures.pool.query(
+      "update verification_events set case_kind='compromised_account',attention_state='parked',containment_status='contained',parked_at='2026-10-25T12:00:00Z',parked_by=$2 where id=$1",
+      [id.case, id.actor]
+    );
+    await fixtures.pool.query(
+      "insert into verification_events(id,server_id,user_id,status,case_kind,attention_state,containment_status) values($1,$2,$3,'pending','compromised_account','parked','contained')",
+      [foreignCase, id.foreignGuild, id.member]
+    );
+    await fixtures.pool.query('delete from moderation_queue_items where server_id=$1', [id.guild]);
+    if (empty)
+      await fixtures.pool.query("update report_intakes set status='actioned' where server_id=$1", [
+        id.guild,
+      ]);
+    else
+      await fixtures.pool.query(
+        "insert into verification_events(id,server_id,user_id,status) values('91000000-0000-4000-8000-000000000032',$1,$2,'pending')",
+        [id.guild, id.reporter]
+      );
+    await page.goto(`/admin/guild/${id.guild}/cases`);
+    await expect(page).toHaveURL(new RegExp(`/inbox`));
+    const assertListing = async () => {
+      const parked = page.getByRole('region', { name: 'Parked recovery' });
+      await expect(parked.getByRole('link', { name: /Case member/ })).toBeVisible();
+      await expect(parked).toContainText('Parked');
+      await expect(parked.locator('time')).toHaveAttribute('datetime', '2026-10-25T12:00:00.000Z');
+      await expect(page.locator(`[data-inbox-item="case:${id.case}"]`)).toHaveCount(0);
+      await expect(page.locator(`a[href*="${foreignCase}"]`)).toHaveCount(0);
+      await expect(page).not.toHaveURL(new RegExp(`selected=case%3A${id.case}`));
+      if (empty) {
+        await expect(
+          page.getByText('No inbox items match these filters.', { exact: true })
+        ).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'Inbox 0', exact: true })).toBeVisible();
+      } else
+        await expect(page.getByRole('heading', { name: 'Inbox 1', exact: true })).toBeVisible();
+    };
+    await assertListing();
+    await page.screenshot({ path: testInfo.outputPath('parked-recovery.png'), fullPage: true });
+    await page
+      .getByRole('region', { name: 'Parked recovery' })
+      .getByRole('link', { name: /Case member/ })
+      .click();
+    await expect(page).toHaveURL(new RegExp(`/cases/${id.case}`));
+    await expect(
+      page.getByRole('region', { name: 'Account containment and recovery' })
+    ).toContainText('Parked');
+    await page
+      .getByRole('link', { name: /Back to inbox/ })
+      .first()
+      .click();
+    await assertListing();
+    await page.reload();
+    await assertListing();
+  });
+
+test('empty inbox return focuses after the queue commits even when a frame runs before that commit', async ({
+  page,
+}, testInfo) => {
+  const focusEvents: string[] = [];
+  page.on('console', (message) => {
+    if (message.text().startsWith('queue-focus:')) focusEvents.push(message.text());
+  });
+  await page.addInitScript(() => {
+    const restoring = new URL(window.location.href).searchParams.has('resume');
+    const requestFrame = window.requestAnimationFrame.bind(window);
+    window.requestAnimationFrame = (callback) => {
+      const queue = document.querySelector('[aria-label="Inbox queue"]');
+      // Exercise the legal ordering where a frame callback precedes React's next commit.
+      if (restoring && queue && getComputedStyle(queue).display === 'none') {
+        queueMicrotask(() => callback(performance.now()));
+        return 0;
+      }
+      return requestFrame(callback);
+    };
+    const focus = HTMLElement.prototype.focus;
+    HTMLElement.prototype.focus = function (options) {
+      const queue = this.closest('[aria-label="Inbox queue"]');
+      if (queue)
+        console.log(
+          `queue-focus:${JSON.stringify({ target: this.tagName, display: getComputedStyle(queue).display })}`
+        );
+      focus.call(this, options);
+    };
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`/admin/guild/${id.guild}/inbox?kind=case&selected=case:${id.case}`);
+  await expect(page.getByRole('region', { name: 'Selected inbox item' })).toBeFocused();
+  await page.getByRole('link', { name: 'Open case', exact: true }).click();
+  await fixtures.pool.query(
+    "update verification_events set status='verified',resolved_at=now() where id=$1",
+    [id.case]
+  );
+  await page
+    .getByRole('link', { name: /Back to inbox/ })
+    .first()
+    .click();
+  try {
+    await expect(page.getByRole('heading', { name: 'Inbox 0', exact: true })).toBeFocused();
+  } finally {
+    await testInfo.attach('queue-focus-events', {
+      body: JSON.stringify(focusEvents),
+      contentType: 'application/json',
+    });
+  }
+});

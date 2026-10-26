@@ -211,3 +211,6 @@
   cursor: pointer;
   font-weight: 500;
 }
+.parkedRecovery {
+  margin-top: 32px;
+}

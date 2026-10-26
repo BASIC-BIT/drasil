@@ -421,7 +421,13 @@ function SelectedDetail({
                 matchesWorkspaceActionRequest(request, requestTarget(detail), action)
             )
           )
-        : [];
+        : detail.kind === 'submitted_report'
+          ? detailActions(detail).filter((action) =>
+              detail.requests.some((request) =>
+                matchesWorkspaceActionRequest(request, requestTarget(detail), action)
+              )
+            )
+          : [];
     return [...new Set([...eligible, ...historical])];
   }, [detail]);
   const [offered, setOffered] = useState(() =>

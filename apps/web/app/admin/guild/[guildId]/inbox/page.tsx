@@ -1,3 +1,4 @@
+import { createActiveCaseDataAdapter } from '@/lib/activeCaseDataAdapter';
 import { ModerationInboxRoute } from '@/components/workspace/ModerationWorkspaceRoute';
 import { WorkspaceShell } from '@/components/workspace/WorkspaceShell';
 import { parseInboxLocation } from '@/lib/inboxLocation';
@@ -13,7 +14,10 @@ export default async function ModerationInboxPage({
 }) {
   const { guildId } = await params;
   const { guild, session } = await loadWorkspaceRoute(guildId, `/admin/guild/${guildId}/inbox`);
-  const items = await createModerationInboxDataAdapter().listInboxItems(guildId);
+  const [items, parkedCases] = await Promise.all([
+    createModerationInboxDataAdapter().listInboxItems(guildId),
+    createActiveCaseDataAdapter().listParkedCases(guildId),
+  ]);
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(await searchParams))
     if (typeof value === 'string') query.set(key, value);
@@ -27,6 +31,7 @@ export default async function ModerationInboxPage({
       <ModerationInboxRoute
         guildId={guildId}
         items={items}
+        parkedCases={parkedCases}
         initialLocation={parseInboxLocation(query)}
       />
     </WorkspaceShell>

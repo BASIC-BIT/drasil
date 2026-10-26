@@ -19,7 +19,7 @@ import {
   workspaceItemDetailSchema,
   type WorkspaceItemDetail,
 } from '@/lib/moderationWorkspaceTypes';
-import type { ModerationInboxItem } from '@drasil/contracts';
+import type { CaseSummary, ModerationInboxItem } from '@drasil/contracts';
 import { useCallback } from 'react';
 
 const actions = {
@@ -37,10 +37,12 @@ const cleanupActions = {
 export function ModerationInboxRoute({
   guildId,
   items,
+  parkedCases,
   initialLocation,
 }: {
   readonly guildId: string;
   readonly items: readonly ModerationInboxItem[];
+  readonly parkedCases: readonly CaseSummary[];
   readonly initialLocation: InboxLocation;
 }) {
   const loadDetail = useCallback(
@@ -58,6 +60,7 @@ export function ModerationInboxRoute({
     <InboxWorkspace
       guildId={guildId}
       items={items}
+      parkedCases={parkedCases}
       initialLocation={initialLocation}
       loadDetail={loadDetail}
       actions={actions}
