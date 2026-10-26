@@ -57,9 +57,12 @@ import {
   ResolvedVerificationStatus,
 } from '../utils/verificationResolution';
 
-/**
- * Interface for the UserModerationService
- */
+/** Injected only by trusted delegated native execution; absent on direct Discord paths. */
+export interface NativeEnforcementLifecycle {
+  beforeSend(): Promise<void>;
+  acknowledged(): Promise<void>;
+}
+
 export interface IUserModerationService {
   /**
    * Applies the configured case role required for active user-facing cases.
@@ -95,7 +98,8 @@ export interface IUserModerationService {
     member: GuildMember,
     reason: string,
     moderator: User,
-    detectionEventId?: string
+    detectionEventId?: string,
+    nativeLifecycle?: NativeEnforcementLifecycle
   ): Promise<boolean>;
 
   banUserById(
@@ -103,14 +107,16 @@ export interface IUserModerationService {
     userId: string,
     reason: string,
     moderator: User,
-    detectionEventId?: string
+    detectionEventId?: string,
+    nativeLifecycle?: NativeEnforcementLifecycle
   ): Promise<boolean>;
 
   kickUser(
     member: GuildMember,
     reason: string,
     moderator: User,
-    detectionEventId?: string
+    detectionEventId?: string,
+    nativeLifecycle?: NativeEnforcementLifecycle
   ): Promise<boolean>;
 
   /**
@@ -1439,7 +1445,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     }
   ): Promise<CaptchaCaseResolutionResult> {
     const actorId = 'drasil:captcha';
-    const actorLabel = 'Drasil browser check';
+    const actorLabel = 'Drasil security check';
     const verificationEvent = await this.verificationEventRepository.findById(
       input.verificationEventId
     );
@@ -1864,10 +1870,13 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     member: GuildMember,
     reason: string,
     moderator: User,
-    detectionEventId?: string
+    detectionEventId?: string,
+    nativeLifecycle?: NativeEnforcementLifecycle
   ): Promise<boolean> {
     try {
-      await this.performDiscordMemberBan(member, reason);
+      if (nativeLifecycle)
+        await this.performDiscordMemberBan(member, reason, undefined, nativeLifecycle);
+      else await this.performDiscordMemberBan(member, reason);
       return await this.finalizeSuccessfulMemberBan(member, reason, moderator, detectionEventId);
     } catch (error) {
       console.error(`Failed to ban user ${member.user.tag}:`, error);
@@ -1918,7 +1927,8 @@ export class UserModerationService implements IUserModerationService, ICombinedB
   public async performDiscordMemberBan(
     member: GuildMember,
     reason: string,
-    lifecycle?: ObservedBanLifecycle
+    lifecycle?: ObservedBanLifecycle,
+    nativeLifecycle?: NativeEnforcementLifecycle
   ): Promise<void> {
     const pendingVerificationEvents = await this.getPendingVerificationEvents(member);
     const attemptId = lifecycle
@@ -1935,7 +1945,9 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     const auditReason = reason.trim().slice(0, DISCORD_AUDIT_LOG_REASON_MAX_LENGTH);
     try {
       await lifecycle?.beforeEnforcement(terminalClaim.events, terminalClaim.attemptId);
+      await nativeLifecycle?.beforeSend();
       await member.ban({ reason: auditReason || 'Moderator-requested ban' });
+      await nativeLifecycle?.acknowledged();
     } catch (error) {
       if (!lifecycle)
         await this.rollbackPendingTerminalActions(
@@ -2366,7 +2378,8 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     member: GuildMember,
     reason: string,
     moderator: User,
-    detectionEventId?: string
+    detectionEventId?: string,
+    nativeLifecycle?: NativeEnforcementLifecycle
   ): Promise<boolean> {
     try {
       const pendingVerificationEvents = await this.getPendingVerificationEvents(member);
@@ -2377,7 +2390,9 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       const resolvedAt = new Date();
 
       try {
+        await nativeLifecycle?.beforeSend();
         await member.kick(reason);
+        await nativeLifecycle?.acknowledged();
       } catch (error) {
         await this.rollbackPendingTerminalActions(
           terminalClaim.originalEvents,
@@ -2469,7 +2484,8 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     userId: string,
     reason: string,
     moderator: User,
-    detectionEventId?: string
+    detectionEventId?: string,
+    nativeLifecycle?: NativeEnforcementLifecycle
   ): Promise<boolean> {
     try {
       const targetUser = await guild.client.users.fetch(userId).catch(() => null);
@@ -2489,7 +2505,9 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       }> = [];
 
       try {
+        await nativeLifecycle?.beforeSend();
         await guild.bans.create(targetUser ?? userId, { reason });
+        await nativeLifecycle?.acknowledged();
       } catch (banError) {
         await this.rollbackPendingTerminalActions(
           terminalClaim.originalEvents,

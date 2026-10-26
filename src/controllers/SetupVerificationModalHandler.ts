@@ -1,12 +1,13 @@
+import type { BotApplication } from '../application/createBotApplication';
+import { requireSetupOutcome } from '../application/adapters/setup';
+import { createDiscordActionContext } from '../application/context';
 import {
   ChannelType,
   Client,
   MessageFlags,
   ModalSubmitInteraction,
   PermissionFlagsBits,
-  Role,
 } from 'discord.js';
-import { IConfigService } from '../config/ConfigService';
 import {
   parseChannelId,
   parseRoleId,
@@ -14,36 +15,17 @@ import {
   SETUP_VERIFICATION_CHANNEL_FIELD_ID,
   SETUP_VERIFICATION_RESTRICTED_ROLE_FIELD_ID,
 } from '../constants/setupVerificationWizard';
-import { INotificationManager } from '../services/NotificationManager';
 import {
   ISetupDiagnosticsService,
   SetupDiagnosticReport,
 } from '../services/SetupDiagnosticsService';
-import {
-  IProductAnalyticsService,
-  NOOP_PRODUCT_ANALYTICS_SERVICE,
-} from '../services/ProductAnalyticsService';
-import { SetupWorkflowService } from '../services/SetupWorkflowService';
 
 export class SetupVerificationModalHandler {
-  private readonly setupWorkflowService?: SetupWorkflowService;
-
   public constructor(
     private readonly client: Client,
-    notificationManager: INotificationManager,
-    configService: IConfigService,
-    setupDiagnosticsService?: ISetupDiagnosticsService,
-    productAnalyticsService: IProductAnalyticsService = NOOP_PRODUCT_ANALYTICS_SERVICE
-  ) {
-    this.setupWorkflowService = setupDiagnosticsService
-      ? new SetupWorkflowService(
-          configService,
-          notificationManager,
-          productAnalyticsService,
-          setupDiagnosticsService
-        )
-      : undefined;
-  }
+    private readonly setupDiagnosticsService?: ISetupDiagnosticsService,
+    private readonly application?: BotApplication
+  ) {}
 
   public async handleSetupVerificationModalSubmit(
     interaction: ModalSubmitInteraction
@@ -98,41 +80,39 @@ export class SetupVerificationModalHandler {
       return;
     }
 
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
     let setupFailureDetail = 'Please check permissions and try again.';
 
     try {
       const guild = await this.client.guilds.fetch(interaction.guildId);
       const moderator = await guild.members.fetch(interaction.user.id).catch(() => null);
       if (!moderator || !moderator.permissions.has(PermissionFlagsBits.Administrator)) {
-        await interaction.reply({
+        await interaction.editReply({
           content: 'You need administrator permissions to complete setup.',
-          flags: MessageFlags.Ephemeral,
         });
         return;
       }
 
-      if (!this.setupWorkflowService) {
-        await interaction.reply({
+      if (!this.setupDiagnosticsService || !this.application) {
+        await interaction.editReply({
           content: 'Setup diagnostics are not available in this runtime.',
-          flags: MessageFlags.Ephemeral,
         });
         return;
       }
 
       const caseRole = await guild.roles.fetch(caseRoleId);
       if (!caseRole) {
-        await interaction.reply({
+        await interaction.editReply({
           content: `Could not find case role <@&${caseRoleId}> in this server.`,
-          flags: MessageFlags.Ephemeral,
         });
         return;
       }
 
       const adminChannel = await guild.channels.fetch(adminChannelId);
       if (!adminChannel || adminChannel.type !== ChannelType.GuildText) {
-        await interaction.reply({
+        await interaction.editReply({
           content: `Admin channel must be a text channel in this server. Received: <#${adminChannelId}>.`,
-          flags: MessageFlags.Ephemeral,
         });
         return;
       }
@@ -140,37 +120,63 @@ export class SetupVerificationModalHandler {
       if (providedVerificationChannelId) {
         const verificationChannel = await guild.channels.fetch(providedVerificationChannelId);
         if (!verificationChannel || verificationChannel.type !== ChannelType.GuildText) {
-          await interaction.reply({
+          await interaction.editReply({
             content: `Verification channel must be a text channel in this server. Received: <#${providedVerificationChannelId}>.`,
-            flags: MessageFlags.Ephemeral,
           });
           return;
         }
       }
 
-      const setupResult = await this.setupWorkflowService.completeSetup({
-        guild,
-        guildId: interaction.guildId,
-        caseRole: caseRole as Role,
-        adminChannelId,
-        initialVerificationChannelId: providedVerificationChannelId,
-        candidateVerificationChannelId: providedVerificationChannelId,
-        reportInstructionsChannelId: null,
-      });
+      const outcome = requireSetupOutcome(
+        await this.application.setupRuntime.execute(
+          createDiscordActionContext({
+            guildId: interaction.guildId,
+            userId: interaction.user.id,
+            requestId: interaction.id,
+          }),
+          {
+            kind: 'complete_setup_verification',
+            mode: 'verification_modal',
+            adminChannelId,
+            caseRoleId,
+            verificationChannelId: providedVerificationChannelId,
+            reportInstructionsChannelId: null,
+            onboardingWizard: false,
+          },
+          {
+            kind: 'direct',
+            guild,
+            caseRole,
+            verificationChannel: null,
+            reportChannel: null,
+            actorLabel: interaction.user.username,
+            captureAnalytics: false,
+            publishPanel: false,
+          }
+        )
+      );
+      if (outcome.kind !== 'complete_setup_verification')
+        throw new Error('Setup outcome mismatch.');
+      const setupResult = outcome.result;
+      if (setupResult.status === 'invalid_selection') throw new Error(setupResult.detail);
+      if (
+        setupResult.status === 'ambiguous_case_role' ||
+        setupResult.status === 'ambiguous_verification_channel'
+      )
+        throw new Error('Choose setup resources before continuing.');
 
       if (setupResult.status === 'candidate_validation_failed') {
-        await interaction.reply({
+        await interaction.editReply({
           content:
             'Setup not saved. Fix these errors before completing setup:\n' +
             this.formatSetupErrorMessages(setupResult.report),
-          flags: MessageFlags.Ephemeral,
           allowedMentions: { parse: [] },
         });
         return;
       }
 
       if (setupResult.status === 'final_validation_failed') {
-        await interaction.reply({
+        await interaction.editReply({
           content:
             'Setup not saved. Fix these errors before completing setup:\n' +
             this.formatSetupErrorMessages(setupResult.report) +
@@ -178,7 +184,6 @@ export class SetupVerificationModalHandler {
               setupResult.setupFailureDetail,
               setupResult.createdVerificationChannelId
             ),
-          flags: MessageFlags.Ephemeral,
           allowedMentions: { parse: [] },
         });
         return;
@@ -199,13 +204,12 @@ export class SetupVerificationModalHandler {
           ? `Created verification channel: <#${setupResult.verificationChannelId}>`
           : `Verification channel: <#${setupResult.verificationChannelId}>`;
 
-      await interaction.reply({
+      await interaction.editReply({
         content:
           'Setup complete.\n' +
           `Case role: <@&${setupResult.caseRoleId}>\n` +
           `Admin channel: <#${adminChannelId}>\n` +
           `${verificationChannelMessage}`,
-        flags: MessageFlags.Ephemeral,
         allowedMentions: { parse: [] },
       });
     } catch (error) {
@@ -215,14 +219,9 @@ export class SetupVerificationModalHandler {
       );
       const errorResponse = {
         content: `Failed to complete setup verification. ${setupFailureDetail}`,
-        flags: MessageFlags.Ephemeral,
       } as const;
 
-      if (interaction.replied || interaction.deferred) {
-        await interaction.followUp(errorResponse);
-      } else {
-        await interaction.reply(errorResponse);
-      }
+      await interaction.editReply(errorResponse);
     }
   }
 

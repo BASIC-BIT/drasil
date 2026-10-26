@@ -1,3 +1,5 @@
+import { getPostgresPool } from './setupDataAdapter';
+import { buildEnqueueStatement } from '@drasil/application/postgres';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -12,10 +14,20 @@ vi.mock('./setupDataAdapter', () => ({
 
 import {
   insertModerationActionRequestWithReceipt,
-  queueSerializedModerationActionRequestWithReceipt,
+  insertSerializedSetupRequestWithReceipt,
 } from './moderationActionRequestQueue';
 
-describe('queueSerializedModerationActionRequestWithReceipt', () => {
+const sharedStatement = buildEnqueueStatement({
+  actionType: 'complete_setup_verification',
+  serverId: 'guild-1',
+  actorId: 'admin-2',
+  actorSurface: 'web',
+  targetUserId: null,
+  idempotencyKey: 'setup-2',
+  metadata: {},
+});
+
+describe('insertSerializedSetupRequestWithReceipt', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.connect.mockResolvedValue({ query: mocks.query, release: mocks.release });
@@ -30,12 +42,14 @@ describe('queueSerializedModerationActionRequestWithReceipt', () => {
       })
       .mockResolvedValueOnce({ rows: [] });
 
-    const result = await queueSerializedModerationActionRequestWithReceipt({
+    const result = await insertSerializedSetupRequestWithReceipt(getPostgresPool(), {
       actionType: 'complete_setup_verification',
       actorId: 'admin-2',
       actorSurface: 'web',
       idempotencyKey: 'setup-2',
       serverId: 'guild-1',
+      targetUserId: null,
+      metadata: {},
     });
 
     expect(result).toEqual({ id: 'active-1', status: 'processing' });
@@ -61,12 +75,14 @@ describe('queueSerializedModerationActionRequestWithReceipt', () => {
       .mockResolvedValueOnce({ rows: [] });
 
     await expect(
-      queueSerializedModerationActionRequestWithReceipt({
+      insertSerializedSetupRequestWithReceipt(getPostgresPool(), {
         actionType: 'complete_setup_verification',
         actorId: 'admin-2',
         actorSurface: 'web',
         idempotencyKey: 'setup-2',
         serverId: 'guild-1',
+        targetUserId: null,
+        metadata: {},
       })
     ).rejects.toThrow('Another Drasil setup is already in progress for this server.');
 
@@ -82,24 +98,20 @@ describe('queueSerializedModerationActionRequestWithReceipt', () => {
       .mockResolvedValueOnce({ rows: [{ id: 'request-2', status: 'queued' }] })
       .mockResolvedValueOnce({ rows: [] });
 
-    const result = await queueSerializedModerationActionRequestWithReceipt({
+    const result = await insertSerializedSetupRequestWithReceipt(getPostgresPool(), {
       actionType: 'complete_setup_verification',
       actorId: 'admin-2',
       actorSurface: 'web',
       idempotencyKey: 'setup-2',
       serverId: 'guild-1',
+      targetUserId: null,
+      metadata: {},
     });
 
     expect(result).toEqual({ id: 'request-2', status: 'queued' });
     const insertSql = String(mocks.query.mock.calls[3]?.[0]);
-    expect(insertSql).toContain('insert into moderation_action_requests');
-    expect(insertSql).toContain('actor_id = case');
-    expect(insertSql).toContain('else excluded.actor_id');
-    expect(insertSql).toContain('actor_surface = case');
-    expect(insertSql).toContain('else excluded.actor_surface');
-    expect(insertSql).toContain("where (moderation_action_requests.status = 'failed'");
-    expect(insertSql).toContain("moderation_action_requests.status = 'queued'");
-    expect(insertSql).toContain('and moderation_action_requests.action_type <>');
+    expect(insertSql).toBe(sharedStatement.text);
+    expect(mocks.query.mock.calls[3]?.[1]).toEqual(sharedStatement.values);
     expect(mocks.query).toHaveBeenLastCalledWith('commit');
     expect(mocks.release).toHaveBeenCalledTimes(1);
   });
@@ -120,17 +132,16 @@ describe('insertModerationActionRequestWithReceipt', () => {
         actorSurface: 'captcha',
         idempotencyKey: 'captcha:apply:challenge-1:1',
         serverId: 'guild-1',
+        targetUserId: null,
+        metadata: {},
       })
     ).resolves.toEqual({ id: 'active-1', status: 'processing' });
 
     const statement = String(mocks.query.mock.calls[0]?.[0]);
-    expect(statement).toContain("where (moderation_action_requests.status = 'failed'");
-    expect(statement).toContain("moderation_action_requests.status = 'queued'");
-    expect(statement).toContain('and moderation_action_requests.action_type <>');
-    expect(statement).toContain('and not exists (select 1 from upserted)');
+    expect(statement).toBe(sharedStatement.text);
   });
 
-  it('preserves queued resubmission updates for other moderation actions', async () => {
+  it('delegates queued resubmissions to the shared statement', async () => {
     mocks.query.mockResolvedValueOnce({ rows: [{ id: 'active-1', status: 'queued' }] });
 
     await expect(
@@ -141,14 +152,12 @@ describe('insertModerationActionRequestWithReceipt', () => {
         idempotencyKey: 'web:case-action:ban:guild-1:case-1',
         metadata: { reason: 'Corrected reason' },
         serverId: 'guild-1',
+        targetUserId: null,
       })
     ).resolves.toEqual({ id: 'active-1', status: 'queued' });
 
     const statement = String(mocks.query.mock.calls[0]?.[0]);
-    expect(statement).toContain("ELSE coalesce(moderation_action_requests.metadata, '{}'::jsonb)");
-    expect(statement).toContain('else excluded.actor_id');
-    expect(statement).toContain("moderation_action_requests.status = 'queued'");
-    expect(statement).toContain('and moderation_action_requests.action_type <>');
+    expect(statement).toBe(sharedStatement.text);
   });
 
   it('leaves processing non-CAPTCHA request payloads untouched', async () => {
@@ -162,12 +171,33 @@ describe('insertModerationActionRequestWithReceipt', () => {
         idempotencyKey: 'web:case-action:ban:guild-1:case-1',
         metadata: { reason: 'Different reason' },
         serverId: 'guild-1',
+        targetUserId: null,
       })
     ).resolves.toEqual({ id: 'active-1', status: 'processing' });
 
     const statement = String(mocks.query.mock.calls[0]?.[0]);
-    expect(statement).toContain("moderation_action_requests.status = 'queued'");
-    expect(statement).toContain('and moderation_action_requests.action_type <>');
-    expect(statement).toContain('and not exists (select 1 from upserted)');
+    expect(statement).toBe(sharedStatement.text);
   });
+});
+
+it('maps the returned job binding and rejects a missing database row', async () => {
+  const input = {
+    actionType: 'ban_case_user' as const,
+    actorId: 'moderator',
+    actorSurface: 'web',
+    serverId: 'guild',
+    targetUserId: null,
+    metadata: {},
+    idempotencyKey: 'key',
+  };
+  mocks.query.mockResolvedValueOnce({
+    rows: [{ id: 'request', status: 'queued', message_deletion_job_id: 'job' }],
+  });
+  await expect(
+    insertModerationActionRequestWithReceipt({ query: mocks.query } as never, input)
+  ).resolves.toEqual({ id: 'request', status: 'queued', messageDeletionJobId: 'job' });
+  mocks.query.mockResolvedValueOnce({ rows: [] });
+  await expect(
+    insertModerationActionRequestWithReceipt({ query: mocks.query } as never, input)
+  ).rejects.toThrow('Failed to enqueue');
 });

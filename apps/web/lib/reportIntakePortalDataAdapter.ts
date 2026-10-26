@@ -1,3 +1,4 @@
+import type { ActionContext } from '@drasil/application';
 import { discordMessageUrl } from './discordUrls';
 import { fixtureGuildId, fixtureTimestampIso, isWebE2eFixtureMode } from './e2eFixtures';
 import { getPostgresPool } from './setupDataAdapter';
@@ -113,4 +114,14 @@ export function createReportIntakePortalDataAdapter(): ReportIntakePortalDataAda
   }
 
   return new PostgresReportIntakePortalDataAdapter();
+}
+
+export async function loadReporterOpenIntake(
+  context: ActionContext
+): Promise<ReporterOpenReportIntake | null> {
+  if (context.actor.kind !== 'user') return null;
+  return createReportIntakePortalDataAdapter().getOpenIntakeForReporter({
+    guildId: context.guildId,
+    reporterId: context.actor.userId,
+  });
 }

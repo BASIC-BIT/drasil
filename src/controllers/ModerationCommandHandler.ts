@@ -1,4 +1,19 @@
 import {
+  operationConfirmationCommand,
+  type ConfirmationBinding,
+  type CaseThreadClosureSweepReport,
+} from '@drasil/application';
+import { requireOperationsOutcome } from '../application/adapters/operations';
+import {
+  normalizeIntegrityAuditScope,
+  clampIntegrityAuditDays,
+  clampIntegrityAuditLimit,
+} from '../utils/integrityAuditSettings';
+import { requireDetectionOutcome } from '../application/adapters/detections';
+import type { BotApplication } from '../application/createBotApplication';
+import { createDiscordActionContext } from '../application/context';
+import { requireCaseOutcome } from '../application/adapters/cases';
+import {
   ActionRowBuilder,
   ButtonStyle,
   ChatInputCommandInteraction,
@@ -12,17 +27,13 @@ import {
   UserContextMenuCommandInteraction,
 } from 'discord.js';
 import { IConfigService } from '../config/ConfigService';
-import {
-  CaseThreadClosureSweepReport,
-  ICaseThreadClosureSweepService,
-} from '../services/CaseThreadClosureSweepService';
+import { ICaseThreadClosureSweepService } from '../services/CaseThreadClosureSweepService';
 import {
   IIntegrityAuditService,
   IntegrityAuditFinding,
   IntegrityAuditReport,
 } from '../services/IntegrityAuditService';
 import { ISecurityActionService } from '../services/SecurityActionService';
-import { IUserModerationService } from '../services/UserModerationService';
 import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
 import {
   buildModerationActionReasonModalCustomId,
@@ -44,11 +55,11 @@ const AUDIT_INTEGRITY_RESPONSE_MAX_LENGTH = 1900;
 export class ModerationCommandHandler {
   public constructor(
     private readonly configService: IConfigService,
-    private readonly userModerationService: IUserModerationService,
     private readonly securityActionService: ISecurityActionService,
     private readonly replyGuildInstallRequired: ReplyGuildInstallRequired,
     private readonly integrityAuditService?: IIntegrityAuditService,
-    private readonly caseThreadClosureSweepService?: ICaseThreadClosureSweepService
+    private readonly caseThreadClosureSweepService?: ICaseThreadClosureSweepService,
+    private readonly application?: BotApplication
   ) {}
 
   public async handleReviewReportBanCommand(
@@ -61,13 +72,24 @@ export class ModerationCommandHandler {
     }
     const operationId = interaction.options.getString('operation', true);
     const reason = interaction.options.getString('reason', true).trim();
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     try {
       if (!reason) throw new Error('A review reason is required.');
-      const reference = await this.securityActionService.prepareReportBanReview(
-        guild,
-        operationId,
-        interaction.user
+      if (!this.application) throw new Error('Detection application is unavailable.');
+      const context = createDiscordActionContext({
+        guildId: guild.id,
+        userId: interaction.user.id,
+        requestId: interaction.id,
+      });
+      const prepared = requireDetectionOutcome(
+        await this.application.detections.execute(context, {
+          kind: 'prepare_report_ban_review',
+          operationId,
+        })
       );
+      if (prepared.kind !== 'prepare_report_ban_review')
+        throw new Error('Review outcome mismatch.');
+      const reference = prepared.reference;
       await requestSlashCommandConfirmation(interaction, {
         message: `Review operation ${operationId} for user ${reference.targetUserId}? If no current ban exists, release its claims. The historical outcome remains uncertain. This does not ban or unban anyone. Reason: ${reason}`,
         confirmLabel: 'Record Review',
@@ -78,11 +100,12 @@ export class ModerationCommandHandler {
             components: [],
           });
           try {
-            await this.securityActionService.reviewUncertainReportBan(
-              guild,
-              reference,
-              interaction.user,
-              reason
+            if (!this.application) throw new Error('Detection application is unavailable.');
+            const reviewContext = { ...context, requestId: button.id };
+            const command = { kind: 'review_uncertain_report_ban' as const, ...reference, reason };
+            this.application.caseConfirmations.recordVerified(reviewContext, command);
+            requireDetectionOutcome(
+              await this.application.detections.execute(reviewContext, command)
             );
             await button.editReply({
               content:
@@ -96,9 +119,8 @@ export class ModerationCommandHandler {
         },
       });
     } catch (error) {
-      await interaction.reply({
+      await interaction.editReply({
         content: error instanceof Error ? error.message : 'Could not prepare review.',
-        flags: MessageFlags.Ephemeral,
       });
     }
   }
@@ -155,28 +177,34 @@ export class ModerationCommandHandler {
       return;
     }
 
-    const reason = providedReason ?? 'No reason provided';
     const member = await guild.members.fetch(targetUser.id).catch(() => null);
 
     await requestSlashCommandConfirmation(interaction, {
+      confirmation: { action: 'ban_user', targetId: targetUser.id },
       message: member
         ? `Ban ${targetUser.tag} from this server?`
         : `Ban ${targetUser.tag} from this server by ID?`,
       confirmLabel: member ? 'Ban User' : 'Ban by ID',
       confirmStyle: ButtonStyle.Danger,
-      execute: async (buttonInteraction) => {
+      execute: async (buttonInteraction, evidence) => {
         await buttonInteraction.update({ content: `Banning ${targetUser.tag}...`, components: [] });
         try {
-          if (member) {
-            await this.userModerationService.banUser(member, reason, interaction.user);
-          } else {
-            await this.userModerationService.banUserById(
-              guild,
-              targetUser.id,
-              reason,
-              interaction.user
-            );
-          }
+          if (!this.application) throw new Error('Case application is unavailable.');
+          const context = createDiscordActionContext({
+            guildId: guild.id,
+            userId: interaction.user.id,
+            requestId: buttonInteraction.id,
+          });
+          const command = {
+            kind: 'ban_user',
+            intent: 'slash_command',
+            targetUserId: targetUser.id,
+            reason: providedReason ?? null,
+            selectedMessage: null,
+          } as const;
+          if (!evidence) throw new Error('Confirmation is unavailable.');
+          this.application.caseConfirmations.recordVerified(context, command, evidence);
+          requireCaseOutcome(await this.application.cases.execute(context, command));
           await buttonInteraction.editReply({ content: `User ${targetUser.tag} has been banned.` });
         } catch (error) {
           console.error('Failed to ban user via command:', error);
@@ -402,6 +430,15 @@ export class ModerationCommandHandler {
       return;
     }
 
+    if (!this.application) throw new Error('Detection application is unavailable.');
+    const detection = await this.application.detectionRuntime.findDetection(detectionEventId);
+    if (!detection) {
+      await interaction.reply({
+        content: `Detection ${detectionEventId} was not found or is not auditable from this server.`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
     const isRestore = subcommand === 'restore-detection';
     await requestSlashCommandConfirmation(interaction, {
       message: `${isRestore ? 'Restore' : 'Ignore'} detection ${detectionEventId} for future accounting?`,
@@ -413,19 +450,30 @@ export class ModerationCommandHandler {
           components: [],
         });
         try {
-          const updatedDetection = isRestore
-            ? await this.securityActionService.restoreDetectionAccounting(
-                guild.id,
-                detectionEventId,
-                interaction.user,
-                reason
-              )
-            : await this.securityActionService.excludeDetectionFromAccounting(
-                guild.id,
-                detectionEventId,
-                interaction.user,
-                reason
-              );
+          if (!this.application) throw new Error('Detection application is unavailable.');
+          const context = createDiscordActionContext({
+            guildId: guild.id,
+            userId: interaction.user.id,
+            requestId: buttonInteraction.id,
+          });
+          const command = {
+            kind: isRestore
+              ? ('restore_detection_accounting' as const)
+              : ('ignore_detection_accounting' as const),
+            targetUserId: detection.targetUserId,
+            detectionEventId,
+            reason: reason ?? null,
+          };
+          this.application.caseConfirmations.recordVerified(context, command);
+          const outcome = requireDetectionOutcome(
+            await this.application.detections.execute(context, command)
+          );
+          if (
+            outcome.kind !== 'restore_detection_accounting' &&
+            outcome.kind !== 'ignore_detection_accounting'
+          )
+            throw new Error('Accounting outcome mismatch.');
+          const updatedDetection = outcome.succeeded;
           await buttonInteraction.editReply({
             content: updatedDetection
               ? isRestore
@@ -481,11 +529,19 @@ export class ModerationCommandHandler {
           components: [],
         });
         try {
-          await this.securityActionService.handleManualFlag(
-            targetMember,
-            interaction.user,
-            reason ?? undefined
-          );
+          if (!this.application) throw new Error('Case application is unavailable.');
+          const context = createDiscordActionContext({
+            guildId: guild.id,
+            userId: interaction.user.id,
+            requestId: buttonInteraction.id,
+          });
+          const command = {
+            kind: 'manual_flag_user',
+            targetUserId: targetUser.id,
+            reason: reason ?? null,
+          } as const;
+          this.application.caseConfirmations.recordVerified(context, command);
+          requireCaseOutcome(await this.application.cases.execute(context, command));
           await buttonInteraction.editReply({
             content: `Flag request for ${targetUser.tag} received. Initiating verification process...`,
           });
@@ -544,12 +600,25 @@ export class ModerationCommandHandler {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     try {
-      const report = await this.integrityAuditService.auditGuild(guild, {
-        scope: interaction.options.getString('scope'),
-        days: interaction.options.getInteger('days'),
-        limit: interaction.options.getInteger('limit'),
-        userId: interaction.options.getUser('user')?.id,
-      });
+      if (!this.application) throw new Error('Operations application is unavailable.');
+      const outcome = requireOperationsOutcome(
+        await this.application.operations.execute(
+          createDiscordActionContext({
+            guildId: guild.id,
+            userId: interaction.user.id,
+            requestId: interaction.id,
+          }),
+          {
+            kind: 'audit_integrity',
+            scope: normalizeIntegrityAuditScope(interaction.options.getString('scope')),
+            days: clampIntegrityAuditDays(interaction.options.getInteger('days')),
+            limit: clampIntegrityAuditLimit(interaction.options.getInteger('limit')),
+            userId: interaction.options.getUser('user')?.id ?? null,
+          }
+        )
+      );
+      if (outcome.kind !== 'audit_integrity') throw new Error('Operation outcome mismatch.');
+      const report = outcome.report;
 
       await interaction.editReply({ content: this.formatIntegrityAuditReport(report) });
     } catch (error) {
@@ -577,32 +646,60 @@ export class ModerationCommandHandler {
     const days = interaction.options.getInteger('days') ?? 30;
     const limit = interaction.options.getInteger('limit') ?? 100;
     const userId = interaction.options.getUser('user')?.id ?? null;
-    const runSweep = async (): Promise<CaseThreadClosureSweepReport> =>
-      caseThreadClosureSweepService.sweepResolvedCaseThreads({
-        serverId: guild.id,
-        execute,
-        days,
-        limit,
-        userId,
-      });
+    const command = {
+      kind: 'close_resolved_case_threads',
+      intent: 'guild_audit',
+      execute,
+      days,
+      limit,
+      userId,
+    } as const;
+    const context = createDiscordActionContext({
+      guildId: guild.id,
+      userId: interaction.user.id,
+      requestId: interaction.id,
+    });
+    const confirmation = operationConfirmationCommand(context, command);
+    const runSweep = async (
+      requestId: string,
+      evidence?: ConfirmationBinding | null
+    ): Promise<CaseThreadClosureSweepReport> => {
+      if (!this.application) throw new Error('Operations application is unavailable.');
+      const executionContext = { ...context, requestId };
+      if (execute) {
+        if (!evidence) throw new Error('Thread closure confirmation is unavailable.');
+        this.application.caseConfirmations.recordVerified(
+          executionContext,
+          operationConfirmationCommand(executionContext, command),
+          evidence
+        );
+      }
+      const outcome = requireOperationsOutcome(
+        await this.application.operations.execute(executionContext, command)
+      );
+      if (outcome.kind !== 'close_resolved_case_threads')
+        throw new Error('Operation outcome mismatch.');
+      return outcome.report;
+    };
 
     if (!execute) {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-      const report = await runSweep();
+      const report = await runSweep(interaction.id);
       await interaction.editReply({ content: this.formatThreadClosureSweepReport(report) });
       return;
     }
 
     await requestSlashCommandConfirmation(interaction, {
+      confirmation: { action: command.kind, targetId: confirmation.operationId },
       message: `Close resolved case threads that are still open? This will inspect up to ${limit} resolved case(s) from the last ${days} day(s).`,
       confirmLabel: 'Close Threads',
       confirmStyle: ButtonStyle.Danger,
-      execute: async (buttonInteraction) => {
+      execute: async (buttonInteraction, evidence) => {
         await buttonInteraction.update({
           content: 'Closing resolved case threads...',
           components: [],
         });
-        const report = await runSweep();
+        const report = await runSweep(buttonInteraction.id, evidence);
         await buttonInteraction.editReply({ content: this.formatThreadClosureSweepReport(report) });
       },
     });

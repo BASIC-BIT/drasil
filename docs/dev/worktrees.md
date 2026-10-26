@@ -109,11 +109,11 @@ Rules:
 
 CI runs integration tests against a Postgres service.
 
-Locally, integration tests can collide if multiple worktrees share the same database/schema.
-Keep it boring:
-
-- Run integration tests from one worktree at a time, OR
-- Give each worktree its own `TEST_DATABASE_URL` / database.
+Run database suites from one worktree at a time. The shared test guard accepts only
+the owned local `55433/drasil_mcp_test` or CI `5432/drasil_test` loopback target and
+requires matching `TEST_DATABASE_URL`, `DATABASE_URL` and `POSTGRES_DB_URL` values.
+See [local test database setup](pr-workflow.md#local-quality-gate) for provisioning
+and migration commands. The test fixtures truncate data in that disposable target.
 
 ## OpenCode permissions (access worktrees without prompts)
 

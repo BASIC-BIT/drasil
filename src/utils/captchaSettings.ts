@@ -1,3 +1,4 @@
+import { CaptchaMethod, getEffectiveCaptchaMethod } from '@drasil/application';
 import type { ServerSettings } from '../repositories/types';
 
 export const CAPTCHA_MODE_SETTING_KEY = 'captcha_mode';
@@ -19,6 +20,8 @@ export type CaptchaMode = 'off' | 'manual' | 'suspicious_join';
 export type CaptchaPassAction = 'evidence_only' | 'verify_join_only';
 
 export interface CaptchaSettings {
+  method: CaptchaMethod;
+  methodRevision: number;
   mode: CaptchaMode;
   passAction: CaptchaPassAction;
   challengeLifetimeHours: number;
@@ -44,11 +47,22 @@ export function getCaptchaSettings(settings: ServerSettings | unknown): CaptchaS
   const mode = record[CAPTCHA_MODE_SETTING_KEY];
   const passAction = record[CAPTCHA_PASS_ACTION_SETTING_KEY];
 
+  const method = getEffectiveCaptchaMethod(settings);
   return {
+    method,
+    methodRevision:
+      typeof record.captcha_method_revision === 'number' &&
+      Number.isInteger(record.captcha_method_revision) &&
+      record.captcha_method_revision >= 0 &&
+      record.captcha_method_revision <= 2147483647
+        ? record.captcha_method_revision
+        : 0,
     mode:
-      mode === 'manual' || mode === 'suspicious_join' || mode === 'off'
-        ? mode
-        : DEFAULT_CAPTCHA_MODE,
+      method === 'none'
+        ? 'off'
+        : mode === 'manual' || mode === 'suspicious_join' || mode === 'off'
+          ? mode
+          : DEFAULT_CAPTCHA_MODE,
     passAction:
       passAction === 'verify_join_only' || passAction === 'evidence_only'
         ? passAction

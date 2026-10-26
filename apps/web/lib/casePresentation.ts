@@ -21,7 +21,7 @@ const actionLabels: Record<CaseAction, string> = {
   view_history: 'View History',
   challenge_user: 'Challenge User',
   retry_captcha: 'Retry Security Check',
-  bypass_captcha: 'Continue Without Browser Check',
+  bypass_captcha: 'Continue Without Security Check',
 };
 
 const presenceLabels: Record<CasePresenceState, string> = {
@@ -62,6 +62,10 @@ export function formatPresenceState(state: CasePresenceState): string {
   return presenceLabels[state];
 }
 
+export function formatCaptchaMethod(method: CaptchaChallengeSummary['method']): string {
+  return method === 'discord_image' ? 'Discord image CAPTCHA' : 'Cloudflare Turnstile';
+}
+
 export function formatCaptchaStatus(status: CaptchaChallengeSummary['status']): string {
   switch (status) {
     case 'pending':
@@ -97,7 +101,7 @@ export function formatCaptchaHistoryEntry(
     ? `, moderator notice updated ${formatUtc(entry.presentedAt)}`
     : '';
   const bypass = entry.bypassReason ? `, bypass reason: ${entry.bypassReason}` : '';
-  return `Generation ${entry.generation}: ${source}, requested ${formatUtc(entry.requestedAt)}, ${delivery}${presentation}, outcome ${outcome}${bypass}.`;
+  return `${formatCaptchaMethod(entry.method)}. Method revision ${entry.methodRevision}. Generation ${entry.generation}: ${source}, requested ${formatUtc(entry.requestedAt)}, ${delivery}${presentation}, outcome ${outcome}${bypass}.`;
 }
 
 export function presenceStatusClass(state: CasePresenceState): string {

@@ -1,3 +1,4 @@
+import type { CaptchaMethod } from '@drasil/application';
 import {
   CaptchaChallengePassEffect,
   CaptchaChallengeRequestSource,
@@ -8,6 +9,7 @@ import {
 import type { CaptchaMode, CaptchaPassAction } from '../utils/captchaSettings';
 
 export interface CaptchaRequestPolicyInput {
+  method: CaptchaMethod;
   mode: CaptchaMode;
   requestSource: CaptchaChallengeRequestSource;
   caseKind: CaseKind;
@@ -16,6 +18,10 @@ export interface CaptchaRequestPolicyInput {
 }
 
 export interface CaptchaAutoResolutionPolicyInput {
+  currentMethod: CaptchaMethod;
+  issuedMethod: Exclude<CaptchaMethod, 'none'>;
+  currentMethodRevision: number;
+  issuedMethodRevision: number;
   currentMode: CaptchaMode;
   requestSource: CaptchaChallengeRequestSource;
   issuedPassEffect: CaptchaChallengePassEffect;
@@ -47,6 +53,7 @@ const SUSPICIOUS_JOIN_DETECTION_TYPES = new Set<DetectionType>([
 
 export function canRequestCaptcha(input: CaptchaRequestPolicyInput): boolean {
   if (
+    input.method === 'none' ||
     input.mode === 'off' ||
     input.caseKind !== CaseKind.STANDARD ||
     input.caseStatus !== VerificationStatus.PENDING
@@ -86,7 +93,13 @@ export function evaluateCaptchaAutoResolution(
   ) {
     return { status: 'evidence_only' };
   }
-  if (input.currentMode !== 'suspicious_join' || input.currentPassAction !== 'verify_join_only') {
+  if (
+    input.currentMethod === 'none' ||
+    input.currentMethod !== input.issuedMethod ||
+    input.currentMethodRevision !== input.issuedMethodRevision ||
+    input.currentMode !== 'suspicious_join' ||
+    input.currentPassAction !== 'verify_join_only'
+  ) {
     return { status: 'held', reason: 'policy_changed' };
   }
   if (

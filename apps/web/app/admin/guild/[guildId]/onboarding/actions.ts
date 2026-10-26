@@ -1,5 +1,6 @@
 'use server';
 
+import { createWebActionContext } from '@/lib/application/context';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { detectionResponseModeSchema } from '@drasil/contracts';
@@ -51,12 +52,15 @@ export async function completeOnboarding(
         : detectionResponseModeSchema.parse(selectedDetectionResponseMode ?? 'notify_only');
 
     const receipt = await queueCompleteSetupVerificationRequestWithReceipt({
-      actorId: session.userId,
+      context: createWebActionContext({
+        guildId,
+        userId: session.userId,
+        requestId: read(formData, 'submissionId') ?? undefined,
+      }),
       adminChannelId,
       caseRoleId: selectedCaseRole === '__create__' ? null : selectedCaseRole,
       caseRoleName: selectedCaseRole === '__create__' ? read(formData, 'caseRoleName') : undefined,
       detectionResponseMode,
-      guildId,
       onboardingWizard: true,
       reportInstructionsChannelId:
         selectedReportChannel === '__none__' ? null : selectedReportChannel,

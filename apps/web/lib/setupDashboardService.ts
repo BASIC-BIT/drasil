@@ -1,6 +1,5 @@
 import {
   deriveSetupReadiness,
-  type GuildSetupUpdate,
   type SetupChecklistItem,
   type SetupDashboard,
   type SetupDiagnosticSeverity,
@@ -763,10 +762,6 @@ export class SetupDashboardService {
       botRoleIds: resources?.botMember.roles ?? [],
       botUserId: resources?.botUser.id ?? '',
     };
-  }
-
-  public async updateGuildSetup(update: GuildSetupUpdate): Promise<SetupServerRecord> {
-    return this.adapter.updateGuildSetup(update);
   }
 }
 

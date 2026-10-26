@@ -76,12 +76,22 @@ export function TurnstileChallengeForm({
     };
   }, [renderWidget]);
 
+  useEffect(() => {
+    if (scriptReady) return;
+    const timeout = window.setTimeout(() => setWidgetError(true), 15_000);
+    return () => window.clearTimeout(timeout);
+  }, [scriptReady]);
+
   return (
     <>
       <Script
         src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"
         strategy="afterInteractive"
-        onReady={() => setScriptReady(true)}
+        onReady={() => {
+          setScriptReady(true);
+          setWidgetError(false);
+        }}
+        onError={() => setWidgetError(true)}
       />
       <form
         className="captcha-check-form"
@@ -93,13 +103,24 @@ export function TurnstileChallengeForm({
         <div ref={containerRef} className="captcha-turnstile" />
         <p className="captcha-check-status" aria-live="polite">
           {widgetError
-            ? 'The browser check could not load. Check your connection or content-blocking settings and try again.'
+            ? "CAPTCHA couldn't load. Try again or ask a moderator."
             : responseToken
-              ? 'Browser check ready.'
-              : 'Waiting for the browser check.'}
+              ? 'Ready to submit.'
+              : scriptReady
+                ? 'Complete the CAPTCHA.'
+                : 'Loading CAPTCHA...'}
         </p>
+        {widgetError ? (
+          <button
+            className="button secondary"
+            type="button"
+            onClick={() => window.location.reload()}
+          >
+            Try again
+          </button>
+        ) : null}
         <button className="button" type="submit" disabled={!responseToken}>
-          Complete security check
+          Submit
         </button>
       </form>
     </>

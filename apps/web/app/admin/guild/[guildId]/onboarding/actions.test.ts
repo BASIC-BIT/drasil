@@ -53,12 +53,16 @@ describe('completeOnboarding', () => {
     );
 
     expect(mocks.queueSetup).toHaveBeenCalledWith({
-      actorId: 'admin-1',
+      context: {
+        guildId: 'guild-1',
+        source: 'web',
+        requestId: 'submission-1',
+        actor: { kind: 'user', userId: 'admin-1' },
+      },
       adminChannelId: 'admin-channel-1',
       caseRoleId: null,
       caseRoleName: 'Drasil Case',
       detectionResponseMode: 'notify_only',
-      guildId: 'guild-1',
       onboardingWizard: true,
       reportInstructionsChannelId: null,
       submissionId: 'submission-1',

@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const m = vi.hoisted(() => ({
+  fixture: false,
+  cookies: { set: vi.fn() },
   session: vi.fn(),
   token: vi.fn(),
   guild: vi.fn(),
@@ -9,6 +11,7 @@ const m = vi.hoisted(() => ({
   queue: vi.fn(),
   revalidate: vi.fn(),
 }));
+vi.mock('next/headers', () => ({ cookies: async () => m.cookies }));
 vi.mock('next/cache', () => ({ revalidatePath: m.revalidate }));
 vi.mock('next/navigation', () => ({
   redirect: (path: string) => {
@@ -24,15 +27,13 @@ vi.mock('@/lib/setupDashboardService', () => ({
 }));
 vi.mock('@/lib/setupDataAdapter', () => ({
   createSetupDataAdapter: () => ({ getServer: m.server }),
+  getPostgresPool: () => ({ query: m.queue }),
 }));
 vi.mock('@/lib/reportDetailDataAdapter', () => ({
   createReportDetailDataAdapter: () => ({ getReportDetail: m.detail }),
 }));
 vi.mock('@/lib/discordApi', () => ({ fetchGuildResources: m.resources }));
-vi.mock('@/lib/moderationActionRequestQueue', () => ({
-  queueModerationActionRequestWithReceipt: m.queue,
-}));
-vi.mock('@/lib/e2eFixtures', () => ({ isWebE2eFixtureMode: () => false }));
+vi.mock('@/lib/e2eFixtures', () => ({ isWebE2eFixtureMode: () => m.fixture }));
 vi.mock('@/lib/reportQueueDataAdapter', () => ({ createReportQueueDataAdapter: vi.fn() }));
 import { banSubmittedReport } from './actions';
 const idle = { status: 'idle', message: null, requestId: null } as const;
@@ -49,6 +50,7 @@ function form(changes: Partial<Record<string, string>> = {}) {
 }
 beforeEach(() => {
   vi.resetAllMocks();
+  m.fixture = false;
   m.session.mockResolvedValue({ userId: 'admin-1' });
   m.token.mockResolvedValue({ accessToken: 'token' });
   m.guild.mockResolvedValue({ id: 'guild-1', owner: false, permissions: '4' });
@@ -65,7 +67,7 @@ beforeEach(() => {
     botMember: { roles: [] },
     roles: [{ id: 'guild-1', permissions: '4' }],
   });
-  m.queue.mockResolvedValue({ id: 'request-1', status: 'queued' });
+  m.queue.mockResolvedValue({ rows: [{ id: 'request-1', status: 'queued' }] });
 });
 describe('banSubmittedReport', () => {
   it('reloads the report and queues its server-side target with a receipt', async () => {
@@ -75,19 +77,20 @@ describe('banSubmittedReport', () => {
       status: 'queued',
       requestId: 'request-1',
     });
-    expect(m.queue).toHaveBeenCalledWith(
-      expect.objectContaining({
-        serverId: 'guild-1',
-        targetUserId: 'user-1',
-        reportIntakeId: 'report-1',
-        detectionEventId: 'det-1',
-        actionType: 'ban_observed_detection',
-        actorId: 'admin-1',
-        actorSurface: 'web_report',
-        idempotencyKey: 'observed-ban:guild-1:det-1',
-        metadata: { reason: 'Reviewed spam', requested_action: 'ban_user' },
-      })
-    );
+    const values = m.queue.mock.calls[0][1];
+    expect(values).toEqual([
+      'guild-1',
+      'ban_observed_detection',
+      'admin-1',
+      'web_report',
+      'user-1',
+      'det-1',
+      'report-1',
+      null,
+      null,
+      'observed-ban:guild-1:det-1',
+      JSON.stringify({ reason: 'Reviewed spam', requested_action: 'ban_user' }),
+    ]);
     expect(m.revalidate.mock.calls.flat()).toEqual(
       expect.arrayContaining([
         '/admin/guild/guild-1/inbox',
@@ -167,5 +170,20 @@ describe('banSubmittedReport', () => {
       ).toMatchObject({ status: 'failed' });
       expect(m.queue).not.toHaveBeenCalled();
     }
+  );
+});
+
+it('keeps fixture report-ban feedback queued and records its report identity without persistence', async () => {
+  m.fixture = true;
+  await expect(banSubmittedReport('guild-1', 'report-1', idle, form())).resolves.toMatchObject({
+    status: 'queued',
+    requestId: 'fixture-report-ban-report-1',
+    message: 'Ban queued for Drasil.',
+  });
+  expect(m.queue).not.toHaveBeenCalled();
+  expect(m.cookies.set).toHaveBeenCalledWith(
+    'drasil-fixture-report-ban',
+    expect.stringContaining('"reportId":"report-1"'),
+    expect.objectContaining({ httpOnly: true, path: '/admin' })
   );
 });

@@ -1,7 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { QueueCaseActionInput } from './activeCaseDataAdapter';
+const persistence = vi.hoisted(() => ({ query: vi.fn() }));
+vi.mock('./setupDataAdapter', () => ({ getPostgresPool: () => persistence }));
 import {
-  buildCaseActionIdempotencyKey,
   FixtureActiveCaseDataAdapter,
+  PostgresActiveCaseDataAdapter,
   parseCaseSummaryRow,
   resolveCaseActionQueueStatus,
   resolveReportIntakeId,
@@ -41,53 +44,144 @@ const baseRow = {
   captcha_id: '11111111-1111-4111-8111-111111111111',
 };
 
-describe('activeCaseDataAdapter', () => {
-  it('binds account-quarantine execution idempotency to its completed preview', () => {
-    const base = {
-      action: 'quarantine_compromised_account' as const,
-      adminId: 'moderator-1',
-      attemptId: 'attempt-1',
-      caseId: 'ver-1',
-      guildId: 'guild-1',
-      quarantinePhase: 'preview' as const,
-    };
+describe('case action admission and submission', () => {
+  const challengeId = '11111111-1111-4111-8111-111111111111';
+  const input: QueueCaseActionInput = {
+    action: 'retry_captcha',
+    adminId: 'moderator',
+    guildId: 'guild',
+    caseId: 'case',
+    attemptId: 'attempt-1',
+    expectedCaptchaChallengeId: challengeId,
+    expectedCaptchaGeneration: 2,
+  };
+  function arrange() {
+    const adapter = new PostgresActiveCaseDataAdapter();
+    const summary = parseCaseSummaryRow({
+      ...baseRow,
+      id: 'case',
+      server_id: 'guild',
+      user_id: 'user',
+      captcha_id: challengeId,
+      captcha_status: 'pending',
+      captcha_generation: 2,
+      captcha_request_source: 'moderator',
+      captcha_pass_effect: 'evidence_only',
+      captcha_submission_count: 0,
+      captcha_expires_at: new Date('2026-10-21T00:00:00Z'),
+      captcha_requested_at: new Date('2026-10-20T00:00:00Z'),
+      captcha_delivered_at: null,
+      captcha_delivery_error_code: null,
+      captcha_passed_at: null,
+      captcha_bypassed_at: null,
+      captcha_bypassed_by: null,
+      captcha_bypass_reason: null,
+    });
+    vi.spyOn(adapter, 'getCaseDetail').mockResolvedValue({
+      ...summary,
+      notes: null,
+      evidenceItems: [],
+      messageContext: [],
+      detectionHistory: [],
+      moderationOutcomes: [],
+      allowedActions: ['retry_captcha', 'bypass_captcha', 'quarantine_compromised_account'],
+    });
+    return adapter;
+  }
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    persistence.query.mockReset();
+  });
 
-    expect(buildCaseActionIdempotencyKey(base)).toBe(
-      'web:case-action:quarantine_compromised_account:guild-1:ver-1:preview:attempt-1'
-    );
+  it('does not enqueue missing repeatable attempt', async () => {
+    const adapter = arrange();
+    for (const action of ['retry_captcha', 'bypass_captcha'] as const) {
+      expect((await adapter.queueCaseAction({ ...input, action, attemptId: null })).status).toBe(
+        'not_allowed'
+      );
+    }
+    expect(persistence.query).not.toHaveBeenCalled();
+  });
+
+  it('does not enqueue stale challenge generation', async () => {
+    const adapter = arrange();
+    for (const action of ['retry_captcha', 'bypass_captcha'] as const) {
+      for (const expectedCaptchaGeneration of [1, null, undefined]) {
+        expect(
+          (await adapter.queueCaseAction({ ...input, action, expectedCaptchaGeneration })).status
+        ).toBe('not_allowed');
+      }
+      expect(
+        (await adapter.queueCaseAction({ ...input, action, expectedCaptchaChallengeId: null }))
+          .status
+      ).toBe('not_allowed');
+    }
+    expect(persistence.query).not.toHaveBeenCalled();
+  });
+
+  it('does not enqueue an unavailable quarantine preview', async () => {
+    const adapter = arrange();
     expect(
-      buildCaseActionIdempotencyKey({
-        ...base,
-        quarantinePhase: 'execute',
-        previewRequestId: 'preview-1',
-      })
-    ).toBe('web:case-action:quarantine_compromised_account:guild-1:ver-1:execute:preview-1');
+      (
+        await adapter.queueCaseAction({
+          ...input,
+          action: 'quarantine_compromised_account',
+          quarantinePhase: 'execute',
+          previewRequestId: null,
+        })
+      ).status
+    ).toBe('not_allowed');
+    expect(persistence.query).not.toHaveBeenCalled();
   });
 
-  it('uses a fresh idempotency key for each repeatable CAPTCHA action', () => {
-    const base = {
-      adminId: 'moderator-1',
+  it.each([
+    {
+      action: 'retry_captcha',
+      attemptId: 'attempt-1',
+      key: 'web:case-action:retry_captcha:guild:case:attempt-1',
+      actionType: 'retry_captcha_challenge',
+    },
+    {
+      action: 'bypass_captcha',
       attemptId: 'attempt-2',
-      caseId: 'ver-1',
-      guildId: 'guild-1',
-    };
+      key: 'web:case-action:bypass_captcha:guild:case:attempt-2',
+      actionType: 'bypass_captcha_challenge',
+    },
+  ] as const)(
+    'persists the submitted $action attempt and challenge binding',
+    async ({ action, attemptId, key, actionType }) => {
+      const adapter = arrange();
+      persistence.query.mockResolvedValueOnce({ rows: [{ id: 'request', status: 'queued' }] });
+      expect(
+        await adapter.queueCaseAction({ ...input, action, attemptId, reason: 'Reviewed evidence' })
+      ).toEqual({ action, caseId: 'case', requestId: 'request', status: 'queued' });
+      expect(persistence.query).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining('insert into moderation_action_requests'),
+        [
+          'guild',
+          actionType,
+          'moderator',
+          'web',
+          'user',
+          null,
+          null,
+          'case',
+          null,
+          key,
+          JSON.stringify({
+            case_action: action,
+            requested_surface: 'web',
+            expected_challenge_id: challengeId,
+            expected_generation: 2,
+            ...(action === 'bypass_captcha' ? { reason: 'Reviewed evidence' } : {}),
+          }),
+        ]
+      );
+    }
+  );
+});
 
-    expect(buildCaseActionIdempotencyKey({ ...base, action: 'retry_captcha' })).toBe(
-      'web:case-action:retry_captcha:guild-1:ver-1:attempt-2'
-    );
-    expect(buildCaseActionIdempotencyKey({ ...base, action: 'bypass_captcha' })).toBe(
-      'web:case-action:bypass_captcha:guild-1:ver-1:attempt-2'
-    );
-    expect(() =>
-      buildCaseActionIdempotencyKey({
-        action: 'retry_captcha',
-        adminId: 'moderator-1',
-        caseId: 'ver-1',
-        guildId: 'guild-1',
-      })
-    ).toThrow('A unique attempt ID is required for repeatable CAPTCHA actions.');
-  });
-
+describe('activeCaseDataAdapter', () => {
   it('preserves failed queue receipts for inline action feedback', () => {
     expect(resolveCaseActionQueueStatus('queued')).toBe('queued');
     expect(resolveCaseActionQueueStatus('processing')).toBe('queued');
@@ -160,11 +254,50 @@ describe('activeCaseDataAdapter', () => {
     expect(summary.captchaChallenge).toBeNull();
   });
 
+  it('retains bypass but hides issuance when None retains an active preference', () => {
+    const summary = parseCaseSummaryRow(
+      { ...baseRow, server_settings: { captcha_method: 'none', captcha_mode: 'suspicious_join' } },
+      new Date('2026-06-03T01:00:00.000Z')
+    );
+    expect(summary.allowedActions).not.toContain('challenge_user');
+  });
+
+  it.each(['pending', 'failed', 'expired'] as const)(
+    'retains moderator bypass for %s after selecting None',
+    (status) => {
+      const summary = parseCaseSummaryRow(
+        {
+          ...baseRow,
+          server_settings: { captcha_method: 'none', captcha_mode: 'suspicious_join' },
+          captcha_status: status,
+          captcha_request_source: 'moderator',
+          captcha_pass_effect: 'evidence_only',
+          captcha_generation: 1,
+          captcha_submission_count: 0,
+          captcha_expires_at: '2026-06-04T00:00:00.000Z',
+          captcha_requested_at: '2026-06-03T00:00:00.000Z',
+          captcha_delivered_at: null,
+          captcha_delivery_error_code: null,
+          captcha_passed_at: null,
+          captcha_bypassed_at: null,
+          captcha_bypassed_by: null,
+          captcha_bypass_reason: null,
+        },
+        new Date('2026-06-03T01:00:00.000Z')
+      );
+      expect(summary.allowedActions).toContain('bypass_captcha');
+      expect(summary.allowedActions).not.toContain('retry_captcha');
+      expect(summary.allowedActions).not.toContain('challenge_user');
+    }
+  );
+
   it('maps a pending challenge and replaces challenge with bypass', () => {
     const summary = parseCaseSummaryRow(
       {
         ...baseRow,
         server_settings: { captcha_mode: 'suspicious_join' },
+        captcha_method: 'discord_image',
+        captcha_method_revision: 2,
         captcha_status: 'pending',
         captcha_request_source: 'automatic_suspicious_join',
         captcha_pass_effect: 'verify_join_only',
@@ -200,10 +333,21 @@ describe('activeCaseDataAdapter', () => {
     );
 
     expect(summary.captchaChallenge).toEqual(
-      expect.objectContaining({ status: 'pending', submissionCount: 2, generation: 1 })
+      expect.objectContaining({
+        method: 'discord_image',
+        methodRevision: 2,
+        status: 'pending',
+        submissionCount: 2,
+        generation: 1,
+      })
     );
     expect(summary.captchaChallenge?.history).toEqual([
-      expect.objectContaining({ generation: 1, presentedAt: '2026-06-03T00:01:00.000Z' }),
+      expect.objectContaining({
+        method: 'turnstile',
+        methodRevision: 0,
+        generation: 1,
+        presentedAt: '2026-06-03T00:01:00.000Z',
+      }),
     ]);
     expect(summary.allowedActions).toContain('bypass_captcha');
     expect(summary.allowedActions).not.toContain('challenge_user');
@@ -669,5 +813,42 @@ describe('activeCaseDataAdapter CAPTCHA recovery actions', () => {
     expect(unused.allowedActions).not.toContain('challenge_user');
     expect(failed.allowedActions).not.toContain('retry_captcha');
     expect(failed.allowedActions).toContain('bypass_captcha');
+  });
+});
+
+describe('shared case moderation policy availability', () => {
+  it.each(['review_required', 'parked'] as const)(
+    'hides disabled moderation for %s cases',
+    (attention_state) => {
+      const summary = parseCaseSummaryRow({
+        ...baseRow,
+        attention_state,
+        server_settings: {
+          moderator_ban_action_enabled: false,
+          moderator_kick_action_enabled: false,
+        },
+      });
+      expect(summary.allowedActions).not.toContain('ban_user');
+      expect(summary.allowedActions).not.toContain('kick_user');
+      const departed = parseCaseSummaryRow({
+        ...baseRow,
+        attention_state,
+        member_user_id: null,
+        latest_outcome_type: 'member_left',
+        server_settings: { moderator_ban_action_enabled: false },
+      });
+      expect(departed.allowedActions).not.toContain('ban_by_id');
+    }
+  );
+  it('keeps reason-required actions available so the user can supply a reason', () => {
+    const summary = parseCaseSummaryRow({
+      ...baseRow,
+      server_settings: {
+        moderator_ban_action_requires_reason: true,
+        moderator_kick_action_requires_reason: true,
+      },
+    });
+    expect(summary.allowedActions).toContain('ban_user');
+    expect(summary.allowedActions).toContain('kick_user');
   });
 });

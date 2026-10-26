@@ -414,7 +414,7 @@ export function CaseActionControls({
                   ) : null}
                   {action === 'challenge_user' ? (
                     <p className="muted">
-                      Send a case-scoped browser security check to the existing user thread.
+                      Send a case-scoped security check to the existing user thread.
                     </p>
                   ) : null}
                   {action === 'retry_captcha' || action === 'bypass_captcha' ? (
@@ -431,11 +431,11 @@ export function CaseActionControls({
                       />
                       {action === 'retry_captcha' ? (
                         <p className="muted">
-                          Invalidate the previous link and send a new browser security check.
+                          Replace the previous generation and send a new security check.
                         </p>
                       ) : (
                         <p className="muted">
-                          Continue moderator review without treating the browser check as passed.
+                          Continue moderator review without treating the security check as passed.
                         </p>
                       )}
                     </>
@@ -464,7 +464,7 @@ export function CaseActionControls({
                   ) : null}
                   {action === 'challenge_user' ? (
                     <p className="muted">
-                      Send a case-scoped browser security check to the existing user thread.
+                      Send a case-scoped security check to the existing user thread.
                     </p>
                   ) : null}
                   {action === 'retry_captcha' || action === 'bypass_captcha' ? (
@@ -481,11 +481,11 @@ export function CaseActionControls({
                       />
                       {action === 'retry_captcha' ? (
                         <p className="muted">
-                          Invalidate the previous link and send a new browser security check.
+                          Replace the previous generation and send a new security check.
                         </p>
                       ) : (
                         <p className="muted">
-                          Continue moderator review without treating the browser check as passed.
+                          Continue moderator review without treating the security check as passed.
                         </p>
                       )}
                     </>

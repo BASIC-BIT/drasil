@@ -27,6 +27,7 @@ import {
   confidenceStatusClass,
   formatCaseAction,
   formatCaptchaStatus,
+  formatCaptchaMethod,
   formatCaptchaHistoryEntry,
   formatConfidence,
   formatDetectionType,
@@ -160,6 +161,10 @@ function SummaryPanel({
       {detail.captchaChallenge ? (
         <div className="member-warning neutral-warning">
           <strong>{formatCaptchaStatus(detail.captchaChallenge.status)}</strong>
+          <p>
+            {formatCaptchaMethod(detail.captchaChallenge.method)}. Method revision{' '}
+            {detail.captchaChallenge.methodRevision}.
+          </p>
           <span>
             {detail.captchaChallenge.status === 'pending'
               ? `Expires ${formatUtc(detail.captchaChallenge.expiresAt)}. ${detail.captchaChallenge.submissionCount} submissions recorded.`
@@ -167,7 +172,7 @@ function SummaryPanel({
                 ? 'Security check completed.'
                 : detail.captchaChallenge.status === 'bypassed'
                   ? (detail.captchaChallenge.bypassReason ??
-                    'A moderator continued this case without the browser check.')
+                    'A moderator continued this case without the security check.')
                   : `Generation ${detail.captchaChallenge.generation}.`}
           </span>
           {detail.captchaChallenge.history?.length ? (

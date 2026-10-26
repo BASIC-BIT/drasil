@@ -9,6 +9,7 @@ import prettier from 'eslint-plugin-prettier';
 const configs = [
   {
     ignores: [
+      'coverage/**',
       'dist/**',
       'build/**',
       '.vercel/**',
@@ -132,7 +133,7 @@ const configs = [
       '**/*.test.ts',
       'test/**/*.ts',
       '**/__mocks__/**/*.ts',
-      '**/__tests__/**/*.*',
+      '**/__tests__/**/*.{ts,tsx,js,mjs,cjs}',
     ],
     ignores: [
       'dist/**/*',

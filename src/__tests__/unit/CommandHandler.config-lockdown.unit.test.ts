@@ -124,12 +124,11 @@ describe('CommandHandler lockdown config commands (unit)', () => {
     await handler.handleSlashCommand(interaction);
 
     expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
-    expect(configService.updateServerSettings).toHaveBeenCalledWith('guild-1', {
-      case_role_lockdown_allowed_channel_ids: ['media-channel-1'],
-      case_role_lockdown_allowed_category_ids: [],
+    expect(configService.updateSetupIfUnchanged).toHaveBeenCalledWith('guild-1', undefined, {
+      lockdownAllowlist: { operation: 'add', targetKind: 'channel', targetId: 'media-channel-1' },
     });
     expect((interaction.deferReply as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
-      configService.updateServerSettings.mock.invocationCallOrder[0]
+      configService.updateSetupIfUnchanged.mock.invocationCallOrder[0]
     );
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining('Channel <#media-channel-1> added to'),
@@ -199,9 +198,13 @@ describe('CommandHandler lockdown config commands (unit)', () => {
 
     await handler.handleSlashCommand(interaction);
 
-    expect(lockdownService.applyGuild).toHaveBeenCalledWith(guild, 'admin-1', {
-      unsyncAllowedChannels: true,
-    });
+    expect(lockdownService.applyGuild).toHaveBeenCalledWith(
+      expect.objectContaining({ id: guild.id }),
+      'admin-1',
+      {
+        unsyncAllowedChannels: true,
+      }
+    );
     const content = interaction.editReply.mock.calls[0][0].content as string;
     expect(content).toContain('Unsynced allowed channels: `1`');
     expect(content.indexOf('[ERROR]')).toBeLessThan(content.indexOf('[WARNING]'));

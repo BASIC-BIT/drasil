@@ -1,7 +1,15 @@
+import type {
+  CaseThreadClosureSweepCaseResult,
+  CaseThreadClosureSweepReport,
+} from '@drasil/application';
+export type {
+  CaseThreadClosureSweepCaseResult,
+  CaseThreadClosureSweepReport,
+} from '@drasil/application';
 import { inject, injectable } from 'inversify';
 import { TYPES } from '../di/symbols';
 import { IVerificationEventRepository } from '../repositories/VerificationEventRepository';
-import { VerificationEvent, VerificationStatus } from '../repositories/types';
+import { VerificationEvent } from '../repositories/types';
 import { IThreadManager, ResolvedThreadClosureResult } from './ThreadManager';
 
 export interface CaseThreadClosureSweepOptions {
@@ -10,27 +18,6 @@ export interface CaseThreadClosureSweepOptions {
   readonly days?: number | null;
   readonly limit?: number | null;
   readonly userId?: string | null;
-}
-
-export interface CaseThreadClosureSweepCaseResult {
-  readonly verificationEventId: string;
-  readonly userId: string;
-  readonly status: VerificationStatus;
-  readonly threadResults: ResolvedThreadClosureResult[];
-}
-
-export interface CaseThreadClosureSweepReport {
-  readonly execute: boolean;
-  readonly days: number;
-  readonly limit: number;
-  readonly checkedCases: number;
-  readonly checkedThreads: number;
-  readonly wouldCloseThreads: number;
-  readonly closedThreads: number;
-  readonly alreadyClosedThreads: number;
-  readonly missingThreads: number;
-  readonly failedThreads: number;
-  readonly cases: CaseThreadClosureSweepCaseResult[];
 }
 
 export interface ICaseThreadClosureSweepService {

@@ -1,3 +1,10 @@
+import {
+  materializeSetupStoredChange,
+  setupStateMatches,
+  parseSetupStoredRecord,
+  type SetupWritePrecondition,
+  type SetupStoredChange,
+} from '@drasil/application';
 import { isDeepStrictEqual } from 'util';
 import type { IAdminActionRepository } from '../../repositories/AdminActionRepository';
 import type { IDetectionEventsRepository } from '../../repositories/DetectionEventsRepository';
@@ -1777,6 +1784,42 @@ export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
 }
 
 export class InMemoryServerRepository implements IServerRepository {
+  async createIfMissing(guildId: string, data: Partial<Server>): Promise<Server> {
+    const current = this.servers.get(guildId);
+    return current ? this.cloneServer(current) : this.upsertByGuildId(guildId, data);
+  }
+
+  async updateSetupIfUnchanged(
+    guildId: string,
+    precondition: SetupWritePrecondition | undefined,
+    change: SetupStoredChange
+  ): Promise<Server | null> {
+    const current = this.servers.get(guildId);
+    if (
+      precondition &&
+      (!current ||
+        !setupStateMatches(
+          parseSetupStoredRecord(current as unknown as Record<string, unknown>),
+          precondition
+        ))
+    )
+      return null;
+    change = materializeSetupStoredChange(
+      parseSetupStoredRecord(
+        (current ?? this.buildServer(guildId, {})) as unknown as Record<string, unknown>
+      ),
+      change
+    );
+    const settings = { ...current?.settings, ...change.settings };
+    for (const key of change.resetSettings ?? []) delete settings[key];
+    return this.upsertByGuildId(guildId, {
+      ...Object.fromEntries(
+        Object.entries(change.columns ?? {}).filter(([, value]) => value !== undefined)
+      ),
+      settings,
+    });
+  }
+
   private servers = new Map<string, Server>();
 
   private cloneServer(server: Server): Server {
@@ -1823,7 +1866,7 @@ export class InMemoryServerRepository implements IServerRepository {
     const updated = existing
       ? {
           ...existing,
-          ...data,
+          ...Object.fromEntries(Object.entries(data).filter(([, value]) => value !== undefined)),
           settings: data.settings ?? existing.settings,
           heuristic_suspicious_keywords:
             data.heuristic_suspicious_keywords ?? existing.heuristic_suspicious_keywords,

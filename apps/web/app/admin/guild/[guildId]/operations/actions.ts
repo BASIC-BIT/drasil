@@ -1,5 +1,7 @@
 'use server';
 
+import { createWebActionContext } from '@/lib/application/context';
+import { queuedOperationCommandSchema, type QueuedOperationCommand } from '@drasil/application';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import {
@@ -18,15 +20,6 @@ const queueOperationActions = new Set<ModerationQueueOperationAction>([
   'apply_case_role_lockdown',
   'intake_role_members',
 ]);
-
-interface QueueOperationOptions {
-  readonly days: number | null;
-  readonly execute?: boolean;
-  readonly limit: number | null;
-  readonly reason: string | null;
-  readonly roleId: string | null;
-  readonly unsyncAllowedChannels: boolean | null;
-}
 
 function readBoundedInteger(
   formData: FormData | undefined,
@@ -63,83 +56,67 @@ function assertChecked(formData: FormData | undefined, key: string, message: str
   }
 }
 
-function emptyOperationOptions(): QueueOperationOptions {
-  return {
-    days: null,
-    limit: null,
-    reason: null,
-    roleId: null,
-    unsyncAllowedChannels: null,
-  };
-}
-
-function readResolvedThreadSweepOptions(formData: FormData | undefined): QueueOperationOptions {
-  const execute = formData?.get('execute') === 'true';
-  if (execute) {
-    assertChecked(
-      formData,
-      'confirmCloseResolvedThreads',
-      'Confirm resolved thread closure before queueing it.'
-    );
-  }
-
-  return {
-    ...emptyOperationOptions(),
-    days: readBoundedInteger(formData, 'days', 30, 1, 365),
-    execute,
-    limit: readBoundedInteger(formData, 'limit', 100, 1, 500),
-  };
-}
-
-function readRoleIntakeOptions(formData: FormData | undefined): QueueOperationOptions {
-  const execute = formData?.get('execute') === 'true';
-  const roleId = readTrimmedString(formData, 'roleId');
-  if (!roleId) {
-    throw new Error('Choose a role before queueing role intake.');
-  }
-  if (execute) {
-    assertChecked(
-      formData,
-      'confirmRoleIntake',
-      'Confirm role intake execution before queueing it.'
-    );
-  }
-
-  return {
-    ...emptyOperationOptions(),
-    execute,
-    limit: readBoundedInteger(formData, 'limit', 250, 1, 250),
-    reason: readTrimmedString(formData, 'reason'),
-    roleId,
-  };
-}
-
-function readOperationOptions(
+function readOperationCommand(
   action: ModerationQueueOperationAction,
   formData: FormData | undefined
-): QueueOperationOptions {
-  if (action === 'clear_moderation_queue') {
-    assertChecked(formData, 'confirmClearQueue', 'Confirm queue clearing before queueing it.');
+): Exclude<QueuedOperationCommand, { kind: 'audit_integrity' }> {
+  switch (action) {
+    case 'clear_moderation_queue':
+      assertChecked(formData, 'confirmClearQueue', 'Confirm queue clearing before queueing it.');
+      return { kind: action };
+    case 'close_resolved_case_threads': {
+      const execute = formData?.get('execute') === 'true';
+      if (execute)
+        assertChecked(
+          formData,
+          'confirmCloseResolvedThreads',
+          'Confirm resolved thread closure before queueing it.'
+        );
+      return {
+        kind: action,
+        intent: 'administrator_operation',
+        execute,
+        days: readBoundedInteger(formData, 'days', 30, 1, 365),
+        limit: readBoundedInteger(formData, 'limit', 100, 1, 500),
+        userId: null,
+      };
+    }
+    case 'apply_case_role_lockdown':
+      assertChecked(
+        formData,
+        'confirmApplyLockdown',
+        'Confirm case-role lockdown apply before queueing it.'
+      );
+      return {
+        kind: action,
+        unsyncAllowedChannels: formData?.get('unsyncAllowedChannels') === 'on',
+      };
+    case 'intake_role_members': {
+      const roleId = readTrimmedString(formData, 'roleId');
+      if (!roleId) throw new Error('Choose a role before queueing role intake.');
+      const execute = formData?.get('execute') === 'true';
+      if (execute)
+        assertChecked(
+          formData,
+          'confirmRoleIntake',
+          'Confirm role intake execution before queueing it.'
+        );
+      return {
+        kind: action,
+        execute,
+        roleId,
+        limit: readBoundedInteger(formData, 'limit', 250, 1, 250),
+        reason: readTrimmedString(formData, 'reason'),
+      };
+    }
+    case 'audit_case_role_lockdown':
+    case 'sync_moderation_queue':
+      return { kind: action };
+    default: {
+      const exhaustive: never = action;
+      return exhaustive;
+    }
   }
-  if (action === 'close_resolved_case_threads') {
-    return readResolvedThreadSweepOptions(formData);
-  }
-  if (action === 'apply_case_role_lockdown') {
-    assertChecked(
-      formData,
-      'confirmApplyLockdown',
-      'Confirm case-role lockdown apply before queueing it.'
-    );
-    return {
-      ...emptyOperationOptions(),
-      unsyncAllowedChannels: formData?.get('unsyncAllowedChannels') === 'on',
-    };
-  }
-  if (action === 'intake_role_members') {
-    return readRoleIntakeOptions(formData);
-  }
-
-  return emptyOperationOptions();
 }
 
 function assertAdministrator(guild: { readonly owner: boolean; readonly permissions: string }) {
@@ -165,22 +142,16 @@ export async function queueModerationQueueOperationAction(
     throw new Error(`Unsupported moderation queue operation: ${action}`);
   }
 
-  const options = readOperationOptions(action, formData);
+  const command = readOperationCommand(action, formData);
+  queuedOperationCommandSchema.parse(command);
 
   const setupService = createSetupDashboardService();
   const guild = await setupService.assertCanManageGuild(guildId, token.accessToken);
   assertAdministrator(guild);
 
-  const status = await queueModerationQueueOperation({
-    action,
-    actorId: session.userId,
-    days: options.days,
-    execute: options.execute,
-    guildId,
-    limit: options.limit,
-    reason: options.reason,
-    roleId: options.roleId,
-    unsyncAllowedChannels: options.unsyncAllowedChannels,
+  const { status } = await queueModerationQueueOperation({
+    context: createWebActionContext({ guildId, userId: session.userId }),
+    command,
   });
 
   revalidatePath(`/admin/guild/${guildId}/operations`);

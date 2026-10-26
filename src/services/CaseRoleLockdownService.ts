@@ -1,3 +1,18 @@
+import type {
+  CaseRoleLockdownActionScope,
+  CaseRoleLockdownIssue,
+  CaseRoleLockdownPlannedAction,
+  CaseRoleLockdownApplyFailure,
+  CaseRoleLockdownReport,
+} from '@drasil/application';
+export type {
+  CaseRoleLockdownSeverity,
+  CaseRoleLockdownActionScope,
+  CaseRoleLockdownIssue,
+  CaseRoleLockdownPlannedAction,
+  CaseRoleLockdownApplyFailure,
+  CaseRoleLockdownReport,
+} from '@drasil/application';
 import {
   ChannelType,
   Guild,
@@ -23,48 +38,12 @@ import {
 } from '../utils/caseRoleLockdownSettings';
 import { COMPROMISED_ACCOUNT_PRIVILEGED_ROLE_PERMISSIONS } from '../utils/privilegedRolePermissions';
 
-export type CaseRoleLockdownSeverity = 'error' | 'warning';
-export type CaseRoleLockdownActionScope = 'category' | 'channel';
-
-export interface CaseRoleLockdownIssue {
-  readonly severity: CaseRoleLockdownSeverity;
-  readonly code: string;
-  readonly message: string;
-}
-
-export interface CaseRoleLockdownPlannedAction {
-  readonly scope: CaseRoleLockdownActionScope;
-  readonly channelId: string;
-  readonly channelName: string;
-}
-
-export interface CaseRoleLockdownApplyFailure extends CaseRoleLockdownPlannedAction {
-  readonly message: string;
-}
-
 export interface CaseRoleLockdownApplyOptions {
   readonly unsyncAllowedChannels?: boolean;
 }
 
 export interface CaseRoleLockdownAuditContext {
   readonly siblingThreadsByParentId: Map<string, Promise<readonly ThreadChannel[]>>;
-}
-
-export interface CaseRoleLockdownReport {
-  readonly guildId: string;
-  readonly checkedAt: Date;
-  readonly enabled: boolean;
-  readonly allowedChannelIds: readonly string[];
-  readonly allowedCategoryIds: readonly string[];
-  readonly autoAllowedChannelIds: readonly string[];
-  readonly issues: readonly CaseRoleLockdownIssue[];
-  readonly plannedActions: readonly CaseRoleLockdownPlannedAction[];
-  readonly appliedActions: readonly CaseRoleLockdownPlannedAction[];
-  readonly failedActions: readonly CaseRoleLockdownApplyFailure[];
-  readonly syncedAllowedChannels: readonly CaseRoleLockdownPlannedAction[];
-  readonly unsyncedAllowedChannels: readonly CaseRoleLockdownPlannedAction[];
-  readonly errorCount: number;
-  readonly warningCount: number;
 }
 
 export interface CaseRoleLockdownMemberBypass {
@@ -232,7 +211,10 @@ const LOCKDOWN_POSTING_PERMISSIONS: readonly PermissionLabel[] = [
 
 @injectable()
 export class CaseRoleLockdownService implements ICaseRoleLockdownService {
-  constructor(@inject(TYPES.ConfigService) private readonly configService: IConfigService) {}
+  constructor(
+    @inject(TYPES.ConfigService)
+    private readonly configService: Pick<IConfigService, 'getServerConfig' | 'updateServerSettings'>
+  ) {}
 
   public async auditGuild(
     guild: Guild,

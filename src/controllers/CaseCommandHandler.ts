@@ -1,3 +1,8 @@
+import { operationConfirmationCommand, type ConfirmationBinding } from '@drasil/application';
+import { requireOperationsOutcome } from '../application/adapters/operations';
+import type { BotApplication } from '../application/createBotApplication';
+import { createDiscordActionContext } from '../application/context';
+import { requireCaseOutcome } from '../application/adapters/cases';
 import {
   ActionRowBuilder,
   ButtonStyle,
@@ -79,7 +84,8 @@ export class CaseCommandHandler {
   public constructor(
     private readonly configService: IConfigService,
     private readonly securityActionService: ISecurityActionService,
-    private readonly replyGuildInstallRequired: ReplyGuildInstallRequired
+    private readonly replyGuildInstallRequired: ReplyGuildInstallRequired,
+    private readonly application?: BotApplication
   ) {}
 
   private async requireAdministrator(
@@ -332,14 +338,26 @@ export class CaseCommandHandler {
           components: [],
         });
         try {
-          const result = await this.securityActionService.openAdminCase(
-            targetMember,
-            interaction.user,
-            {
-              action: 'open_case',
-              reason,
-            }
+          if (!this.application) throw new Error('Case application is unavailable.');
+          const context = createDiscordActionContext({
+            guildId: guild.id,
+            userId: interaction.user.id,
+            requestId: buttonInteraction.id,
+          });
+          const command = {
+            kind: 'open_admin_case',
+            intent: 'native_case_open',
+            targetUserId: targetUser.id,
+            reason: reason ?? null,
+            detectionEventId: null,
+            selectedMessage: null,
+          } as const;
+          this.application.caseConfirmations.recordVerified(context, command);
+          const outcome = requireCaseOutcome(
+            await this.application.cases.execute(context, command)
           );
+          if (outcome.kind !== command.kind) throw new Error('Case outcome mismatch.');
+          const result = outcome.result;
           if (!result.opened) {
             throw new Error('Case flow returned false');
           }
@@ -377,7 +395,30 @@ export class CaseCommandHandler {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     try {
-      const result = await this.securityActionService.repairActiveCase(targetMember);
+      if (!this.application) throw new Error('Case application is unavailable.');
+      const active = await this.application.caseRepository.findActiveByUserAndServer(
+        targetUser.id,
+        guild.id
+      );
+      if (!active) throw new Error('No active verification event found');
+      const outcome = requireCaseOutcome(
+        await this.application.cases.execute(
+          createDiscordActionContext({
+            guildId: guild.id,
+            userId: interaction.user.id,
+            requestId: interaction.id,
+          }),
+          {
+            kind: 'repair_active_case',
+            intent: 'administrator_repair',
+            mode: 'repair_thread',
+            caseId: active.id,
+            targetUserId: targetUser.id,
+          }
+        )
+      );
+      if (outcome.kind !== 'repair_active_case') throw new Error('Case outcome mismatch.');
+      const result = outcome.result;
       const lines = [result.message];
 
       if (result.threadId) {
@@ -414,11 +455,23 @@ export class CaseCommandHandler {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     try {
-      const result = await this.securityActionService.refreshCaseNotification(
-        guild.id,
-        targetUser,
-        caseId
+      if (!this.application) throw new Error('Case application is unavailable.');
+      const selected = caseId
+        ? await this.application.caseRepository.findById(caseId)
+        : (await this.application.caseRepository.findByUserAndServer(targetUser.id, guild.id))[0];
+      if (!selected) throw new Error('No verification event found');
+      const outcome = requireCaseOutcome(
+        await this.application.cases.execute(
+          createDiscordActionContext({
+            guildId: guild.id,
+            userId: interaction.user.id,
+            requestId: interaction.id,
+          }),
+          { kind: 'refresh_case_notification', caseId: selected.id, targetUserId: targetUser.id }
+        )
       );
+      if (outcome.kind !== 'refresh_case_notification') throw new Error('Case outcome mismatch.');
+      const result = outcome.result;
 
       const lines = [result.message];
       if (result.verificationEventId) {
@@ -478,7 +531,6 @@ export class CaseCommandHandler {
       return;
     }
 
-    const action = 'open_case' as const;
     const execute = interaction.options.getBoolean('execute') ?? false;
     const limit = interaction.options.getInteger('limit') ?? undefined;
     const reason = interaction.options.getString('reason')?.trim() || undefined;
@@ -492,11 +544,27 @@ export class CaseCommandHandler {
     }
 
     if (execute) {
+      const command = {
+        kind: 'intake_role_members',
+        roleId: role.id,
+        execute,
+        limit: limit ?? 250,
+        reason: reason ?? null,
+      } as const;
+      const context = createDiscordActionContext({
+        guildId: guild.id,
+        userId: interaction.user.id,
+        requestId: interaction.id,
+      });
       await requestSlashCommandConfirmation(interaction, {
+        confirmation: {
+          action: command.kind,
+          targetId: operationConfirmationCommand(context, command).operationId,
+        },
         message: `Execute role intake for ${role.name}? This will open cases and apply the case role to eligible members${limit ? `, up to ${limit} members` : ''}.`,
         confirmLabel: 'Execute Intake',
         confirmStyle: ButtonStyle.Danger,
-        execute: async (buttonInteraction) => {
+        execute: async (buttonInteraction, evidence) => {
           await buttonInteraction.update({
             content: `Executing role intake for ${role.name}...`,
             components: [],
@@ -506,9 +574,9 @@ export class CaseCommandHandler {
             role,
             interaction.user,
             reason,
-            action,
             execute,
-            limit
+            limit,
+            evidence
           );
         },
       });
@@ -516,56 +584,63 @@ export class CaseCommandHandler {
     }
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-    await this.executeRoleIntake(
-      interaction,
-      role,
-      interaction.user,
-      reason,
-      action,
-      execute,
-      limit
-    );
+    await this.executeRoleIntake(interaction, role, interaction.user, reason, execute, limit);
   }
 
   private async executeRoleIntake(
-    interaction: Pick<ChatInputCommandInteraction, 'editReply'>,
+    interaction: Pick<ChatInputCommandInteraction, 'editReply' | 'id'>,
     role: Role,
     moderator: ChatInputCommandInteraction['user'],
     reason: string | undefined,
-    action: 'open_case',
     execute: boolean,
-    limit: number | undefined
+    limit: number | undefined,
+    evidence?: ConfirmationBinding | null
   ): Promise<void> {
     let lastProgressUpdateAt = 0;
     try {
-      const result = await this.securityActionService.intakeRoleMembers({
-        role,
-        moderator,
-        reason,
-        action,
-        execute,
-        limit,
-        onProgress: execute
-          ? async (progress): Promise<void> => {
-              const now = Date.now();
-              const shouldUpdate =
-                progress.completedMembers === 1 ||
-                progress.completedMembers === progress.result.processed ||
-                progress.completedMembers % 5 === 0 ||
-                now - lastProgressUpdateAt > 15_000;
-              if (!shouldUpdate) {
-                return;
-              }
-
-              lastProgressUpdateAt = now;
-              await interaction.editReply({
-                content: this.formatRoleIntakeProgress(progress),
-                allowedMentions: { parse: [] },
-              });
-            }
-          : undefined,
+      if (!this.application) throw new Error('Operations application is unavailable.');
+      const context = createDiscordActionContext({
+        guildId: role.guild.id,
+        userId: moderator.id,
+        requestId: interaction.id,
       });
+      const command = {
+        kind: 'intake_role_members',
+        roleId: role.id,
+        reason: reason ?? null,
+        execute,
+        limit: limit ?? 250,
+      } as const;
+      if (execute) {
+        if (!evidence) throw new Error('Intake confirmation is unavailable.');
+        this.application.caseConfirmations.recordVerified(
+          context,
+          operationConfirmationCommand(context, command),
+          evidence
+        );
+      }
+      const actions = execute
+        ? this.application.operationsRuntime.withProgress(async (progress): Promise<void> => {
+            const now = Date.now();
+            const shouldUpdate =
+              progress.completedMembers === 1 ||
+              progress.completedMembers === progress.result.processed ||
+              progress.completedMembers % 5 === 0 ||
+              now - lastProgressUpdateAt > 15_000;
+            if (!shouldUpdate) {
+              return;
+            }
 
+            lastProgressUpdateAt = now;
+            await interaction.editReply({
+              content: this.formatRoleIntakeProgress(progress),
+              allowedMentions: { parse: [] },
+            });
+          })
+        : this.application.operations;
+      const outcome = requireOperationsOutcome(await actions.execute(context, command));
+      if (outcome.kind !== 'intake_role_members') throw new Error('Operation outcome mismatch.');
+      const result = outcome.result;
       await interaction.editReply({
         content: this.formatRoleIntakeResult(result),
         allowedMentions: { parse: [] },

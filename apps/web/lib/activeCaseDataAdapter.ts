@@ -1,4 +1,9 @@
+import { buildQueuedCaseCommand } from './application/caseCommands';
+import { createWebActionContext } from './application/context';
+import { submitQueuedAction } from './application/queuedSubmission';
+import { evaluateCasePolicy, readCasePolicy } from '@drasil/application';
 import {
+  getEffectiveCaptchaMethod,
   caseDetailSchema,
   caseSummarySchema,
   sortCaseSummariesForQueue,
@@ -24,11 +29,7 @@ import {
 } from './e2eFixtures';
 import { discordDesktopUrl, discordMessageUrl } from './discordUrls';
 import { getPostgresPool } from './setupDataAdapter';
-import {
-  queueModerationActionRequestWithReceipt,
-  type ModerationActionRequestActionType,
-  type ModerationActionRequestQueueStatus,
-} from './moderationActionRequestQueue';
+import type { ModerationActionRequestQueueStatus } from './moderationActionRequestQueue';
 
 export type WebCaseAction = Extract<
   CaseAction,
@@ -130,6 +131,8 @@ interface CaseSummaryRow {
   user_username: string | null;
   user_metadata: unknown;
   member_user_id: string | null;
+  captcha_method?: 'turnstile' | 'discord_image' | null;
+  captcha_method_revision?: number | null;
   captcha_id?: string | null;
   captcha_status?: 'pending' | 'passed' | 'failed' | 'expired' | 'bypassed' | 'cancelled' | null;
   captcha_request_source?: 'moderator' | 'automatic_suspicious_join' | null;
@@ -217,49 +220,6 @@ const THREAD_REPAIR_ACTIONS_BY_STATE = [
 ] as const satisfies readonly (readonly (readonly CaseAction[])[])[];
 
 const uuidSchema = z.string().uuid();
-
-const requestTypeByCaseAction: Record<WebCaseAction, ModerationActionRequestActionType> = {
-  ban_by_id: 'ban_case_user_by_id',
-  ban_user: 'ban_case_user',
-  close_no_action: 'close_case_no_action',
-  create_thread: 'repair_active_case',
-  kick_user: 'kick_case_user',
-  repair_thread: 'repair_active_case',
-  refresh_notification: 'refresh_case_notification',
-  reopen_case: 'reopen_case',
-  sync_existing_ban: 'sync_existing_ban',
-  verify_user: 'verify_case_user',
-  quarantine_compromised_account: 'quarantine_compromised_account',
-  challenge_user: 'request_captcha_challenge',
-  retry_captcha: 'retry_captcha_challenge',
-  bypass_captcha: 'bypass_captcha_challenge',
-};
-
-function resolveCaseActionRequestType(
-  input: QueueCaseActionInput
-): ModerationActionRequestActionType {
-  if (input.action === 'quarantine_compromised_account' && input.quarantinePhase === 'preview') {
-    return 'preview_account_quarantine';
-  }
-  return requestTypeByCaseAction[input.action];
-}
-
-export function buildCaseActionIdempotencyKey(input: QueueCaseActionInput): string {
-  const base = `web:case-action:${input.action}:${input.guildId}:${input.caseId}`;
-  if (input.action === 'retry_captcha' || input.action === 'bypass_captcha') {
-    if (!input.attemptId) {
-      throw new Error('A unique attempt ID is required for repeatable CAPTCHA actions.');
-    }
-    return `${base}:${input.attemptId}`;
-  }
-  if (input.action !== 'quarantine_compromised_account') {
-    return base;
-  }
-  if (input.quarantinePhase === 'preview') {
-    return `${base}:preview:${input.attemptId ?? 'missing-attempt'}`;
-  }
-  return `${base}:execute:${input.previewRequestId ?? 'missing-preview'}`;
-}
 
 function sortCaseSummariesForHistory(cases: readonly CaseSummary[]): CaseSummary[] {
   return [...cases].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
@@ -530,6 +490,7 @@ export function parseCaseSummaryRow(row: CaseSummaryRow, now = new Date()): Case
   const updatedAt = new Date(toIsoString(row.updated_at));
   const staleHours = Math.max(0, Math.floor((now.getTime() - updatedAt.getTime()) / 3_600_000));
   const presenceState = resolvePresenceState(row);
+  const policy = readCasePolicy(metadataToRecord(row.server_settings));
   const quarantine = readNestedRecord(metadataToRecord(row.metadata), 'account_quarantine');
   const quarantineEffects =
     row.case_kind === 'compromised_account'
@@ -563,10 +524,22 @@ export function parseCaseSummaryRow(row: CaseSummaryRow, now = new Date()): Case
     lastActionType: row.last_action_type,
     lastActionAt: toNullableIsoString(row.last_action_at),
     surfaces: buildSurfaces(row),
-    allowedActions: resolveAllowedActions(row, presenceState),
+    allowedActions: resolveAllowedActions(row, presenceState).filter((action) => {
+      if (action === 'ban_user' || action === 'ban_by_id')
+        return (
+          evaluateCasePolicy({ kind: 'ban_case_user', reason: null }, policy) !== 'policy_disabled'
+        );
+      if (action === 'kick_user')
+        return (
+          evaluateCasePolicy({ kind: 'kick_case_user', reason: null }, policy) !== 'policy_disabled'
+        );
+      return true;
+    }),
     captchaChallenge: row.captcha_status
       ? {
           id: row.captcha_id,
+          method: row.captcha_method ?? 'turnstile',
+          methodRevision: row.captcha_method_revision ?? 0,
           status: row.captcha_status,
           requestSource: row.captcha_request_source,
           passEffect: row.captcha_pass_effect,
@@ -586,6 +559,17 @@ export function parseCaseSummaryRow(row: CaseSummaryRow, now = new Date()): Case
   });
 }
 
+function appendCaptchaBypassAction(row: CaseSummaryRow, actions: CaseAction[]): CaseAction[] {
+  if (
+    row.captcha_status === 'pending' ||
+    row.captcha_status === 'failed' ||
+    row.captcha_status === 'expired'
+  ) {
+    actions.push('bypass_captcha');
+  }
+  return actions;
+}
+
 function appendCaptchaActions(
   row: CaseSummaryRow,
   actions: CaseAction[],
@@ -594,19 +578,13 @@ function appendCaptchaActions(
   if (row.case_kind === 'compromised_account' || row.status !== 'pending') {
     return actions;
   }
-  const mode = metadataToRecord(row.server_settings).captcha_mode;
+  const settings = metadataToRecord(row.server_settings);
+  const mode = getEffectiveCaptchaMethod(settings) === 'none' ? 'off' : settings.captcha_mode;
   if (mode !== 'manual' && mode !== 'suspicious_join') {
-    return actions;
+    return appendCaptchaBypassAction(row, actions);
   }
   if (presenceState !== 'in_server') {
-    if (
-      row.captcha_status === 'pending' ||
-      row.captcha_status === 'failed' ||
-      row.captcha_status === 'expired'
-    ) {
-      actions.push('bypass_captcha');
-    }
-    return actions;
+    return appendCaptchaBypassAction(row, actions);
   }
   if (!row.captcha_status) {
     actions.push('challenge_user');
@@ -729,6 +707,8 @@ const SUMMARY_QUERY = `
     u.username as user_username,
     u.metadata as user_metadata,
     sm.user_id as member_user_id,
+    cc.provider as captcha_method,
+    cc.method_revision as captcha_method_revision,
     cc.id::text as captcha_id,
     cc.status as captcha_status,
     cc.request_source as captcha_request_source,
@@ -752,6 +732,8 @@ const SUMMARY_QUERY = `
   left join lateral (
     select jsonb_agg(
       jsonb_build_object(
+        'method', captcha_request.provider,
+        'methodRevision', captcha_request.method_revision,
         'generation', captcha_request.generation,
         'requestSource', captcha_request.request_source,
         'passEffect', captcha_request.pass_effect,
@@ -995,27 +977,18 @@ export class PostgresActiveCaseDataAdapter implements ActiveCaseDataAdapter {
       return { action: input.action, caseId: input.caseId, requestId: null, status: 'not_allowed' };
     }
 
-    const receipt = await queueModerationActionRequestWithReceipt({
-      actionType: resolveCaseActionRequestType(input),
-      actorId: input.adminId,
-      actorSurface: 'web',
-      idempotencyKey: buildCaseActionIdempotencyKey(input),
-      metadata: {
-        case_action: input.action,
-        ...(input.quarantinePhase ? { quarantine_phase: input.quarantinePhase } : {}),
-        ...(input.previewRequestId ? { preview_request_id: input.previewRequestId } : {}),
-        ...(input.reason ? { reason: input.reason } : {}),
-        ...(input.action === 'retry_captcha' || input.action === 'bypass_captcha'
-          ? {
-              expected_challenge_id: input.expectedCaptchaChallengeId,
-              expected_generation: input.expectedCaptchaGeneration,
-            }
-          : {}),
-        requested_surface: 'web',
-      },
-      serverId: input.guildId,
-      targetUserId: detail.userId,
-      verificationEventId: detail.id,
+    const result = buildQueuedCaseCommand(input, detail.userId);
+    if (result.kind === 'denied') {
+      return { action: input.action, caseId: input.caseId, requestId: null, status: 'not_allowed' };
+    }
+    const receipt = await submitQueuedAction({
+      context: createWebActionContext({
+        guildId: input.guildId,
+        userId: input.adminId,
+        requestId: input.attemptId ?? input.caseId,
+        source: 'web',
+      }),
+      command: result.outcome,
     });
 
     return {

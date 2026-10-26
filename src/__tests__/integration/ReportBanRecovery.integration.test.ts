@@ -1,8 +1,20 @@
+import { mock } from 'jest-mock-extended';
+import type { EnqueueInput } from '@drasil/application';
+import type { IIntegrityAuditService } from '../../services/IntegrityAuditService';
+import type { ICaseRoleLockdownService } from '../../services/CaseRoleLockdownService';
+import type { ICaseThreadClosureSweepService } from '../../services/CaseThreadClosureSweepService';
+import { ModerationCommandHandler } from '../../controllers/ModerationCommandHandler';
+import { handleSlashCommandConfirmationButton } from '../../utils/slashCommandConfirmations';
+import { createBotApplication } from '../../application/createBotApplication';
 import { Prisma, PrismaClient } from '../../db/prisma';
 import { CaseRoleReleaseReconciliationService } from '../../services/CaseRoleReleaseReconciliationService';
 import { RoleQuarantineSnapshotRepository } from '../../repositories/RoleQuarantineSnapshotRepository';
 import { Pool } from 'pg';
 import { insertModerationActionRequestWithReceipt } from '../../../apps/web/lib/moderationActionRequestQueue';
+interface PersistenceInput extends Omit<EnqueueInput, 'actionType'> {
+  readonly actionType: ModerationActionRequestType;
+}
+
 jest.mock('../../../apps/web/lib/setupDataAdapter', () => ({ getPostgresPool: jest.fn() }));
 import { MessageContextRepository } from '../../repositories/MessageContextRepository';
 import {
@@ -10,7 +22,17 @@ import {
   IRoleQuarantineService,
 } from '../../services/RoleQuarantineService';
 import { NotificationManager } from '../../services/NotificationManager';
-import { ChannelType, Client, EmbedBuilder, Guild, GuildMember, Role, User } from 'discord.js';
+import {
+  ChannelType,
+  Client,
+  EmbedBuilder,
+  Guild,
+  GuildMember,
+  Role,
+  User,
+  type ChatInputCommandInteraction,
+  type ButtonInteraction,
+} from 'discord.js';
 import { SecurityActionService } from '../../services/SecurityActionService';
 import { UserModerationService } from '../../services/UserModerationService';
 import { AdminActionService } from '../../services/AdminActionService';
@@ -23,7 +45,6 @@ import {
   ModerationOutcomeSource,
   DetectionType,
   ModerationActionRequestType,
-  ModerationActionRequestCreate,
   ReportIntakeStatus,
   VerificationStatus,
 } from '../../repositories/types';
@@ -66,6 +87,7 @@ async function fixture(withReport = true, quarantine?: IRoleQuarantineService) {
   const banFetch = jest.fn().mockResolvedValue({ user });
   const guild = {
     id: 'guild',
+    roles: { fetch: jest.fn() },
     bans: { create: ban, fetch: banFetch },
     members: {
       fetch: jest.fn(),
@@ -87,7 +109,11 @@ async function fixture(withReport = true, quarantine?: IRoleQuarantineService) {
   } as unknown as GuildMember;
   (guild.members.fetch as jest.Mock).mockImplementation(async (id) =>
     (typeof id === 'object' ? id.user : id) === moderator.id
-      ? { permissions: { has: () => true } }
+      ? {
+          id: moderator.id,
+          permissions: { has: () => true, bitfield: 8n },
+          roles: { cache: new Map() },
+        }
       : member
   );
   const notifications = {
@@ -199,30 +225,39 @@ async function fixture(withReport = true, quarantine?: IRoleQuarantineService) {
           request
         )
       : security.banObservedDetection(member, detection.id, moderator, 'Confirmed spam', request);
-  const worker = () =>
-    new ModerationActionRequestService(
-      requests,
-      cases,
-      client,
-      threads as never,
-      {} as never,
-      {
-        getServerConfig: jest
-          .fn()
-          .mockResolvedValue({ settings: { moderator_ban_action_enabled: true } }),
-      } as never,
-      security,
-      moderation,
-      queue as never,
-      {} as never,
-      {} as never,
-      notifications as never,
-      {} as never,
-      {} as never,
-      {} as never,
-      {} as never
-    );
+  const config = {
+    getServerConfig: jest
+      .fn()
+      .mockResolvedValue({ settings: { moderator_ban_action_enabled: true } }),
+  };
+  const application = createBotApplication({
+    productAnalyticsService: {} as never,
+    setupDiagnosticsService: {} as never,
+    reportIntakeService: {} as any,
+    integrityAuditService: mock<IIntegrityAuditService>(),
+    caseRoleLockdownService: mock<ICaseRoleLockdownService>(),
+    caseThreadClosureSweepService: mock<ICaseThreadClosureSweepService>(),
+    messageDeletionJobs: {} as never,
+    messageCleanupService: {} as never,
+    captchaChallengeService: null,
+    threadManager: threads as never,
+    notificationManager: notifications as never,
+    accountQuarantineService: null,
+    client,
+    actionRequests: requests,
+    configService: config as never,
+    securityActionService: security,
+    userModerationService: moderation,
+    detectionEventsRepository: detections,
+    verificationEventRepository: cases,
+    roleGateService: null,
+    queueService: queue as never,
+    queueRepository: {} as never,
+  });
+  const worker = () => new ModerationActionRequestService(requests, application, {} as never);
   return {
+    application,
+    config,
     analytics,
     detections,
     reports,
@@ -391,13 +426,13 @@ integration('report-ban stale worker recovery with real services and Postgres', 
         await f.security.undoObservedDetectionAction('guild', 'target', f.detection.id, f.moderator)
       ).toBe(AdminActionType.DISMISS);
       expect((await f.reports.findById(f.report.id))?.status).toBe('submitted');
-      const input = {
+      const input: PersistenceInput = {
         serverId: 'guild',
         targetUserId: 'target',
         actorId: 'new-moderator',
         actorSurface: 'web',
         detectionEventId: f.detection.id,
-        reportIntakeId: withReport ? f.report.id : undefined,
+        reportIntakeId: withReport ? f.report.id : null,
         idempotencyKey: f.request.idempotency_key,
         actionType: ModerationActionRequestType.BAN_OBSERVED_DETECTION,
         metadata: {
@@ -410,7 +445,11 @@ integration('report-ban stale worker recovery with real services and Postgres', 
       (f.guild.members.fetch as jest.Mock).mockImplementation(async (input) =>
         (typeof input === 'object' ? input.user : input) === 'target'
           ? f.member
-          : { permissions: { has: () => true } }
+          : {
+              id: typeof input === 'object' ? input.user : input,
+              permissions: { has: () => true, bitfield: 8n },
+              roles: { cache: new Map() },
+            }
       );
       (f.client.users.fetch as jest.Mock).mockImplementation(async (id) => ({ id }));
       await getPrismaClient().moderation_action_requests.update({
@@ -511,7 +550,7 @@ integration('report-ban stale worker recovery with real services and Postgres', 
       { observed_ban_result: { status: 'already_handled' } },
       getReportBanAttemptToken(f.request)
     );
-    const input: ModerationActionRequestCreate & { metadata: Record<string, string> } = {
+    let input: PersistenceInput = {
       serverId: 'guild',
       actorId: 'moderator',
       actorSurface: 'web',
@@ -581,24 +620,30 @@ integration('report-ban stale worker recovery with real services and Postgres', 
         where: { id: f.report.id },
         data: { confirmed_target_user_id: 'reporter' },
       });
-    if (guard === 'changed-target') input.targetUserId = 'reporter';
+    if (guard === 'changed-target') input = { ...input, targetUserId: 'reporter' };
     if (guard === 'changed-server') {
       await new ServerRepository(prisma).getOrCreateServer('other-guild');
-      input.serverId = 'other-guild';
+      input = { ...input, serverId: 'other-guild' };
     }
     if (guard === 'changed-detection')
-      input.detectionEventId = (
-        await f.detections.create({
-          server_id: 'guild',
-          user_id: 'target',
-          detection_type: DetectionType.USER_REPORT,
-          confidence: 1,
-          metadata: { reportIntakeId: f.report.id },
-        })
-      ).id;
-    if (guard === 'changed-report') input.reportIntakeId = undefined;
+      input = {
+        ...input,
+        detectionEventId: (
+          await f.detections.create({
+            server_id: 'guild',
+            user_id: 'target',
+            detection_type: DetectionType.USER_REPORT,
+            confidence: 1,
+            metadata: { reportIntakeId: f.report.id },
+          })
+        ).id,
+      };
+    if (guard === 'changed-report') input = { ...input, reportIntakeId: null };
     if (guard === 'changed-action')
-      input.actionType = ModerationActionRequestType.OPEN_CASE_FROM_OBSERVED_DETECTION;
+      input = {
+        ...input,
+        actionType: ModerationActionRequestType.OPEN_CASE_FROM_OBSERVED_DETECTION,
+      };
     const before = await f.requests.findById(f.request.id);
     const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
     try {
@@ -627,7 +672,7 @@ integration('report-ban stale worker recovery with real services and Postgres', 
       expect(
         await f.security.undoObservedDetectionAction('guild', 'target', f.detection.id, f.moderator)
       ).toBe(AdminActionType.DISMISS);
-      const input = {
+      const input: PersistenceInput = {
         serverId: 'guild',
         actorId: 'moderator',
         actorSurface: 'web',
@@ -636,6 +681,7 @@ integration('report-ban stale worker recovery with real services and Postgres', 
         detectionEventId: f.detection.id,
         reportIntakeId: f.report.id,
         idempotencyKey: f.request.idempotency_key,
+        metadata: {},
       };
       const pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
       try {
@@ -713,7 +759,11 @@ integration('report-ban stale worker recovery with real services and Postgres', 
         if (typeof input === 'string' || !input.force) return { permissions: { has: () => true } };
         if (state === 'departed') throw { code: 10007 };
         if (state === 'failure') throw new Error('member fetch unavailable');
-        return { permissions: { has: () => state === 'allowed' } };
+        return {
+          id: 'moderator',
+          permissions: { has: () => state === 'allowed', bitfield: state === 'allowed' ? 4n : 0n },
+          roles: { cache: new Map() },
+        };
       });
       await f.worker().processPendingRequests();
       expect(f.ban).toHaveBeenCalledTimes(state === 'allowed' ? 1 : 0);
@@ -2806,12 +2856,12 @@ integration('report-ban stale worker recovery with real services and Postgres', 
       ]);
       const oldSnapshot = (await f.requests.findById(f.request.id))!;
       await f.security.reconcileReportBan(oldSnapshot);
-      const input = {
+      const input: PersistenceInput = {
         serverId: 'guild',
         targetUserId: 'target',
         actorId: 'moderator',
         actorSurface: surface,
-        actionType: 'ban_observed_detection' as const,
+        actionType: ModerationActionRequestType.BAN_OBSERVED_DETECTION,
         reportIntakeId: f.report.id,
         detectionEventId: f.detection.id,
         idempotencyKey: f.request.idempotency_key,
@@ -2892,15 +2942,16 @@ integration('report-ban stale worker recovery with real services and Postgres', 
     'retains uncertain failed %s requests instead of rotating the attempt',
     async (surface) => {
       const f = await fixture();
-      const input = {
+      const input: PersistenceInput = {
         serverId: 'guild',
         targetUserId: 'target',
         actorId: 'moderator',
         actorSurface: surface,
-        actionType: 'ban_observed_detection' as const,
+        actionType: ModerationActionRequestType.BAN_OBSERVED_DETECTION,
         reportIntakeId: f.report.id,
         detectionEventId: f.detection.id,
         idempotencyKey: f.request.idempotency_key,
+        metadata: {},
       };
       for (const [phase, status] of [
         ['enforcement_started', null],
@@ -2937,6 +2988,282 @@ integration('report-ban stale worker recovery with real services and Postgres', 
         expect(await f.requests.claimNext()).toBeNull();
       }
       expect(f.ban).not.toHaveBeenCalled();
+    }
+  );
+});
+
+integration('shared detection action persistence boundary', () => {
+  it('revoked_actor_cannot_start_report_ban', async () => {
+    const f = await fixture();
+    (f.guild.members.fetch as jest.Mock).mockImplementation(async (value) =>
+      (typeof value === 'object' ? value.user : value) === 'moderator'
+        ? {
+            id: 'moderator',
+            permissions: { bitfield: 0n, has: () => false },
+            roles: { cache: new Map() },
+          }
+        : f.member
+    );
+    await f.worker().processPendingRequests();
+    const banCallsAfterRevocation = f.ban.mock.calls.length;
+    expect(banCallsAfterRevocation).toBe(0);
+    expect(await f.requests.findById(f.request.id)).toMatchObject({
+      status: 'failed',
+      last_error: 'Detection action denied: permission_denied',
+    });
+  });
+  it('confirmed_ban_recovery_finishes_after_policy_disable', async () => {
+    const f = await fixture();
+    jest
+      .spyOn(f.moderation, 'finalizeObservedBan')
+      .mockRejectedValueOnce(new Error('interrupted follow-up'));
+    await f.worker().processPendingRequests();
+    expect(f.ban).toHaveBeenCalledTimes(1);
+    f.config.getServerConfig.mockResolvedValue({
+      settings: { moderator_ban_action_enabled: false },
+    });
+    (f.guild.members.fetch as jest.Mock).mockImplementation(async () => {
+      throw { code: 10007 };
+    });
+    await f.requests.mergeMetadata(
+      f.request.id,
+      {
+        report_ban_lease_until: new Date(0).toISOString(),
+        report_ban_retry_at: new Date(0).toISOString(),
+      },
+      getReportBanAttemptToken(f.request)
+    );
+    await f.worker().processPendingRequests();
+    const recovered = await f.requests.findById(f.request.id);
+    const recoveredReceipt = (recovered?.result as { observed_ban_result: { status: string } })
+      .observed_ban_result;
+    const banCallsAcrossRecovery = f.ban.mock.calls.length;
+    expect(banCallsAcrossRecovery).toBe(1);
+    expect(recoveredReceipt.status).toBe('banned');
+    expect(recovered?.actor_id).toBe('moderator');
+    expect((await f.actionRepo.getActionHistory('target', 'guild'))[0].admin_id).toBe('moderator');
+  });
+  it('uncertain_ban_never_reenforces', async () => {
+    const f = await fixture();
+    f.ban.mockRejectedValue(new Error('transport lost'));
+    f.banFetch.mockRejectedValue({ code: 10026 });
+    await f.worker().processPendingRequests();
+    f.config.getServerConfig.mockResolvedValue({
+      settings: { moderator_ban_action_enabled: false },
+    });
+    await f.requests.mergeMetadata(
+      f.request.id,
+      {
+        report_ban_lease_until: new Date(0).toISOString(),
+        report_ban_retry_at: new Date(0).toISOString(),
+      },
+      getReportBanAttemptToken(f.request)
+    );
+    await f.worker().processPendingRequests();
+    const recovered = await f.requests.findById(f.request.id);
+    const uncertainReceipt = (recovered?.result as { observed_ban_result: { status: string } })
+      .observed_ban_result;
+    expect(uncertainReceipt.status).toBe('ban_outcome_unknown');
+    expect(f.ban).toHaveBeenCalledTimes(1);
+  });
+  it('accounting_change_is_guild_bound', async () => {
+    const f = await fixture();
+    const before = await f.detections.findById(f.detection.id);
+    const context = {
+      guildId: 'foreign',
+      requestId: 'accounting',
+      source: 'web',
+      actor: { kind: 'user' as const, userId: 'moderator' },
+    };
+    const command = {
+      kind: 'ignore_detection_accounting' as const,
+      targetUserId: 'target',
+      detectionEventId: f.detection.id,
+      reason: null,
+    };
+    f.application.caseConfirmations.recordVerified(context, command);
+    // Current actor is authorized in the requested guild, but the detection belongs elsewhere.
+    (f.client.guilds.fetch as jest.Mock).mockResolvedValue({ ...f.guild, id: 'foreign' });
+    expect(await f.application.detections.execute(context, command)).toEqual({
+      kind: 'denied',
+      code: 'binding_mismatch',
+    });
+    const foreignDetectionAccountingUnchanged =
+      JSON.stringify(await f.detections.findById(f.detection.id)) === JSON.stringify(before);
+    expect(foreignDetectionAccountingUnchanged).toBe(true);
+  });
+});
+
+integration('shared uncertain-ban operator review', () => {
+  it('keeps attempt fencing private and consumes a bound review without reenforcement', async () => {
+    const f = await fixture();
+    f.ban.mockRejectedValue(new Error('transport lost'));
+    f.banFetch.mockRejectedValue({ code: 10026 });
+    await f.worker().processPendingRequests();
+    const context = {
+      guildId: 'guild',
+      requestId: 'review-prepare',
+      source: 'discord_interaction',
+      actor: { kind: 'user' as const, userId: 'moderator' },
+    };
+    const prepared = await f.application.detections.execute(context, {
+      kind: 'prepare_report_ban_review',
+      operationId: f.request.id,
+    });
+    if (prepared.kind !== 'outcome' || prepared.outcome.kind !== 'prepare_report_ban_review')
+      throw new Error('Expected review preparation');
+    expect(prepared.outcome.reference).not.toHaveProperty('attemptToken');
+    const command = {
+      kind: 'review_uncertain_report_ban' as const,
+      ...prepared.outcome.reference,
+      reason: 'Checked current ban and audit trail',
+    };
+    const reviewContext = { ...context, requestId: 'review-confirm' };
+    f.application.caseConfirmations.recordVerified(reviewContext, command);
+    expect(await f.application.detections.execute(reviewContext, command)).toEqual({
+      kind: 'outcome',
+      outcome: { kind: 'review_uncertain_report_ban', succeeded: true },
+    });
+    const persisted = await f.requests.findById(f.request.id);
+    expect(persisted?.result).toMatchObject({
+      observed_ban_result: { status: 'ban_reviewed_no_current_ban' },
+    });
+    expect((await f.reports.findById(f.report.id))?.metadata).not.toHaveProperty(
+      'report_ban_operation_id'
+    );
+    f.application.caseConfirmations.recordVerified(reviewContext, command);
+    await expect(f.application.detections.execute(reviewContext, command)).resolves.toEqual({
+      kind: 'denied',
+      code: 'stale_state',
+    });
+    expect(f.ban).toHaveBeenCalledTimes(1);
+  });
+});
+
+integration('shared accounting execution scope', () => {
+  const originalGlobalAdmins = process.env.DRASIL_GLOBAL_ADMIN_IDS;
+  afterEach(() => {
+    if (originalGlobalAdmins === undefined) delete process.env.DRASIL_GLOBAL_ADMIN_IDS;
+    else process.env.DRASIL_GLOBAL_ADMIN_IDS = originalGlobalAdmins;
+  });
+  it.each([
+    ModerationActionRequestType.IGNORE_DETECTION_ACCOUNTING,
+    ModerationActionRequestType.RESTORE_DETECTION_ACCOUNTING,
+  ])(
+    'queued %s denies revoked Manage Server even with Moderate Members and writes no audit',
+    async (actionType) => {
+      const f = await fixture(false);
+      await getPrismaClient().moderation_action_requests.delete({ where: { id: f.request.id } });
+      if (actionType === ModerationActionRequestType.RESTORE_DETECTION_ACCOUNTING)
+        await f.detections.markExcludedFromAccounting(f.detection.id, {
+          excluded_from_accounting: true,
+        });
+      const before = await f.detections.findById(f.detection.id);
+      const request = await f.requests.enqueue({
+        serverId: 'guild',
+        actorId: 'moderator',
+        actorSurface: 'web',
+        targetUserId: 'target',
+        detectionEventId: f.detection.id,
+        actionType,
+        idempotencyKey: `accounting:${actionType}`,
+        metadata: { reason: 'Reviewed' },
+      });
+      (f.guild.members.fetch as jest.Mock).mockImplementation(async (value) =>
+        (typeof value === 'object' ? value.user : value) === 'moderator'
+          ? {
+              id: 'moderator',
+              permissions: { bitfield: 1n << 40n, has: () => false },
+              roles: { cache: new Map() },
+            }
+          : f.member
+      );
+      await f.worker().processPendingRequests();
+      expect(await f.requests.findById(request.id)).toMatchObject({
+        status: 'failed',
+        last_error: 'Detection action denied: permission_denied',
+      });
+      expect(await f.detections.findById(f.detection.id)).toEqual(before);
+      expect(await getPrismaClient().admin_actions.count()).toBe(0);
+    }
+  );
+  it.each(
+    ['ignore-detection', 'restore-detection'].flatMap((subcommand) =>
+      ['global', 'not-global', 'foreign', 'global-revoked'].map((scope) => ({ subcommand, scope }))
+    )
+  )(
+    'slash $subcommand preserves accounting scope $scope through real confirmation',
+    async ({ subcommand, scope }) => {
+      const f = await fixture(false);
+      process.env.DRASIL_GLOBAL_ADMIN_IDS =
+        scope === 'not-global' ? 'other-admin' : ' other-admin, moderator , ';
+      if (scope === 'foreign')
+        await getPrismaClient().servers.create({ data: { guild_id: 'foreign' } });
+      await getPrismaClient().detection_events.update({
+        where: { id: f.detection.id },
+        data: { server_id: scope === 'foreign' ? 'foreign' : null },
+      });
+      if (subcommand === 'restore-detection')
+        await f.detections.markExcludedFromAccounting(f.detection.id, {
+          excluded_from_accounting: true,
+        });
+      const before = await f.detections.findById(f.detection.id);
+      let permissions = 32n;
+      (f.guild.members.fetch as jest.Mock).mockImplementation(async (value) =>
+        (typeof value === 'object' ? value.user : value) === 'moderator'
+          ? {
+              id: 'moderator',
+              permissions: { bitfield: permissions, has: () => true },
+              roles: { cache: new Map() },
+            }
+          : f.member
+      );
+      const handler = new ModerationCommandHandler(
+        f.config as never,
+        f.security,
+        async () => undefined,
+        undefined,
+        undefined,
+        f.application
+      );
+      const interaction = {
+        id: `audit-${scope}-${subcommand}`,
+        guild: f.guild,
+        guildId: 'guild',
+        user: f.moderator,
+        memberPermissions: { has: () => true },
+        options: {
+          getSubcommand: () => subcommand,
+          getString: (name: string) => (name === 'detection-id' ? f.detection.id : 'Reviewed'),
+        },
+        reply: jest.fn(),
+        editReply: jest.fn(),
+      } as unknown as ChatInputCommandInteraction;
+      await handler.handleAuditCommand(interaction);
+      const reply = (interaction.reply as jest.Mock).mock.calls[0][0];
+      expect(reply.components).toHaveLength(1);
+      if (scope === 'global-revoked') permissions = 1n << 40n;
+      await handleSlashCommandConfirmationButton({
+        id: 'audit-confirm',
+        customId: reply.components[0].components[0].toJSON().custom_id,
+        guildId: 'guild',
+        user: f.moderator,
+        reply: jest.fn(),
+        update: jest.fn(),
+        editReply: interaction.editReply,
+      } as unknown as ButtonInteraction);
+      const after = await f.detections.findById(f.detection.id);
+      if (scope === 'global') {
+        expect(after?.metadata?.excluded_from_accounting === true).toBe(
+          subcommand === 'ignore-detection'
+        );
+        expect(await getPrismaClient().admin_actions.findMany()).toMatchObject([
+          { server_id: null, admin_id: 'moderator', user_id: 'target' },
+        ]);
+      } else {
+        expect(after).toEqual(before);
+        expect(await getPrismaClient().admin_actions.count()).toBe(0);
+      }
     }
   );
 });

@@ -1,4 +1,6 @@
-import type { ReportInteractionHandler } from '../../controllers/ReportInteractionHandler';
+import type { BotApplication } from '../../application/createBotApplication';
+import { buildCaseApplication } from './caseApplicationTestHarness';
+import { createBotReportActions } from '../../application/adapters/reports';
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -58,17 +60,42 @@ import {
 } from '../../controllers/CaseCommandHandler';
 import { buildReportIntakeAdminActionsCustomId } from '../../utils/reportIntakeAdminActions';
 import { buildAccountQuarantinePreviewFingerprint } from '../../utils/accountQuarantinePreview';
-import { buildAdminActionCustomId } from '../../utils/adminActionCustomIds';
+import {
+  buildAdminActionCustomId,
+  parseAdminActionCustomId,
+} from '../../utils/adminActionCustomIds';
 import type { AccountQuarantinePreview } from '../../services/AccountQuarantineService';
 
-interface ReportNotificationTestAccess {
-  notifyReportIntakeThreadOpened: ReportInteractionHandler['notifyReportIntakeThreadOpened'];
+const handlerApplications = new WeakMap<InteractionHandler, BotApplication>();
+function buildHandler(
+  ...args: ConstructorParameters<typeof InteractionHandler>
+): InteractionHandler {
+  if (!args[12])
+    args[12] = buildCaseApplication({
+      client: args[0],
+      captchaChallengeService: args[16] ?? null,
+      threadManager: args[6],
+      notificationManager: args[1],
+      setupDiagnosticsService: args[8],
+      accountQuarantineService: args[15] ?? null,
+      configService: args[4],
+      verificationEventRepository: args[5],
+      securityActionService: args[3],
+      userModerationService: args[2],
+      roleGateService: args[13] ?? null,
+      detectionEventsRepository:
+        args[14] ??
+        ({ findById: jest.fn(async () => ({ server_id: 'guild-1', user_id: 'user-1' })) } as any),
+    });
+  const handler = new InteractionHandler(...args);
+  handlerApplications.set(handler, args[12]);
+  return handler;
 }
 
 const buildMember = (guildId: string, userId: string, displayName = 'test-user'): GuildMember =>
   ({
     id: userId,
-    guild: { id: guildId } as Guild,
+    guild: { id: guildId, roles: { cache: new Map() } } as unknown as Guild,
     displayName,
     nickname: displayName,
     user: {
@@ -85,12 +112,16 @@ const buildGuildMemberFetchMock = (): jest.Mock =>
       return buildMember('guild-1', query);
     }
 
-    const userIds = Array.isArray(query.user) ? query.user : query.user ? [query.user] : [];
+    if (typeof query.user === 'string') return buildMember('guild-1', query.user);
+    const userIds = Array.isArray(query.user) ? query.user : [];
     return new Map(userIds.map((userId) => [userId, buildMember('guild-1', userId)]));
   });
 
 const buildInteraction = (customId: string, guildId: string, user: User): ButtonInteraction => {
   const interaction = {
+    id: 'interaction-1',
+    message: { id: 'message-ver-1' },
+    channelId: 'admin-text-channel',
     customId,
     guildId,
     channel: { id: 'channel-1', type: ChannelType.GuildText },
@@ -116,6 +147,27 @@ const buildInteraction = (customId: string, guildId: string, user: User): Button
     showModal: jest.fn().mockResolvedValue(undefined),
   };
   return interaction as unknown as ButtonInteraction;
+};
+
+const issueCaseModal = async (
+  handler: InteractionHandler,
+  interaction: ModalSubmitInteraction
+): Promise<void> => {
+  const userId = interaction.customId.split(':').at(-1)!;
+  const button = buildInteraction(
+    buildAdminActionCustomId(
+      interaction.customId.includes('kick_modal') ? 'confirm_kick' : 'ban',
+      'case',
+      userId,
+      undefined,
+      'ver-1'
+    ),
+    interaction.guildId!,
+    interaction.user
+  );
+  Object.assign(button, { memberPermissions: interaction.memberPermissions });
+  await handler.handleButtonInteraction(button);
+  expect(button.showModal).toHaveBeenCalledTimes(1);
 };
 
 const buildSelectInteraction = (
@@ -258,6 +310,7 @@ const readyAccountQuarantinePreview: AccountQuarantinePreview = {
 };
 
 const buildAccountQuarantineModalCustomId = (
+  handler: InteractionHandler,
   event: VerificationEvent,
   preview: AccountQuarantinePreview = readyAccountQuarantinePreview
 ): string => {
@@ -265,8 +318,16 @@ const buildAccountQuarantineModalCustomId = (
     adminNotificationReady: false,
     recoveryThreadId: event.thread_id,
     recoveryThreadReady: false,
-  }).slice(0, 20);
-  return `verification:qa:${event.user_id}:${event.id}:${fingerprint}`;
+  });
+  handlerApplications.get(handler)!.quarantineRuntime.previews.record({
+    guildId: event.server_id,
+    actorId: 'admin-1',
+    caseId: event.id,
+    targetUserId: event.user_id!,
+    fingerprint,
+    expiresAt: Date.now() + 600000,
+  });
+  return `verification:qa:${event.user_id}:${event.id}:${fingerprint.slice(0, 20)}`;
 };
 
 describe('InteractionHandler (unit)', () => {
@@ -285,11 +346,13 @@ describe('InteractionHandler (unit)', () => {
     delete process.env.DRASIL_WEB_PUBLIC_URL;
     delete process.env.NEXT_PUBLIC_APP_URL;
     client = {
+      users: { fetch: jest.fn(async (id: string) => ({ id })) },
       channels: { fetch: jest.fn().mockResolvedValue(null) },
       guilds: {
         fetch: jest.fn().mockResolvedValue({
           members: {
             me: { permissions: { has: jest.fn().mockReturnValue(true) } },
+            fetchMe: jest.fn().mockResolvedValue({ permissions: { has: () => true } }),
             fetch: buildGuildMemberFetchMock(),
           },
         }),
@@ -374,7 +437,9 @@ describe('InteractionHandler (unit)', () => {
     configService = {
       initialize: jest.fn().mockResolvedValue(undefined),
       getCachedServerConfig: jest.fn(),
-      getServerConfig: jest.fn().mockResolvedValue({ settings: {} }),
+      getServerConfig: jest
+        .fn()
+        .mockResolvedValue({ settings: { account_quarantine_enabled: true } }),
       updateSetupConfiguration: jest.fn().mockResolvedValue({}),
       updateServerConfig: jest.fn().mockResolvedValue({}),
       getServerSettings: jest.fn(),
@@ -388,8 +453,14 @@ describe('InteractionHandler (unit)', () => {
       clearCache: jest.fn(),
     } as unknown as jest.Mocked<IConfigService>;
     verificationEventRepository = {
-      findActiveByUserAndServer: jest.fn(),
-      findByUserAndServer: jest.fn(),
+      findActiveByUserAndServer: jest.fn(
+        async (userId: string, serverId: string): Promise<VerificationEvent | null> =>
+          serverId === 'guild-1' ? buildVerificationEvent('ver-1', userId) : null
+      ),
+      findByUserAndServer: jest.fn(
+        async (userId: string, serverId: string): Promise<VerificationEvent[]> =>
+          serverId === 'guild-1' ? [buildVerificationEvent('ver-1', userId)] : []
+      ),
       findByDetectionEvent: jest.fn(),
       findPendingByServer: jest.fn(),
       findReviewablePendingByServer: jest.fn(),
@@ -400,7 +471,7 @@ describe('InteractionHandler (unit)', () => {
       findResolvedWithThreadsByServer: jest.fn(),
       createFromDetection: jest.fn(),
       getVerificationHistory: jest.fn(),
-      findById: jest.fn(),
+      findById: jest.fn(async (id: string) => buildVerificationEvent(id, 'user-1')),
       findByThreadId: jest.fn(),
       claimQuarantineAttempt: jest.fn(),
       claimCaseRoleRelease: jest.fn(),
@@ -502,7 +573,7 @@ describe('InteractionHandler (unit)', () => {
       caseRoleAttempted: true,
       caseRoleActive: true,
     });
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -557,6 +628,8 @@ describe('InteractionHandler (unit)', () => {
     });
     const sourceMessage = {
       id: 'message-1',
+      guildId: 'guild-1',
+      author: { id: 'user-2' },
       channelId: 'channel-1',
       url: 'https://discord.com/channels/guild-1/channel-1/message-1',
     } as Message;
@@ -570,7 +643,7 @@ describe('InteractionHandler (unit)', () => {
         }),
       },
     });
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -622,7 +695,7 @@ describe('InteractionHandler (unit)', () => {
   });
 
   it('rejects native Open Case modal submits without administrator permission', async () => {
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -684,7 +757,7 @@ describe('InteractionHandler (unit)', () => {
         metadata: null,
       }),
     };
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -726,7 +799,7 @@ describe('InteractionHandler (unit)', () => {
   });
 
   it('handles verify button by calling UserModerationService', async () => {
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -757,7 +830,7 @@ describe('InteractionHandler (unit)', () => {
       formatResolutionConfirmation: jest.fn().mockReturnValue(null),
       applyResolution: jest.fn().mockResolvedValue({ applied: true }),
     } as unknown as jest.Mocked<IRoleGateService>;
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -795,7 +868,9 @@ describe('InteractionHandler (unit)', () => {
   it('maps legacy restrict-user case action to repair', async () => {
     const activeCase = buildVerificationEvent('ver-restrict', 'user-1');
     verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(activeCase);
-    const handler = new InteractionHandler(
+    verificationEventRepository.findById.mockResolvedValue(activeCase);
+    verificationEventRepository.findByUserAndServer.mockResolvedValue([activeCase]);
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -810,6 +885,7 @@ describe('InteractionHandler (unit)', () => {
       'guild-1',
       { id: 'admin-1' } as User
     );
+    Object.assign(interaction, { message: { id: activeCase.notification_message_id } });
     grantInteractionPermissions(interaction);
 
     await handler.handleButtonInteraction(interaction);
@@ -831,7 +907,7 @@ describe('InteractionHandler (unit)', () => {
       'Close pending verification cases for <@user-1> without verifying or banning them? The case role will be removed.',
     ],
   ])('opens an ephemeral confirmation for persistent %s button', async (customId, message) => {
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -855,7 +931,9 @@ describe('InteractionHandler (unit)', () => {
   it('maps legacy lift-restriction case action to close no-action', async () => {
     const activeCase = buildVerificationEvent('ver-lift', 'user-1');
     verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(activeCase);
-    const handler = new InteractionHandler(
+    verificationEventRepository.findById.mockResolvedValue(activeCase);
+    verificationEventRepository.findByUserAndServer.mockResolvedValue([activeCase]);
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -870,6 +948,7 @@ describe('InteractionHandler (unit)', () => {
       'guild-1',
       { id: 'admin-1' } as User
     );
+    Object.assign(interaction, { message: { id: activeCase.notification_message_id } });
     grantInteractionPermissions(interaction);
 
     await handler.handleButtonInteraction(interaction);
@@ -890,7 +969,7 @@ describe('InteractionHandler (unit)', () => {
   });
 
   it('handles close-no-action button by calling UserModerationService', async () => {
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -929,7 +1008,7 @@ describe('InteractionHandler (unit)', () => {
       attention_state: CaseAttentionState.PARKED,
       containment_status: CaseContainmentStatus.CONTAINED,
     });
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -962,7 +1041,7 @@ describe('InteractionHandler (unit)', () => {
       formatResolutionConfirmation: jest.fn().mockReturnValue(null),
       applyResolution: jest.fn().mockResolvedValue({ applied: true }),
     } as unknown as jest.Mocked<IRoleGateService>;
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -1011,7 +1090,7 @@ describe('InteractionHandler (unit)', () => {
       formatResolutionConfirmation: jest.fn().mockReturnValue(null),
       applyResolution: jest.fn().mockResolvedValue({ applied: true }),
     } as unknown as jest.Mocked<IRoleGateService>;
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -1053,7 +1132,7 @@ describe('InteractionHandler (unit)', () => {
       formatResolutionConfirmation: jest.fn().mockReturnValue('Role gate should not render'),
       applyResolution: jest.fn().mockResolvedValue({ applied: true }),
     } as unknown as jest.Mocked<IRoleGateService>;
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -1099,7 +1178,7 @@ describe('InteractionHandler (unit)', () => {
       buildVerificationEvent(`ver-${index + 1}`, `user-${index + 1}`)
     );
     verificationEventRepository.findReviewablePendingByServer.mockResolvedValue(pendingCases);
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -1133,7 +1212,7 @@ describe('InteractionHandler (unit)', () => {
   });
 
   it('truncates case digest select text to the provided limit', () => {
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -1163,7 +1242,7 @@ describe('InteractionHandler (unit)', () => {
     (configService.getCachedServerConfig as jest.Mock).mockReturnValue({
       admin_channel_id: 'admin-channel-1',
     });
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -1210,7 +1289,7 @@ describe('InteractionHandler (unit)', () => {
     const activeCase = buildVerificationEvent('ver-1', 'user-1');
     verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(activeCase);
     verificationEventRepository.findByUserAndServer.mockResolvedValue([activeCase]);
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -1234,19 +1313,28 @@ describe('InteractionHandler (unit)', () => {
     expect(buttons.map((button: { label?: string }) => button.label)).toEqual(['Kick User']);
   });
 
-  it('binds CAPTCHA controls to the case notification the moderator selected', async () => {
+  it.each([
+    { captcha_mode: 'manual' as const },
+    { captcha_method: 'none' as const, captcha_mode: 'suspicious_join' as const },
+  ])('binds CAPTCHA controls to the selected case while disabled=%j', async (settings) => {
     const selectedCase = buildVerificationEvent('ver-selected', 'user-1');
     const newestCase = buildVerificationEvent('ver-newest', 'user-1');
     verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(newestCase);
     verificationEventRepository.findById.mockResolvedValue(selectedCase);
     verificationEventRepository.findByUserAndServer.mockResolvedValue([newestCase, selectedCase]);
     (configService.getServerConfig as jest.Mock).mockResolvedValue({
-      settings: { captcha_mode: 'manual' },
+      settings,
     });
     const captchaChallengeService = {
-      findByCaseId: jest.fn().mockResolvedValue(null),
+      findByCaseId: jest
+        .fn()
+        .mockResolvedValue(
+          settings.captcha_method === 'none'
+            ? { id: 'challenge-1', generation: 1, status: 'pending' }
+            : null
+        ),
     } as any;
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -1280,9 +1368,21 @@ describe('InteractionHandler (unit)', () => {
     const buttons = response.components.flatMap(
       (row: { toJSON(): { components: any[] } }) => row.toJSON().components
     );
-    expect(
-      buttons.find((button: { label?: string }) => button.label === 'Challenge User')?.custom_id
-    ).toBe('admin_actions:cp:c:user-1:_:ver-selected');
+    if (settings.captcha_method === 'none') {
+      expect(buttons.map((button: { label?: string }) => button.label)).not.toContain(
+        'Challenge User'
+      );
+      expect(buttons.map((button: { label?: string }) => button.label)).not.toContain(
+        'Retry Security Check'
+      );
+      expect(buttons.map((button: { label?: string }) => button.label)).toContain(
+        'Continue Without Check...'
+      );
+    } else {
+      expect(
+        buttons.find((button: { label?: string }) => button.label === 'Challenge User')?.custom_id
+      ).toBe('admin_actions:cp:c:user-1:_:ver-selected');
+    }
   });
 
   it('refuses a confirmed CAPTCHA action when the target has left the server', async () => {
@@ -1294,7 +1394,7 @@ describe('InteractionHandler (unit)', () => {
       },
     });
     const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -1336,7 +1436,19 @@ describe('InteractionHandler (unit)', () => {
       challenge: { id: challengeId, generation: 5 },
       delivered: true,
     });
+    configService.getServerConfig.mockResolvedValue({
+      settings: { captcha_mode: 'manual' },
+    } as any);
     const captchaChallengeService = {
+      findByCaseId: jest.fn().mockResolvedValue({
+        id: challengeId,
+        generation: 4,
+        server_id: 'guild-1',
+        user_id: 'user-1',
+        verification_event_id: 'ver-1',
+        status: 'failed',
+        case_revision_at_issue: 2,
+      }),
       findById: jest.fn().mockResolvedValue({
         id: challengeId,
         generation: 4,
@@ -1349,7 +1461,7 @@ describe('InteractionHandler (unit)', () => {
     (client.guilds.fetch as jest.Mock).mockResolvedValue({
       members: { fetch: jest.fn().mockResolvedValue(buildMember('guild-1', 'user-1')) },
     });
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -1404,7 +1516,7 @@ describe('InteractionHandler (unit)', () => {
         id: '11111111-1111-4111-8111-111111111111',
       }),
     } as any;
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -1444,11 +1556,22 @@ describe('InteractionHandler (unit)', () => {
       generation: 2,
       id: '11111111-1111-4111-8111-111111111111',
     });
-    const captchaChallengeService = { bypassChallenge } as any;
+    const captchaChallengeService = {
+      bypassChallenge,
+      findByCaseId: jest.fn().mockResolvedValue({
+        id: '11111111-1111-4111-8111-111111111111',
+        generation: 2,
+        server_id: 'guild-1',
+        user_id: 'user-1',
+        verification_event_id: 'ver-1',
+        status: 'pending',
+        case_revision_at_issue: 2,
+      }),
+    } as any;
     verificationEventRepository.findById.mockResolvedValue(
       buildVerificationEvent('ver-1', 'user-1')
     );
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -1494,7 +1617,7 @@ describe('InteractionHandler (unit)', () => {
   it('shows observed admin actions with a resolved display label and no confirmation copy', async () => {
     process.env.DRASIL_WEB_PUBLIC_URL = 'https://drasilbot.com';
     delete process.env.NEXT_PUBLIC_APP_URL;
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -1533,7 +1656,7 @@ describe('InteractionHandler (unit)', () => {
         detection_type: DetectionType.USER_REPORT,
       }),
     };
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -1573,7 +1696,7 @@ describe('InteractionHandler (unit)', () => {
       user_id: null,
     } as unknown as VerificationEvent;
     verificationEventRepository.findById.mockResolvedValue(selectedCase);
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -1602,7 +1725,7 @@ describe('InteractionHandler (unit)', () => {
 
   it('shows a confirmation modal for the ban button', async () => {
     enableModeratorBanActions();
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -1647,16 +1770,18 @@ describe('InteractionHandler (unit)', () => {
       metadata: null,
     };
     verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    verificationEventRepository.findById.mockResolvedValue(verificationEvent);
     verificationEventRepository.findByUserAndServer.mockResolvedValue([verificationEvent]);
     (client.guilds.fetch as jest.Mock).mockResolvedValue({
       bans: { fetch: jest.fn().mockResolvedValue({ user: { id: 'user-1' } }) },
       members: {
         me: { permissions: { has: jest.fn().mockReturnValue(true) } },
+        fetchMe: jest.fn().mockResolvedValue({ permissions: { has: () => true } }),
         fetch: jest.fn().mockResolvedValue(buildMember('guild-1', 'admin-1')),
       },
     });
 
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -1672,6 +1797,10 @@ describe('InteractionHandler (unit)', () => {
     } as User);
     grantOnlyBanMembersPermission(interaction);
 
+    Object.assign(interaction, {
+      message: { id: verificationEvent.notification_message_id },
+      channelId: 'admin-text-channel',
+    });
     await handler.handleButtonInteraction(interaction);
 
     expect(interaction.reply).toHaveBeenCalledWith(
@@ -1687,7 +1816,7 @@ describe('InteractionHandler (unit)', () => {
   });
 
   it('syncs pending cases for an already-banned user after confirmation', async () => {
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -1724,16 +1853,18 @@ describe('InteractionHandler (unit)', () => {
       metadata: { membership_state: 'left_or_removed' },
     };
     verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    verificationEventRepository.findById.mockResolvedValue(verificationEvent);
     verificationEventRepository.findByUserAndServer.mockResolvedValue([verificationEvent]);
     (client.guilds.fetch as jest.Mock).mockResolvedValue({
       bans: { fetch: jest.fn().mockRejectedValue({ code: 10026 }) },
       members: {
         me: { permissions: { has: jest.fn().mockReturnValue(true) } },
+        fetchMe: jest.fn().mockResolvedValue({ permissions: { has: () => true } }),
         fetch: jest.fn().mockResolvedValue(buildMember('guild-1', 'admin-1')),
       },
     });
 
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -1749,6 +1880,10 @@ describe('InteractionHandler (unit)', () => {
     } as User);
     grantInteractionPermissions(interaction);
 
+    Object.assign(interaction, {
+      message: { id: verificationEvent.notification_message_id },
+      channelId: 'admin-text-channel',
+    });
     await handler.handleButtonInteraction(interaction);
 
     const reply = (interaction.reply as jest.Mock).mock.calls[0][0];
@@ -1769,16 +1904,18 @@ describe('InteractionHandler (unit)', () => {
       metadata: { membership_state: 'left_or_removed' },
     };
     verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    verificationEventRepository.findById.mockResolvedValue(verificationEvent);
     verificationEventRepository.findByUserAndServer.mockResolvedValue([verificationEvent]);
     (client.guilds.fetch as jest.Mock).mockResolvedValue({
       bans: { fetch: jest.fn().mockRejectedValue({ code: 10026 }) },
       members: {
         me: { permissions: { has: jest.fn().mockReturnValue(true) } },
+        fetchMe: jest.fn().mockResolvedValue({ permissions: { has: () => true } }),
         fetch: jest.fn().mockResolvedValue(buildMember('guild-1', 'admin-1')),
       },
     });
 
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -1794,6 +1931,10 @@ describe('InteractionHandler (unit)', () => {
     } as User);
     grantInteractionPermissions(interaction);
 
+    Object.assign(interaction, {
+      message: { id: verificationEvent.notification_message_id },
+      channelId: 'admin-text-channel',
+    });
     await handler.handleButtonInteraction(interaction);
 
     const reply = (interaction.reply as jest.Mock).mock.calls[0][0];
@@ -1812,8 +1953,9 @@ describe('InteractionHandler (unit)', () => {
       containment_status: CaseContainmentStatus.CONTAINED,
     };
     verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    verificationEventRepository.findById.mockResolvedValue(verificationEvent);
     verificationEventRepository.findByUserAndServer.mockResolvedValue([verificationEvent]);
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -1829,6 +1971,10 @@ describe('InteractionHandler (unit)', () => {
     } as User);
     grantOnlyModerationPermission(interaction);
 
+    Object.assign(interaction, {
+      message: { id: verificationEvent.notification_message_id },
+      channelId: 'admin-text-channel',
+    });
     await handler.handleButtonInteraction(interaction);
 
     const reply = (interaction.reply as jest.Mock).mock.calls[0][0];
@@ -1847,8 +1993,9 @@ describe('InteractionHandler (unit)', () => {
       containment_status: CaseContainmentStatus.INCOMPLETE,
     };
     verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    verificationEventRepository.findById.mockResolvedValue(verificationEvent);
     verificationEventRepository.findByUserAndServer.mockResolvedValue([verificationEvent]);
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -1864,6 +2011,10 @@ describe('InteractionHandler (unit)', () => {
     } as User);
     grantOnlyModerationPermission(interaction);
 
+    Object.assign(interaction, {
+      message: { id: verificationEvent.notification_message_id },
+      channelId: 'admin-text-channel',
+    });
     await handler.handleButtonInteraction(interaction);
 
     const reply = (interaction.reply as jest.Mock).mock.calls[0][0];
@@ -1894,7 +2045,7 @@ describe('InteractionHandler (unit)', () => {
     };
     verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
 
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -1911,10 +2062,9 @@ describe('InteractionHandler (unit)', () => {
 
     await handler.handleButtonInteraction(interaction);
 
-    expect(threadManager.createVerificationThread).toHaveBeenCalledTimes(1);
-    expect(notificationManager.updateNotificationButtons).toHaveBeenCalled();
+    expect(securityActionService.repairActiveCase).toHaveBeenCalledTimes(1);
     expect(interaction.followUp).toHaveBeenCalledWith({
-      content: 'Created verification thread: https://discord.com/channels/thread-1',
+      content: 'Created verification thread: https://discord.com/channels/guild-1/thread-1',
       flags: MessageFlags.Ephemeral,
     });
   });
@@ -1940,7 +2090,7 @@ describe('InteractionHandler (unit)', () => {
     };
     verificationEventRepository.findByUserAndServer.mockResolvedValue([verificationEvent]);
 
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -1955,6 +2105,9 @@ describe('InteractionHandler (unit)', () => {
     } as User);
     grantInteractionPermissions(interaction);
 
+    Object.assign(interaction, { message: { id: verificationEvent.notification_message_id } });
+    verificationEventRepository.findById.mockResolvedValue(verificationEvent);
+    verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(null);
     await handler.handleButtonInteraction(interaction);
 
     expect(securityActionService.reopenVerification).toHaveBeenCalledWith(
@@ -1970,7 +2123,7 @@ describe('InteractionHandler (unit)', () => {
   it('handles history button for members with moderation permissions', async () => {
     verificationEventRepository.findByUserAndServer.mockResolvedValue([]);
 
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -2011,7 +2164,7 @@ describe('InteractionHandler (unit)', () => {
           }),
         },
       });
-      const handler = new InteractionHandler(
+      const handler = buildHandler(
         client,
         notificationManager,
         userModerationService,
@@ -2058,7 +2211,7 @@ describe('InteractionHandler (unit)', () => {
           }),
         },
       });
-      const handler = new InteractionHandler(
+      const handler = buildHandler(
         client,
         notificationManager,
         userModerationService,
@@ -2086,7 +2239,7 @@ describe('InteractionHandler (unit)', () => {
 
   it('allows ban confirmation with only BanMembers permission', async () => {
     enableModeratorBanActions();
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -2107,9 +2260,225 @@ describe('InteractionHandler (unit)', () => {
     expect(userModerationService.banUser).not.toHaveBeenCalled();
   });
 
+  it.each(['verify', 'ban'] as const)(
+    'binds legacy notification to its original case before the ephemeral %s menu click',
+    async (action) => {
+      enableModeratorBanActions();
+      Object.assign(await client.guilds.fetch('guild-1'), {
+        bans: { fetch: jest.fn(async () => null) },
+      });
+      const original = buildVerificationEvent('ver-original', 'user-1');
+      const newer = buildVerificationEvent('ver-new', 'user-1');
+      verificationEventRepository.findByUserAndServer.mockResolvedValue([newer, original]);
+      verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(newer);
+      verificationEventRepository.findById.mockImplementation(async (id) =>
+        id === original.id ? original : newer
+      );
+      const handler = buildHandler(
+        client,
+        notificationManager,
+        userModerationService,
+        securityActionService,
+        configService,
+        verificationEventRepository,
+        threadManager,
+        adminActionRepository
+      );
+      const notification = buildInteraction(
+        buildAdminActionCustomId('menu', 'case', 'user-1'),
+        'guild-1',
+        { id: 'admin-1' } as User
+      );
+      Object.assign(notification, {
+        message: { id: original.notification_message_id },
+        channelId: 'admin-text-channel',
+      });
+      grantInteractionPermissions(notification);
+      await handler.handleButtonInteraction(notification);
+      const menu = (notification.reply as jest.Mock).mock.calls.at(-1)?.[0];
+      const button = menu.components
+        .flatMap((row: ActionRowBuilder<ButtonBuilder>) => row.components)
+        .map((component: ButtonBuilder) => component.toJSON())
+        .find(
+          (component: { custom_id?: string }) =>
+            component.custom_id && parseAdminActionCustomId(component.custom_id)?.action === action
+        );
+      expect(button?.custom_id).toBeDefined();
+      expect(parseAdminActionCustomId(button.custom_id)?.verificationEventId).toBe(original.id);
+      const ephemeral = buildInteraction(button.custom_id, 'guild-1', notification.user);
+      Object.assign(ephemeral, {
+        message: { id: 'distinct-ephemeral-menu' },
+        channelId: 'admin-text-channel',
+      });
+      grantInteractionPermissions(ephemeral);
+      await handler.handleButtonInteraction(ephemeral);
+      if (action === 'verify') {
+        expect(ephemeral.update).toHaveBeenCalledTimes(1);
+        const confirmation = (
+          ephemeral.update as jest.Mock
+        ).mock.calls[0][0].components[0].components[0].toJSON();
+        expect(parseAdminActionCustomId(confirmation.custom_id)?.verificationEventId).toBe(
+          original.id
+        );
+      } else {
+        expect(ephemeral.showModal).toHaveBeenCalledTimes(1);
+        const submission = {
+          id: 'modal-submit',
+          customId: 'verification:ban_modal:user-1',
+          guildId: 'guild-1',
+          user: notification.user,
+          fields: { getTextInputValue: jest.fn(() => 'review') },
+          deferReply: jest.fn(),
+          editReply: jest.fn(),
+          reply: jest.fn(),
+        } as unknown as ModalSubmitInteraction;
+        grantInteractionPermissions(submission);
+        await handler.handleModalSubmit(submission);
+        expect(userModerationService.banUser).not.toHaveBeenCalled();
+      }
+    }
+  );
+
+  it.each([
+    ['ban', true],
+    ['kick', true],
+    ['ban', false],
+    ['kick', false],
+  ] as const)(
+    'checks fresh required-reason policy for blank %s modal, fresh required=%s',
+    async (action, freshRequired) => {
+      configService.getServerConfig.mockImplementation(
+        async (guildId, options) =>
+          ({
+            guild_id: guildId,
+            settings: {
+              moderator_ban_action_enabled: true,
+              moderator_kick_action_enabled: true,
+              moderator_ban_action_requires_reason:
+                action === 'ban' && Boolean(options?.forceRefresh) && freshRequired,
+              moderator_kick_action_requires_reason:
+                action === 'kick' && Boolean(options?.forceRefresh) && freshRequired,
+            },
+          }) as any
+      );
+      const handler = buildHandler(
+        client,
+        notificationManager,
+        userModerationService,
+        securityActionService,
+        configService,
+        verificationEventRepository,
+        threadManager,
+        adminActionRepository
+      );
+      const submission = {
+        id: 'modal-submit',
+        customId: `verification:${action}_modal:user-1`,
+        guildId: 'guild-1',
+        user: { id: 'admin-1' },
+        fields: { getTextInputValue: jest.fn(() => '  ') },
+        deferReply: jest.fn(),
+        editReply: jest.fn(),
+        reply: jest.fn(),
+      } as unknown as ModalSubmitInteraction;
+      grantInteractionPermissions(submission);
+      await issueCaseModal(handler, submission);
+      await handler.handleModalSubmit(submission);
+      const effect =
+        action === 'ban' ? userModerationService.banUser : userModerationService.kickUser;
+      if (freshRequired) expect(effect).not.toHaveBeenCalled();
+      else
+        expect(effect).toHaveBeenCalledWith(
+          expect.objectContaining({ id: 'user-1' }),
+          action === 'ban'
+            ? 'Banned by moderator during verification'
+            : 'Kicked by moderator during verification',
+          submission.user
+        );
+      expect(configService.getServerConfig).toHaveBeenCalledWith('guild-1', {
+        forceRefresh: true,
+        failOnReadError: true,
+      });
+    }
+  );
+
+  it('does not rebind an unexpired case modal to a newer case', async () => {
+    enableModeratorBanActions();
+    const handler = buildHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const first = buildInteraction(
+      buildAdminActionCustomId('ban', 'case', 'user-1', undefined, 'ver-1'),
+      'guild-1',
+      { id: 'admin-1' } as User
+    );
+    const second = buildInteraction(
+      buildAdminActionCustomId('ban', 'case', 'user-1', undefined, 'ver-new'),
+      'guild-1',
+      { id: 'admin-1' } as User
+    );
+    grantInteractionPermissions(first);
+    grantInteractionPermissions(second);
+    await handler.handleButtonInteraction(first);
+    await handler.handleButtonInteraction(second);
+    expect(first.showModal).toHaveBeenCalledTimes(1);
+    expect(second.showModal).not.toHaveBeenCalled();
+    expect(userModerationService.banUser).not.toHaveBeenCalled();
+  });
+
+  it.each(['expired', 'wrong_actor', 'wrong_action'] as const)(
+    'rejects %s case modal evidence before moderation effects',
+    async (failure) => {
+      enableModeratorBanActions();
+      const handler = buildHandler(
+        client,
+        notificationManager,
+        userModerationService,
+        securityActionService,
+        configService,
+        verificationEventRepository,
+        threadManager,
+        adminActionRepository
+      );
+      const interaction = {
+        customId: 'verification:ban_modal:user-1',
+        guildId: 'guild-1',
+        user: { id: 'admin-1' },
+        fields: { getTextInputValue: jest.fn(() => 'reason') },
+        deferReply: jest.fn(),
+        editReply: jest.fn(),
+        reply: jest.fn(),
+      } as unknown as ModalSubmitInteraction;
+      grantInteractionPermissions(interaction);
+      await issueCaseModal(handler, interaction);
+      const clock =
+        failure === 'expired'
+          ? jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 10 * 60 * 1000 + 1)
+          : null;
+      if (failure === 'wrong_actor') Object.assign(interaction, { user: { id: 'another-admin' } });
+      if (failure === 'wrong_action')
+        Object.assign(interaction, { customId: 'verification:kick_modal:user-1' });
+      try {
+        await handler.handleModalSubmit(interaction);
+      } finally {
+        clock?.mockRestore();
+      }
+      expect(userModerationService.banUser).not.toHaveBeenCalled();
+      expect(userModerationService.banUserById).not.toHaveBeenCalled();
+      expect(userModerationService.kickUser).not.toHaveBeenCalled();
+    }
+  );
+
   it('submits verifier ban modal with final notes', async () => {
     enableModeratorBanActions();
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -2135,6 +2504,7 @@ describe('InteractionHandler (unit)', () => {
     } as unknown as ModalSubmitInteraction;
     grantOnlyBanMembersPermission(interaction);
 
+    await issueCaseModal(handler, interaction);
     await handler.handleModalSubmit(interaction);
 
     expect(userModerationService.banUser).toHaveBeenCalledWith(
@@ -2154,10 +2524,11 @@ describe('InteractionHandler (unit)', () => {
       id: 'guild-1',
       members: {
         me: { permissions: { has: jest.fn().mockReturnValue(true) } },
+        fetchMe: jest.fn().mockResolvedValue({ permissions: { has: () => true } }),
         fetch: jest.fn().mockRejectedValue(new Error('Unknown Member')),
       },
     });
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -2183,6 +2554,10 @@ describe('InteractionHandler (unit)', () => {
     } as unknown as ModalSubmitInteraction;
     grantOnlyBanMembersPermission(interaction);
 
+    verificationEventRepository.findById.mockResolvedValue(
+      buildVerificationEvent('ver-1', 'user-left')
+    );
+    await issueCaseModal(handler, interaction);
     await handler.handleModalSubmit(interaction);
 
     expect(userModerationService.banUser).not.toHaveBeenCalled();
@@ -2196,7 +2571,7 @@ describe('InteractionHandler (unit)', () => {
 
   it('submits verifier ban modal with the default reason when notes are blank', async () => {
     enableModeratorBanActions();
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -2222,6 +2597,7 @@ describe('InteractionHandler (unit)', () => {
     } as unknown as ModalSubmitInteraction;
     grantOnlyBanMembersPermission(interaction);
 
+    await issueCaseModal(handler, interaction);
     await handler.handleModalSubmit(interaction);
 
     expect(userModerationService.banUser).toHaveBeenCalledWith(
@@ -2239,7 +2615,7 @@ describe('InteractionHandler (unit)', () => {
         }),
       },
     });
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -2277,7 +2653,7 @@ describe('InteractionHandler (unit)', () => {
   });
 
   it('handles observed open case button', async () => {
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -2310,7 +2686,7 @@ describe('InteractionHandler (unit)', () => {
   });
 
   it('does not open cases from old observed restrict custom ID codes', async () => {
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -2336,7 +2712,7 @@ describe('InteractionHandler (unit)', () => {
 
   it('shows an observed kick reason modal for present members', async () => {
     enableObservedKickActions();
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -2368,7 +2744,7 @@ describe('InteractionHandler (unit)', () => {
     securityActionService.kickObservedDetection.mockRejectedValueOnce(
       new Error('Discord rejected')
     );
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -2402,7 +2778,7 @@ describe('InteractionHandler (unit)', () => {
   });
 
   it('shows a case kick reason modal by default', async () => {
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -2426,7 +2802,7 @@ describe('InteractionHandler (unit)', () => {
   });
 
   it('submits case kick modal with the default reason when blank', async () => {
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -2451,6 +2827,7 @@ describe('InteractionHandler (unit)', () => {
     } as unknown as ModalSubmitInteraction;
     grantInteractionPermissions(interaction);
 
+    await issueCaseModal(handler, interaction);
     await handler.handleModalSubmit(interaction);
 
     expect(userModerationService.kickUser).toHaveBeenCalledWith(
@@ -2466,7 +2843,7 @@ describe('InteractionHandler (unit)', () => {
 
   it('submits observed kick modal with the provided reason', async () => {
     enableObservedKickActions();
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -2505,8 +2882,197 @@ describe('InteractionHandler (unit)', () => {
     });
   });
 
+  async function prepareNativeBanConfirmation(): Promise<{
+    handler: InteractionHandler;
+    modalId: string;
+  }> {
+    const handler = buildHandler(
+      client,
+      notificationManager,
+      userModerationService,
+      securityActionService,
+      configService,
+      verificationEventRepository,
+      threadManager,
+      adminActionRepository
+    );
+    const reason = {
+      id: 'reason-1',
+      customId: 'moderation_action_reason:ban:user-1',
+      guildId: 'guild-1',
+      user: { id: 'moderator-1' },
+      fields: { getTextInputValue: () => 'native ban reason' },
+      reply: jest.fn(),
+      replied: false,
+      deferred: false,
+    } as unknown as ModalSubmitInteraction;
+    grantOnlyBanMembersPermission(reason);
+    await handler.handleModalSubmit(reason);
+    const reply = (reason.reply as jest.Mock).mock.calls[0][0];
+    const button = buildInteraction(
+      reply.components[0].components[0].toJSON().custom_id,
+      'guild-1',
+      { id: 'moderator-1' } as User
+    );
+    grantOnlyBanMembersPermission(button);
+    await handler.handleButtonInteraction(button);
+    const modalId = (button.showModal as jest.Mock).mock.calls[0][0].toJSON().custom_id;
+    return { handler, modalId };
+  }
+
+  function nativeBanSubmission(modalId: string, requestId: string): ModalSubmitInteraction {
+    const interaction = {
+      id: requestId,
+      customId: modalId,
+      guildId: 'guild-1',
+      user: { id: 'moderator-1' },
+      fields: { getTextInputValue: () => 'BAN' },
+      reply: jest.fn(),
+      deferReply: jest.fn(),
+      editReply: jest.fn(),
+      replied: false,
+      deferred: false,
+    } as unknown as ModalSubmitInteraction;
+    grantOnlyBanMembersPermission(interaction);
+    return interaction;
+  }
+
+  it('consumes native pending confirmation once across overlapping valid submissions', async () => {
+    const { handler, modalId } = await prepareNativeBanConfirmation();
+    let releasePolicyRead = (): void => {
+      throw new Error('Policy read not arranged');
+    };
+    let signalPolicyRead = (): void => {
+      throw new Error('Policy read signal not arranged');
+    };
+    const heldPolicyRead = new Promise<void>((resolve) => {
+      releasePolicyRead = resolve;
+    });
+    const policyReadStarted = new Promise<void>((resolve) => {
+      signalPolicyRead = resolve;
+    });
+    (configService.getServerConfig as jest.Mock).mockImplementationOnce(async () => {
+      signalPolicyRead();
+      await heldPolicyRead;
+      return { settings: {} };
+    });
+
+    const first = handler.handleModalSubmit(nativeBanSubmission(modalId, 'first-confirmation'));
+    await policyReadStarted;
+    const second = nativeBanSubmission(modalId, 'second-confirmation');
+    try {
+      await handler.handleModalSubmit(second);
+    } finally {
+      releasePolicyRead();
+      await first;
+    }
+
+    expect(userModerationService.banUser).toHaveBeenCalledTimes(1);
+    expect(userModerationService.banUserById).not.toHaveBeenCalled();
+    expect(second.reply).toHaveBeenCalledWith({
+      content: 'That confirmation expired. Start the action again if you still want to continue.',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('consumes valid native confirmation when policy denies it before a later retry', async () => {
+    const { handler, modalId } = await prepareNativeBanConfirmation();
+    (configService.getServerConfig as jest.Mock).mockResolvedValue({
+      settings: { moderator_ban_action_enabled: false },
+    });
+    const denied = nativeBanSubmission(modalId, 'denied-confirmation');
+    await handler.handleModalSubmit(denied);
+    expect(userModerationService.banUser).not.toHaveBeenCalled();
+    expect(denied.reply).toHaveBeenCalledWith({
+      content:
+        'Drasil ban actions are disabled for this server or the bot lacks Ban Members permission.',
+      flags: MessageFlags.Ephemeral,
+    });
+
+    (configService.getServerConfig as jest.Mock).mockResolvedValue({ settings: {} });
+    const retry = nativeBanSubmission(modalId, 'retried-confirmation');
+    await handler.handleModalSubmit(retry);
+    expect(userModerationService.banUser).not.toHaveBeenCalled();
+    expect(userModerationService.banUserById).not.toHaveBeenCalled();
+    expect(retry.reply).toHaveBeenCalledWith({
+      content: 'That confirmation expired. Start the action again if you still want to continue.',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it.each(['ban_reason', 'kick_reason', 'expired', 'wrong_actor', 'wrong_guild'] as const)(
+    'native confirmation blocks %s before enforcement',
+    async (scenario) => {
+      jest.useFakeTimers();
+      try {
+        const action = scenario === 'kick_reason' ? 'kick' : 'ban';
+        const handler = buildHandler(
+          client,
+          notificationManager,
+          userModerationService,
+          securityActionService,
+          configService,
+          verificationEventRepository,
+          threadManager,
+          adminActionRepository
+        );
+        const reasonInteraction = {
+          id: 'reason-1',
+          customId: `moderation_action_reason:${action}:user-1`,
+          guildId: 'guild-1',
+          user: { id: 'moderator-1' },
+          fields: { getTextInputValue: () => '' },
+          reply: jest.fn(),
+          replied: false,
+          deferred: false,
+        } as unknown as ModalSubmitInteraction;
+        grantInteractionPermissions(reasonInteraction);
+        await handler.handleModalSubmit(reasonInteraction);
+        const reply = (reasonInteraction.reply as jest.Mock).mock.calls[0][0];
+        const confirmButton = buildInteraction(
+          reply.components[0].components[0].toJSON().custom_id,
+          'guild-1',
+          { id: 'moderator-1' } as User
+        );
+        grantInteractionPermissions(confirmButton);
+        await handler.handleButtonInteraction(confirmButton);
+        const modalId = (confirmButton.showModal as jest.Mock).mock.calls[0][0].toJSON().custom_id;
+        if (scenario.endsWith('reason')) {
+          (configService.getServerConfig as jest.Mock).mockResolvedValue({
+            settings: {
+              moderator_ban_action_requires_reason: true,
+              moderator_kick_action_requires_reason: true,
+            },
+          });
+        }
+        if (scenario === 'expired') jest.advanceTimersByTime(10 * 60 * 1000 + 1);
+        const confirmation = {
+          id: 'confirm-1',
+          customId: modalId,
+          guildId: scenario === 'wrong_guild' ? 'another-guild' : 'guild-1',
+          user: { id: scenario === 'wrong_actor' ? 'another-actor' : 'moderator-1' },
+          fields: { getTextInputValue: () => action.toUpperCase() },
+          reply: jest.fn(),
+          deferReply: jest.fn(),
+          editReply: jest.fn(),
+          replied: false,
+          deferred: false,
+        } as unknown as ModalSubmitInteraction;
+        grantInteractionPermissions(confirmation);
+        await handler.handleModalSubmit(confirmation);
+        const enforcementCountAfterExpiredConfirmation =
+          userModerationService.banUser.mock.calls.length +
+          userModerationService.banUserById.mock.calls.length +
+          userModerationService.kickUser.mock.calls.length;
+        expect(enforcementCountAfterExpiredConfirmation).toBe(0);
+      } finally {
+        jest.useRealTimers();
+      }
+    }
+  );
+
   it('executes native ban action only after the second confirmation modal', async () => {
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -2576,7 +3142,7 @@ describe('InteractionHandler (unit)', () => {
     (configService.getServerConfig as jest.Mock).mockResolvedValue({
       settings: { [MODERATOR_KICK_ACTION_ENABLED_SETTING_KEY]: false },
     });
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -2602,7 +3168,7 @@ describe('InteractionHandler (unit)', () => {
   });
 
   it('blocks confirmed observed kick when the observed kick policy is disabled', async () => {
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -2653,7 +3219,7 @@ describe('InteractionHandler (unit)', () => {
           metadata: state === 'busy' ? { report_ban_operation_id: 'other-operation' } : {},
         }),
       };
-      const handler = new InteractionHandler(
+      const handler = buildHandler(
         client,
         notificationManager,
         userModerationService,
@@ -2744,7 +3310,7 @@ describe('InteractionHandler (unit)', () => {
         metadata: state === 'busy' ? { report_ban_operation_id: 'other-operation' } : {},
       }),
     };
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -2765,6 +3331,20 @@ describe('InteractionHandler (unit)', () => {
       requests as never,
       reports as never
     );
+    const originalReport = await reports.findById();
+    reports.findById.mockResolvedValueOnce({
+      ...originalReport,
+      server_id: 'guild-1',
+      status: 'submitted',
+      confirmed_target_user_id: 'user-1',
+      metadata: {},
+    });
+    const open = buildInteraction('report_intake_admin:b:report-1', 'guild-1', {
+      id: 'admin-1',
+    } as User);
+    Object.assign(open, { channelId: 'report-thread' });
+    grantOnlyBanMembersPermission(open);
+    await handler.handleButtonInteraction(open);
     const interaction = {
       customId: 'report_ban:report-1:user-1',
       channelId:
@@ -2847,7 +3427,7 @@ describe('InteractionHandler (unit)', () => {
         metadata: state === 'busy' ? { report_ban_operation_id: 'operation-1' } : {},
       }),
     };
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -2889,7 +3469,7 @@ describe('InteractionHandler (unit)', () => {
     expect(securityActionService.banObservedDetection).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
+  it.each([false, true, 'detection-changed', 'replayed'])(
     'runs the admin notification menu through modal submission (channel changed: %s)',
     async (changed) => {
       enableModeratorBanActions();
@@ -2929,7 +3509,7 @@ describe('InteractionHandler (unit)', () => {
         },
         channels: { fetch: jest.fn().mockResolvedValue(null) },
       });
-      const handler = new InteractionHandler(
+      const handler = buildHandler(
         client,
         notificationManager,
         userModerationService,
@@ -2950,16 +3530,52 @@ describe('InteractionHandler (unit)', () => {
         requests as never,
         reports as never
       );
-      const reportHandler = (
-        handler as unknown as {
-          reportInteractionHandler: ReportNotificationTestAccess;
+      const reporter = buildMember('guild-1', 'reporter');
+      const reportActions = createBotReportActions(
+        {
+          client: {
+            guilds: { fetch: async () => ({ members: { fetch: async () => reporter } }) },
+            channels: {
+              fetch: async () => ({
+                id: 'intake-channel',
+                guildId: 'guild-1',
+                type: ChannelType.GuildText,
+              }),
+            },
+          } as unknown as Client,
+          configService,
+          securityActionService,
+          reportIntakeService: {
+            findOpenIntakeForReporter: async () => null,
+            openIntakeFromThread: async () => ({ ...report, reporter_id: 'reporter' }),
+          } as never,
+          threadManager: {
+            createReportIntakeThread: async () => ({
+              id: 'report-thread',
+              url: 'https://example.test/thread',
+            }),
+            activateReportIntakeThread: async () => true,
+          } as never,
+        },
+        {
+          loadFresh: async (guildId, userId) => ({
+            guildId,
+            userId,
+            present: true,
+            owner: false,
+            permissions: '0',
+            roleIds: [],
+          }),
         }
-      ).reportInteractionHandler;
-      await reportHandler.notifyReportIntakeThreadOpened(
-        'guild-1',
-        buildMember('guild-1', 'reporter'),
-        { id: 'report-thread', url: 'https://example.test/thread' } as never,
-        report.id
+      );
+      await reportActions.execute(
+        {
+          guildId: 'guild-1',
+          requestId: 'start-report',
+          source: 'discord_interaction',
+          actor: { kind: 'user', userId: 'reporter' },
+        },
+        { kind: 'start_report_intake', channelId: 'intake-channel' }
       );
       const notification = adminChannel.send.mock.calls[0][0];
       const menu = buildInteraction(
@@ -2978,8 +3594,13 @@ describe('InteractionHandler (unit)', () => {
       grantOnlyBanMembersPermission(click);
       await handler.handleButtonInteraction(click);
       const modal = (click.showModal as jest.Mock).mock.calls[0][0].toJSON();
-      if (changed)
+      if (changed === true)
         (configService.getAdminChannel as jest.Mock).mockResolvedValue({ id: 'new-admin-channel' });
+      if (changed === 'detection-changed')
+        detections.findByReportIntakeId.mockResolvedValue({
+          ...detection,
+          id: 'replacement-detection',
+        });
       const submit = {
         customId: modal.custom_id,
         guildId: 'guild-1',
@@ -2993,7 +3614,10 @@ describe('InteractionHandler (unit)', () => {
       } as unknown as ModalSubmitInteraction;
       grantOnlyBanMembersPermission(submit);
       await handler.handleModalSubmit(submit);
-      expect(requests.enqueue).toHaveBeenCalledTimes(changed ? 0 : 1);
+      if (changed === 'replayed') await handler.handleModalSubmit(submit);
+      expect(requests.enqueue).toHaveBeenCalledTimes(
+        changed === true || changed === 'detection-changed' ? 0 : 1
+      );
     }
   );
 
@@ -3004,7 +3628,7 @@ describe('InteractionHandler (unit)', () => {
         [MODERATOR_BAN_ACTION_REQUIRES_REASON_SETTING_KEY]: true,
       },
     });
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -3028,7 +3652,7 @@ describe('InteractionHandler (unit)', () => {
   });
 
   it('handles observed false positive dismissal', async () => {
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -3065,7 +3689,7 @@ describe('InteractionHandler (unit)', () => {
   });
 
   it('handles observed close report confirmation as an observed dismissal', async () => {
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -3100,7 +3724,7 @@ describe('InteractionHandler (unit)', () => {
   });
 
   it('confirms the direct observed close report button as a report closeout', async () => {
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -3142,7 +3766,7 @@ describe('InteractionHandler (unit)', () => {
         }),
       },
     });
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -3177,7 +3801,7 @@ describe('InteractionHandler (unit)', () => {
         }),
       },
     });
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -3215,7 +3839,7 @@ describe('InteractionHandler (unit)', () => {
         }),
       },
     });
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -3246,7 +3870,7 @@ describe('InteractionHandler (unit)', () => {
     securityActionService.undoObservedDetectionAction.mockResolvedValueOnce(
       AdminActionType.FALSE_POSITIVE
     );
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -3303,7 +3927,7 @@ describe('InteractionHandler (unit)', () => {
       },
     });
 
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -3334,6 +3958,8 @@ describe('InteractionHandler (unit)', () => {
         }),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
     } as unknown as ModalSubmitInteraction;
 
     await handler.handleModalSubmit(interaction);
@@ -3344,10 +3970,9 @@ describe('InteractionHandler (unit)', () => {
       verificationChannelId: '123456789012345680',
       settingsPatch: {},
     });
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content:
         'Setup complete.\nCase role: <@&123456789012345678>\nAdmin channel: <#123456789012345679>\nVerification channel: <#123456789012345680>',
-      flags: MessageFlags.Ephemeral,
       allowedMentions: { parse: [] },
     });
     expect(notificationManager.setupVerificationChannel).not.toHaveBeenCalled();
@@ -3379,7 +4004,7 @@ describe('InteractionHandler (unit)', () => {
       },
     });
 
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -3407,6 +4032,8 @@ describe('InteractionHandler (unit)', () => {
         }),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
     } as unknown as ModalSubmitInteraction;
 
     await handler.handleModalSubmit(interaction);
@@ -3423,10 +4050,9 @@ describe('InteractionHandler (unit)', () => {
       verificationChannelId: '123456789012345681',
       settingsPatch: {},
     });
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content:
         'Setup complete.\nCase role: <@&123456789012345678>\nAdmin channel: <#123456789012345679>\nCreated verification channel: <#123456789012345681>',
-      flags: MessageFlags.Ephemeral,
       allowedMentions: { parse: [] },
     });
   });
@@ -3442,7 +4068,7 @@ describe('InteractionHandler (unit)', () => {
       },
     });
 
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -3469,15 +4095,16 @@ describe('InteractionHandler (unit)', () => {
         }),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
     } as unknown as ModalSubmitInteraction;
 
     await handler.handleModalSubmit(interaction);
 
     expect(configService.updateServerConfig).not.toHaveBeenCalled();
     expect(notificationManager.setupVerificationChannel).not.toHaveBeenCalled();
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: 'Setup diagnostics are not available in this runtime.',
-      flags: MessageFlags.Ephemeral,
     });
   });
 
@@ -3542,7 +4169,7 @@ describe('InteractionHandler (unit)', () => {
       },
     });
 
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -3569,6 +4196,8 @@ describe('InteractionHandler (unit)', () => {
         }),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
     } as unknown as ModalSubmitInteraction;
 
     await handler.handleModalSubmit(interaction);
@@ -3577,17 +4206,16 @@ describe('InteractionHandler (unit)', () => {
     expect(createdChannel.delete).toHaveBeenCalledWith(
       'Rolling back Drasil setup after final validation failed'
     );
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: expect.stringContaining(
         'Created verification channel <#123456789012345681> was removed.'
       ),
-      flags: MessageFlags.Ephemeral,
       allowedMentions: { parse: [] },
     });
   });
 
   it('rejects setup verification modal when role is invalid', async () => {
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -3622,109 +4250,185 @@ describe('InteractionHandler (unit)', () => {
     });
   });
 
-  it('submits a compromised-account quarantine without closing the recovery thread', async () => {
-    const verificationEvent = {
-      ...buildVerificationEvent('ver-quarantine', 'user-1'),
-      thread_id: 'thread-1',
-      case_kind: CaseKind.STANDARD,
-      attention_state: CaseAttentionState.REVIEW_REQUIRED,
-    };
-    verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
-    securityActionService.repairActiveCase.mockResolvedValue({
-      repaired: true,
-      notificationReady: true,
-      threadCreated: false,
-      threadId: 'thread-1',
-      verificationEventId: verificationEvent.id,
-      userAdded: true,
-      promptSent: false,
-      promptAlreadyPresent: true,
-      message: 'Active case ready.',
-    });
-    const accountQuarantineService = {
-      preview: jest.fn().mockResolvedValue(readyAccountQuarantinePreview),
-      quarantine: jest.fn().mockResolvedValue({
-        status: 'parked',
-        verificationEvent: {
-          ...verificationEvent,
-          case_kind: CaseKind.COMPROMISED_ACCOUNT,
-          attention_state: CaseAttentionState.PARKED,
-          containment_status: CaseContainmentStatus.CONTAINED,
+  it.each([true, false])(
+    'acknowledges quarantine preview before live reads (update=%s)',
+    async (update) => {
+      const verificationEvent = buildVerificationEvent('quarantine-responsive', 'user-1');
+      verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+      verificationEventRepository.findById.mockResolvedValue(verificationEvent);
+      const service = {
+        preview: jest.fn().mockResolvedValue(readyAccountQuarantinePreview),
+        quarantine: jest.fn(),
+      };
+      const handler = buildHandler(
+        client,
+        notificationManager,
+        userModerationService,
+        securityActionService,
+        configService,
+        verificationEventRepository,
+        threadManager,
+        adminActionRepository,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        service as any
+      );
+      const interaction = buildInteraction('preview', 'guild-1', { id: 'admin-1' } as User);
+      Object.assign(interaction, {
+        guild: {
+          members: { fetch: jest.fn().mockResolvedValue(buildMember('guild-1', 'user-1')) },
         },
-        roleResult: {
-          status: 'quarantined',
-          mode: 'on',
-          purpose: RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT,
-          snapshotId: 'snapshot-1',
-          originalRoleIds: [],
-          plannedRoleIds: [],
-          removedRoleIds: [],
-          skippedRoles: [],
-          failedRemovals: [],
+      });
+      await (handler as any).showAdminActionConfirmation(
+        interaction,
+        {
+          surface: 'case',
+          action: 'quarantine',
+          userId: 'user-1',
+          verificationEventId: verificationEvent.id,
         },
-        lockdown: { plannedActions: [] },
-        memberAudit: {
-          memberId: 'user-1',
-          bypasses: [],
-          retainedPrivilegedRoleIds: [],
-          retainedAdministratorRoleIds: [],
-          unremovablePrivilegeReasons: [],
-        },
-      }),
-    };
-    (client.guilds.fetch as jest.Mock).mockResolvedValue({
-      id: 'guild-1',
-      members: { fetch: jest.fn().mockResolvedValue(buildMember('guild-1', 'user-1')) },
-    });
-    const handler = new InteractionHandler(
-      client,
-      notificationManager,
-      userModerationService,
-      securityActionService,
-      configService,
-      verificationEventRepository,
-      threadManager,
-      adminActionRepository,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      accountQuarantineService as any
-    );
-    const interaction = {
-      customId: buildAccountQuarantineModalCustomId(verificationEvent),
-      guildId: 'guild-1',
-      user: { id: 'admin-1' } as User,
-      memberPermissions: { has: jest.fn().mockReturnValue(true) },
-      fields: { getTextInputValue: jest.fn().mockReturnValue('Reported compromise') },
-      deferReply: jest.fn().mockResolvedValue(undefined),
-      editReply: jest.fn().mockResolvedValue(undefined),
-      reply: jest.fn().mockResolvedValue(undefined),
-    } as unknown as ModalSubmitInteraction;
+        { message: 'Confirm quarantine', label: 'Continue', style: ButtonStyle.Danger },
+        { update }
+      );
+      const acknowledgement = (
+        update ? interaction.deferUpdate : interaction.deferReply
+      ) as jest.Mock;
+      expect(acknowledgement).toHaveBeenCalled();
+      expect(acknowledgement.mock.invocationCallOrder[0]).toBeLessThan(
+        verificationEventRepository.findActiveByUserAndServer.mock.invocationCallOrder[0]
+      );
+      expect(interaction.editReply).toHaveBeenCalled();
+    }
+  );
 
-    await handler.handleModalSubmit(interaction);
+  it.each(['bound', 'unissued', 'another_actor'])(
+    'binds compromised-account quarantine to its runtime preview (%s)',
+    async (binding) => {
+      const verificationEvent = {
+        ...buildVerificationEvent('ver-quarantine', 'user-1'),
+        thread_id: 'thread-1',
+        case_kind: CaseKind.STANDARD,
+        attention_state: CaseAttentionState.REVIEW_REQUIRED,
+      };
+      verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+      verificationEventRepository.findById.mockResolvedValue(verificationEvent);
+      securityActionService.repairActiveCase.mockResolvedValue({
+        repaired: true,
+        notificationReady: true,
+        threadCreated: false,
+        threadId: 'thread-1',
+        verificationEventId: verificationEvent.id,
+        userAdded: true,
+        promptSent: false,
+        promptAlreadyPresent: true,
+        message: 'Active case ready.',
+      });
+      const accountQuarantineService = {
+        preview: jest.fn().mockResolvedValue(readyAccountQuarantinePreview),
+        quarantine: jest.fn().mockResolvedValue({
+          status: 'parked',
+          verificationEvent: {
+            ...verificationEvent,
+            case_kind: CaseKind.COMPROMISED_ACCOUNT,
+            attention_state: CaseAttentionState.PARKED,
+            containment_status: CaseContainmentStatus.CONTAINED,
+          },
+          roleResult: {
+            status: 'quarantined',
+            mode: 'on',
+            purpose: RoleQuarantineSnapshotPurpose.COMPROMISED_ACCOUNT,
+            snapshotId: 'snapshot-1',
+            originalRoleIds: [],
+            plannedRoleIds: [],
+            removedRoleIds: [],
+            skippedRoles: [],
+            failedRemovals: [],
+          },
+          lockdown: { plannedActions: [] },
+          memberAudit: {
+            memberId: 'user-1',
+            bypasses: [],
+            retainedPrivilegedRoleIds: [],
+            retainedAdministratorRoleIds: [],
+            unremovablePrivilegeReasons: [],
+          },
+        }),
+      };
+      (client.guilds.fetch as jest.Mock).mockResolvedValue({
+        id: 'guild-1',
+        members: { fetch: jest.fn().mockResolvedValue(buildMember('guild-1', 'user-1')) },
+      });
+      const handler = buildHandler(
+        client,
+        notificationManager,
+        userModerationService,
+        securityActionService,
+        configService,
+        verificationEventRepository,
+        threadManager,
+        adminActionRepository,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        accountQuarantineService as any
+      );
+      const interaction = {
+        customId: buildAccountQuarantineModalCustomId(handler, verificationEvent),
+        guildId: 'guild-1',
+        user: { id: 'admin-1' } as User,
+        memberPermissions: { has: jest.fn().mockReturnValue(true) },
+        fields: { getTextInputValue: jest.fn().mockReturnValue('Reported compromise') },
+        deferReply: jest.fn().mockResolvedValue(undefined),
+        editReply: jest.fn().mockResolvedValue(undefined),
+        reply: jest.fn().mockResolvedValue(undefined),
+      } as unknown as ModalSubmitInteraction;
 
-    expect(securityActionService.repairActiveCase).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'user-1' })
-    );
-    expect(accountQuarantineService.quarantine).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'user-1' }),
-      verificationEvent,
-      interaction.user,
-      'Reported compromise'
-    );
-    expect(threadManager.resolveVerificationThread).not.toHaveBeenCalled();
-    expect(interaction.editReply).toHaveBeenCalledWith(
-      expect.objectContaining({ content: expect.stringContaining('parked the case') })
-    );
-  });
+      if (binding === 'unissued') {
+        Object.assign(interaction, {
+          customId: `verification:qa:user-1:${verificationEvent.id}:${'0'.repeat(20)}`,
+        });
+      }
+      if (binding === 'another_actor')
+        Object.assign(interaction, { user: { id: 'another-admin' } });
+      await handler.handleModalSubmit(interaction);
+      if (binding !== 'bound') {
+        expect(accountQuarantineService.quarantine).not.toHaveBeenCalled();
+        expect(securityActionService.repairActiveCase).not.toHaveBeenCalled();
+        expect(interaction.editReply).toHaveBeenCalledWith(
+          expect.objectContaining({ content: expect.stringContaining('preview is missing') })
+        );
+        return;
+      }
+
+      expect(securityActionService.repairActiveCase).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'user-1' })
+      );
+      expect(accountQuarantineService.quarantine).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'user-1' }),
+        verificationEvent,
+        interaction.user,
+        'Reported compromise'
+      );
+      expect(threadManager.resolveVerificationThread).not.toHaveBeenCalled();
+      expect(interaction.editReply).toHaveBeenCalledWith(
+        expect.objectContaining({ content: expect.stringContaining('parked the case') })
+      );
+    }
+  );
 
   it('rejects a quarantine when live containment changes after the modal preview', async () => {
     const verificationEvent = buildVerificationEvent('ver-quarantine-drift', 'user-1');
     verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    verificationEventRepository.findById.mockResolvedValue(verificationEvent);
     const changedPreview: AccountQuarantinePreview = {
       ...readyAccountQuarantinePreview,
       rolePreview: {
@@ -3741,7 +4445,7 @@ describe('InteractionHandler (unit)', () => {
       id: 'guild-1',
       members: { fetch: jest.fn().mockResolvedValue(buildMember('guild-1', 'user-1')) },
     });
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -3760,7 +4464,7 @@ describe('InteractionHandler (unit)', () => {
       accountQuarantineService as any
     );
     const interaction = {
-      customId: buildAccountQuarantineModalCustomId(verificationEvent),
+      customId: buildAccountQuarantineModalCustomId(handler, verificationEvent),
       guildId: 'guild-1',
       user: { id: 'admin-1' } as User,
       memberPermissions: { has: jest.fn().mockReturnValue(true) },
@@ -3782,6 +4486,7 @@ describe('InteractionHandler (unit)', () => {
   it('rejects a quarantine when case repair changes the previewed containment state', async () => {
     const verificationEvent = buildVerificationEvent('ver-quarantine-repair-drift', 'user-1');
     verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    verificationEventRepository.findById.mockResolvedValue(verificationEvent);
     securityActionService.repairActiveCase.mockResolvedValue({
       repaired: true,
       notificationReady: true,
@@ -3812,7 +4517,7 @@ describe('InteractionHandler (unit)', () => {
       id: 'guild-1',
       members: { fetch: jest.fn().mockResolvedValue(buildMember('guild-1', 'user-1')) },
     });
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -3831,7 +4536,7 @@ describe('InteractionHandler (unit)', () => {
       accountQuarantineService as any
     );
     const interaction = {
-      customId: buildAccountQuarantineModalCustomId(verificationEvent),
+      customId: buildAccountQuarantineModalCustomId(handler, verificationEvent),
       guildId: 'guild-1',
       user: { id: 'admin-1' } as User,
       memberPermissions: { has: jest.fn().mockReturnValue(true) },
@@ -3854,6 +4559,7 @@ describe('InteractionHandler (unit)', () => {
   it('binds modal submission to the containment preview shown before Continue', async () => {
     const verificationEvent = buildVerificationEvent('ver-quarantine-confirmation-drift', 'user-1');
     verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    verificationEventRepository.findById.mockResolvedValue(verificationEvent);
     const changedPreview: AccountQuarantinePreview = {
       ...readyAccountQuarantinePreview,
       rolePreview: {
@@ -3874,7 +4580,7 @@ describe('InteractionHandler (unit)', () => {
       id: 'guild-1',
       members: { fetch: jest.fn().mockResolvedValue(member) },
     });
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -3905,7 +4611,7 @@ describe('InteractionHandler (unit)', () => {
       { label: 'Continue', message: 'Confirm quarantine', style: ButtonStyle.Danger }
     );
 
-    const previewResponse = (previewInteraction.update as jest.Mock).mock.calls[0][0];
+    const previewResponse = (previewInteraction.editReply as jest.Mock).mock.calls[0][0];
     const continueCustomId = previewResponse.components[0].toJSON().components[0].custom_id;
     const continueInteraction = buildInteraction(continueCustomId, 'guild-1', {
       id: 'admin-1',
@@ -3940,7 +4646,7 @@ describe('InteractionHandler (unit)', () => {
     const accountQuarantineService = {
       preview: jest.fn().mockRejectedValue(new Error('Preview unavailable')),
     };
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -3974,7 +4680,7 @@ describe('InteractionHandler (unit)', () => {
       { label: 'Continue', message: 'Confirm quarantine', style: ButtonStyle.Danger }
     );
 
-    const response = (interaction.update as jest.Mock).mock.calls[0][0];
+    const response = (interaction.editReply as jest.Mock).mock.calls[0][0];
     const renderedComponents = JSON.stringify(
       response.components.map((component: { toJSON: () => unknown }) => component.toJSON())
     );
@@ -3985,6 +4691,7 @@ describe('InteractionHandler (unit)', () => {
   it('requires a usable recovery thread before applying quarantine', async () => {
     const verificationEvent = buildVerificationEvent('ver-thread-required', 'user-1');
     verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    verificationEventRepository.findById.mockResolvedValue(verificationEvent);
     securityActionService.repairActiveCase.mockResolvedValue({
       repaired: false,
       threadCreated: false,
@@ -4003,7 +4710,7 @@ describe('InteractionHandler (unit)', () => {
       id: 'guild-1',
       members: { fetch: jest.fn().mockResolvedValue(buildMember('guild-1', 'user-1')) },
     });
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -4022,7 +4729,7 @@ describe('InteractionHandler (unit)', () => {
       accountQuarantineService as any
     );
     const interaction = {
-      customId: buildAccountQuarantineModalCustomId(verificationEvent),
+      customId: buildAccountQuarantineModalCustomId(handler, verificationEvent),
       guildId: 'guild-1',
       user: { id: 'admin-1' } as User,
       memberPermissions: { has: jest.fn().mockReturnValue(true) },
@@ -4043,6 +4750,7 @@ describe('InteractionHandler (unit)', () => {
   it('requires a usable persistent admin notification before applying quarantine', async () => {
     const verificationEvent = buildVerificationEvent('ver-notification-required', 'user-1');
     verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    verificationEventRepository.findById.mockResolvedValue(verificationEvent);
     securityActionService.repairActiveCase.mockResolvedValue({
       repaired: true,
       notificationReady: false,
@@ -4062,7 +4770,7 @@ describe('InteractionHandler (unit)', () => {
       id: 'guild-1',
       members: { fetch: jest.fn().mockResolvedValue(buildMember('guild-1', 'user-1')) },
     });
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -4081,7 +4789,7 @@ describe('InteractionHandler (unit)', () => {
       accountQuarantineService as any
     );
     const interaction = {
-      customId: buildAccountQuarantineModalCustomId(verificationEvent),
+      customId: buildAccountQuarantineModalCustomId(handler, verificationEvent),
       guildId: 'guild-1',
       user: { id: 'admin-1' } as User,
       memberPermissions: { has: jest.fn().mockReturnValue(true) },
@@ -4102,6 +4810,7 @@ describe('InteractionHandler (unit)', () => {
   it('bounds a large compromised-account preview to Discord message limits', async () => {
     const verificationEvent = buildVerificationEvent('ver-quarantine-preview', 'user-1');
     verificationEventRepository.findActiveByUserAndServer.mockResolvedValue(verificationEvent);
+    verificationEventRepository.findById.mockResolvedValue(verificationEvent);
     const member = buildMember('guild-1', 'user-1');
     const accountQuarantineService = {
       preview: jest.fn().mockResolvedValue({
@@ -4118,7 +4827,7 @@ describe('InteractionHandler (unit)', () => {
         lockdown: { plannedActions: [] },
       }),
     };
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -4139,6 +4848,8 @@ describe('InteractionHandler (unit)', () => {
 
     const preview = await (handler as any).buildAccountQuarantineConfirmationMessage(
       {
+        id: 'preview-interaction',
+        user: { id: 'admin-1' },
         guildId: 'guild-1',
         guild: { members: { fetch: jest.fn().mockResolvedValue(member) } },
       },
@@ -4163,7 +4874,7 @@ describe('InteractionHandler (unit)', () => {
       },
     });
 
-    const handler = new InteractionHandler(
+    const handler = buildHandler(
       client,
       notificationManager,
       userModerationService,
@@ -4190,15 +4901,16 @@ describe('InteractionHandler (unit)', () => {
         }),
       },
       reply: jest.fn().mockResolvedValue(undefined),
+      deferReply: jest.fn().mockResolvedValue(undefined),
+      editReply: jest.fn().mockResolvedValue(undefined),
     } as unknown as ModalSubmitInteraction;
 
     await handler.handleModalSubmit(interaction);
 
     expect(configService.updateServerConfig).not.toHaveBeenCalled();
     expect(notificationManager.setupVerificationChannel).not.toHaveBeenCalled();
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: 'You need administrator permissions to complete setup.',
-      flags: MessageFlags.Ephemeral,
     });
   });
 });

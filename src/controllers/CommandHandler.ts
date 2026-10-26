@@ -1,3 +1,9 @@
+import { McpCommandHandler } from './McpCommandHandler';
+import { deferConfigurationMutation, replyToConfiguration } from './configInteractionResponse';
+import { setupCommandSchema } from '@drasil/application';
+import { requireSetupOutcome } from '../application/adapters/setup';
+import { createDiscordActionContext } from '../application/context';
+import type { BotApplication } from '../application/createBotApplication';
 import {
   Client,
   REST,
@@ -97,7 +103,7 @@ export class CommandHandler implements ICommandHandler {
     @inject(TYPES.HeuristicService) heuristicService: IHeuristicService,
     @inject(TYPES.NotificationManager) notificationManager: INotificationManager,
     @inject(TYPES.ConfigService) configService: IConfigService,
-    @inject(TYPES.UserModerationService) userModerationService: IUserModerationService,
+    @inject(TYPES.UserModerationService) _userModerationService: IUserModerationService,
     @inject(TYPES.SecurityActionService) securityActionService: ISecurityActionService,
     @inject(TYPES.ProductAnalyticsService)
     @optional()
@@ -116,7 +122,8 @@ export class CommandHandler implements ICommandHandler {
     integrityAuditService?: IIntegrityAuditService,
     @inject(TYPES.CaseThreadClosureSweepService)
     @optional()
-    caseThreadClosureSweepService?: ICaseThreadClosureSweepService
+    caseThreadClosureSweepService?: ICaseThreadClosureSweepService,
+    @inject(TYPES.BotApplication) @optional() private readonly application?: BotApplication
   ) {
     this.client = client;
     this.configService = configService;
@@ -126,16 +133,19 @@ export class CommandHandler implements ICommandHandler {
       this.configService,
       heuristicService,
       resolvedProductAnalyticsService,
-      moderationQueueService
+      moderationQueueService,
+      application
     );
     this.caseCommandHandler = new CaseCommandHandler(
       this.configService,
       securityActionService,
-      (interaction) => this.replyGuildInstallRequired(interaction)
+      (interaction) => this.replyGuildInstallRequired(interaction),
+      application
     );
     this.lockdownConfigCommandHandler = new LockdownConfigCommandHandler(
       this.configService,
-      caseRoleLockdownService
+      caseRoleLockdownService,
+      application
     );
     const reportInstructionsManager = new ReportInstructionsManager(
       this.client,
@@ -147,24 +157,24 @@ export class CommandHandler implements ICommandHandler {
     );
     this.moderationCommandHandler = new ModerationCommandHandler(
       this.configService,
-      userModerationService,
       securityActionService,
       (interaction) => this.replyGuildInstallRequired(interaction),
       integrityAuditService,
-      caseThreadClosureSweepService
+      caseThreadClosureSweepService,
+      application
     );
     this.reportCommandHandler = new ReportCommandHandler(
       reportSubmissionService,
       reportInstructionsManager,
-      (interaction) => this.replyGuildInstallRequired(interaction)
+      (interaction) => this.replyGuildInstallRequired(interaction),
+      application?.reports,
+      application
     );
     this.setupCommandHandler = new SetupCommandHandler(
       this.configService,
-      notificationManager,
-      resolvedProductAnalyticsService,
       setupDiagnosticsService,
-      reportInstructionsManager,
-      (interaction) => this.replyGuildInstallRequired(interaction)
+      (interaction) => this.replyGuildInstallRequired(interaction),
+      application
     );
 
     this.commands = buildApplicationCommands({
@@ -205,6 +215,9 @@ export class CommandHandler implements ICommandHandler {
     const { commandName } = interaction;
 
     switch (commandName) {
+      case 'mcp':
+        await new McpCommandHandler(this.application?.mcp).handleSlashCommand(interaction);
+        break;
       case 'review-report-ban':
         await this.moderationCommandHandler.handleReviewReportBanCommand(interaction);
         break;
@@ -410,17 +423,34 @@ export class CommandHandler implements ICommandHandler {
     const value = interaction.options.getString('value', true);
 
     try {
-      await this.configService.updateServerConfig(guild.id, {
-        [key]: value,
-      });
+      await deferConfigurationMutation(interaction);
+      const settingKeys = {
+        case_role_id: 'caseRoleId',
+        admin_channel_id: 'adminChannelId',
+        verification_channel_id: 'verificationChannelId',
+        admin_notification_role_id: 'adminNotificationRoleId',
+      };
+      if (!(key in settingKeys)) throw new Error('Unsupported configuration key.');
+      if (!this.application) throw new Error('Setup application is unavailable.');
+      const field = settingKeys[key as keyof typeof settingKeys];
+      requireSetupOutcome(
+        await this.application.setup.execute(
+          createDiscordActionContext({
+            guildId: guild.id,
+            userId: interaction.user.id,
+            requestId: interaction.id,
+          }),
+          setupCommandSchema.parse({ kind: 'update_setup', changes: { [field]: value } })
+        )
+      );
 
-      await interaction.reply({
+      await replyToConfiguration(interaction, {
         content: `✅ Configuration updated successfully!\n\`${key}\` has been set to \`${value}\``,
         flags: MessageFlags.Ephemeral,
       });
     } catch (error) {
       console.error(`Failed to update configuration for guild ${guild.id}:`, error);
-      await interaction.reply({
+      await replyToConfiguration(interaction, {
         content: 'An error occurred while updating the configuration. Please try again later.',
         flags: MessageFlags.Ephemeral,
       });

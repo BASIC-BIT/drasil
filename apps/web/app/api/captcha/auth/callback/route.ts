@@ -1,3 +1,4 @@
+import { createWebActionContext } from '@/lib/application/context';
 import { createHash } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { CAPTCHA_IDENTITY_MAX_AGE_SECONDS } from '@/lib/cookies';
@@ -38,10 +39,9 @@ export async function GET(request: NextRequest) {
 
   if (!cookieState || !token) {
     return clearOAuthState(
-      new NextResponse(
-        'Discord account confirmation expired. Return to the security check link and try again.',
-        { status: 400 }
-      ),
+      new NextResponse('Discord sign-in expired. Open the CAPTCHA in Discord and try again.', {
+        status: 400,
+      }),
       stateCookieName
     );
   }
@@ -59,11 +59,19 @@ export async function GET(request: NextRequest) {
     const oauthToken = await exchangeDiscordCode({ code, redirectUri });
     const user = await fetchDiscordUser(oauthToken.access_token);
     if (user.id !== challenge.userId) {
-      await recordCaptchaIdentityMismatch({
-        token,
-        discordUserId: user.id,
-        idempotencyKey: `captcha-oauth:${createHash('sha256').update(state).digest('hex')}`,
-      });
+      await recordCaptchaIdentityMismatch(
+        {
+          ...createWebActionContext({ guildId: challenge.serverId, userId: user.id }),
+          source: 'captcha',
+        },
+        {
+          challengeId: challenge.id,
+          generation: challenge.generation,
+          token,
+          discordUserId: user.id,
+          idempotencyKey: `captcha-oauth:${createHash('sha256').update(state).digest('hex')}`,
+        }
+      );
       return clearOAuthState(challengeRedirect(request, token, 'mismatch'), stateCookieName);
     }
 

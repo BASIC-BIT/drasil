@@ -26,6 +26,8 @@ export interface Server {
  * Flexible server settings stored as JSON
  */
 export interface ServerSettings {
+  captcha_method?: 'none' | 'discord_image' | 'turnstile';
+  captcha_method_revision?: number;
   captcha_mode?: 'off' | 'manual' | 'suspicious_join';
   captcha_pass_action?: 'evidence_only' | 'verify_join_only';
   captcha_challenge_lifetime_hours?: number;
@@ -36,9 +38,9 @@ export interface ServerSettings {
   gpt_message_check_count?: number; // Number of messages to check with GPT
   message_retention_days?: number; // Days to retain message history
   detection_retention_days?: number; // Days to retain detection history
-  verification_prompt_template?: string; // Custom verification thread prompt template
-  server_about?: string; // Short description of the server/community for GPT context
-  verification_context?: string; // Moderator-provided guidance for what legitimate users know
+  verification_prompt_template?: string | null; // Custom verification thread prompt template
+  server_about?: string | null; // Short description of the server/community for GPT context
+  verification_context?: string | null; // Moderator-provided guidance for what legitimate users know
   expected_topics?: string[]; // Topics, keywords, or links expected from legitimate users
   verification_ai_thread_analysis_enabled?: boolean; // Whether to analyze replies in verification threads
   verification_ai_thread_analysis_message_limit?: number; // Max flagged-user thread messages to analyze
@@ -291,9 +293,24 @@ export enum ModerationQueueItemType {
 }
 
 export enum ModerationActionRequestType {
+  AUDIT_INTEGRITY = 'audit_integrity',
+  UPDATE_SETTINGS = 'update_settings',
+  UPDATE_HEURISTICS = 'update_heuristics',
+  RESET_HEURISTICS = 'reset_heuristics',
+  LOCKDOWN_ALLOW_ADD = 'lockdown_allow_add',
+  LOCKDOWN_ALLOW_REMOVE = 'lockdown_allow_remove',
+  DISABLE_LOCKDOWN = 'disable_lockdown',
+  CLEAR_REPORT_INSTRUCTIONS = 'clear_report_instructions',
+  BAN_USER = 'ban_user',
+  KICK_USER = 'kick_user',
   OPEN_CASE_FROM_OBSERVED_DETECTION = 'open_case_from_observed_detection',
   OPEN_ADMIN_CASE = 'open_admin_case',
   MANUAL_FLAG_USER = 'manual_flag_user',
+  SUBMIT_MESSAGE_REPORT = 'submit_message_report',
+  CONFIRM_INTAKE_CANDIDATE = 'confirm_intake_candidate',
+  REJECT_INTAKE_CANDIDATES = 'reject_intake_candidates',
+  PREPARE_REPORT_BAN_REVIEW = 'prepare_report_ban_review',
+  REVIEW_UNCERTAIN_REPORT_BAN = 'review_uncertain_report_ban',
   SUBMIT_USER_REPORT = 'submit_user_report',
   START_REPORT_INTAKE = 'start_report_intake',
   CLOSE_REPORT_INTAKE = 'close_report_intake',
@@ -507,6 +524,7 @@ export interface VerificationEvent {
 
 export enum CaptchaProvider {
   TURNSTILE = 'turnstile',
+  DISCORD_IMAGE = 'discord_image',
 }
 
 export enum CaptchaChallengeStatus {
@@ -551,6 +569,7 @@ export interface CaptchaChallenge {
   server_id: string;
   user_id: string;
   provider: CaptchaProvider;
+  method_revision: number;
   status: CaptchaChallengeStatus;
   request_source: CaptchaChallengeRequestSource;
   pass_effect: CaptchaChallengePassEffect;
@@ -574,6 +593,8 @@ export interface CaptchaChallenge {
 }
 
 export interface CaptchaChallengeGenerationHistory {
+  provider: CaptchaProvider;
+  method_revision: number;
   generation: number;
   request_source: CaptchaChallengeRequestSource;
   pass_effect: CaptchaChallengePassEffect;

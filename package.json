@@ -6,7 +6,8 @@
   "main": "dist/index.js",
   "workspaces": [
     "apps/web",
-    "packages/contracts"
+    "packages/contracts",
+    "packages/application"
   ],
   "directories": {
     "doc": "docs"
@@ -33,7 +34,7 @@
     "web:storybook:build": "npm --workspace apps/web run storybook:build",
     "web:storybook:visual": "npm --workspace apps/web run test:storybook:visual",
     "web:storybook:visual:update": "npm --workspace apps/web run test:storybook:visual:update",
-    "web:e2e": "npm --workspace apps/web run test:e2e",
+    "web:e2e": "npm --workspace apps/web run test:e2e --",
     "web:e2e:visual": "npm --workspace apps/web run test:e2e:visual",
     "web:e2e:visual:update": "npm --workspace apps/web run test:e2e:visual:update",
     "contracts:build": "npm --workspace packages/contracts run build",
@@ -47,7 +48,7 @@
     "format:check": "prettier --check \"**/*.{ts,js,json,md,mjs}\"",
     "check": "npm run lint:fix && npm run build && npm test",
     "check:full": "npm run format:check && npm run check && npm run test:integration",
-    "check:ci": "npm run format:check && npm run lint && npm run build && npm test && npm run contracts:lint && npm run contracts:typecheck && npm run contracts:test:coverage && npm run web:lint && npm run web:typecheck && npm run web:test:coverage && npm run web:build && npm run web:storybook:build && npm run web:e2e && npm run web:e2e:visual && npm run web:storybook:visual && npm run test:integration && npm run db:check:rls",
+    "check:ci": "npm run format:check && npm run application:build && npm run application:lint && npm run application:typecheck && npm run application:test:coverage && npm run action:boundary && npm run lint && npm run build && npm test && npm run contracts:lint && npm run contracts:typecheck && npm run contracts:test:coverage && npm run web:lint && npm run web:typecheck && npm run test:db:prepare && npm run web:test:coverage && npm run web:build && npm run web:check:packaging && npm run web:storybook:build && npm run web:e2e && npm run web:e2e:visual && npm run web:storybook:visual && npm run test:integration && npm run web:test:integration && npm run web:e2e:mcp && npm run db:check:rls",
     "prisma:generate": "node scripts/prisma-generate.js",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:migrate:dev": "prisma migrate dev",
@@ -58,7 +59,25 @@
     "db:reset:local": "npx supabase db reset --local && node scripts/create-prisma-user.js && prisma migrate reset && npm run db:seed",
     "db:check:rls": "node scripts/check-public-rls.js",
     "intel:upload": "node scripts/upload-intel-case.js",
-    "trace:smoke": "node -r ts-node/register src/scripts/langfuseSmoke.ts"
+    "trace:smoke": "node -r ts-node/register src/scripts/langfuseSmoke.ts",
+    "application:build": "npm --workspace packages/application run build",
+    "application:typecheck": "npm --workspace packages/application run typecheck",
+    "application:lint": "npm --workspace packages/application run lint",
+    "application:test": "npm --workspace packages/application run test --",
+    "application:test:coverage": "npm --workspace packages/application run test:coverage --",
+    "prestart": "npm run application:build",
+    "predev": "npm run application:build",
+    "pretest": "npm run application:build",
+    "pretest:watch": "npm run application:build",
+    "pretest:coverage": "npm run application:build",
+    "pretest:integration": "npm run application:build",
+    "prebuild": "npm run application:build",
+    "prebuild:watch": "npm run application:build",
+    "action:boundary": "node --test scripts/check-action-boundary.test.mjs && node scripts/check-action-boundary.mjs",
+    "web:test:integration": "npm --workspace apps/web run test:integration --",
+    "test:db:prepare": "node --test scripts/owned-test-database.test.js && node scripts/prepare-test-database.js",
+    "web:e2e:mcp": "npm run build && node scripts/run-mcp-e2e.js",
+    "web:check:packaging": "NODE_ENV=production node scripts/check-mcp-packaging.mjs"
   },
   "keywords": [
     "discord",
@@ -95,16 +114,19 @@
     "typescript-eslint": "^8.28.0"
   },
   "dependencies": {
+    "@drasil/application": "file:packages/application",
     "@drasil/contracts": "file:packages/contracts",
     "@langfuse/otel": "^5.11.1",
     "@langfuse/tracing": "^5.11.1",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/context-async-hooks": "2.8.0",
+    "@opentelemetry/exporter-trace-otlp-http": "0.219.0",
     "@opentelemetry/sdk-node": "0.219.0",
     "@opentelemetry/sdk-trace-base": "2.8.0",
     "@prisma/adapter-pg": "^7.9.0",
     "@prisma/client": "^7.9.0",
     "@supabase/supabase-js": "^2.49.3",
+    "captcha-canvas": "3.4.0",
     "discord.js": "^14.18.0",
     "dotenv": "^16.4.7",
     "inversify": "^7.2.0",
@@ -113,8 +135,7 @@
     "posthog-node": "^5.35.1",
     "prisma": "^7.9.1",
     "reflect-metadata": "^0.2.2",
-    "zod": "^3.25.76",
-    "@opentelemetry/exporter-trace-otlp-http": "0.219.0"
+    "zod": "^3.25.76"
   },
   "overrides": {
     "@opentelemetry/core": "2.8.0",

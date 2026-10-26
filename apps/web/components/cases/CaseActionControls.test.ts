@@ -81,6 +81,8 @@ function renderCaptchaBypassControls(useInboxAction: boolean): string {
       actions: ['bypass_captcha'],
       canQueueCaseActions: true,
       captchaChallenge: {
+        method: 'turnstile',
+        methodRevision: 0,
         id: '11111111-1111-4111-8111-111111111111',
         status: 'failed',
         requestSource: 'moderator',
@@ -150,8 +152,11 @@ describe('CaseActionControls account quarantine', () => {
         'type="hidden" name="expectedCaptchaChallengeId" value="11111111-1111-4111-8111-111111111111"'
       );
       expect(markup).toContain('type="hidden" name="expectedCaptchaGeneration" value="3"');
+      expect(markup).toContain(
+        'Continue moderator review without treating the security check as passed.'
+      );
       expect(markup).not.toContain(
-        '<button class="button secondary compact-button" type="submit">Continue Without Browser Check</button>'
+        '<button class="button secondary compact-button" type="submit">Continue Without Security Check</button>'
       );
     }
   );

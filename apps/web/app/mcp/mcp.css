@@ -1,0 +1,105 @@
+.mcp-shell {
+  max-width: 760px;
+  margin: 3rem auto;
+  padding: 2rem;
+  background: var(--panel);
+  color: var(--text);
+}
+.mcp-header {
+  display: flex;
+  justify-content: space-between;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid var(--line);
+}
+.mcp-shell h1 {
+  margin-top: 2rem;
+  font-size: 2rem;
+}
+.mcp-shell h2 {
+  font-size: 1.15rem;
+  margin-top: 1.5rem;
+}
+.mcp-client {
+  overflow-wrap: anywhere;
+  font-size: 1.15rem;
+}
+.mcp-shell fieldset {
+  border: 0;
+  border-top: 1px solid var(--line);
+  padding: 1.5rem 0;
+  margin: 1.5rem 0 0;
+  min-width: 0;
+}
+.mcp-shell legend {
+  font-weight: 650;
+  padding-right: 1rem;
+}
+.mcp-choice {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.65rem 0;
+  cursor: pointer;
+}
+.mcp-choice input {
+  flex-shrink: 0;
+}
+.mcp-shell code,
+.mcp-shell small {
+  font-size: 0.8rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.mcp-shell code {
+  display: block;
+}
+.mcp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin: 1.5rem 0;
+}
+.mcp-shell button {
+  padding: 0.7rem 1.1rem;
+  cursor: pointer;
+}
+.mcp-shell button:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+.mcp-shell :focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+}
+.mcp-shell [role='alert'] {
+  color: var(--danger);
+}
+.mcp-connections {
+  list-style: none;
+  padding: 0;
+}
+.mcp-connections > li {
+  border-top: 1px solid var(--line);
+  padding-block: 0.75rem;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 600px) {
+  .mcp-shell {
+    margin: 0;
+    padding: 1.25rem;
+  }
+}
+
+.mcp-approval-summary {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border-block: 1px solid var(--line);
+  padding-block: 1.5rem;
+  margin-block: 1.5rem;
+  line-height: 1.6;
+}
+
+.mcp-approval-context dd {
+  margin: 0 0 0.75rem;
+  overflow-wrap: anywhere;
+}

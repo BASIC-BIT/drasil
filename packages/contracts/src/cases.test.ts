@@ -42,41 +42,43 @@ describe('case contracts', () => {
   });
 
   it('validates per-generation CAPTCHA history', () => {
-    expect(() =>
-      captchaChallengeSummarySchema.parse({
-        id: '11111111-1111-4111-8111-111111111111',
-        status: 'bypassed',
-        requestSource: 'moderator',
-        passEffect: 'evidence_only',
-        generation: 2,
-        submissionCount: 0,
-        expiresAt: '2026-06-03T01:00:00.000Z',
-        requestedAt: '2026-06-03T00:00:00.000Z',
-        deliveredAt: null,
-        deliveryErrorCode: null,
-        passedAt: null,
-        bypassedAt: '2026-06-03T00:10:00.000Z',
-        bypassedBy: 'moderator-2',
-        bypassReason: 'Identity confirmed',
-        history: [
-          {
-            generation: 1,
-            requestSource: 'moderator',
-            passEffect: 'evidence_only',
-            caseRevisionAtIssue: 0,
-            requestedBy: 'moderator-1',
-            requestedAt: '2026-06-02T00:00:00.000Z',
-            presentedAt: null,
-            outcome: 'delivery_failed',
-            outcomeAt: '2026-06-02T00:01:00.000Z',
-            deliveryErrorCode: 'discord_delivery_failed',
-            bypassedBy: null,
-            bypassedAt: null,
-            bypassReason: null,
-          },
-        ],
-      })
-    ).not.toThrow();
+    const challenge = captchaChallengeSummarySchema.parse({
+      id: '11111111-1111-4111-8111-111111111111',
+      status: 'bypassed',
+      requestSource: 'moderator',
+      passEffect: 'evidence_only',
+      generation: 2,
+      submissionCount: 0,
+      expiresAt: '2026-06-03T01:00:00.000Z',
+      requestedAt: '2026-06-03T00:00:00.000Z',
+      deliveredAt: null,
+      deliveryErrorCode: null,
+      passedAt: null,
+      bypassedAt: '2026-06-03T00:10:00.000Z',
+      bypassedBy: 'moderator-2',
+      bypassReason: 'Identity confirmed',
+      history: [
+        {
+          generation: 1,
+          requestSource: 'moderator',
+          passEffect: 'evidence_only',
+          caseRevisionAtIssue: 0,
+          requestedBy: 'moderator-1',
+          requestedAt: '2026-06-02T00:00:00.000Z',
+          presentedAt: null,
+          outcome: 'delivery_failed',
+          outcomeAt: '2026-06-02T00:01:00.000Z',
+          deliveryErrorCode: 'discord_delivery_failed',
+          bypassedBy: null,
+          bypassedAt: null,
+          bypassReason: null,
+        },
+      ],
+    });
+    expect(challenge.method).toBe('turnstile');
+    expect(challenge.methodRevision).toBe(0);
+    expect(challenge.history?.[0].method).toBe('turnstile');
+    expect(challenge.history?.[0].methodRevision).toBe(0);
   });
 
   it('sorts queue summaries with stale cases first and oldest movement first', () => {
