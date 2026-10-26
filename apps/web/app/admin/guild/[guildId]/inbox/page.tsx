@@ -1,3 +1,4 @@
+import { WorkspaceAccessFailure } from '@/components/workspace/WorkspaceReadFailure';
 import { createActiveCaseDataAdapter } from '@/lib/activeCaseDataAdapter';
 import { ModerationInboxRoute } from '@/components/workspace/ModerationWorkspaceRoute';
 import { WorkspaceShell } from '@/components/workspace/WorkspaceShell';
@@ -13,7 +14,9 @@ export default async function ModerationInboxPage({
   readonly searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { guildId } = await params;
-  const { guild, session } = await loadWorkspaceRoute(guildId, `/admin/guild/${guildId}/inbox`);
+  const access = await loadWorkspaceRoute(guildId, `/admin/guild/${guildId}/inbox`);
+  if (access.kind !== 'ready') return <WorkspaceAccessFailure code={access.kind} />;
+  const { guild, session } = access;
   const [items, parkedCases] = await Promise.all([
     createModerationInboxDataAdapter().listInboxItems(guildId),
     createActiveCaseDataAdapter().listParkedCases(guildId),

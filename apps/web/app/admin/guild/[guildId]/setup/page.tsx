@@ -1,7 +1,7 @@
+import { LegacyWorkspacePage } from '@/components/workspace/LegacyWorkspacePage';
 import { CaptchaSettingsFields } from '@/components/setup/CaptchaSettingsFields';
 import { getEffectiveCaptchaMethod } from '@drasil/contracts';
 import { captchaImageSecretConfigured } from '@drasil/application';
-import Link from 'next/link';
 import { randomUUID } from 'node:crypto';
 import { redirect } from 'next/navigation';
 import {
@@ -79,9 +79,7 @@ import {
   queueReportInstructionsRepost,
   saveGuildSetup,
 } from './actions';
-import { AccountControl } from '@/components/AccountControl';
 import { InstallInvitePanel } from '@/components/InstallInvitePanel';
-import { ThemeToggle } from '@/components/ThemeToggle';
 import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
 import { createSetupDashboardService } from '@/lib/setupDashboardService';
 import type { DiscordChannel, DiscordRole } from '@/lib/discordApi';
@@ -314,36 +312,12 @@ export default async function GuildSetupPage({ params }: PageProps) {
   const moderationQueueChannelId = server?.settings.moderation_queue_channel_id ?? null;
 
   return (
-    <main className="shell stack">
-      <nav className="topbar">
-        <Link className="brand" href="/admin">
-          <span className="brand-mark" />
-          <span>Drasil</span>
-        </Link>
-        <div className="nav-cluster">
-          <Link className="button secondary" href={`/admin/guild/${guildId}/inbox`}>
-            Inbox
-          </Link>
-          <Link className="button secondary" href={`/admin/guild/${guildId}/cases`}>
-            Active Cases
-          </Link>
-          <Link className="button secondary" href={`/admin/guild/${guildId}/reports`}>
-            Reports
-          </Link>
-          <Link className="button secondary" href={`/admin/guild/${guildId}/history`}>
-            History
-          </Link>
-          <Link className="button secondary" href={`/admin/guild/${guildId}/operations`}>
-            Operations
-          </Link>
-          <Link className="button secondary" href="/admin">
-            All Servers
-          </Link>
-          <ThemeToggle />
-          <AccountControl username={session.username} />
-        </div>
-      </nav>
-
+    <LegacyWorkspacePage
+      guildId={guildId}
+      guildName={dashboard.guildName}
+      sessionUsername={session.username}
+      currentPage="setup"
+    >
       <section className="panel stack">
         <div className="section-heading">
           <span className={dashboard.readiness === 'ready' ? 'status ok' : 'status warning'}>
@@ -1252,6 +1226,6 @@ export default async function GuildSetupPage({ params }: PageProps) {
           </p>
         </div>
       </form>
-    </main>
+    </LegacyWorkspacePage>
   );
 }

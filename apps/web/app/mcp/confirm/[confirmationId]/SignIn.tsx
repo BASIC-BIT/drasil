@@ -1,4 +1,5 @@
 'use client';
+import { PublicShell } from '@/components/workspace/PublicShell';
 import { useState } from 'react';
 /** Provider session login returns to this same saved confirmation; no approval occurs here. */
 export function ApprovalSignIn({ confirmationId }: { confirmationId: string }) {
@@ -23,12 +24,14 @@ export function ApprovalSignIn({ confirmationId }: { confirmationId: string }) {
     }
   }
   return (
-    <main className="mcp-shell">
-      <h1>Sign in to review this action</h1>
-      <button className="button" onClick={login}>
-        Sign in with Discord
-      </button>
-      {error && <p role="alert">Sign in is unavailable. Try again.</p>}
-    </main>
+    <PublicShell>
+      <main className="mcp-shell">
+        <h1>Sign in to review this action</h1>
+        <button className="button" onClick={login}>
+          Sign in with Discord
+        </button>
+        {error && <p role="alert">Sign in is unavailable. Try again.</p>}
+      </main>
+    </PublicShell>
   );
 }

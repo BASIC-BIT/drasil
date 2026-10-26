@@ -1,3 +1,4 @@
+import { PublicShell } from '@/components/workspace/PublicShell';
 import { headers } from 'next/headers';
 import { notFound } from 'next/navigation';
 import { ApprovalSignIn } from './SignIn';
@@ -27,10 +28,12 @@ export default async function Page({ params }: { params: Promise<{ confirmationI
     );
   } catch {
     return (
-      <main className="mcp-shell">
-        <h1>Confirmation unavailable</h1>
-        <p>Check the account and connection, then try again.</p>
-      </main>
+      <PublicShell>
+        <main className="mcp-shell">
+          <h1>Confirmation unavailable</h1>
+          <p>Check the account and connection, then try again.</p>
+        </main>
+      </PublicShell>
     );
   }
 }

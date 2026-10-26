@@ -417,9 +417,14 @@ export function OnboardingWizard({
           </button>
         ) : null}
         {readiness === 'ready' && step === STEPS.length - 1 ? (
-          <Link className="button" href={`/admin/guild/${guildId}/setup`}>
-            Open full settings
-          </Link>
+          <>
+            <Link className="button" href={`/admin/guild/${guildId}/inbox`}>
+              Open Inbox
+            </Link>
+            <Link className="button secondary" href={`/admin/guild/${guildId}/setup`}>
+              Open full settings
+            </Link>
+          </>
         ) : null}
       </div>
     </section>

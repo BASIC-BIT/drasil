@@ -38,6 +38,12 @@ export function workspaceFixtures() {
   let server: Server | undefined;
   let unavailable = false;
   let unauthorized = false;
+  let selectedOwner = true;
+  let selectedPermissions = '8';
+  let selectedRoleIds: string[] = [];
+  let identityId: string = id.actor;
+  const failures = new Map<string, number>();
+  const malformedResponses = new Set<string>();
   const calls: string[] = [];
   async function start() {
     server = createServer((request, response) => {
@@ -47,6 +53,29 @@ export function workspaceFixtures() {
       if (request.method !== 'GET') {
         response.writeHead(405);
         response.end('{}');
+        return;
+      }
+      const source =
+        url.pathname === '/users/@me/guilds'
+          ? 'directory'
+          : url.pathname === '/users/@me' && request.headers.authorization?.startsWith('Bearer ')
+            ? 'identity'
+            : url.pathname === `/guilds/${id.guild}`
+              ? 'guild'
+              : url.pathname.endsWith('/roles')
+                ? 'roles'
+                : url.pathname === `/guilds/${id.guild}/members/${id.actor}`
+                  ? 'member'
+                  : '';
+      if (malformedResponses.has(source)) {
+        response.writeHead(200);
+        response.end('{"controlledMalformedResponse":');
+        return;
+      }
+      const failure = failures.get(source);
+      if (failure) {
+        response.writeHead(failure, { 'Retry-After': '1' });
+        response.end(JSON.stringify({ message: 'Controlled provider failure' }));
         return;
       }
       const guild = {
@@ -73,12 +102,34 @@ export function workspaceFixtures() {
       };
       let body: unknown;
       if (url.pathname === '/users/@me/guilds') body = unauthorized ? [] : [guild];
-      else if (url.pathname === '/users/@me') body = { id: id.bot, username: 'Test bot' };
-      else if (url.pathname === `/guilds/${id.guild}`) body = guild;
+      else if (url.pathname === '/users/@me')
+        body = request.headers.authorization?.startsWith('Bearer ')
+          ? { id: identityId, username: 'Test moderator' }
+          : { id: id.bot, username: 'Test bot' };
+      else if (url.pathname === `/guilds/${id.guild}`)
+        body = { ...guild, owner_id: selectedOwner ? id.actor : id.bot };
       else if (url.pathname.endsWith('/roles'))
-        body = [{ id: id.guild, name: '@everyone', permissions: '8', position: 0, managed: false }];
+        body = [
+          {
+            id: id.guild,
+            name: '@everyone',
+            permissions: selectedPermissions,
+            position: 0,
+            managed: false,
+          },
+          {
+            id: '910000000000000020',
+            name: 'Staff',
+            permissions: '0',
+            position: 1,
+            managed: false,
+          },
+        ];
       else if (url.pathname.includes('/members/'))
-        body = { user: { id: url.pathname.split('/').at(-1) }, roles: [] };
+        body = {
+          user: { id: url.pathname.split('/').at(-1) },
+          roles: url.pathname.endsWith(id.actor) ? selectedRoleIds : [],
+        };
       else if (url.pathname.endsWith('/channels')) body = [channel];
       else if (url.pathname.startsWith('/channels/')) {
         if (unavailable) {
@@ -107,6 +158,12 @@ export function workspaceFixtures() {
     unavailable = false;
     unauthorized = false;
     calls.length = 0;
+    selectedOwner = true;
+    selectedPermissions = '8';
+    selectedRoleIds = [];
+    identityId = id.actor;
+    failures.clear();
+    malformedResponses.clear();
     await pool.query(
       'update detection_events set latest_verification_event_id=null where server_id=any($1::text[])',
       [[id.guild, id.foreignGuild]]
@@ -264,6 +321,25 @@ export function workspaceFixtures() {
     pool,
     calls,
     finishCase,
+    setMalformedResponse: (source: 'identity' | 'roles', enabled: boolean) => {
+      if (enabled) malformedResponses.add(source);
+      else malformedResponses.delete(source);
+    },
+    setProviderFailure: (
+      source: 'identity' | 'directory' | 'guild' | 'member' | 'roles',
+      status?: number
+    ) => {
+      if (status === undefined) failures.delete(source);
+      else failures.set(source, status);
+    },
+    setSelectedAuthority: (owner: boolean, permissions: string, roleIds: string[] = []) => {
+      selectedOwner = owner;
+      selectedPermissions = permissions;
+      selectedRoleIds = roleIds;
+    },
+    setIdentity: (value: string) => {
+      identityId = value;
+    },
     setUnavailable: (value: boolean) => {
       unavailable = value;
     },

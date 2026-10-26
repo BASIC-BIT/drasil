@@ -1,3 +1,4 @@
+import { WorkspaceAccessFailure } from '@/components/workspace/WorkspaceReadFailure';
 import { ModerationRecordRoute } from '@/components/workspace/ModerationWorkspaceRoute';
 import { WorkspaceShell } from '@/components/workspace/WorkspaceShell';
 import {
@@ -15,10 +16,9 @@ export default async function RecordPage({
   readonly searchParams: Promise<{ readonly returnTo?: string | string[] }>;
 }) {
   const { guildId, reportId } = await params;
-  const { guild, session, adapter } = await loadWorkspaceRoute(
-    guildId,
-    `/admin/guild/${guildId}/reports/${reportId}`
-  );
+  const access = await loadWorkspaceRoute(guildId, `/admin/guild/${guildId}/reports/${reportId}`);
+  if (access.kind !== 'ready') return <WorkspaceAccessFailure code={access.kind} />;
+  const { guild, session, adapter } = access;
   const detail = await loadReportWorkspace(guildId, reportId, adapter);
   if (!detail) notFound();
   return (

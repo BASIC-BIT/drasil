@@ -1,6 +1,8 @@
 'use client';
 
 import type { CaseCleanupActions } from '@/components/cases/CaseWorkspaceController';
+import { WorkspaceReadFailure } from '@/components/workspace/WorkspaceReadFailure';
+import { WorkspaceReadError, type WorkspaceReadFailureCode } from '@/lib/workspaceReadFailure';
 import { ParkedRecoveryList } from './ParkedRecoveryList';
 import { ActionButton } from '@/components/workspace/Foundation';
 import { chooseInboxContinuation } from '@/lib/inboxContinuation';
@@ -45,7 +47,12 @@ export type InboxDetailState =
       readonly detail: WorkspaceItemDetail;
       readonly loadedAt: string;
     }
-  | { readonly kind: 'unavailable'; readonly guildId: string; readonly itemId: string };
+  | {
+      readonly kind: 'failed';
+      readonly code: WorkspaceReadFailureCode;
+      readonly guildId: string;
+      readonly itemId: string;
+    };
 interface QueueRestoration {
   readonly ordering: readonly string[];
   readonly focusId: string | null;
@@ -163,6 +170,10 @@ function GuildInboxWorkspace({
   const [location, setLocation] = useState(initialLocation);
   const [detailState, setDetailState] = useState<InboxDetailState | null>(null);
   const [refresh, setRefresh] = useState(0);
+  const [refreshFailure, setRefreshFailure] = useState<{
+    readonly itemId: string;
+    readonly code: WorkspaceReadFailureCode;
+  } | null>(null);
   const queue = useRef<HTMLDivElement>(null);
   const detailRegion = useRef<HTMLDivElement>(null);
   const ordering = useRef<readonly string[]>([]);
@@ -354,9 +365,10 @@ function GuildInboxWorkspace({
         )
           return;
         if (!matchesDetailIdentity(detail, guildId, itemId)) {
-          setDetailState({ kind: 'unavailable', guildId, itemId });
+          setDetailState({ kind: 'failed', code: 'unavailable', guildId, itemId });
           return;
         }
+        setRefreshFailure(null);
         completedReadTime.current = Math.max(Date.now(), completedReadTime.current + 1);
         setDetailState({
           kind: 'ready',
@@ -366,13 +378,20 @@ function GuildInboxWorkspace({
           loadedAt: new Date(completedReadTime.current).toISOString(),
         });
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (controller.signal.aborted || sequence !== loadSequence.current) return;
-        // Failed refreshes retain the selected evidence/result and do not reconcile a lost response.
+        const code = error instanceof WorkspaceReadError ? error.code : 'internal_error';
+        setRefreshFailure({ itemId, code });
+        // Revoked access unmounts evidence, confirmations and receipts. A transient read failure
+        // retains domain results so a lost refresh never erases a completed action's receipt.
         setDetailState((previous) =>
-          previous?.kind === 'ready' && previous.itemId === itemId
+          code !== 'authentication_required' &&
+          code !== 'access_denied' &&
+          code !== 'not_found' &&
+          previous?.kind === 'ready' &&
+          previous.itemId === itemId
             ? previous
-            : { kind: 'unavailable', guildId, itemId }
+            : { kind: 'failed', code, guildId, itemId }
         );
       });
     return () => controller.abort();
@@ -560,6 +579,13 @@ function GuildInboxWorkspace({
               aria-label="Selected inbox item"
               className={styles.detail}
             >
+              {selected && refreshFailure?.itemId === selected.itemId ? (
+                <WorkspaceReadFailure
+                  code={refreshFailure.code}
+                  returnTo={returnHref}
+                  onRetry={() => setRefresh((value) => value + 1)}
+                />
+              ) : null}
               {selected ? (
                 <InboxActionRequestPollingProvider
                   enabled
@@ -587,9 +613,13 @@ function GuildInboxWorkspace({
                     }}
                   />
                 </InboxActionRequestPollingProvider>
-              ) : detailState?.kind === 'unavailable' &&
+              ) : detailState?.kind === 'failed' &&
                 detailState.itemId === location.selectedItemId ? (
-                <p>Item unavailable. Return to the queue or refresh this item.</p>
+                <WorkspaceReadFailure
+                  code={detailState.code}
+                  returnTo={returnHref}
+                  onRetry={() => setRefresh((value) => value + 1)}
+                />
               ) : (
                 <p role="status">Loading item...</p>
               )}

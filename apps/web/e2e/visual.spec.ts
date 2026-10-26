@@ -56,7 +56,7 @@ async function expectElementVisualSchemes(
 test('landing page visual baseline @visual', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'light' });
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: /review scams/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /shared protection/i })).toBeVisible();
   await expectVisualSchemes(page, 'landing-page');
 });
 
@@ -117,7 +117,7 @@ test('guild setup visual baseline @visual', async ({ page }) => {
 test('operations visual baseline @visual', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'light' });
   await page.goto('/admin/guild/guild-1/operations');
-  await expect(page.getByRole('heading', { name: /fixture guild operations/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Operations', exact: true })).toBeVisible();
   await expectInboxLink(page, '/admin/guild/guild-1/inbox');
   await expect(page.getByText('#moderation-queue')).toBeVisible();
   await expectVisualSchemes(page, 'operations');
@@ -126,7 +126,7 @@ test('operations visual baseline @visual', async ({ page }) => {
 test('case history visual baseline @visual', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'light' });
   await page.goto('/admin/guild/guild-1/history');
-  await expect(page.getByRole('heading', { name: /fixture guild case history/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History', exact: true })).toBeVisible();
   await expectInboxLink(page, '/admin/guild/guild-1/inbox');
   await expectVisualSchemes(page, 'case-history');
 });

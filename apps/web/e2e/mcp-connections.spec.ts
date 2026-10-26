@@ -1,3 +1,4 @@
+import { inspectEntryPresentation } from './entrypointPresentation';
 import { expect, test } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { mcpBrowserFixtures, guildA, guildB, guildFuture, actorId } from './mcpFixtures';
@@ -31,6 +32,7 @@ test('keeps each consent tab bound to its selected client and guilds', async ({
   await expect(page.getByText('Fixture client A', { exact: true })).toBeVisible();
   await expect(page.getByText(`Client ID: ${a.client_id}`, { exact: true })).toBeVisible();
   await expect(tabB.getByText('Fixture client B', { exact: true })).toBeVisible();
+  await inspectEntryPresentation(page, 'mcp-select-servers');
   await page.getByLabel(`Fixture North ${guildA}`).check();
   await page.getByLabel(/Take moderation actions/).uncheck();
   await tabB.getByLabel(`Fixture South ${guildB}`).check();
@@ -56,6 +58,7 @@ test('keeps each consent tab bound to its selected client and guilds', async ({
   await expect(tabB.getByRole('region', { name: 'Connection summary' })).toContainText(
     'Fixture South'
   );
+  await inspectEntryPresentation(page, 'mcp-consent');
   await page.screenshot({
     path: '../../.superpowers/sdd/drasil-mcp/task-5-consent.png',
     fullPage: true,

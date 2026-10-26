@@ -2,6 +2,7 @@ import { currentReadRequestContext } from './readRequestContext';
 
 const operations = new Set([
   'mcp_http',
+  'selected_workspace_read',
   'list_guilds',
   'get_capabilities',
   'list_cases',
@@ -61,6 +62,7 @@ export interface ReadDependencyEvent {
   readonly dependency: (typeof dependencies)[number];
   readonly category: (typeof categories)[number];
   readonly boundary: (typeof boundaries)[number];
+  readonly source?: 'identity' | 'guild' | 'member' | 'roles';
   readonly status: number | null;
   /** Null when a swallowed application exception has no boundary timing. */
   readonly latencyMs: number | null;
@@ -105,6 +107,9 @@ export function recordReadDependency(
         event: 'read_dependency',
         correlationId: context.correlationId,
         operation: operations.has(context.operation) ? context.operation : 'unknown',
+        ...(event.source && ['identity', 'guild', 'member', 'roles'].includes(event.source)
+          ? { source: event.source }
+          : {}),
         dependency: dependencies.includes(event.dependency) ? event.dependency : 'internal',
         category: categories.includes(event.category) ? event.category : 'unknown',
         boundary: boundaries.includes(event.boundary) ? event.boundary : 'query',

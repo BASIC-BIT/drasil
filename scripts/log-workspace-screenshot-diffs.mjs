@@ -1,10 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import bundle from 'playwright-core/lib/utilsBundle';
+import { createRequire } from 'node:module';
 
 // Use the PNG codec already shipped with the pinned browser-test dependency.
-const { PNG } = bundle;
+const requireWeb = createRequire(new URL('../apps/web/package.json', import.meta.url));
+const { PNG } = requireWeb('playwright-core/lib/utilsBundle');
 export const MAX_CROP_BASE64_LENGTH = 8192;
 const MAX_COMPARISONS = 8;
 const MAX_CROP_SIDE = 96;
@@ -88,24 +89,29 @@ export function screenshotDiagnostic(expected, actual, diff) {
     crops,
   };
 }
-function logFailures(directory) {
-  if (!fs.existsSync(directory)) {
-    console.log(JSON.stringify({ screenshotDiagnostics: 'No workspace results directory' }));
-    return;
-  }
-  const files = fs
-    .readdirSync(directory, { recursive: true })
-    .filter((file) =>
-      /^workspace-(case|inbox)-(light|dark)-\d+-actual\.png$/.test(path.basename(file))
-    )
-    .sort();
+function logFailures(directories) {
+  const files = directories.flatMap((directory) => {
+    if (!fs.existsSync(directory)) return [];
+    return fs
+      .readdirSync(directory, { recursive: true })
+      .filter((file) => {
+        const name = path.basename(file);
+        return (
+          /^workspace-(case|inbox)-(light|dark)-\d+-actual\.png$/.test(name) ||
+          /^operations-(linux|win32)-(light|dark)-actual\.png$/.test(name)
+        );
+      })
+      .sort()
+      .map((file) => path.join(directory, file));
+  });
   for (const file of files.slice(0, MAX_COMPARISONS)) {
     try {
-      const actualPath = path.join(directory, file);
+      const actualPath = file;
       const expectedPath = actualPath.replace(/-actual\.png$/, '-expected.png');
+      const isOperations = path.basename(file).startsWith('operations-');
       const baselinePath = path.join(
-        'apps/web/e2e/moderation-workspace.spec.ts-snapshots',
-        path.basename(file).replace(/-actual\.png$/, '-linux.png')
+        `apps/web/e2e/${isOperations ? 'visual' : 'moderation-workspace'}.spec.ts-snapshots`,
+        path.basename(file).replace(/-actual\.png$/, isOperations ? '.png' : '-linux.png')
       );
       const diffPath = actualPath.replace(/-actual\.png$/, '-diff.png');
       const read = (filename) => PNG.sync.read(fs.readFileSync(filename));
@@ -123,4 +129,8 @@ function logFailures(directory) {
     console.log(JSON.stringify({ omittedComparisons: files.length - MAX_COMPARISONS }));
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url))
-  logFailures(process.argv[2] ?? 'apps/web/workspace-test-results');
+  logFailures(
+    process.argv.length > 2
+      ? process.argv.slice(2)
+      : ['apps/web/workspace-test-results', 'apps/web/test-results']
+  );

@@ -1,5 +1,4 @@
-import { AccountControl } from '@/components/AccountControl';
-import { ThemeToggle } from '@/components/ThemeToggle';
+import { LegacyWorkspacePage } from '@/components/workspace/LegacyWorkspacePage';
 import { formatUtc } from '@/lib/casePresentation';
 import type { DiscordRole } from '@/lib/discordApi';
 import type { ModerationActionRequestSummary } from '@/lib/moderationActionRequestDataAdapter';
@@ -174,42 +173,16 @@ export function OperationsView({
     integritySnapshot.findingCounts.info;
 
   return (
-    <main className="shell stack">
-      <nav className="topbar">
-        <a className="brand" href="/admin">
-          <span className="brand-mark" />
-          <span>Drasil</span>
-        </a>
-        <div className="nav-cluster">
-          <a className="button secondary" href={`/admin/guild/${guildId}/inbox`}>
-            Inbox
-          </a>
-          <a className="button secondary" href={`/admin/guild/${guildId}/cases`}>
-            Cases
-          </a>
-          <a className="button secondary" href={`/admin/guild/${guildId}/reports`}>
-            Reports
-          </a>
-          <a className="button secondary" href={`/admin/guild/${guildId}/history`}>
-            History
-          </a>
-          <a className="button secondary" href={`/admin/guild/${guildId}/setup`}>
-            Setup
-          </a>
-          <a className="button secondary" href="/admin">
-            All Servers
-          </a>
-          <ThemeToggle />
-          <AccountControl username={sessionUsername} />
-        </div>
-      </nav>
-
+    <LegacyWorkspacePage
+      guildId={guildId}
+      guildName={guildName}
+      sessionUsername={sessionUsername}
+      currentPage="operations"
+    >
       <section className="panel stack">
         <div className="section-heading">
-          <h1 className="page-title">{guildName} Operations</h1>
-          <p className="lede">
-            Queue bot-owned maintenance jobs without moving Discord queue state into the web app.
-          </p>
+          <h1 className="page-title">Operations</h1>
+          <p className="lede">Queue maintenance jobs for the bot to run.</p>
         </div>
         <div className="case-meta compact">
           <div>
@@ -564,6 +537,6 @@ export function OperationsView({
           </div>
         )}
       </section>
-    </main>
+    </LegacyWorkspacePage>
   );
 }

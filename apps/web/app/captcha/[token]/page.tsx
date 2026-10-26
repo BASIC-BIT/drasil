@@ -1,3 +1,4 @@
+import { PublicShell } from '@/components/workspace/PublicShell';
 import { randomUUID } from 'node:crypto';
 import Link from 'next/link';
 import { cookies } from 'next/headers';
@@ -33,12 +34,14 @@ export default async function CaptchaChallengePage({
 
   if (!challenge) {
     return (
-      <main className="public-flow-shell">
-        <section className="public-flow-panel">
-          <h1>CAPTCHA unavailable</h1>
-          <p>This link is invalid or no longer active. Ask a moderator for a new CAPTCHA.</p>
-        </section>
-      </main>
+      <PublicShell>
+        <main className="public-flow-shell">
+          <section className="public-flow-panel">
+            <h1>CAPTCHA unavailable</h1>
+            <p>This link is invalid or no longer active. Ask a moderator for a new CAPTCHA.</p>
+          </section>
+        </main>
+      </PublicShell>
     );
   }
   if (challenge.status === 'passed') {
@@ -48,22 +51,26 @@ export default async function CaptchaChallengePage({
       console.error('Failed to requeue completed CAPTCHA effects:', error);
     }
     return (
-      <main className="public-flow-shell">
-        <section className="public-flow-panel">
-          <h1>CAPTCHA passed</h1>
-          <p>Return to your case in Discord.</p>
-        </section>
-      </main>
+      <PublicShell>
+        <main className="public-flow-shell">
+          <section className="public-flow-panel">
+            <h1>CAPTCHA passed</h1>
+            <p>Return to your case in Discord.</p>
+          </section>
+        </main>
+      </PublicShell>
     );
   }
   if (challenge.status !== 'pending') {
     return (
-      <main className="public-flow-shell">
-        <section className="public-flow-panel">
-          <h1>CAPTCHA unavailable</h1>
-          <p>This CAPTCHA is no longer active. Ask a moderator if you need another.</p>
-        </section>
-      </main>
+      <PublicShell>
+        <main className="public-flow-shell">
+          <section className="public-flow-panel">
+            <h1>CAPTCHA unavailable</h1>
+            <p>This CAPTCHA is no longer active. Ask a moderator if you need another.</p>
+          </section>
+        </main>
+      </PublicShell>
     );
   }
 
@@ -86,41 +93,43 @@ export default async function CaptchaChallengePage({
     : null;
 
   return (
-    <main className="public-flow-shell">
-      <section className="public-flow-panel">
-        <h1>CAPTCHA</h1>
-        <p>
-          {identityMatches
-            ? 'Complete the CAPTCHA below.'
-            : 'Sign in with the Discord account this CAPTCHA was sent to.'}
-        </p>
-        {message ? (
-          <p className="status-banner" role="status">
-            {message}
+    <PublicShell>
+      <main className="public-flow-shell">
+        <section className="public-flow-panel">
+          <h1>CAPTCHA</h1>
+          <p>
+            {identityMatches
+              ? 'Complete the CAPTCHA below.'
+              : 'Sign in with the Discord account this CAPTCHA was sent to.'}
           </p>
-        ) : null}
-        {identityMatches && formConfiguration ? (
-          <TurnstileChallengeForm
-            token={token}
-            siteKey={formConfiguration.siteKey}
-            cdata={formConfiguration.cdata}
-            attemptId={randomUUID()}
-          />
-        ) : identityMatches ? (
-          <>
+          {message ? (
             <p className="status-banner" role="status">
-              CAPTCHA unavailable. Try again later or ask a moderator.
+              {message}
             </p>
-            <Link className="button" href={`/captcha/${encodeURIComponent(token)}`}>
-              Try again
+          ) : null}
+          {identityMatches && formConfiguration ? (
+            <TurnstileChallengeForm
+              token={token}
+              siteKey={formConfiguration.siteKey}
+              cdata={formConfiguration.cdata}
+              attemptId={randomUUID()}
+            />
+          ) : identityMatches ? (
+            <>
+              <p className="status-banner" role="status">
+                CAPTCHA unavailable. Try again later or ask a moderator.
+              </p>
+              <Link className="button" href={`/captcha/${encodeURIComponent(token)}`}>
+                Try again
+              </Link>
+            </>
+          ) : (
+            <Link className="button" href={`/api/captcha/auth/${encodeURIComponent(token)}`}>
+              Continue with Discord
             </Link>
-          </>
-        ) : (
-          <Link className="button" href={`/api/captcha/auth/${encodeURIComponent(token)}`}>
-            Continue with Discord
-          </Link>
-        )}
-      </section>
-    </main>
+          )}
+        </section>
+      </main>
+    </PublicShell>
   );
 }

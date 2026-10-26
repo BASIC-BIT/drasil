@@ -1,3 +1,4 @@
+import { inspectEntryPresentation } from './entrypointPresentation';
 import { expect, test } from '@playwright/test';
 import { mcpBrowserFixtures, guildA, guildB, actorId } from './mcpFixtures';
 import {
@@ -96,6 +97,7 @@ test('GET shows the full saved summary and only explicit POST approves', async (
   expect((await fixtures.pool.query('select * from mcp_executions')).rows).toHaveLength(0);
   await page.goto(`/mcp/confirm/${intent.confirmationId}`);
   expect((await store.loadIntent(principal, intent.confirmationId))?.state).toBe('pending');
+  await inspectEntryPresentation(page, 'mcp-approval');
   await page.screenshot({
     path: '../../.superpowers/sdd/drasil-mcp/task-14-confirmation.png',
     fullPage: true,
@@ -113,6 +115,7 @@ test('GET shows the full saved summary and only explicit POST approves', async (
   expect((await fixtures.pool.query('select * from mcp_executions')).rows).toHaveLength(0);
   await page.getByRole('button', { name: 'Approve', exact: true }).click();
   await expect(page.getByText('Action queued', { exact: true })).toBeVisible();
+  await inspectEntryPresentation(page, 'mcp-receipt');
   const execution = (await fixtures.pool.query('select * from mcp_executions')).rows;
   expect(execution).toHaveLength(1);
   expect(execution[0]).toMatchObject({
@@ -140,6 +143,7 @@ test('sign-in returns to the same confirmation without approving', async ({ cont
     })
   );
   await page.goto(`/mcp/confirm/${id}`);
+  await inspectEntryPresentation(page, 'mcp-approval-login');
   const request = page.waitForRequest('**/api/mcp-auth/sign-in/social');
   await page.getByRole('button', { name: 'Sign in with Discord' }).click();
   expect((await request).postDataJSON()).toEqual({
@@ -149,4 +153,15 @@ test('sign-in returns to the same confirmation without approving', async ({ cont
   expect(
     (await fixtures.pool.query('select count(*)::int as count from mcp_executions')).rows[0].count
   ).toBe(before);
+});
+
+test('unavailable saved confirmation keeps branded recovery without an approval form', async ({
+  context,
+  page,
+}) => {
+  await fixtures.reset(context);
+  await page.goto(`/mcp/confirm/${'b'.repeat(43)}`);
+  await expect(page.getByRole('heading', { name: 'Confirmation unavailable' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Approve', exact: true })).toHaveCount(0);
+  await inspectEntryPresentation(page, 'mcp-approval-unavailable');
 });

@@ -1,5 +1,5 @@
 import { AccountControl } from '@/components/AccountControl';
-import { ThemeToggle } from '@/components/ThemeToggle';
+import { PublicShell } from '@/components/workspace/PublicShell';
 import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
 import { createSetupDashboardService } from '@/lib/setupDashboardService';
 import Link from 'next/link';
@@ -22,70 +22,69 @@ export default async function AdminPage() {
   const guilds = await service.listManageableGuilds(token.accessToken);
 
   return (
-    <main className="shell stack">
-      <nav className="topbar">
-        <Link className="brand" href="/">
-          <span className="brand-mark" />
-          <span>Drasil</span>
-        </Link>
-        <div className="nav-cluster">
-          <ThemeToggle />
-          <AccountControl username={session.username} />
-        </div>
-      </nav>
-      <section className="panel stack">
-        <div className="section-heading server-list-heading">
-          <h1 className="page-title">Choose a Server</h1>
-          <p className="lede">Select a server to review moderation, history and settings.</p>
-        </div>
-        {guilds.length === 0 ? (
-          <div className="card">
-            <h2>No manageable guilds found</h2>
-            <p className="muted">Sign in with a Discord account that can manage a server.</p>
+    <PublicShell brandHref="/" actions={<AccountControl username={session.username} />}>
+      <main className="shell stack">
+        <section className="panel stack">
+          <div className="section-heading server-list-heading">
+            <h1 className="page-title">Choose a Server</h1>
+            <p className="lede">Select a server to review moderation, history and settings.</p>
           </div>
-        ) : (
-          <div className="server-list">
-            {guilds.map((guild) => (
-              <article className="server-row" key={guild.id}>
-                <div className="server-row-body">
-                  <h2>{guild.name}</h2>
-                  <p className="muted">
-                    Review reports, cases and replies in the moderation inbox.
-                  </p>
-                  <div className="actions">
-                    <Link className="button" href={`/admin/guild/${guild.id}/inbox`}>
-                      Inbox
-                    </Link>
-                    <Link className="button secondary" href={`/admin/guild/${guild.id}/history`}>
-                      History
-                    </Link>
-                    <Link className="button secondary" href={`/admin/guild/${guild.id}/operations`}>
-                      Operations
-                    </Link>
-                    <Link
-                      className="button secondary"
-                      href={`/admin/guild/${guild.id}/${guild.readiness === 'ready' ? 'setup' : 'onboarding'}`}
-                    >
-                      {guild.readiness === 'ready' ? 'Setup' : 'Finish setup'}
-                    </Link>
+          {guilds.length === 0 ? (
+            <div className="card">
+              <h2>No manageable guilds found</h2>
+              <p className="muted">Sign in with a Discord account that can manage a server.</p>
+            </div>
+          ) : (
+            <div className="server-list">
+              {guilds.map((guild) => (
+                <article className="server-row" key={guild.id}>
+                  <div className="server-row-body">
+                    <h2>{guild.name}</h2>
+                    <p className="muted">
+                      {guild.readiness === 'ready'
+                        ? 'Review reports, cases and replies in the moderation inbox.'
+                        : guild.readiness === 'not_installed'
+                          ? 'Install Drasil and configure protection for this server.'
+                          : 'Complete setup and review moderation, history and settings.'}
+                    </p>
+                    <div className="actions">
+                      <Link className="button" href={`/admin/guild/${guild.id}/inbox`}>
+                        Inbox
+                      </Link>
+                      <Link className="button secondary" href={`/admin/guild/${guild.id}/history`}>
+                        History
+                      </Link>
+                      <Link
+                        className="button secondary"
+                        href={`/admin/guild/${guild.id}/operations`}
+                      >
+                        Operations
+                      </Link>
+                      <Link
+                        className="button secondary"
+                        href={`/admin/guild/${guild.id}/${guild.readiness === 'ready' ? 'setup' : 'onboarding'}`}
+                      >
+                        {guild.readiness === 'ready' ? 'Setup' : 'Finish setup'}
+                      </Link>
+                    </div>
                   </div>
-                </div>
-                <span
-                  className={
-                    guild.readiness === 'ready'
-                      ? 'status ok server-row-status'
-                      : guild.readiness === 'blocked'
-                        ? 'status error server-row-status'
-                        : 'status warning server-row-status'
-                  }
-                >
-                  {READINESS_LABELS[guild.readiness]}
-                </span>
-              </article>
-            ))}
-          </div>
-        )}
-      </section>
-    </main>
+                  <span
+                    className={
+                      guild.readiness === 'ready'
+                        ? 'status ok server-row-status'
+                        : guild.readiness === 'blocked'
+                          ? 'status error server-row-status'
+                          : 'status warning server-row-status'
+                    }
+                  >
+                    {READINESS_LABELS[guild.readiness]}
+                  </span>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
+      </main>
+    </PublicShell>
   );
 }

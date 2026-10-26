@@ -1,139 +1,165 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
-import type { AuthorityFacts } from '@drasil/application';
+import { ReadDependencyUnavailableError } from '@drasil/application';
 const state = vi.hoisted(() => ({
   session: vi.fn(),
   token: vi.fn(),
+  identity: vi.fn(),
+  directory: vi.fn(),
   guild: vi.fn(),
+  member: vi.fn(),
+  roles: vi.fn(),
   detail: vi.fn(),
-  authority: vi.fn(),
   adapter: vi.fn(),
 }));
 vi.mock('@/lib/session', () => ({
   getCurrentAdminSession: state.session,
   getCurrentDiscordToken: state.token,
 }));
-vi.mock('@/lib/setupDashboardService', () => ({
-  createSetupDashboardService: () => ({ assertCanManageGuild: state.guild }),
-}));
-vi.mock('@/lib/application/adapters/authority', () => ({
-  createWebAuthority: () => ({ loadFresh: state.authority }),
+vi.mock('@/lib/discordApi', async (original) => ({
+  ...(await original<typeof import('@/lib/discordApi')>()),
+  fetchDiscordUser: state.identity,
+  fetchDiscordGuilds: state.directory,
+  fetchDiscordGuild: state.guild,
+  fetchDiscordGuildMember: state.member,
+  fetchDiscordGuildRoles: state.roles,
 }));
 vi.mock('@/lib/moderationWorkspaceDataAdapter', () => ({
   createModerationWorkspaceDataAdapter: state.adapter,
 }));
+import { DiscordApiError } from '@/lib/discordApi';
 import { GET } from './route';
 const request = () =>
   GET(new NextRequest('https://drasil.example/api/admin/guild/guild-1/inbox/case:case-1'), {
     params: Promise.resolve({ guildId: 'guild-1', itemId: 'case:case-1' }),
   });
-const freshActor: AuthorityFacts = {
-  guildId: 'guild-1',
-  userId: 'admin',
-  present: true,
-  owner: false,
-  permissions: '32',
-  roleIds: ['configured-moderator', 'configured-reviewer'],
-};
 beforeEach(() => {
   vi.resetAllMocks();
-  state.session.mockResolvedValue({ userId: 'admin' });
-  state.token.mockResolvedValue({ accessToken: 'token' });
-  state.guild.mockResolvedValue({ id: 'guild-1', owner: true, permissions: '8' });
-  state.authority.mockResolvedValue(freshActor);
+  vi.spyOn(console, 'info').mockImplementation(() => undefined);
+  state.session.mockResolvedValue({ userId: 'admin', expiresAt: Date.now() + 60000 });
+  state.token.mockResolvedValue({ accessToken: 'token', expiresAt: Date.now() + 60000 });
+  state.identity.mockResolvedValue({ id: 'admin', username: 'Admin' });
+  state.directory.mockRejectedValue(new ReadDependencyUnavailableError({}));
+  state.guild.mockResolvedValue({ id: 'guild-1', name: 'Selected server', owner_id: 'other' });
+  state.member.mockResolvedValue({ user: { id: 'admin' }, roles: ['staff'] });
+  state.roles.mockResolvedValue([
+    { id: 'guild-1', permissions: '32' },
+    { id: 'staff', permissions: '0' },
+  ]);
   state.adapter.mockReturnValue({ getInboxItemDetail: state.detail });
   state.detail.mockResolvedValue(null);
 });
-it.each(['session', 'token'] as const)(
-  'returns 401 without a %s before any guild read',
-  async (missing) => {
-    state[missing].mockResolvedValue(null);
-    const response = await request();
-    expect(response.status).toBe(401);
-    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
-    expect(state.guild).not.toHaveBeenCalled();
-    expect(state.authority).not.toHaveBeenCalled();
-    expect(state.adapter).not.toHaveBeenCalled();
-    expect(state.detail).not.toHaveBeenCalled();
-  }
-);
-it('retains the manageable-guild gate before loading fresh authority or detail', async () => {
-  state.guild.mockRejectedValue(new Error('private metadata'));
+async function failure(status: number, code: string) {
   const response = await request();
-  expect(response.status).toBe(403);
+  expect(response.status).toBe(status);
   expect(response.headers.get('Cache-Control')).toBe('private, no-store');
-  expect(await response.text()).not.toContain('private metadata');
-  expect(state.guild).toHaveBeenCalledExactlyOnceWith('guild-1', 'token');
-  expect(state.authority).not.toHaveBeenCalled();
+  expect(await response.json()).toEqual({ code });
   expect(state.adapter).not.toHaveBeenCalled();
   expect(state.detail).not.toHaveBeenCalled();
+  return response;
+}
+it.each(['session', 'token'] as const)(
+  'requires local %s before provider reads',
+  async (missing) => {
+    state[missing].mockResolvedValue(null);
+    await failure(401, 'authentication_required');
+    expect(state.identity).not.toHaveBeenCalled();
+    expect(state.guild).not.toHaveBeenCalled();
+  }
+);
+it('uses live identity and selected authority even when guild enumeration fails', async () => {
+  expect((await request()).status).toBe(404);
+  expect(state.identity).toHaveBeenCalledExactlyOnceWith('token');
+  expect(state.directory).not.toHaveBeenCalled();
+  expect(state.adapter).toHaveBeenCalledWith(
+    expect.objectContaining({
+      guildId: 'guild-1',
+      userId: 'admin',
+      permissions: '32',
+      roleIds: ['staff'],
+    })
+  );
 });
-it('passes exact fresh authority and configured roles to the detail adapter instead of OAuth facts', async () => {
-  await request();
-  expect(state.authority).toHaveBeenCalledExactlyOnceWith('guild-1', 'admin');
-  expect(state.adapter).toHaveBeenCalledExactlyOnceWith({
-    guildId: 'guild-1',
-    userId: 'admin',
-    present: true,
-    owner: false,
-    permissions: '32',
-    roleIds: ['configured-moderator', 'configured-reviewer'],
+it('checks live OAuth revocation before authority', async () => {
+  state.identity.mockRejectedValue(new DiscordApiError(401, 'private token'));
+  await failure(401, 'authentication_required');
+  expect(state.guild).not.toHaveBeenCalled();
+});
+it('denies identity mismatch before authority', async () => {
+  state.identity.mockResolvedValue({ id: 'different' });
+  await failure(403, 'access_denied');
+  expect(state.guild).not.toHaveBeenCalled();
+});
+it.each([
+  ['owner', '0', true, 404],
+  ['administrator', '8', false, 404],
+  ['manage server', '32', false, 404],
+  ['staff role only', '0', false, 403],
+  ['moderate members only', '1099511627776', false, 403],
+] as const)('uses fresh %s admission', async (_label, permissions, owner, status) => {
+  state.guild.mockResolvedValue({
+    id: 'guild-1',
+    name: 'Selected server',
+    owner_id: owner ? 'admin' : 'other',
   });
+  state.roles.mockResolvedValue([{ id: 'guild-1', permissions }]);
+  expect((await request()).status).toBe(status);
+  if (status === 403) expect(state.adapter).not.toHaveBeenCalled();
+});
+it('refreshes permissions each request and denies removed grants', async () => {
+  expect((await request()).status).toBe(404);
+  state.roles.mockResolvedValue([{ id: 'guild-1', permissions: '0' }]);
+  expect((await request()).status).toBe(403);
+  expect(state.identity).toHaveBeenCalledTimes(2);
+  expect(state.guild).toHaveBeenCalledTimes(2);
+  expect(state.adapter).toHaveBeenCalledTimes(1);
+});
+it.each(['guild', 'member'] as const)('rejects mismatched %s binding', async (source) => {
+  if (source === 'guild') state.guild.mockResolvedValue({ id: 'other-guild', owner_id: 'admin' });
+  else state.member.mockResolvedValue({ user: { id: 'other-user' }, roles: [] });
+  await failure(403, 'access_denied');
+});
+it.each([
+  ['member', 404, 403, 'access_denied'],
+  ['member', 403, 503, 'unavailable'],
+  ['guild', 404, 503, 'unavailable'],
+  ['roles', 404, 503, 'unavailable'],
+  ['guild', 403, 503, 'unavailable'],
+  ['roles', 403, 503, 'unavailable'],
+] as const)('classifies %s %s without an item404', async (source, providerStatus, status, code) => {
+  state[source].mockRejectedValue(new DiscordApiError(providerStatus, 'private provider body'));
+  await failure(status, code);
+});
+it.each(['identity', 'guild', 'member', 'roles'] as const)(
+  'fails closed on %s unavailability',
+  async (source) => {
+    state[source].mockRejectedValue(new ReadDependencyUnavailableError({ retryAfterSeconds: 2 }));
+    expect((await failure(503, 'unavailable')).headers.get('Retry-After')).toBe('2');
+  }
+);
+it.each([NaN, Infinity, -1, 0, 86400])(
+  'omits invalid or unbounded retry advice %s',
+  async (retryAfterSeconds) => {
+    state.identity.mockRejectedValue(new ReadDependencyUnavailableError({ retryAfterSeconds }));
+    expect((await failure(503, 'unavailable')).headers.get('Retry-After')).toBeNull();
+  }
+);
+it('sanitizes unexpected errors as500 rather than denial or provider outage', async () => {
+  state.guild.mockRejectedValue(new Error('private authority metadata'));
+  const response = await failure(500, 'internal_error');
+  expect(response.status).toBe(500);
+});
+it('returns real404 only after successful authority and sets no-store', async () => {
+  const response = await request();
+  expect(response.status).toBe(404);
+  expect(await response.json()).toMatchObject({ code: 'not_found' });
+  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
   expect(state.detail).toHaveBeenCalledExactlyOnceWith({
     guildId: 'guild-1',
     itemId: 'case:case-1',
   });
 });
-it('reloads authority on each request so removed roles are not reused', async () => {
-  state.authority.mockResolvedValueOnce(freshActor).mockResolvedValueOnce({
-    ...freshActor,
-    permissions: '0',
-    roleIds: [],
-  });
-  await request();
-  await request();
-  expect(state.authority).toHaveBeenCalledTimes(2);
-  expect(state.adapter).toHaveBeenNthCalledWith(2, {
-    guildId: 'guild-1',
-    userId: 'admin',
-    present: true,
-    owner: false,
-    permissions: '0',
-    roleIds: [],
-  });
-});
-it.each([
-  { label: 'missing', actor: null },
-  { label: 'absent', actor: { ...freshActor, present: false } },
-  { label: 'another guild', actor: { ...freshActor, guildId: 'guild-2' } },
-  { label: 'another user', actor: { ...freshActor, userId: 'other-admin' } },
-])(
-  'rejects $label authority before constructing an adapter or reading detail',
-  async ({ actor }) => {
-    state.authority.mockResolvedValue(actor);
-    const response = await request();
-    expect(response.status).toBe(403);
-    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
-    expect(await response.json()).toEqual({ error: 'Guild access denied.' });
-    expect(state.adapter).not.toHaveBeenCalled();
-    expect(state.detail).not.toHaveBeenCalled();
-  }
-);
-it('handles a fresh-authority lookup failure safely without caching or reading detail', async () => {
-  state.authority.mockRejectedValue(new Error('private authority token metadata'));
-  const response = await request();
-  expect(response.status).toBe(500);
-  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
-  expect(await response.json()).toEqual({ error: 'Unable to load inbox item.' });
-  expect(state.adapter).not.toHaveBeenCalled();
-  expect(state.detail).not.toHaveBeenCalled();
-});
-it('returns 404 without matching detail and prevents shared caching', async () => {
-  const response = await request();
-  expect(response.status).toBe(404);
-  expect(response.headers.get('Cache-Control')).toBe('private, no-store');
-});
-it('rejects invalid composed JSON without returning raw metadata', async () => {
+it('rejects invalid composed JSON without raw metadata', async () => {
   state.detail.mockResolvedValue({ metadata: 'private' });
   const response = await request();
   expect(response.status).toBe(500);

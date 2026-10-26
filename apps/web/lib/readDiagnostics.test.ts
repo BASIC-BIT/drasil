@@ -69,3 +69,31 @@ it('treats an unreadable backend error as unknown', () => {
     status: null,
   });
 });
+
+it('bounds selected workspace source diagnostics without provider text or identities', async () => {
+  const lines: string[] = [];
+  await withReadRequestContext({ operation: 'selected_workspace_read' }, async () => {
+    const event = {
+      dependency: 'discord' as const,
+      category: 'http_client_error' as const,
+      boundary: 'authority' as const,
+      source: 'member' as const,
+      status: 404,
+      latencyMs: null,
+      attempt: 1,
+      body: 'PRIVATE_BODY',
+      guildId: 'PRIVATE_GUILD',
+    };
+    recordReadDependency(event, (line) => lines.push(line));
+    recordReadDependency({ ...event, source: 'PRIVATE_SOURCE' as 'member' }, (line) =>
+      lines.push(line)
+    );
+  });
+  expect(JSON.parse(lines[0])).toMatchObject({
+    operation: 'selected_workspace_read',
+    source: 'member',
+    status: 404,
+  });
+  expect(JSON.parse(lines[1])).not.toHaveProperty('source');
+  expect(lines.join()).not.toContain('PRIVATE');
+});

@@ -1,9 +1,8 @@
+import { LegacyWorkspacePage } from '@/components/workspace/LegacyWorkspacePage';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { randomUUID } from 'node:crypto';
-import { AccountControl } from '@/components/AccountControl';
 import { OnboardingWizard } from '@/components/OnboardingWizard';
-import { ThemeToggle } from '@/components/ThemeToggle';
 import { InboxActionRequestPollingProvider } from '@/components/inbox/InboxActionRequestPoller';
 import { buildBotInviteUrl } from '@/lib/discordInvite';
 import { hasActiveInboxActionRequests } from '@/lib/inboxActionReceipts';
@@ -102,18 +101,13 @@ export default async function OnboardingPage({
   const action = completeOnboarding.bind(null, guildId);
 
   return (
-    <main className="shell stack">
-      <nav className="topbar">
-        <Link className="brand" href="/admin">
-          <span className="brand-mark" />
-          <span>Drasil</span>
-        </Link>
-        <div className="nav-cluster">
-          <Link href={`/admin/guild/${guildId}/setup`}>Full settings</Link>
-          <ThemeToggle />
-          <AccountControl username={session.username} />
-        </div>
-      </nav>
+    <LegacyWorkspacePage
+      guildId={guildId}
+      guildName={dashboard.guildName}
+      sessionUsername={session.username}
+      currentPage="setup"
+    >
+      <Link href={`/admin/guild/${guildId}/setup`}>Full settings</Link>
       <InboxActionRequestPollingProvider
         enabled={dashboard.readiness !== 'ready' || hasActiveInboxActionRequests(setupRequests)}
         serverRequests={setupRequests}
@@ -146,6 +140,6 @@ export default async function OnboardingPage({
           roles={selectableRoles.map((role) => ({ id: role.id, name: role.name }))}
         />
       </InboxActionRequestPollingProvider>
-    </main>
+    </LegacyWorkspacePage>
   );
 }
