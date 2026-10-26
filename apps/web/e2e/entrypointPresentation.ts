@@ -5,7 +5,7 @@ import path from 'node:path';
 /** Inspect the actual page in both themes and widths; retain images only on request. */
 export async function inspectEntryPresentation(page: Page, name: string): Promise<void> {
   const original = page.viewportSize();
-  for (const width of [390, 1440]) {
+  for (const width of [320, 390, 1440]) {
     await page.setViewportSize({ width, height: 1000 });
     for (const theme of ['light', 'dark']) {
       await page.emulateMedia({ colorScheme: theme === 'light' ? 'light' : 'dark' });
@@ -21,9 +21,10 @@ export async function inspectEntryPresentation(page: Page, name: string): Promis
       await expect(page.locator('[data-foundation-theme]')).toHaveCount(1);
       await expect(page.locator('[data-foundation-theme]')).toHaveCSS('color-scheme', theme);
       await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1);
-      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
-        true
-      );
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+        `${name} has horizontal overflow at ${width}px in ${theme}`
+      ).toBe(true);
       const directory = process.env.DRASIL_ENTRY_EVIDENCE_DIR;
       if (directory) {
         await mkdir(directory, { recursive: true });
