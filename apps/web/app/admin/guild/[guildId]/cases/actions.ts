@@ -1,24 +1,11 @@
 'use server';
 
-import { assertWorkspaceConfirmation, resolveWorkspaceReturnTo } from '@/lib/workspaceConfirmation';
-import type { WorkspaceActions } from '@/lib/workspaceActionTypes';
-import {
-  evaluateCasePolicy,
-  readCasePolicy,
-  getCaptchaMethodRevision,
-  type CaptchaIssuanceConfiguration,
-  type ActionContext,
-} from '@drasil/application';
-import { createWebActionContext, createWebConfirmationPort } from '@/lib/application/context';
-import { randomUUID } from 'node:crypto';
-import { revalidatePath } from 'next/cache';
-import { redirect } from 'next/navigation';
-import { caseActionSchema, getEffectiveCaptchaMethod, type CaseAction } from '@drasil/contracts';
 import {
   createActiveCaseDataAdapter,
   type CaseActionQueueResult,
   type WebCaseAction,
 } from '@/lib/activeCaseDataAdapter';
+import { createWebActionContext, createWebConfirmationPort } from '@/lib/application/context';
 import { fetchGuildResources } from '@/lib/discordApi';
 import {
   DISCORD_PERMISSIONS,
@@ -26,14 +13,23 @@ import {
   hasPermission,
   parsePermissions,
 } from '@/lib/discordPermissions';
+import { failedInboxActionState } from '@/lib/inboxActionState';
 import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
-import { createSetupDataAdapter } from '@/lib/setupDataAdapter';
 import { createSetupDashboardService } from '@/lib/setupDashboardService';
+import { createSetupDataAdapter } from '@/lib/setupDataAdapter';
+import type { WorkspaceActions } from '@/lib/workspaceActionTypes';
+import { assertWorkspaceConfirmation, resolveWorkspaceReturnTo } from '@/lib/workspaceConfirmation';
 import {
-  failedInboxActionState,
-  queuedInboxActionState,
-  type InboxActionState,
-} from '@/lib/inboxActionState';
+  evaluateCasePolicy,
+  getCaptchaMethodRevision,
+  readCasePolicy,
+  type ActionContext,
+  type CaptchaIssuanceConfiguration,
+} from '@drasil/application';
+import { caseActionSchema, getEffectiveCaptchaMethod, type CaseAction } from '@drasil/contracts';
+import { revalidatePath } from 'next/cache';
+import { redirect } from 'next/navigation';
+import { randomUUID } from 'node:crypto';
 
 const queuedCaseActions = new Set<CaseAction>([
   'verify_user',
@@ -373,9 +369,8 @@ async function performQueueCaseAction(
   guildId: string,
   caseId: string,
   action: WebCaseAction,
-  formData?: FormData,
-  returnTo = `/admin/guild/${guildId}/cases/${caseId}`,
-  workspaceConfirmation = false
+  formData: FormData,
+  returnTo: string
 ): Promise<CaseActionQueueResult> {
   const [session, token] = await Promise.all([getCurrentAdminSession(), getCurrentDiscordToken()]);
   if (!session || !token) {
@@ -389,7 +384,7 @@ async function performQueueCaseAction(
 
   const setupService = createSetupDashboardService();
   const guild = await setupService.assertCanManageGuild(guildId, token.accessToken);
-  if (workspaceConfirmation) {
+  {
     const detail = await createActiveCaseDataAdapter().getCaseDetail(guildId, caseId);
     if (
       !detail ||
@@ -431,7 +426,7 @@ async function performQueueCaseAction(
   revalidatePath(`/admin/guild/${guildId}/cases/${caseId}`);
   revalidatePath(`/admin/guild/${guildId}/history`);
 
-  if (workspaceConfirmation && result.receipt) return result;
+  if (result.receipt) return result;
   if (result.status === 'queued') {
     return result;
   }
@@ -439,39 +434,6 @@ async function performQueueCaseAction(
   throw new Error(
     queueCaseActionErrorMessages[result.status] ?? `Unsupported case action: ${parsedAction}`
   );
-}
-
-export async function queueCaseAction(
-  guildId: string,
-  caseId: string,
-  action: WebCaseAction,
-  formData?: FormData
-): Promise<void> {
-  await performQueueCaseAction(guildId, caseId, action, formData);
-}
-
-export async function queueInboxCaseAction(
-  guildId: string,
-  caseId: string,
-  action: WebCaseAction,
-  _previousState: InboxActionState,
-  formData: FormData
-): Promise<InboxActionState> {
-  try {
-    const result = await performQueueCaseAction(
-      guildId,
-      caseId,
-      action,
-      formData,
-      `/admin/guild/${guildId}/inbox`
-    );
-    if (!result.requestId) {
-      return failedInboxActionState('Drasil did not return an action request receipt.');
-    }
-    return queuedInboxActionState({ id: result.requestId, status: 'queued' });
-  } catch (error) {
-    return failedInboxActionState(error);
-  }
 }
 
 export async function submitWorkspaceCaseAction(
@@ -491,8 +453,7 @@ export async function submitWorkspaceCaseAction(
       input.caseId,
       input.action,
       formData,
-      returnTo,
-      true
+      returnTo
     );
     if (!result.receipt)
       throw new Error(

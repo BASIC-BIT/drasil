@@ -24,7 +24,8 @@
     "pretest:coverage": "npm --prefix ../.. run application:build",
     "pretypecheck": "npm --prefix ../.. run application:build",
     "test:integration": "vitest run --config vitest.integration.config.ts",
-    "pretest:integration": "npm --prefix ../.. run application:build"
+    "pretest:integration": "npm --prefix ../.. run application:build",
+    "test:e2e:workspace": "playwright test -c playwright.workspace.config.ts"
   },
   "dependencies": {
     "@drasil/contracts": "file:../../packages/contracts",

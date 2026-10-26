@@ -9,11 +9,9 @@ import {
   type MemberProfileReport,
   type ReportQueueStatus,
 } from '@drasil/contracts';
-import { discordMessageUrl } from './discordUrls';
-import { isWebE2eFixtureMode } from './e2eFixtures';
-import { resolveReportSummarySource } from './reportSummaryProvenance';
-import { fixtureMemberProfile } from './memberProfileFixtures';
 import { createActiveCaseDataAdapter } from './activeCaseDataAdapter';
+import { discordMessageUrl } from './discordUrls';
+import { resolveReportSummarySource } from './reportSummaryProvenance';
 import { getPostgresPool } from './setupDataAdapter';
 
 export interface MemberProfileDataAdapter {
@@ -416,16 +414,6 @@ export class PostgresMemberProfileDataAdapter implements MemberProfileDataAdapte
   }
 }
 
-export class FixtureMemberProfileDataAdapter implements MemberProfileDataAdapter {
-  public async getMemberProfile(guildId: string, userId: string): Promise<MemberProfile | null> {
-    return fixtureMemberProfile(guildId, userId);
-  }
-}
-
 export function createMemberProfileDataAdapter(): MemberProfileDataAdapter {
-  if (isWebE2eFixtureMode()) {
-    return new FixtureMemberProfileDataAdapter();
-  }
-
   return new PostgresMemberProfileDataAdapter();
 }

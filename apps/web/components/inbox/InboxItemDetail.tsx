@@ -1,30 +1,34 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { CaseEvidenceReader } from '@/components/cases/CaseEvidenceReader';
+import { recordLabel } from '@/components/cases/caseRecordLabel';
 import {
-  moderationInboxActionSchema,
-  type ModerationInboxAction,
-  type ReportEvidenceItem,
-} from '@drasil/contracts';
-import type { WorkspaceItemDetail, ReplyReadState } from '@/lib/moderationWorkspaceTypes';
-import type { WorkspaceActions, WorkspaceMutation } from '@/lib/workspaceActionTypes';
-import type { ModerationActionRequestSummary } from '@/lib/moderationActionRequestDataAdapter';
-import {
-  matchesWorkspaceActionRequest,
-  type WorkspaceRequestTarget,
-} from '@/lib/inboxActionReceipts';
+  CaseWorkspaceController,
+  type CaseCleanupActions,
+} from '@/components/cases/CaseWorkspaceController';
+import { ChannelConversation } from '@/components/cases/ChannelConversation';
 import {
   ConfirmedAction,
   type ConfirmedActionDescriptor,
 } from '@/components/workspace/actions/ConfirmedAction';
 import { Timestamp } from '@/components/workspace/Timestamp';
-import { CaseEvidenceReader } from '@/components/cases/CaseEvidenceReader';
-import { CaseChecks } from '@/components/cases/CaseChecks';
-import { CaseHistory } from '@/components/cases/CaseHistory';
-import { recordLabel } from '@/components/cases/caseRecordLabel';
+import { filterCaseKindActions } from '@/lib/caseActionEligibility';
+import type { ConversationSource } from '@/lib/conversationTypes';
+import {
+  matchesWorkspaceActionRequest,
+  type WorkspaceRequestTarget,
+} from '@/lib/inboxActionReceipts';
+import type { ModerationActionRequestSummary } from '@/lib/moderationActionRequestDataAdapter';
+import type { ReplyReadState, WorkspaceItemDetail } from '@/lib/moderationWorkspaceTypes';
+import type { WorkspaceActions, WorkspaceMutation } from '@/lib/workspaceActionTypes';
+import {
+  moderationInboxActionSchema,
+  type ModerationInboxAction,
+  type ReportEvidenceItem,
+} from '@drasil/contracts';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { inboxKindLabels } from './InboxQueue';
 import styles from './InboxWorkspace.module.css';
-import { filterCaseKindActions } from '@/lib/caseActionEligibility';
 
 export function inboxDetailRequests(
   detail: WorkspaceItemDetail
@@ -61,9 +65,14 @@ export function matchingInboxRequests(
 ): readonly ModerationActionRequestSummary[] {
   const target = requestTarget(detail);
   return inboxDetailRequests(detail).filter((request) =>
-    moderationInboxActionSchema.options.some((action) =>
-      matchesWorkspaceActionRequest(request, target, action)
-    )
+    [
+      ...moderationInboxActionSchema.options,
+      ...([
+        'preview_case_message_deletion',
+        'execute_case_message_deletion',
+        'ban_case_user_with_message_cleanup',
+      ] as const),
+    ].some((action) => matchesWorkspaceActionRequest(request, target, action))
   );
 }
 const routineCaseActions: readonly ModerationInboxAction[] = [
@@ -246,10 +255,36 @@ function isAllowed(detail: WorkspaceItemDetail, action: ModerationInboxAction): 
   if (detail.kind === 'observed_alert') return detail.policy.canQueueCaseActions;
   return true;
 }
-function evidence(items: readonly ReportEvidenceItem[]) {
+function ReportEvidence({
+  items,
+  sources = [],
+}: {
+  readonly items: readonly ReportEvidenceItem[];
+  readonly sources?: readonly ConversationSource[];
+}) {
+  const [selected, setSelected] = useState<string | null>(null);
+  const trigger = useRef<HTMLButtonElement | null>(null);
+  const source = sources.find(
+    (item) => `${item.recordKind}:${item.recordId}:${item.sourceKey}` === selected
+  );
+  function back(): void {
+    setSelected(null);
+    trigger.current?.focus();
+    trigger.current?.scrollIntoView({ block: 'center' });
+  }
   return (
     <section aria-label="Report evidence">
       <h2>Report evidence</h2>
+      {selected ? (
+        source ? (
+          <ChannelConversation source={source} onBackToSource={back} />
+        ) : (
+          <section aria-label="Channel conversation">
+            <p>This conversation is no longer available.</p>
+            <button onClick={back}>Back to source</button>
+          </section>
+        )
+      ) : null}
       {items.length ? (
         items.map((item) => (
           <article key={item.id} className={styles.source}>
@@ -272,6 +307,23 @@ function evidence(items: readonly ReportEvidenceItem[]) {
                 {item.attachment.contentType ? ` · ${item.attachment.contentType}` : ''}
                 {item.attachment.size !== null ? ` · ${item.attachment.size} bytes` : ''}
               </p>
+            ) : null}
+            {sources.some((candidate) => candidate.sourceKey === `evidence:${item.id}`) ? (
+              <button
+                onClick={(event) => {
+                  const descriptor = sources.find(
+                    (candidate) => candidate.sourceKey === `evidence:${item.id}`
+                  );
+                  if (descriptor) {
+                    trigger.current = event.currentTarget;
+                    setSelected(
+                      `${descriptor.recordKind}:${descriptor.recordId}:${descriptor.sourceKey}`
+                    );
+                  }
+                }}
+              >
+                View conversation
+              </button>
             ) : null}
             {item.sourceMessageUrl ? (
               <a href={item.sourceMessageUrl} target="_blank" rel="noreferrer">
@@ -332,6 +384,7 @@ export interface InboxItemDetailProps {
   readonly actions: WorkspaceActions;
   readonly onTrackedRequest: (id: string) => void;
   readonly available?: boolean;
+  readonly cleanupActions?: CaseCleanupActions;
 }
 export function InboxItemDetail(props: InboxItemDetailProps) {
   return <SelectedDetail key={`${props.detail.item.guildId}:${props.detail.item.id}`} {...props} />;
@@ -344,6 +397,7 @@ function SelectedDetail({
   actions,
   onTrackedRequest,
   available = true,
+  cleanupActions,
 }: InboxItemDetailProps) {
   const { item } = detail;
   const currentActions = useMemo(
@@ -455,6 +509,27 @@ function SelectedDetail({
       />
     );
   }
+  if (detail.kind === 'case')
+    return (
+      <CaseWorkspaceController
+        data={{ ...detail.data, loadedAt }}
+        actions={actions}
+        cleanupActions={cleanupActions}
+        returnHref={returnHref}
+        actionArea={
+          <section className={styles.actions} aria-label="Case decisions">
+            {primaryActions.map(renderAction)}
+          </section>
+        }
+        maintenance={
+          maintenanceActions.length ? (
+            <section className={styles.actions} aria-label="Case maintenance">
+              {maintenanceActions.map(renderAction)}
+            </section>
+          ) : null
+        }
+      />
+    );
   return (
     <article>
       <header>
@@ -463,7 +538,20 @@ function SelectedDetail({
         </p>
         <h1>{item.subject.displayLabel}</h1>
         <p>{item.title}</p>
-        {item.subject.userId ? <p>Member ID {item.subject.userId}</p> : <p>Target not confirmed</p>}
+        {detail.kind === 'report_attention' ? (
+          <>
+            <p>Reporter ID {detail.intake?.reporterId ?? item.subject.userId}</p>
+            {detail.intake?.targetUserId ? (
+              <p>Target ID {detail.intake.targetUserId}</p>
+            ) : (
+              <p>Target not confirmed</p>
+            )}
+          </>
+        ) : item.subject.userId ? (
+          <p>Member ID {item.subject.userId}</p>
+        ) : (
+          <p>Target not confirmed</p>
+        )}
         <p>
           Updated <Timestamp value={item.updatedAt} />
         </p>
@@ -496,10 +584,7 @@ function SelectedDetail({
         ))}
       </div>
       {primaryActions.length ? (
-        <section
-          className={styles.actions}
-          aria-label={detail.kind === 'case' ? 'Case decisions' : 'Moderation actions'}
-        >
+        <section className={styles.actions} aria-label="Moderation actions">
           {primaryActions.map(renderAction)}
         </section>
       ) : null}
@@ -509,51 +594,7 @@ function SelectedDetail({
           <div className={styles.actions}>{maintenanceActions.map(renderAction)}</div>
         </details>
       ) : null}
-      {detail.kind === 'case' ? (
-        <>
-          <p>
-            {recordLabel(detail.data.detail.presenceState)} ·{' '}
-            {recordLabel(detail.data.detail.status)}
-          </p>
-          {detail.data.detail.captchaChallenge ? (
-            <section>
-              <h2>Security check</h2>
-              <p>
-                {detail.data.detail.captchaChallenge.method === 'discord_image'
-                  ? 'Discord image check'
-                  : 'Browser check'}{' '}
-                · {recordLabel(detail.data.detail.captchaChallenge.status)} · generation{' '}
-                {detail.data.detail.captchaChallenge.generation} · method revision{' '}
-                {detail.data.detail.captchaChallenge.methodRevision}
-              </p>
-            </section>
-          ) : null}
-          <CaseEvidenceReader detail={detail.data.detail} report={detail.data.report} />
-          <CaseChecks detail={detail.data.detail} />
-          <CaseHistory detail={detail.data.detail} />
-          {detail.data.membership ? (
-            <section aria-label="Member context">
-              <h2>Member context</h2>
-              <p>
-                Joined <Timestamp value={detail.data.membership.joinDate} />
-              </p>
-              <p>
-                {detail.data.membership.caseRoleActive === null
-                  ? 'Case role state unknown'
-                  : detail.data.membership.caseRoleActive
-                    ? 'Case role active'
-                    : 'Case role absent'}
-              </p>
-            </section>
-          ) : null}
-          {detail.data.detail.notes !== null ? (
-            <details>
-              <summary>Case notes</summary>
-              <p>{detail.data.detail.notes}</p>
-            </details>
-          ) : null}
-        </>
-      ) : detail.kind === 'submitted_report' ? (
+      {detail.kind === 'submitted_report' ? (
         <>
           <dl>
             <dt>Reporter</dt>
@@ -563,7 +604,7 @@ function SelectedDetail({
               <Timestamp value={detail.report.createdAt} />
             </dd>
           </dl>
-          {evidence(detail.report.evidence)}
+          <ReportEvidence items={detail.report.evidence} sources={detail.conversationSources} />
         </>
       ) : detail.kind === 'observed_alert' ? (
         <section>
@@ -592,7 +633,7 @@ function SelectedDetail({
             Report {detail.intake.id} · {recordLabel(detail.intake.status)}
           </p>
           <Reply reply={detail.reply} />
-          {evidence(detail.intake.evidence)}
+          <ReportEvidence items={detail.intake.evidence} />
         </>
       ) : detail.kind === 'support_attention' ? (
         <>

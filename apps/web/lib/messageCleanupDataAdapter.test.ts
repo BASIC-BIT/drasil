@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest';
 import type { QueryResultRow } from 'pg';
+import { describe, expect, it } from 'vitest';
+import { FixtureMessageCleanupDataAdapter } from '../e2e/legacy/messageCleanupDataAdapter';
 import {
-  FixtureMessageCleanupDataAdapter,
   PostgresMessageCleanupDataAdapter,
   parseMessageCleanupCaseWorkspace,
   parseMessageCleanupItemRow,

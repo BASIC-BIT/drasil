@@ -95,11 +95,14 @@ export function sortModerationInboxItems(
   items: readonly ModerationInboxItem[]
 ): ModerationInboxItem[] {
   return [...items].sort((left, right) => {
-    if (!left.updatedAt || !right.updatedAt) return left.updatedAt ? -1 : right.updatedAt ? 1 : 0;
+    if (!left.updatedAt || !right.updatedAt)
+      return left.updatedAt ? -1 : right.updatedAt ? 1 : left.id.localeCompare(right.id);
     if (left.stale !== right.stale) {
       return left.stale ? -1 : 1;
     }
 
-    return Date.parse(left.updatedAt) - Date.parse(right.updatedAt);
+    return (
+      Date.parse(left.updatedAt) - Date.parse(right.updatedAt) || left.id.localeCompare(right.id)
+    );
   });
 }

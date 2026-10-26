@@ -1,9 +1,10 @@
 'use client';
+import { recordLabel } from '@/lib/recordLabel';
 
-import type { MouseEvent } from 'react';
-import type { ModerationInboxItem, ModerationInboxItemKind } from '@drasil/contracts';
-import { serializeInboxLocation, type InboxLocation } from '@/lib/inboxLocation';
 import { Timestamp } from '@/components/workspace/Timestamp';
+import { serializeInboxLocation, type InboxLocation } from '@/lib/inboxLocation';
+import type { ModerationInboxItem, ModerationInboxItemKind } from '@drasil/contracts';
+import type { MouseEvent } from 'react';
 import styles from './InboxWorkspace.module.css';
 
 export const inboxKindLabels: Record<ModerationInboxItemKind, string> = {
@@ -49,12 +50,12 @@ export function InboxQueue({ guildId, items, location, onSelect }: InboxQueuePro
                 <span className={styles.rowTop}>
                   <strong>{item.subject.displayLabel}</strong>
                   <span data-severity={item.stale ? 'warning' : 'neutral'}>
-                    {item.stale ? 'Stale' : item.statusLabel}
+                    {item.stale ? 'Stale' : recordLabel(item.statusLabel)}
                   </span>
                 </span>
                 <span>
                   {inboxKindLabels[item.kind]}
-                  {item.signalLabel ? ` · ${item.signalLabel}` : ''}
+                  {item.signalLabel ? ` · ${recordLabel(item.signalLabel)}` : ''}
                 </span>
                 {item.summary !== null ? (
                   <span className={styles.rowSummary}>{item.summary}</span>

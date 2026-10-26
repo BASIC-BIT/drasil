@@ -6,6 +6,9 @@ export default [
   {
     ignores: [
       '.next/**',
+      '.next-legacy-test/**',
+      'workspace-test-results/**',
+      'storybook-test-results/**',
       'node_modules/**',
       'coverage/**',
       'playwright-report/**',

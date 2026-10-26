@@ -1,7 +1,6 @@
 import type { ActionContext, QueuedDetectionCommand } from '@drasil/application';
 import type { ModerationInboxAction } from '@drasil/contracts';
 import { submitQueuedAction } from './application/queuedSubmission';
-import { isWebE2eFixtureMode } from './e2eFixtures';
 import type {
   ModerationActionRequestActionType,
   ModerationActionRequestReceipt,
@@ -35,13 +34,6 @@ export async function queueObservedAlertActionRequest(input: {
   readonly reportId?: string | null;
   readonly targetUserId: string;
 }): Promise<ModerationActionRequestReceipt> {
-  if (isWebE2eFixtureMode()) {
-    return {
-      id: `fixture-observed-action-${input.action}-${input.detectionEventId}`,
-      status: input.action === 'dismiss_no_action' ? 'completed' : 'queued',
-    };
-  }
-
   if (input.action !== 'open_case') {
     const target = { targetUserId: input.targetUserId, detectionEventId: input.detectionEventId };
     const command: QueuedDetectionCommand =
@@ -82,10 +74,6 @@ export async function queueObservedAlertUndoActionRequest(input: {
   readonly detectionEventId: string;
   readonly targetUserId: string;
 }): Promise<ModerationActionRequestReceipt> {
-  if (isWebE2eFixtureMode()) {
-    return { id: `fixture-observed-undo-${input.detectionEventId}`, status: 'queued' };
-  }
-
   return submitQueuedAction({
     context: input.context,
     command: {

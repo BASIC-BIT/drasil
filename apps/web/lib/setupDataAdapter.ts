@@ -1,15 +1,13 @@
-import { captchaProviderConfigurationIssues } from './turnstile';
-import { applyCaptchaMethodChange } from '@drasil/application/postgres';
-import { captchaImageSecretConfigured, materializeSetupStoredChange } from '@drasil/application';
 import {
   ActionDeniedError,
-  type SetupWritePrecondition,
-  setupStateMatches,
+  captchaImageSecretConfigured,
+  materializeSetupStoredChange,
   parseSetupStoredRecord,
+  setupStateMatches,
+  type SetupWritePrecondition,
 } from '@drasil/application';
+import { applyCaptchaMethodChange } from '@drasil/application/postgres';
 import { buildSetupSettingsPatch, normalizeOptionalId } from '@drasil/application/setup-settings';
-export { buildSetupSettingsPatch } from '@drasil/application/setup-settings';
-import { Pool, type PoolConfig } from 'pg';
 import {
   guildSetupUpdateSchema,
   serverSettingsSchema,
@@ -17,13 +15,10 @@ import {
   type GuildSetupUpdate,
   type SetupServerRecord,
 } from '@drasil/contracts';
-import {
-  fixtureGuildId,
-  fixtureServerRecord,
-  isWebE2eFixtureMode,
-  updateFixtureServerRecord,
-} from './e2eFixtures';
+import { Pool, type PoolConfig } from 'pg';
 import { readOptionalEnv, readOptionalPositiveIntegerEnv, requireEnv } from './env';
+import { captchaProviderConfigurationIssues } from './turnstile';
+export { buildSetupSettingsPatch } from '@drasil/application/setup-settings';
 
 export type SetupDataProvider = 'postgres' | 'convex';
 
@@ -395,39 +390,7 @@ export class ConvexSetupDataAdapter implements SetupDataAdapter {
   }
 }
 
-export class FixtureSetupDataAdapter implements SetupDataAdapter {
-  public readonly provider = 'postgres' as const;
-
-  public async listConfiguredGuildIds(guildIds: readonly string[]): Promise<Set<string>> {
-    return new Set(guildIds.includes(fixtureGuildId) ? [fixtureGuildId] : []);
-  }
-
-  public async listCoreConfiguredGuildIds(guildIds: readonly string[]): Promise<Set<string>> {
-    return new Set(
-      guildIds.includes(fixtureGuildId) && hasCoreSetupConfiguration(fixtureServerRecord())
-        ? [fixtureGuildId]
-        : []
-    );
-  }
-
-  public async getServer(guildId: string): Promise<SetupServerRecord | null> {
-    return guildId === fixtureGuildId ? fixtureServerRecord() : null;
-  }
-
-  public async updateGuildSetup(
-    update: GuildSetupUpdate,
-    precondition?: SetupWritePrecondition
-  ): Promise<SetupServerRecord> {
-    if (precondition) throw new ActionDeniedError('approved_setup_executor_required');
-    return updateFixtureServerRecord(update);
-  }
-}
-
 export function createSetupDataAdapter(): SetupDataAdapter {
-  if (isWebE2eFixtureMode()) {
-    return new FixtureSetupDataAdapter();
-  }
-
   const provider = readOptionalEnv('DRASIL_WEB_DATA_PROVIDER') ?? 'postgres';
   if (provider === 'convex') {
     return new ConvexSetupDataAdapter();

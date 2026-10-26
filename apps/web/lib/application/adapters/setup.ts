@@ -1,37 +1,17 @@
 import {
-  createSetupUpdateActions,
   captchaImageSecretConfigured,
-  type AuthorityPort,
+  createSetupUpdateActions,
   type SetupUpdateActions,
 } from '@drasil/application';
-import { createWebAuthority } from './authority';
 import { createSetupDataAdapter, type SetupDataAdapter } from '../../setupDataAdapter';
 import { captchaProviderConfigurationIssues } from '../../turnstile';
-import { fixtureAdminSession, fixtureGuilds, isWebE2eFixtureMode } from '../../e2eFixtures';
-
-function createSetupAuthority(): AuthorityPort {
-  if (!isWebE2eFixtureMode()) return createWebAuthority();
-  return {
-    async loadFresh(guildId, userId) {
-      const guild = fixtureGuilds().find((entry) => entry.id === guildId);
-      if (!guild || userId !== fixtureAdminSession().userId) return null;
-      return {
-        guildId,
-        userId,
-        present: true,
-        owner: guild.owner,
-        permissions: guild.permissions,
-        roleIds: [],
-      };
-    },
-  };
-}
+import { createWebAuthority } from './authority';
 
 export function createWebSetupActions(
   adapter: SetupDataAdapter = createSetupDataAdapter()
 ): SetupUpdateActions {
   return createSetupUpdateActions({
-    authority: createSetupAuthority(),
+    authority: createWebAuthority(),
     provider: {
       isConfigured: (method) =>
         method === 'discord_image'

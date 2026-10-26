@@ -3,6 +3,9 @@ dist/
 build/
 .vercel/
 apps/web/.next/
+apps/web/.next-legacy-test/
+apps/web/workspace-test-results/
+apps/web/storybook-test-results/
 apps/web/next-env.d.ts
 apps/web/playwright-report/
 apps/web/storybook-static/

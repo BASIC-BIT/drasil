@@ -1,21 +1,31 @@
 'use server';
 
+import { createWebConfirmationPort } from '@/lib/application/context';
+import {
+  failedInboxActionState,
+  queuedInboxActionState,
+  type InboxActionState,
+} from '@/lib/inboxActionState';
+import type {
+  ModerationActionRequestActionType,
+  ModerationActionRequestQueueStatus,
+  ModerationActionRequestReceipt,
+} from '@/lib/moderationActionRequestQueue';
+import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
+import { createSetupDashboardService } from '@/lib/setupDashboardService';
+import { createSetupDataAdapter, getPostgresPool } from '@/lib/setupDataAdapter';
+import { assertWorkspaceConfirmation, resolveWorkspaceReturnTo } from '@/lib/workspaceConfirmation';
 import {
   authorizeMessageCleanup,
-  checkMessageCleanupSubmission,
   canSubmitMessageCleanup,
-  isMessageCleanupFinalizationContinuation,
+  checkMessageCleanupSubmission,
   encodeQueuedAction,
+  isMessageCleanupFinalizationContinuation,
   messageCleanupSubmissionKey,
   type ActionContext,
   type MessageCleanupCommand,
   type MessageCleanupJob,
 } from '@drasil/application';
-import { assertWorkspaceConfirmation, resolveWorkspaceReturnTo } from '@/lib/workspaceConfirmation';
-import { createWebConfirmationPort } from '@/lib/application/context';
-import { randomUUID } from 'node:crypto';
-import { revalidatePath } from 'next/cache';
-import { redirect } from 'next/navigation';
 import {
   MESSAGE_CLEANUP_REASON_MAX_LENGTH,
   messageCleanupJobModeSchema,
@@ -27,21 +37,10 @@ import {
   type MessageCleanupJobStatus,
   type MessageCleanupScope,
 } from '@drasil/contracts';
+import { revalidatePath } from 'next/cache';
+import { redirect } from 'next/navigation';
+import { randomUUID } from 'node:crypto';
 import type { PoolClient, QueryResultRow } from 'pg';
-import {
-  failedInboxActionState,
-  queuedInboxActionState,
-  type InboxActionState,
-} from '@/lib/inboxActionState';
-import type {
-  ModerationActionRequestActionType,
-  ModerationActionRequestQueueStatus,
-  ModerationActionRequestReceipt,
-} from '@/lib/moderationActionRequestQueue';
-import { isWebE2eFixtureMode } from '@/lib/e2eFixtures';
-import { getCurrentAdminSession, getCurrentDiscordToken } from '@/lib/session';
-import { createSetupDataAdapter, getPostgresPool } from '@/lib/setupDataAdapter';
-import { createSetupDashboardService } from '@/lib/setupDashboardService';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const IDEMPOTENCY_TOKEN_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
@@ -554,34 +553,6 @@ async function queueFrozenJob(
   });
 }
 
-function fixtureCleanupReceipt(
-  actionType:
-    | 'preview_case_message_deletion'
-    | 'execute_case_message_deletion'
-    | 'ban_case_user_with_message_cleanup',
-  formData: FormData,
-  expectedMode: MessageCleanupJobMode,
-  message: string
-): InboxActionState {
-  const values = cleanupFormValues(formData);
-  if (values.mode !== expectedMode) {
-    throw new Error('The cleanup action does not match the frozen preview mode.');
-  }
-  const submittedJobId = formData.get('jobId');
-  const jobId =
-    typeof submittedJobId === 'string' && submittedJobId.trim()
-      ? submittedJobId.trim()
-      : `fixture-preview-${values.idempotencyToken}`;
-  return queuedInboxActionState(
-    {
-      id: `fixture-${actionType}-${values.idempotencyToken}`,
-      messageDeletionJobId: jobId,
-      status: 'queued',
-    },
-    message
-  );
-}
-
 function revalidateCleanupPaths(guildId: string, caseId: string): void {
   revalidatePath(`/admin/guild/${guildId}/inbox`);
   revalidatePath(`/admin/guild/${guildId}/cases`);
@@ -596,14 +567,6 @@ export async function previewCaseMessageCleanup(
   formData: FormData
 ): Promise<InboxActionState> {
   try {
-    if (isWebE2eFixtureMode()) {
-      return fixtureCleanupReceipt(
-        'preview_case_message_deletion',
-        formData,
-        messageCleanupJobModeSchema.parse(requiredFormString(formData, 'mode')),
-        'Message cleanup preview queued.'
-      );
-    }
     requireUuid(caseId, 'Case id');
     const values = cleanupFormValues(formData);
     const actorId = await cleanupActor(guildId, caseId, formData);
@@ -622,15 +585,6 @@ export async function executeCaseMessageCleanup(
   formData: FormData
 ): Promise<InboxActionState> {
   try {
-    if (isWebE2eFixtureMode()) {
-      assertConfirmed(formData);
-      return fixtureCleanupReceipt(
-        'execute_case_message_deletion',
-        formData,
-        'delete_only',
-        'Message cleanup queued.'
-      );
-    }
     requireUuid(caseId, 'Case id');
     assertConfirmed(formData);
     const jobId = requireUuid(requiredFormString(formData, 'jobId'), 'Cleanup job id');
@@ -660,15 +614,6 @@ export async function banCaseUserWithMessageCleanup(
   formData: FormData
 ): Promise<InboxActionState> {
   try {
-    if (isWebE2eFixtureMode()) {
-      assertConfirmed(formData);
-      return fixtureCleanupReceipt(
-        'ban_case_user_with_message_cleanup',
-        formData,
-        'ban_with_cleanup',
-        'Ban and message cleanup queued.'
-      );
-    }
     requireUuid(caseId, 'Case id');
     assertConfirmed(formData);
     const jobId = requireUuid(requiredFormString(formData, 'jobId'), 'Cleanup job id');

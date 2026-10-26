@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WebCaseAction } from '@/lib/activeCaseDataAdapter';
-import { initialInboxActionState, type InboxActionState } from '@/lib/inboxActionState';
+import type { WorkspaceMutationResult } from '@/lib/workspaceActionTypes';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   session: vi.fn(),
@@ -35,7 +35,7 @@ vi.mock('@/lib/activeCaseDataAdapter', () => ({
   }),
 }));
 
-import { queueCaseAction, queueInboxCaseAction } from './actions';
+import { submitWorkspaceCaseAction } from './actions';
 
 type Surface = 'case' | 'inbox';
 const challengeId = '11111111-1111-4111-8111-111111111111';
@@ -43,18 +43,20 @@ function confirmedForm(): FormData {
   const form = new FormData();
   form.set('confirmAction', 'on');
   form.set('reason', ' Reviewed the case ');
+  form.set('confirmedRecordId', 'case-1');
+  form.set('confirmedTargetUserId', 'member-1');
   form.set('expectedCaptchaChallengeId', challengeId);
   form.set('expectedCaptchaGeneration', '3');
+  form.set('expectedCaptchaMethod', 'turnstile');
+  form.set('expectedCaptchaMethodRevision', '1');
   return form;
 }
 function submit(
-  surface: Surface,
+  _surface: Surface,
   action: WebCaseAction,
   form: FormData
-): Promise<void | InboxActionState> {
-  return surface === 'case'
-    ? queueCaseAction('guild-1', 'case-1', action, form)
-    : queueInboxCaseAction('guild-1', 'case-1', action, initialInboxActionState, form);
+): Promise<WorkspaceMutationResult> {
+  return submitWorkspaceCaseAction({ guildId: 'guild-1', caseId: 'case-1', action }, form);
 }
 async function expectDenied(
   surface: Surface,
@@ -62,13 +64,10 @@ async function expectDenied(
   form: FormData,
   message: string
 ): Promise<void> {
-  if (surface === 'case') await expect(submit(surface, action, form)).rejects.toThrow(message);
-  else
-    expect(await submit(surface, action, form)).toMatchObject({
-      status: 'failed',
-      requestId: null,
-      message: expect.stringContaining(message),
-    });
+  expect(await submit(surface, action, form)).toMatchObject({
+    kind: 'failed',
+    message: expect.stringContaining(message),
+  });
 }
 
 beforeEach(() => {
@@ -81,10 +80,17 @@ beforeEach(() => {
     permissions: '1099511627776',
   });
   mocks.getServer.mockResolvedValue({ settings: { captcha_mode: 'off' } });
+  mocks.detail.mockResolvedValue({
+    id: 'case-1',
+    guildId: 'guild-1',
+    userId: 'member-1',
+    allowedActions: ['bypass_captcha', 'challenge_user', 'retry_captcha'],
+  });
   mocks.queue.mockResolvedValue({
     action: 'bypass_captcha',
     caseId: 'case-1',
     requestId: 'request-1',
+    receipt: { id: 'request-1', status: 'queued' },
     status: 'queued',
   });
 });
@@ -97,9 +103,10 @@ describe.each<Surface>(['case', 'inbox'])('%s CAPTCHA action submission', (surfa
   ])('queues authorized reasoned bypass after disablement %j', async (settings) => {
     mocks.getServer.mockResolvedValue({ settings });
     const result = await submit(surface, 'bypass_captcha', confirmedForm());
-    if (surface === 'inbox')
-      expect(result).toMatchObject({ status: 'queued', requestId: 'request-1' });
-    else expect(result).toBeUndefined();
+    expect(result).toMatchObject({
+      kind: 'request',
+      receipt: { status: 'queued', id: 'request-1' },
+    });
     expect(mocks.assertCanManageGuild).toHaveBeenCalledWith('guild-1', 'synthetic-token');
     expect(mocks.queue).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
@@ -136,7 +143,7 @@ describe.each<Surface>(['case', 'inbox'])('%s CAPTCHA action submission', (surfa
   });
 
   it.each([
-    ['confirmAction', 'Confirm the security-check action'],
+    ['confirmAction', 'Review and confirm the current record'],
     ['reason', 'A reason is required'],
     ['expectedCaptchaChallengeId', 'The displayed security check is no longer available'],
     ['expectedCaptchaGeneration', 'The displayed security check is no longer available'],
@@ -177,11 +184,17 @@ describe.each<Surface>(['case', 'inbox'])('%s CAPTCHA action submission', (surfa
         action,
         caseId: 'case-1',
         requestId: 'request-1',
+        receipt: { id: 'request-1', status: 'queued' },
         status: 'queued',
       });
-      const result = await submit(surface, action, confirmedForm());
-      if (surface === 'inbox') expect(result).toMatchObject({ status: 'queued' });
-      else expect(result).toBeUndefined();
+      const form = confirmedForm();
+      form.set(
+        'expectedCaptchaConfigurationMethod',
+        'captcha_method' in settings ? 'discord_image' : 'turnstile'
+      );
+      form.set('expectedCaptchaConfigurationRevision', '0');
+      const result = await submit(surface, action, form);
+      expect(result).toMatchObject({ kind: 'request', receipt: { status: 'queued' } });
       expect(mocks.queue).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ action }));
     });
 

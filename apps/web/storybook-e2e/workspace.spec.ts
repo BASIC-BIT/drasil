@@ -45,7 +45,7 @@ test('filter changes retain target, reason draft and confirmation, browser Back 
     'Complete detection source text'
   );
   await page.getByRole('button', { name: 'Next item', exact: true }).click();
-  await expect(page).toHaveURL(/selected=queue%3Areport_attention/);
+  await expect(page).toHaveURL(/selected=queue%3Apending_screening/);
 });
 
 test('direct selected URLs open narrow detail and Back restores row focus', async ({ page }) => {
@@ -376,7 +376,7 @@ test('the current history entry restores its captured ordering ahead of later se
   await expect(page.getByLabel('Search inbox')).toHaveValue('');
   await page.getByRole('button', { name: 'Next item', exact: true }).click();
   const expected = oldIds[oldIds.indexOf(observed) + 1];
-  expect(expected).toBe('queue:report_attention');
+  expect(expected).toBe('queue:pending_screening');
   await expect(page).toHaveURL(new RegExp(`selected=${encodeURIComponent(expected ?? '')}`));
 });
 
@@ -442,7 +442,7 @@ for (const width of [1440, 390]) {
     await expect(
       page.getByRole('button', { name: 'Refresh notification', exact: true })
     ).toBeHidden();
-    await page.getByText('Case tools', { exact: true }).click();
+    await page.getByRole('button', { name: 'Case tools', exact: true }).click();
     await expect(
       page.getByRole('button', { name: 'Refresh notification', exact: true })
     ).toBeVisible();
@@ -459,16 +459,14 @@ test('case tools retain their draft, request result and polling through disclosu
 }) => {
   await page.clock.install();
   await page.goto(`${story}&selected=case%3Acase-stale`);
-  const tools = page
-    .locator('details')
-    .filter({ has: page.locator('summary').filter({ hasText: /^Case tools$/ }) });
-  await tools.locator('summary').click();
+  const tools = page.getByRole('region', { name: 'Case tools', exact: true });
+  await tools.getByRole('button', { name: 'Case tools', exact: true }).click();
   await tools.getByRole('button', { name: 'Refresh notification', exact: true }).click();
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('Reason', { exact: true }).fill('Retained maintenance context');
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
-  await tools.locator('summary').click();
-  await tools.locator('summary').click();
+  await tools.getByRole('button', { name: 'Case tools', exact: true }).click();
+  await tools.getByRole('button', { name: 'Case tools', exact: true }).click();
   await tools.getByRole('button', { name: 'Refresh notification', exact: true }).click();
   await expect(dialog.getByLabel('Reason', { exact: true })).toHaveValue(
     'Retained maintenance context'
@@ -477,16 +475,16 @@ test('case tools retain their draft, request result and polling through disclosu
   await dialog.getByRole('button', { name: 'Confirm Refresh notification', exact: true }).click();
   await expect(tools.getByRole('status')).toContainText('Request queued.');
   await expect(page.getByTestId('submissions')).toHaveText('1');
-  await tools.locator('summary').click();
+  await tools.getByRole('button', { name: 'Case tools', exact: true }).click();
   const before = Number(await page.getByTestId('refreshes').textContent());
   await page.clock.runFor(2200);
   await expect(page.getByTestId('refreshes')).toHaveText(String(before + 1));
-  await tools.locator('summary').click();
+  await tools.getByRole('button', { name: 'Case tools', exact: true }).click();
   await expect(tools.getByRole('status')).toContainText('Request queued.');
   await page.getByRole('button', { name: 'Complete case request', exact: true }).click();
   await expect(tools.getByRole('status')).toContainText('Request completed.');
-  await tools.locator('summary').click();
-  await tools.locator('summary').click();
+  await tools.getByRole('button', { name: 'Case tools', exact: true }).click();
+  await tools.getByRole('button', { name: 'Case tools', exact: true }).click();
   await expect(tools.getByRole('status')).toContainText('Request completed.');
   const completedCount = await page.getByTestId('refreshes').textContent();
   await page.clock.runFor(4200);
@@ -497,7 +495,7 @@ test('case tools preserve an open confirmation and reason when eligibility disap
   page,
 }) => {
   await page.goto(`${story}&selected=case%3Acase-stale`);
-  await page.getByText('Case tools', { exact: true }).click();
+  await page.getByRole('button', { name: 'Case tools', exact: true }).click();
   await page.getByRole('button', { name: 'Refresh notification', exact: true }).click();
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('Reason', { exact: true }).fill('Keep this contextual review');

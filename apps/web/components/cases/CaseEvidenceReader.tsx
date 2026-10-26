@@ -16,6 +16,7 @@ export interface CaseEvidenceReaderProps {
     readonly id: string;
     readonly label: string;
     readonly content: ReactNode;
+    readonly afterSources?: boolean;
   }[];
   readonly contextLinks?: readonly {
     readonly id: string;
@@ -55,6 +56,36 @@ export function CaseEvidenceReader({
     target.scrollIntoView({ block: 'start' });
     target.focus({ preventScroll: true });
   };
+  const beforeRegions = regions.filter((region) => !region.afterSources);
+  const afterRegions = regions.filter((region) => region.afterSources);
+  const initialTarget = beforeRegions[0]?.id ?? sources[0]?.targetId ?? afterRegions[0]?.id;
+  type Region = NonNullable<CaseEvidenceReaderProps['regions']>[number];
+  const renderRegionLink = (region: Region) => (
+    <a
+      key={region.id}
+      href={`#${region.id}`}
+      onClick={navigate}
+      aria-current={(active ?? initialTarget) === region.id ? 'location' : undefined}
+    >
+      <strong>{region.label}</strong>
+    </a>
+  );
+  const renderRegion = (region: Region) => (
+    <section
+      key={region.id}
+      id={region.id}
+      tabIndex={-1}
+      className={styles.injectedRegion}
+      aria-label={region.label}
+    >
+      {region.content}
+      {returnSource ? (
+        <a className={styles.previewLink} href={`#${returnSource}`} onClick={navigate}>
+          Back to source
+        </a>
+      ) : null}
+    </section>
+  );
   return (
     <div className={styles.desk}>
       <nav className={styles.index} aria-label="Evidence sources">
@@ -64,31 +95,19 @@ export function CaseEvidenceReader({
             {groups.reduce((total, group) => total + group.records.length, 0)} saved records
           </span>
         </header>
-        {regions.map((region) => (
-          <a
-            key={region.id}
-            href={`#${region.id}`}
-            onClick={navigate}
-            aria-current={(active ?? regions[0]?.id) === region.id ? 'location' : undefined}
-          >
-            <strong>{region.label}</strong>
-          </a>
-        ))}
+        {beforeRegions.map(renderRegionLink)}
         {sources.map((source) => (
           <a
             key={source.id}
             href={`#${source.targetId}`}
             onClick={navigate}
-            aria-current={
-              (active ?? regions[0]?.id ?? sources[0]?.targetId) === source.targetId
-                ? 'location'
-                : undefined
-            }
+            aria-current={(active ?? initialTarget) === source.targetId ? 'location' : undefined}
           >
             <strong>{source.label}</strong>
             <Timestamp value={source.records[0].createdAt} format="time" />
           </a>
         ))}
+        {afterRegions.map(renderRegionLink)}
         <div className={styles.contextJumps}>
           {contextLinks.map((link) => (
             <a
@@ -115,22 +134,7 @@ export function CaseEvidenceReader({
         ) : null}
       </nav>
       <div className={styles.reader}>
-        {regions.map((region) => (
-          <section
-            key={region.id}
-            id={region.id}
-            tabIndex={-1}
-            className={styles.injectedRegion}
-            aria-label={region.label}
-          >
-            {region.content}
-            {returnSource ? (
-              <a className={styles.previewLink} href={`#${returnSource}`} onClick={navigate}>
-                Back to source
-              </a>
-            ) : null}
-          </section>
-        ))}
+        {beforeRegions.map(renderRegion)}
         {sources.map((source) => (
           <section
             key={source.id}
@@ -193,6 +197,7 @@ export function CaseEvidenceReader({
             ))}
           </section>
         ))}
+        {afterRegions.map(renderRegion)}
         {!sources.length ? <p className={styles.empty}>No source evidence saved.</p> : null}
       </div>
     </div>
