@@ -39,7 +39,7 @@ describe('CAPTCHA Discord OAuth callback', () => {
     expect(response.headers.get('set-cookie')).toContain(
       `${getCaptchaOAuthStateCookieName(state)}=`
     );
-    await expect(response.text()).resolves.toContain('Return to the security check link');
+    await expect(response.text()).resolves.toContain('Open the CAPTCHA in Discord');
   });
   it('records mismatches using authenticated Discord identity and the bound challenge', async () => {
     vi.stubEnv('DRASIL_OAUTH_ENCRYPTION_KEY', 'callback-test-secret');

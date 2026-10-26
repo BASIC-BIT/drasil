@@ -103,10 +103,12 @@ export function TurnstileChallengeForm({
         <div ref={containerRef} className="captcha-turnstile" />
         <p className="captcha-check-status" aria-live="polite">
           {widgetError
-            ? 'The browser check could not load. Check your connection or content-blocking settings, retry, or ask a moderator in your case thread for assistance.'
+            ? "CAPTCHA couldn't load. Try again or ask a moderator."
             : responseToken
-              ? 'Browser check ready.'
-              : 'Waiting for the browser check.'}
+              ? 'Ready to submit.'
+              : scriptReady
+                ? 'Complete the CAPTCHA.'
+                : 'Loading CAPTCHA...'}
         </p>
         {widgetError ? (
           <button
@@ -114,11 +116,11 @@ export function TurnstileChallengeForm({
             type="button"
             onClick={() => window.location.reload()}
           >
-            Retry browser check
+            Try again
           </button>
         ) : null}
         <button className="button" type="submit" disabled={!responseToken}>
-          Complete security check
+          Submit
         </button>
       </form>
     </>

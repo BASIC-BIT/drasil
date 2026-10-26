@@ -39,10 +39,9 @@ export async function GET(request: NextRequest) {
 
   if (!cookieState || !token) {
     return clearOAuthState(
-      new NextResponse(
-        'Discord account confirmation expired. Return to the security check link and try again.',
-        { status: 400 }
-      ),
+      new NextResponse('Discord sign-in expired. Open the CAPTCHA in Discord and try again.', {
+        status: 400,
+      }),
       stateCookieName
     );
   }

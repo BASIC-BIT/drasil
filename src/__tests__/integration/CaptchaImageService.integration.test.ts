@@ -121,7 +121,7 @@ describeIntegration('native CAPTCHA image service', () => {
       opened.interaction,
       createBotCaptchaImageActions(f.service)
     );
-    expect(JSON.stringify(opened.interaction.editReply.mock.calls)).toContain('security-check.png');
+    expect(JSON.stringify(opened.interaction.editReply.mock.calls)).toContain('captcha.png');
     const restarted = createBotCaptchaImageActions(new CaptchaImageService(f.dependencies));
     const answerButton = discordInteraction(f, 'answer');
     await handleCaptchaImageInteraction(answerButton.interaction, restarted);
@@ -129,9 +129,7 @@ describeIntegration('native CAPTCHA image service', () => {
     const modal = discordInteraction(f, 'answer', true);
     modal.fields.getTextInputValue.mockReturnValue(f.answers[0].toLowerCase());
     await handleCaptchaImageInteraction(modal.interaction, restarted);
-    expect(JSON.stringify(modal.interaction.editReply.mock.calls)).toContain(
-      'Security check completed'
-    );
+    expect(JSON.stringify(modal.interaction.editReply.mock.calls)).toContain('Code accepted');
     expect(await f.prisma.captcha_challenge_attempts.count()).toBe(1);
     expect(
       await f.prisma.moderation_action_requests.count({
@@ -154,9 +152,7 @@ describeIntegration('native CAPTCHA image service', () => {
           item.interaction,
           createBotCaptchaImageActions(f.service)
         );
-        expect(JSON.stringify(item.interaction.editReply.mock.calls)).not.toContain(
-          'security-check.png'
-        );
+        expect(JSON.stringify(item.interaction.editReply.mock.calls)).not.toContain('captcha.png');
         expect(await f.prisma.captcha_challenge_attempts.count()).toBe(0);
       }
     }

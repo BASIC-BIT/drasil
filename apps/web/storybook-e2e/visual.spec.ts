@@ -152,13 +152,13 @@ test('Turnstile script failure offers retry and moderator assistance @storybook-
     return route.abort();
   });
   await gotoStory(page, 'security-checks-turnstile--script-failure');
-  await expect(page.getByText(/ask a moderator in your case thread/)).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Retry browser check' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Complete security check' })).toBeDisabled();
+  await expect(page.getByText(/ask a moderator/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Try again' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Submit', exact: true })).toBeDisabled();
   await expect(page.getByText('Discord image CAPTCHA')).toHaveCount(0);
-  await page.getByRole('button', { name: 'Retry browser check' }).click();
+  await page.getByRole('button', { name: 'Try again' }).click();
   await expect.poll(() => scriptLoads).toBeGreaterThan(1);
-  await expect(page.getByText(/ask a moderator in your case thread/)).toBeVisible();
+  await expect(page.getByText(/ask a moderator/)).toBeVisible();
   await expectVisualSchemes(page, 'storybook-turnstile-script-failure');
 });
 

@@ -3,6 +3,7 @@ import {
   AttachmentBuilder,
   ButtonBuilder,
   ButtonStyle,
+  ComponentType,
   MessageFlags,
   ModalBuilder,
   TextInputBuilder,
@@ -42,35 +43,33 @@ function controls(
     row.addComponents(
       new ButtonBuilder()
         .setCustomId(`${PREFIX}answer:${reference.challengeId}:${reference.generation}`)
-        .setLabel('Enter answer')
+        .setLabel('Enter code')
         .setStyle(ButtonStyle.Primary)
     );
   row.addComponents(
     new ButtonBuilder()
       .setCustomId(`${PREFIX}help:${reference.challengeId}:${reference.generation}`)
-      .setLabel('Ask for help')
+      .setLabel('Get help')
       .setStyle(ButtonStyle.Secondary)
   );
   return [row];
 }
-const unavailable =
-  'This security check is temporarily unavailable. Please retry opening it or ask for help.';
-const stale =
-  'This security check expired, was replaced, or is no longer active. Ask a moderator for review or a new check.';
+const unavailable = 'CAPTCHA unavailable. Try opening it again or get help.';
+const stale = 'Ask a moderator for a new CAPTCHA.';
 function submitCopy(outcome: ImageSubmitOutcome): string {
   switch (outcome.kind) {
     case 'passed':
-      return 'Security check completed. Moderators will review the case if further action is needed.';
+      return 'Code accepted.';
     case 'invalid':
-      return `That answer did not match. ${outcome.remainingAttempts} attempts remaining.`;
+      return `That code doesn't match. ${outcome.remainingAttempts} ${outcome.remainingAttempts === 1 ? 'attempt' : 'attempts'} left.`;
     case 'failed':
-      return 'This security check reached its attempt limit. Your case needs moderator review.';
+      return 'Too many incorrect attempts. Ask a moderator for a new CAPTCHA.';
     case 'denied':
-      return 'This security check is only available to the member it was issued to in this server.';
+      return 'You can only answer your own CAPTCHA.';
     case 'stale':
       return stale;
     case 'rate_limited':
-      return 'Please wait a moment and try again. No answer attempt was used.';
+      return 'Wait a moment, then try again.';
     case 'unavailable':
       return unavailable;
     default: {
@@ -87,12 +86,29 @@ export async function handleCaptchaImageInteraction(
 ): Promise<boolean> {
   if (!interaction.customId.startsWith(PREFIX)) return false;
   const control = parseControl(interaction.customId);
-  const respond = async (content: string, help = false): Promise<void> => {
+  // Only a modal opened from this bot's matching private card may replace that card.
+  const updatesImage =
+    interaction.isModalSubmit() &&
+    interaction.isFromMessage() &&
+    interaction.message.flags.has(MessageFlags.Ephemeral) &&
+    interaction.message.author.id === interaction.client.user.id &&
+    interaction.message.components.some(
+      (row) =>
+        row.type === ComponentType.ActionRow &&
+        row.components.some(
+          (component) =>
+            component.type === ComponentType.Button && component.customId === interaction.customId
+        )
+    );
+  let terminalContent: string | undefined;
+  const respond = async (
+    content: string,
+    mode: 'replace' | 'help' | 'retry_image' = 'replace'
+  ): Promise<void> => {
     const payload = {
       content,
-      files: [],
-      attachments: [],
-      components: help && control ? controls(control, false) : [],
+      ...(mode === 'retry_image' ? {} : { files: [], attachments: [] }),
+      components: mode !== 'replace' && control ? controls(control, mode === 'retry_image') : [],
     };
     if (interaction.deferred || interaction.replied) await interaction.editReply(payload);
     else await interaction.reply({ ...payload, flags: MessageFlags.Ephemeral });
@@ -103,13 +119,11 @@ export async function handleCaptchaImageInteraction(
       !interaction.guildId ||
       (interaction.isModalSubmit() && control.action !== 'answer')
     ) {
-      await respond(
-        'This security check control is invalid. Open the current check in your case thread.'
-      );
+      await respond('Open the current CAPTCHA in your case thread.');
       return true;
     }
     if (interaction.deferred || interaction.replied) {
-      await respond(unavailable, true);
+      await respond(unavailable, 'help');
       return true;
     }
     if (control.action === 'answer' && !interaction.isModalSubmit()) {
@@ -118,12 +132,12 @@ export async function handleCaptchaImageInteraction(
       await interaction.showModal(
         new ModalBuilder()
           .setCustomId(interaction.customId)
-          .setTitle('Security check answer')
+          .setTitle('CAPTCHA')
           .addComponents(
             new ActionRowBuilder<TextInputBuilder>().addComponents(
               new TextInputBuilder()
                 .setCustomId(ANSWER_FIELD)
-                .setLabel('Enter the characters in the image')
+                .setLabel('Code')
                 .setStyle(TextInputStyle.Short)
                 .setMaxLength(32)
                 .setRequired(true)
@@ -132,7 +146,8 @@ export async function handleCaptchaImageInteraction(
       );
       return true;
     }
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    if (updatesImage && interaction.isModalSubmit()) await interaction.deferUpdate();
+    else await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const context = createDiscordActionContext({
       guildId: interaction.guildId,
       userId: interaction.user.id,
@@ -146,36 +161,50 @@ export async function handleCaptchaImageInteraction(
         answer: interaction.fields.getTextInputValue(ANSWER_FIELD),
       });
       const outcome = result.kind === 'denied' ? { kind: 'denied' as const } : result.outcome;
+      if (updatesImage && outcome.kind === 'denied') {
+        // A denied operation must not change the source card, even if delivery fails.
+        try {
+          await interaction.followUp({
+            content: submitCopy(outcome),
+            flags: MessageFlags.Ephemeral,
+          });
+        } catch {
+          /* The interaction may no longer exist. */
+        }
+        return true;
+      }
+      const retry =
+        outcome.kind === 'invalid' ||
+        outcome.kind === 'unavailable' ||
+        outcome.kind === 'rate_limited';
+      if (!retry) terminalContent = submitCopy(outcome);
       await respond(
         submitCopy(outcome),
-        outcome.kind === 'invalid' ||
-          outcome.kind === 'unavailable' ||
-          outcome.kind === 'rate_limited'
+        retry ? (updatesImage ? 'retry_image' : 'help') : 'replace'
       );
     } else if (control.action === 'help') {
       const result = await actions.requestAssistance(context, reference);
       const outcome = result.kind === 'denied' ? { kind: 'denied' as const } : result.outcome;
       await respond(
         outcome.kind === 'queued'
-          ? 'Your request for moderator assistance has been recorded. Your security check remains pending.'
+          ? 'Help requested.'
           : outcome.kind === 'stale'
             ? stale
             : outcome.kind === 'denied'
               ? submitCopy({ kind: 'denied' })
               : unavailable,
-        outcome.kind === 'unavailable'
+        outcome.kind === 'unavailable' ? 'help' : 'replace'
       );
     } else {
       const result = await actions.open(context, reference);
       const outcome = result.kind === 'denied' ? { kind: 'denied' as const } : result.outcome;
       if (outcome.kind === 'ready')
         await interaction.editReply({
-          content:
-            'Read the image, then choose Enter answer. Completing this check does not itself verify your account.',
+          content: 'Enter the code in the image.',
           files: [
             new AttachmentBuilder(outcome.png, {
-              name: 'security-check.png',
-              description: 'Security check image',
+              name: 'captcha.png',
+              description: 'CAPTCHA image',
             }),
           ],
           components: controls(reference, true),
@@ -187,13 +216,15 @@ export async function handleCaptchaImageInteraction(
             : outcome.kind === 'denied'
               ? submitCopy({ kind: 'denied' })
               : unavailable,
-          outcome.kind === 'unavailable'
+          outcome.kind === 'unavailable' ? 'help' : 'replace'
         );
     }
   } catch {
     // Discord delivery and service errors may contain private payloads. Never log them.
     try {
-      await respond(unavailable, true);
+      if (terminalContent)
+        await interaction.followUp({ content: terminalContent, flags: MessageFlags.Ephemeral });
+      else await respond(unavailable, updatesImage ? 'retry_image' : 'help');
     } catch {
       /* The interaction or its channel may no longer exist. */
     }

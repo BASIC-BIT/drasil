@@ -1,5 +1,16 @@
 import { mock } from 'jest-mock-extended';
-import { ButtonInteraction, ModalSubmitInteraction, MessageFlags } from 'discord.js';
+import {
+  ActionRow,
+  ComponentType,
+  MessageFlagsBitField,
+  type ButtonComponent,
+  type Message,
+  type InteractionCallbackResponse,
+  type InteractionResponse,
+  ButtonInteraction,
+  ModalSubmitInteraction,
+  MessageFlags,
+} from 'discord.js';
 import type { BotCaptchaImageActions } from '../../application/adapters/captchaImage';
 import { handleCaptchaImageInteraction } from '../../controllers/captchaImageInteractions';
 
@@ -35,7 +46,160 @@ function rendered(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function imageModalFixture() {
+  const { actions, fields } = fixture('answer', true);
+  const interaction = mock<ModalSubmitInteraction>();
+  const message = mock<Message>();
+  Object.assign(message, {
+    author: { id: 'bot' },
+    flags: new MessageFlagsBitField(MessageFlags.Ephemeral),
+    components: [
+      mock<ActionRow<ButtonComponent>>({
+        type: ComponentType.ActionRow,
+        components: [
+          mock<ButtonComponent>({
+            type: ComponentType.Button,
+            customId: id('answer'),
+            label: 'Enter code',
+          }),
+        ],
+      }),
+    ],
+  });
+  Object.assign(interaction, {
+    customId: id('answer'),
+    id: 'modal-interaction',
+    guildId: 'guild',
+    user: { id: 'member' },
+    client: { user: { id: 'bot' } },
+    message,
+    fields,
+    deferred: false,
+    replied: false,
+  });
+  interaction.isModalSubmit.mockReturnValue(true);
+  interaction.isFromMessage.mockReturnValue(true);
+  const acknowledgement = mock<InteractionCallbackResponse & InteractionResponse & Message>();
+  interaction.deferUpdate.mockImplementation(async () => {
+    Object.assign(interaction, { deferred: true });
+    return acknowledgement;
+  });
+  interaction.deferReply.mockImplementation(async () => {
+    Object.assign(interaction, { deferred: true });
+    return acknowledgement;
+  });
+  fields.getTextInputValue.mockReturnValue('AB2CDE');
+  return { interaction, actions, fields, message };
+}
+
 describe('private Discord image CAPTCHA interactions', () => {
+  it('replaces the original private image with acceptance instead of adding another reply', async () => {
+    const f = imageModalFixture();
+    await handleCaptchaImageInteraction(f.interaction, f.actions);
+    expect(f.interaction.deferUpdate).toHaveBeenCalledTimes(1);
+    expect(f.interaction.deferReply).not.toHaveBeenCalled();
+    expect(f.interaction.editReply).toHaveBeenCalledWith({
+      content: 'Code accepted.',
+      files: [],
+      attachments: [],
+      components: [],
+    });
+    expect(f.interaction.reply).not.toHaveBeenCalled();
+    expect(f.interaction.followUp).not.toHaveBeenCalled();
+    expect(f.actions.submit).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { kind: 'invalid', remainingAttempts: 2 },
+    { kind: 'rate_limited' },
+    { kind: 'unavailable' },
+  ] as const)('keeps the image and answer controls for $kind', async (outcome) => {
+    const f = imageModalFixture();
+    f.actions.submit.mockResolvedValue({ kind: 'outcome', outcome });
+    await handleCaptchaImageInteraction(f.interaction, f.actions);
+    const payload = f.interaction.editReply.mock.calls[0][0];
+    expect(payload).not.toHaveProperty('attachments');
+    expect(payload).not.toHaveProperty('files');
+    expect(rendered(payload)).toContain(id('answer'));
+    expect(rendered(payload)).toContain(id('help'));
+    expect(f.interaction.deferReply).not.toHaveBeenCalled();
+  });
+
+  it.each(['failed', 'stale'] as const)(
+    'removes the image and controls after $kind',
+    async (kind) => {
+      const f = imageModalFixture();
+      f.actions.submit.mockResolvedValue({ kind: 'outcome', outcome: { kind } });
+      await handleCaptchaImageInteraction(f.interaction, f.actions);
+      expect(f.interaction.deferUpdate).toHaveBeenCalledTimes(1);
+      expect(f.interaction.editReply).toHaveBeenCalledWith(
+        expect.objectContaining({ attachments: [], components: [] })
+      );
+    }
+  );
+
+  it('leaves a public source message untouched', async () => {
+    const f = imageModalFixture();
+    Object.assign(f.message, { flags: new MessageFlagsBitField() });
+    await handleCaptchaImageInteraction(f.interaction, f.actions);
+    expect(f.interaction.deferUpdate).not.toHaveBeenCalled();
+    expect(f.interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+  });
+
+  it.each(['other_bot', 'other_generation'] as const)(
+    'leaves a private source from %s untouched',
+    async (source) => {
+      const f = imageModalFixture();
+      if (source === 'other_bot') Object.assign(f.message, { author: { id: 'other-bot' } });
+      else
+        Object.assign(f.message, {
+          components: [
+            mock<ActionRow<ButtonComponent>>({
+              type: ComponentType.ActionRow,
+              components: [
+                mock<ButtonComponent>({
+                  type: ComponentType.Button,
+                  customId: `captcha:image:answer:${challengeId}:2`,
+                }),
+              ],
+            }),
+          ],
+        });
+      await handleCaptchaImageInteraction(f.interaction, f.actions);
+      expect(f.interaction.deferUpdate).not.toHaveBeenCalled();
+      expect(f.interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    }
+  );
+
+  it('does not edit the image for an unauthorized submission', async () => {
+    const f = imageModalFixture();
+    f.actions.submit.mockResolvedValue({ kind: 'denied', code: 'binding_mismatch' });
+    await handleCaptchaImageInteraction(f.interaction, f.actions);
+    expect(f.interaction.editReply).not.toHaveBeenCalled();
+    expect(f.interaction.followUp).toHaveBeenCalledWith(
+      expect.objectContaining({ flags: MessageFlags.Ephemeral })
+    );
+  });
+
+  it('keeps an accepted result when Discord cannot update the old image', async () => {
+    const f = imageModalFixture();
+    f.interaction.editReply.mockRejectedValueOnce(new Error('Discord unavailable'));
+    await handleCaptchaImageInteraction(f.interaction, f.actions);
+    expect(f.actions.submit).toHaveBeenCalledTimes(1);
+    expect(f.interaction.editReply).toHaveBeenCalledTimes(1);
+    expect(f.interaction.followUp).toHaveBeenCalledWith({
+      content: 'Code accepted.',
+      flags: MessageFlags.Ephemeral,
+    });
+  });
+
+  it('leaves a denied source untouched even when its private notice cannot be delivered', async () => {
+    const f = imageModalFixture();
+    f.actions.submit.mockResolvedValue({ kind: 'denied', code: 'binding_mismatch' });
+    f.interaction.followUp.mockRejectedValueOnce(new Error('Discord unavailable'));
+    await expect(handleCaptchaImageInteraction(f.interaction, f.actions)).resolves.toBe(true);
+    expect(f.interaction.editReply).not.toHaveBeenCalled();
+  });
   it('ignores unrelated controls', async () => {
     const f = fixture();
     Object.assign(f.interaction, { customId: 'verify:member' });
@@ -57,12 +221,12 @@ describe('private Discord image CAPTCHA interactions', () => {
     );
     const response = f.interaction.editReply.mock.calls[0][0];
     const json = rendered(response);
-    expect(json).toContain('security-check.png');
-    expect(json).toContain('Security check image');
+    expect(json).toContain('captcha.png');
+    expect(json).toContain('CAPTCHA image');
     expect(json).toContain(id('answer'));
     expect(json).toContain(id('help'));
-    expect(json).toContain('Enter answer');
-    expect(json).toContain('Ask for help');
+    expect(json).toContain('Enter code');
+    expect(json).toContain('Get help');
     for (const forbidden of ['Refresh', 'https:', 'Turnstile', 'Select method', 'digest', 'secret'])
       expect(json).not.toContain(forbidden);
   });
@@ -87,7 +251,7 @@ describe('private Discord image CAPTCHA interactions', () => {
       { challengeId, generation: 1, interactionId: 'discord-interaction', answer: ' ab2cde ' }
     );
     const json = rendered(f.interaction.editReply.mock.calls[0][0]);
-    expect(json).toContain('Security check completed');
+    expect(json).toContain('Code accepted');
     expect(json.toLowerCase()).not.toContain('you are verified');
   });
   it.each([
@@ -126,7 +290,7 @@ describe('private Discord image CAPTCHA interactions', () => {
     f.actions.open.mockResolvedValue({ kind: 'outcome', outcome: { kind: 'unavailable' } });
     await handleCaptchaImageInteraction(f.interaction, f.actions);
     const json = rendered(f.interaction.editReply.mock.calls[0][0]);
-    expect(json).toContain('retry');
+    expect(json).toContain('Try opening');
     expect(json).toContain(id('help'));
   });
   it('routes repeated help clicks to the durable assistance action without opening an image', async () => {
@@ -157,7 +321,7 @@ describe('private Discord image CAPTCHA interactions', () => {
     Object.assign(f.interaction, { deferred: true });
     await handleCaptchaImageInteraction(f.interaction, f.actions);
     expect(f.actions.open).not.toHaveBeenCalled();
-    expect(rendered(f.interaction.editReply.mock.calls)).not.toContain('security-check.png');
+    expect(rendered(f.interaction.editReply.mock.calls)).not.toContain('captcha.png');
   });
 
   it('does not attempt a modal after the interaction has been deferred', async () => {
@@ -167,8 +331,8 @@ describe('private Discord image CAPTCHA interactions', () => {
     expect(f.interaction.showModal).not.toHaveBeenCalled();
   });
   it.each([
-    [{ kind: 'invalid', remainingAttempts: 3 }, '3 attempts remaining'],
-    [{ kind: 'failed' }, 'moderator review'],
+    [{ kind: 'invalid', remainingAttempts: 3 }, '3 attempts left'],
+    [{ kind: 'failed' }, 'moderator'],
     [{ kind: 'stale' }, 'moderator'],
     [{ kind: 'rate_limited' }, 'try again'],
   ] as const)('presents %s accurately', async (outcome, copy) => {

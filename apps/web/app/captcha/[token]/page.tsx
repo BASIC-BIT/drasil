@@ -14,18 +14,18 @@ export const dynamic = 'force-dynamic';
 function resultMessage(result: string | undefined): string | null {
   switch (result) {
     case 'invalid':
-      return 'That browser check was not accepted. Please try again.';
+      return 'CAPTCHA not accepted. Try again.';
     case 'provider_error':
     case 'service':
-      return 'The browser check is temporarily unavailable. Please try again.';
+      return 'CAPTCHA unavailable. Try again.';
     case 'rate_limited':
-      return 'Too many attempts were submitted. Wait a minute and try again.';
+      return 'Too many attempts. Wait a minute, then try again.';
     case 'authenticate':
-      return 'Confirm your Discord account again before continuing.';
+      return 'Sign in with Discord again to continue.';
     case 'retry':
-      return 'The browser check could not be submitted. Please try again.';
+      return "Couldn't submit the CAPTCHA. Try again.";
     case 'stale':
-      return 'This security check changed while it was being completed. Please try again.';
+      return 'This CAPTCHA has changed. Open the latest link in Discord.';
     default:
       return null;
   }
@@ -45,8 +45,8 @@ export default async function CaptchaChallengePage({
     return (
       <main className="public-flow-shell">
         <section className="public-flow-panel">
-          <h1>Security check unavailable</h1>
-          <p>This link is invalid or no longer available. Ask a moderator for a new check.</p>
+          <h1>CAPTCHA unavailable</h1>
+          <p>This link is invalid or no longer active. Ask a moderator for a new CAPTCHA.</p>
         </section>
       </main>
     );
@@ -60,7 +60,8 @@ export default async function CaptchaChallengePage({
     return (
       <main className="public-flow-shell">
         <section className="public-flow-panel">
-          <h1>Security check completed.</h1>
+          <h1>CAPTCHA passed</h1>
+          <p>Return to your case in Discord.</p>
         </section>
       </main>
     );
@@ -69,8 +70,8 @@ export default async function CaptchaChallengePage({
     return (
       <main className="public-flow-shell">
         <section className="public-flow-panel">
-          <h1>Security check unavailable</h1>
-          <p>This check is no longer active. Ask a moderator if you still need access.</p>
+          <h1>CAPTCHA unavailable</h1>
+          <p>This CAPTCHA is no longer active. Ask a moderator if you need another.</p>
         </section>
       </main>
     );
@@ -86,9 +87,9 @@ export default async function CaptchaChallengePage({
     identity.userId === challenge.userId;
   const message =
     query.auth === 'mismatch'
-      ? 'This check belongs to a different Discord account.'
+      ? 'This CAPTCHA belongs to a different Discord account.'
       : query.auth === 'failed'
-        ? 'Discord account confirmation did not complete. Please try again.'
+        ? 'Discord sign-in failed. Try again.'
         : resultMessage(query.result);
   const formConfiguration = identityMatches
     ? getCaptchaFormConfiguration(challenge.id, challenge.generation)
@@ -97,8 +98,12 @@ export default async function CaptchaChallengePage({
   return (
     <main className="public-flow-shell">
       <section className="public-flow-panel">
-        <h1>Discord security check</h1>
-        <p>Complete this browser check to confirm access to your Discord account.</p>
+        <h1>CAPTCHA</h1>
+        <p>
+          {identityMatches
+            ? 'Complete the CAPTCHA below.'
+            : 'Sign in with the Discord account this CAPTCHA was sent to.'}
+        </p>
         {message ? (
           <p className="status-banner" role="status">
             {message}
@@ -114,7 +119,7 @@ export default async function CaptchaChallengePage({
         ) : identityMatches ? (
           <>
             <p className="status-banner" role="status">
-              The browser check is temporarily unavailable. Please try again.
+              CAPTCHA unavailable. Try again later or ask a moderator.
             </p>
             <Link className="button" href={`/captcha/${encodeURIComponent(token)}`}>
               Try again
@@ -122,7 +127,7 @@ export default async function CaptchaChallengePage({
           </>
         ) : (
           <Link className="button" href={`/api/captcha/auth/${encodeURIComponent(token)}`}>
-            Confirm Discord account
+            Continue with Discord
           </Link>
         )}
       </section>
