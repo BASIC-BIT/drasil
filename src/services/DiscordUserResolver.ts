@@ -1,9 +1,7 @@
 import type { Client } from 'discord.js';
 
 export type UserResolution =
-  | { status: 'found'; userId: string }
-  | { status: 'not_found' }
-  | { status: 'ambiguous' };
+  { status: 'found'; userId: string } | { status: 'not_found' } | { status: 'ambiguous' };
 
 export class DiscordUserResolver {
   public constructor(private readonly client: Client) {}

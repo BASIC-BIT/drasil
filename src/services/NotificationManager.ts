@@ -1194,8 +1194,7 @@ export class NotificationManager implements INotificationManager {
       readonly deny: { readonly bitfield: bigint };
     };
     const cache = channel.permissionOverwrites.cache as
-      | { values?: () => IterableIterator<ExistingOverwrite> }
-      | undefined;
+      { values?: () => IterableIterator<ExistingOverwrite> } | undefined;
     const existingOverwrites = typeof cache?.values === 'function' ? [...cache.values()] : [];
     return {
       channelId: channel.id,

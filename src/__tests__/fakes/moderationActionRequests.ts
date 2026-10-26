@@ -99,8 +99,7 @@ export class InMemoryModerationActionRequestRepository implements IModerationAct
     if (!current || getReportBanAttemptToken(current) !== token) return false;
     const metadata = current.metadata as Prisma.JsonObject;
     const result = (current.result as Prisma.JsonObject).observed_ban_result as
-      | Prisma.JsonObject
-      | undefined;
+      Prisma.JsonObject | undefined;
     if (result?.status !== 'banned' || metadata.report_ban_analytics_claimed_at) return false;
     this.rows.set(id, {
       ...current,
@@ -140,8 +139,7 @@ export class InMemoryModerationActionRequestRepository implements IModerationAct
       return row;
     const current = row.metadata as Prisma.JsonObject;
     const receipt = (row.result as Prisma.JsonObject).observed_ban_result as
-      | Prisma.JsonObject
-      | undefined;
+      Prisma.JsonObject | undefined;
     if (receipt?.status === 'banned' && patch.report_ban_phase !== null) return row;
     if (row.status === ModerationActionRequestStatus.FAILED && !current.report_ban_phase)
       return row;
@@ -196,11 +194,9 @@ export class InMemoryModerationActionRequestRepository implements IModerationAct
     )
       return row;
     const receipt = (row.result as Prisma.JsonObject).observed_ban_result as
-      | Prisma.JsonObject
-      | undefined;
+      Prisma.JsonObject | undefined;
     const incoming = (result as Prisma.JsonObject).observed_ban_result as
-      | Prisma.JsonObject
-      | undefined;
+      Prisma.JsonObject | undefined;
     if (
       receipt?.status === 'banned' ||
       (receipt?.status === 'banned_updates_pending' && incoming?.status === 'ban_outcome_unknown')
@@ -229,8 +225,7 @@ export class InMemoryModerationActionRequestRepository implements IModerationAct
     )
       return row;
     const receipt = (row.result as Prisma.JsonObject).observed_ban_result as
-      | Prisma.JsonObject
-      | undefined;
+      Prisma.JsonObject | undefined;
     if (
       (row.metadata as Prisma.JsonObject).report_ban_phase ||
       ['banned', 'banned_updates_pending', 'ban_outcome_unknown'].includes(String(receipt?.status))

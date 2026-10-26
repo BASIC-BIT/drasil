@@ -19,8 +19,7 @@ export interface ImageChallengeReference {
   generation: number;
 }
 export type ImageOpenOutcome =
-  | { kind: 'ready'; png: Buffer }
-  | { kind: 'denied' | 'stale' | 'unavailable' };
+  { kind: 'ready'; png: Buffer } | { kind: 'denied' | 'stale' | 'unavailable' };
 export type ImageSubmitOutcome =
   | { kind: 'invalid'; remainingAttempts: number }
   | { kind: 'passed' | 'failed' | 'denied' | 'stale' | 'rate_limited' | 'unavailable' };

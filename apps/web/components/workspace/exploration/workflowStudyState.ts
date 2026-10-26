@@ -19,12 +19,7 @@ export type ToolView =
     };
 
 export type ResultView =
-  | 'queued'
-  | 'processing'
-  | 'failed'
-  | 'updates_pending'
-  | 'unknown'
-  | 'resolved_elsewhere';
+  'queued' | 'processing' | 'failed' | 'updates_pending' | 'unknown' | 'resolved_elsewhere';
 
 export const workflowViews = {
   inbox: 'Mixed inbox',

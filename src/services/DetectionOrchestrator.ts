@@ -51,10 +51,7 @@ export interface DetectionMessageAction {
 }
 
 export type DetectionGptTriggerReason =
-  | 'first_recent_messages'
-  | 'new_account'
-  | 'new_server_member'
-  | 'borderline_score';
+  'first_recent_messages' | 'new_account' | 'new_server_member' | 'borderline_score';
 
 export interface DetectionMessageOptions {
   /** Requires profileData because GPT analysis is profile-context based. */

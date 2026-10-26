@@ -7,12 +7,7 @@ import {
 } from './casePresentation';
 
 export type CaseHistoryPresenceFilter =
-  | 'all'
-  | 'banned'
-  | 'in_server'
-  | 'kicked'
-  | 'left_or_removed'
-  | 'unknown';
+  'all' | 'banned' | 'in_server' | 'kicked' | 'left_or_removed' | 'unknown';
 
 export type CaseHistorySortMode = 'newest' | 'oldest' | 'signal' | 'last_action';
 

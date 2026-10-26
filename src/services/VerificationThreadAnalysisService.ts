@@ -544,8 +544,7 @@ export class VerificationThreadAnalysisService implements IVerificationThreadAna
                   ? latestAnalysis.gptSummary
                   : undefined,
               jevAnalysis: this.asObject(latestAnalysis.jevAnalysis) as unknown as
-                | JevProfileAnalysis
-                | undefined,
+                JevProfileAnalysis | undefined,
               result,
               confidence: latestAnalysis.confidence,
               summary: latestAnalysis.summary,

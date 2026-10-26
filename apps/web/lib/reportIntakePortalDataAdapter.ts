@@ -3,9 +3,7 @@ import { discordMessageUrl } from './discordUrls';
 import { getPostgresPool } from './setupDataAdapter';
 
 export type OpenReportIntakeStatus =
-  | 'collecting_evidence'
-  | 'needs_reporter_confirmation'
-  | 'needs_admin_confirmation';
+  'collecting_evidence' | 'needs_reporter_confirmation' | 'needs_admin_confirmation';
 
 export interface ReporterOpenReportIntake {
   readonly createdAt: string;

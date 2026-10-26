@@ -39,11 +39,7 @@ export interface ConnectionGrant {
   readonly revokedAt: Date | null;
 }
 export type ConfirmationMethod =
-  | 'elicitation'
-  | 'client_confirmation'
-  | 'website'
-  | 'discord'
-  | 'not_required';
+  'elicitation' | 'client_confirmation' | 'website' | 'discord' | 'not_required';
 export type IntentPreconditions =
   | import('../reports/resolution').ReportMessagePrecondition
   | import('../reports/review').ReportCasePrecondition
@@ -218,9 +214,7 @@ export interface ExecutionRecord extends ResolvedIntent {
   } | null;
 }
 export type IntentDelivery =
-  | { readonly kind: 'direct' }
-  | { readonly kind: 'report_case_terminal' }
-  | EnqueueInput;
+  { readonly kind: 'direct' } | { readonly kind: 'report_case_terminal' } | EnqueueInput;
 /** Trusted persistence interface. The runtime resolves/revalidates before acceptance;
  * this store atomically binds only the frozen, canonical delivery. */
 export interface IntentStore {

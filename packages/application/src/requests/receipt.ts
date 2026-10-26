@@ -1,11 +1,6 @@
 import type { QueuedCommand } from './commands';
 export type QueuedJson =
-  | string
-  | number
-  | boolean
-  | null
-  | QueuedJson[]
-  | { [key: string]: QueuedJson };
+  string | number | boolean | null | QueuedJson[] | { [key: string]: QueuedJson };
 export interface QueuedActionReceipt {
   readonly id: string;
   readonly status: 'queued' | 'processing' | 'completed' | 'failed';

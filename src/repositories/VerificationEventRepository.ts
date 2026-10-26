@@ -1500,8 +1500,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
     )
       return false;
     const snapshot = ((event.metadata ?? {}) as Prisma.JsonObject).user_snapshot as
-      | Prisma.JsonObject
-      | undefined;
+      Prisma.JsonObject | undefined;
     const operationJoin = metadata.report_ban_membership_joined_at;
     const caseJoin = snapshot?.joined_at;
     if (
@@ -1547,8 +1546,7 @@ export class VerificationEventRepository implements IVerificationEventRepository
             WHERE server_id = ${serverId} AND target_user_id = ${userId}
               AND action_type = 'ban_observed_detection'`;
           const joinedAt = (metadata as Prisma.JsonObject | null)?.user_snapshot as
-            | Prisma.JsonObject
-            | undefined;
+            Prisma.JsonObject | undefined;
           for (const request of requests) {
             const confirmed = request.metadata?.report_ban_confirmed_at;
             const expectedJoin = request.metadata?.report_ban_membership_joined_at;

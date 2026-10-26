@@ -142,8 +142,7 @@ export class ModerationEvidenceService {
           this.matchingAssets(
             assets,
             (event.metadata as Record<string, unknown> | null)?.profile_assets as
-              | ProfileAssetSnapshot
-              | undefined
+              ProfileAssetSnapshot | undefined
           ) &&
           typeof stored.summary === 'string' &&
           typeof stored.analyzed_image_count === 'number' &&
