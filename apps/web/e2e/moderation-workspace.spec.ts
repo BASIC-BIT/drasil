@@ -95,6 +95,45 @@ for (const kind of [
   });
 }
 
+test('theme toggle is independent of fallback fonts and keyboard preference persists across routes', async ({
+  page,
+}, testInfo) => {
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.goto(`/admin/guild/${id.guild}/cases/${id.case}`);
+  const toggle = page.getByRole('button', { name: 'Toggle light and dark mode', exact: true });
+  await expect(toggle).toHaveAttribute('title', 'Switch to light mode');
+  await expect(toggle).toHaveCSS('width', '32px');
+  await expect(toggle).toHaveCSS('height', '32px');
+  await toggle.evaluate((button) => {
+    button.style.fontFamily = 'Noto Color Emoji';
+  });
+  const emojiFont = await toggle.screenshot();
+  await toggle.evaluate((button) => {
+    button.style.fontFamily = 'DejaVu Sans';
+  });
+  const textFont = await toggle.screenshot();
+  await testInfo.attach('theme-icon-emoji-font', { body: emojiFont, contentType: 'image/png' });
+  await testInfo.attach('theme-icon-text-font', { body: textFont, contentType: 'image/png' });
+  expect(emojiFont.equals(textFont), 'Theme icon must not change with platform font fallback').toBe(
+    true
+  );
+  await toggle.evaluate((button) => button.style.removeProperty('font-family'));
+  await toggle.focus();
+  await page.keyboard.press('Space');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await page.goto(`/admin/guild/${id.guild}/inbox`);
+  await page.reload();
+  await expect(toggle).toHaveAttribute('title', 'Switch to dark mode');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  expect(await page.evaluate(() => localStorage.getItem('drasil-theme'))).toBe('light');
+  await toggle.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await page.goto(`/admin/guild/${id.guild}/cases/${id.case}`);
+  await expect(toggle).toHaveAttribute('title', 'Switch to light mode');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+});
+
 test('early reporter reply and breach preserve distinct identities; screening has no decision', async ({
   page,
 }) => {
