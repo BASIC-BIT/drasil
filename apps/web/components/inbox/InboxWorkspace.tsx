@@ -1,6 +1,7 @@
 'use client';
 
 import type { CaseCleanupActions } from '@/components/cases/CaseWorkspaceController';
+import { ParkedRecoveryList } from './ParkedRecoveryList';
 import { ActionButton } from '@/components/workspace/Foundation';
 import { chooseInboxContinuation } from '@/lib/inboxContinuation';
 import {
@@ -15,7 +16,11 @@ import {
 } from '@/lib/moderationInboxViewModel';
 import type { WorkspaceItemDetail } from '@/lib/moderationWorkspaceTypes';
 import type { WorkspaceActions } from '@/lib/workspaceActionTypes';
-import { moderationInboxItemKindSchema, type ModerationInboxItem } from '@drasil/contracts';
+import {
+  moderationInboxItemKindSchema,
+  type ModerationInboxItem,
+  type CaseSummary,
+} from '@drasil/contracts';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { InboxActionRequestPollingProvider } from './InboxActionRequestPoller';
 import { InboxItemDetail, inboxDetailRequests, matchingInboxRequests } from './InboxItemDetail';
@@ -25,6 +30,7 @@ import styles from './InboxWorkspace.module.css';
 export interface InboxWorkspaceProps {
   readonly guildId: string;
   readonly items: readonly ModerationInboxItem[];
+  readonly parkedCases?: readonly CaseSummary[];
   readonly initialLocation: InboxLocation;
   readonly loadDetail: (itemId: string, signal: AbortSignal) => Promise<WorkspaceItemDetail>;
   readonly actions: WorkspaceActions;
@@ -148,6 +154,7 @@ export function InboxWorkspace(props: InboxWorkspaceProps) {
 function GuildInboxWorkspace({
   guildId,
   items,
+  parkedCases = [],
   initialLocation,
   loadDetail,
   actions,
@@ -161,6 +168,7 @@ function GuildInboxWorkspace({
   const ordering = useRef<readonly string[]>([]);
   const focusId = useRef<string | null>(null);
   const focusedDetail = useRef<string | null>(null);
+  const pendingQueueFocus = useRef(false);
   const loadSequence = useRef(0);
   const completedReadTime = useRef(0);
   const initialRestore = useRef(true);
@@ -268,9 +276,9 @@ function GuildInboxWorkspace({
         },
         true
       );
-      if (!location.selectedItemId || !nextId) requestAnimationFrame(() => focusQueue(nextId));
+      if (!location.selectedItemId || !nextId) pendingQueueFocus.current = true;
     } else if (initialRestore.current && !location.selectedItemId && focusId.current) {
-      focusQueue(focusId.current);
+      pendingQueueFocus.current = true;
     }
     initialRestore.current = false;
     // Keep the review's captured order while filters change or a resolved row disappears.
@@ -305,7 +313,7 @@ function GuildInboxWorkspace({
       requestAnimationFrame(() => {
         if (queue.current && stored) queue.current.scrollTop = stored.scrollTop;
       });
-      if (!restored.selectedItemId || !nextId) requestAnimationFrame(() => focusQueue(nextId));
+      if (!restored.selectedItemId || !nextId) pendingQueueFocus.current = true;
     };
     const save = () => saveRestoration();
     const show = (event: PageTransitionEvent) => {
@@ -320,6 +328,13 @@ function GuildInboxWorkspace({
       window.removeEventListener('pageshow', show);
     };
   }, [saveRestoration, guildId, navigate, focusQueue]);
+  useEffect(() => {
+    // A frame can run before the selection update reveals the mobile queue.
+    // Apply explicit return focus only after that visibility change is committed.
+    if (!pendingQueueFocus.current || location.selectedItemId) return;
+    pendingQueueFocus.current = false;
+    focusQueue(focusId.current);
+  }, [location, focusQueue]);
   useEffect(() => {
     const itemId = location.selectedItemId;
     if (!itemId) return;
@@ -394,7 +409,7 @@ function GuildInboxWorkspace({
     });
     focusedDetail.current = null;
     navigate({ ...location, selectedItemId: null, trackedRequestId: null });
-    requestAnimationFrame(() => focusQueue(focusId.current));
+    pendingQueueFocus.current = true;
   }
   function next(): void {
     const id = chooseInboxContinuation({
@@ -520,6 +535,7 @@ function GuildInboxWorkspace({
           }}
         >
           <InboxQueue guildId={guildId} items={visible} location={location} onSelect={select} />
+          <ParkedRecoveryList guildId={guildId} cases={parkedCases} returnHref={returnHref} />
         </div>
         {location.selectedItemId ? (
           <div>

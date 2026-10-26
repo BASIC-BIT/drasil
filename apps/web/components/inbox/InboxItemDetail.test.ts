@@ -1,3 +1,5 @@
+import { fixtureReportDetails, fixtureReportQueueItems } from '@/lib/reportFixtures';
+import { reportQueueItemToInboxItem } from '@/lib/moderationInboxDataAdapter';
 import { fixtureCaseDetails } from '@/lib/caseFixtures';
 import { fixtureModerationInboxItems } from '@/lib/inboxFixtures';
 import { workspaceItemDetailSchema } from '@/lib/moderationWorkspaceTypes';
@@ -176,3 +178,70 @@ it.each(['ordinary', 'compromised_account'] as const)(
     } else expect(html).toContain('Confirm account recovery');
   }
 );
+
+it.each([
+  ['matching', {}],
+  ['guild', { guildId: 'other-guild' }],
+  ['record', { reportIntakeId: 'other-report' }],
+  ['member', { targetUserId: 'other-member' }],
+  ['action', { requestedAction: 'kick_user' }],
+] as const)('restores only a matching report receipt on a fresh mount: %s', (scope, override) => {
+  const report = { ...fixtureReportDetails[0], allowedActions: [] };
+  const request = {
+    id: 'claimed-ban',
+    guildId: report.guildId,
+    actionType: 'ban_observed_detection',
+    requestedAction: 'ban_user',
+    actorSurface: 'web',
+    actorUserId: 'moderator-1',
+    targetUserId: report.targetUserId,
+    reportIntakeId: report.id,
+    detectionEventId: report.latestDetectionId,
+    verificationEventId: null,
+    messageDeletionJobId: null,
+    status: 'failed',
+    resultSummary: null,
+    requestedAt: '2026-10-24T12:00:00Z',
+    updatedAt: '2026-10-24T12:01:00Z',
+    completedAt: null,
+    failedAt: '2026-10-24T12:01:00Z',
+    lastError: null,
+    observedBanResult: { status: 'ban_outcome_unknown', operationId: 'claimed-ban' },
+    ...override,
+  };
+  const detail = workspaceItemDetailSchema.parse({
+    kind: 'submitted_report',
+    report,
+    item: reportQueueItemToInboxItem({ ...fixtureReportQueueItems[0], allowedActions: [] }),
+    requests: [request],
+    policy: {
+      allowedActions: [],
+      canQueueCaseActions: true,
+      canOpenReportCases: true,
+      canManageCleanup: false,
+      kickReasonRequired: false,
+      banReasonRequired: false,
+    },
+  });
+  const submit = vi.fn();
+  const html = renderToStaticMarkup(
+    createElement(InboxItemDetail, {
+      detail,
+      loadedAt: '2026-10-25T12:00:00Z',
+      returnHref: '/inbox',
+      trackedRequestId: null,
+      onTrackedRequest() {},
+      actions: {
+        caseAction: submit,
+        reportAction: submit,
+        observedAction: submit,
+        attentionAction: submit,
+      },
+    })
+  );
+  if (scope === 'matching') {
+    expect(html).toContain('Request claimed-ban');
+    expect(html).toContain('/review-report-ban operation:claimed-ban');
+    expect(html).toMatch(/disabled=""[^>]*>Ban member/);
+  } else expect(html).not.toContain('Request claimed-ban');
+});
