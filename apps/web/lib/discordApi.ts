@@ -1,3 +1,4 @@
+import { ReadDependencyUnavailableError } from '@drasil/application';
 import { fetchDiscordRead } from './discordReadRecovery';
 import { readOptionalEnv, requireEnv } from './env';
 
@@ -101,7 +102,14 @@ async function readDiscordJson<T>(response: Response): Promise<T> {
     const body = await response.text().catch(() => '');
     throw new DiscordApiError(response.status, body);
   }
-  return (await response.json()) as T;
+  try {
+    return (await response.json()) as T;
+  } catch (error) {
+    // Only native provider JSON decoding failures are expected unavailability.
+    // SyntaxErrors from other code must retain their unexpected-error semantics.
+    if (error instanceof SyntaxError) throw new ReadDependencyUnavailableError({});
+    throw error;
+  }
 }
 
 export function discordAvatarUrl(user: Pick<DiscordUser, 'id' | 'avatar'>): string | null {

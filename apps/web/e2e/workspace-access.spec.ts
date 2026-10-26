@@ -178,3 +178,22 @@ test('authorized foreign and absent records remain missing', async ({ page }) =>
     await expect(page.getByText('Server access required', { exact: true })).toHaveCount(0);
   }
 });
+
+for (const source of ['identity', 'roles'] as const)
+  test(`HTTP200 malformed ${source} JSON is unavailable and retry recovers`, async ({ page }) => {
+    fixtures.setMalformedResponse(source, true);
+    const response = await page.request.get(detailUrl);
+    expect(response.status()).toBe(503);
+    expect(await response.json()).toEqual({ code: 'unavailable' });
+    expect(response.headers()['cache-control']).toBe('private, no-store');
+    expect(response.headers()['retry-after']).toBeUndefined();
+    await page.goto(inbox);
+    await expect(page.getByText('Unable to verify server access', { exact: true })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Inbox queue' })).toHaveCount(0);
+    await expect(page.getByText('Case member', { exact: true })).toHaveCount(0);
+    fixtures.setMalformedResponse(source, false);
+    await page.getByRole('button', { name: 'Try again', exact: true }).click();
+    await expect(page.getByRole('region', { name: 'Inbox queue' })).toBeVisible();
+    expect((await page.request.get(detailUrl)).status()).toBe(200);
+    expect(fixtures.calls.filter((call) => call.includes('/users/@me/guilds'))).toEqual([]);
+  });

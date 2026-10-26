@@ -43,6 +43,7 @@ export function workspaceFixtures() {
   let selectedRoleIds: string[] = [];
   let identityId: string = id.actor;
   const failures = new Map<string, number>();
+  const malformedResponses = new Set<string>();
   const calls: string[] = [];
   async function start() {
     server = createServer((request, response) => {
@@ -66,6 +67,11 @@ export function workspaceFixtures() {
                 : url.pathname === `/guilds/${id.guild}/members/${id.actor}`
                   ? 'member'
                   : '';
+      if (malformedResponses.has(source)) {
+        response.writeHead(200);
+        response.end('{"controlledMalformedResponse":');
+        return;
+      }
       const failure = failures.get(source);
       if (failure) {
         response.writeHead(failure, { 'Retry-After': '1' });
@@ -157,6 +163,7 @@ export function workspaceFixtures() {
     selectedRoleIds = [];
     identityId = id.actor;
     failures.clear();
+    malformedResponses.clear();
     await pool.query(
       'update detection_events set latest_verification_event_id=null where server_id=any($1::text[])',
       [[id.guild, id.foreignGuild]]
@@ -314,6 +321,10 @@ export function workspaceFixtures() {
     pool,
     calls,
     finishCase,
+    setMalformedResponse: (source: 'identity' | 'roles', enabled: boolean) => {
+      if (enabled) malformedResponses.add(source);
+      else malformedResponses.delete(source);
+    },
     setProviderFailure: (
       source: 'identity' | 'directory' | 'guild' | 'member' | 'roles',
       status?: number
