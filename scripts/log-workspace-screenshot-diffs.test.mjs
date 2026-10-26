@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
-import bundle from 'playwright-core/lib/utilsBundle';
+import { createRequire } from 'node:module';
 import { screenshotDiagnostic, MAX_CROP_BASE64_LENGTH } from './log-workspace-screenshot-diffs.mjs';
-const { PNG } = bundle;
+const requireWeb = createRequire(new URL('../apps/web/package.json', import.meta.url));
+const { PNG } = requireWeb('playwright-core/lib/utilsBundle');
 function png(width, height, color = [80, 80, 80, 255]) {
   const result = new PNG({ width, height });
   for (let i = 0; i < result.data.length; i += 4) result.data.set(color, i);
@@ -77,6 +78,43 @@ test('failure logger reads adjacent runner artifacts and emits only bounded diag
     assert.equal(lines[0].changedPixels, 1);
     assert.deepEqual(lines[0].thresholdDiffBounds, { x: 7, y: 9, width: 1, height: 1 });
     assert.ok(result.stdout.length < 30_000);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('failure logger includes Operations artifacts across result directories within one comparison limit', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'drasil-operations-diagnostic-'));
+  try {
+    for (let index = 0; index < 10; index++) {
+      const results = index < 5 ? 'workspace-test-results' : 'test-results';
+      const nested = path.join(dir, 'apps/web', results, `comparison-${index}`);
+      mkdirSync(nested, { recursive: true });
+      const actual = png(20, 20);
+      pixel(actual, 7, 9, [0, 255, 0, 255]);
+      const name = index < 5 ? 'workspace-case-dark-320' : 'operations-linux-dark';
+      for (const [suffix, data] of Object.entries({ actual, expected: png(20, 20) }))
+        writeFileSync(path.join(nested, `${name}-${suffix}.png`), PNG.sync.write(data));
+    }
+    const result = spawnSync(
+      process.execPath,
+      [path.resolve('scripts/log-workspace-screenshot-diffs.mjs')],
+      { encoding: 'utf8', cwd: dir }
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const lines = result.stdout
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    assert.equal(lines.length, 9);
+    assert.deepEqual(lines.pop(), { omittedComparisons: 2 });
+    assert.equal(lines.filter((line) => line.file.includes('workspace-test-results')).length, 5);
+    assert.equal(lines.filter((line) => line.file.includes('/test-results/')).length, 3);
+    for (const line of lines) {
+      assert.equal(line.changedPixels, 1);
+      assert.deepEqual(line.actualSize, { width: 20, height: 20 });
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
