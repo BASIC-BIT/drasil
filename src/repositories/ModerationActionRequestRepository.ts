@@ -290,8 +290,7 @@ export class ModerationActionRequestRepository implements IModerationActionReque
   ): boolean {
     const metadata = (current.metadata ?? {}) as Prisma.JsonObject;
     const receipt = ((current.result ?? {}) as Prisma.JsonObject).observed_ban_result as
-      | Prisma.JsonObject
-      | undefined;
+      Prisma.JsonObject | undefined;
     const phase = metadata.report_ban_phase;
     const next = patch.report_ban_phase;
     if (receipt?.status === 'banned' && next !== null) return false;
@@ -450,8 +449,7 @@ export class ModerationActionRequestRepository implements IModerationActionReque
       const adopted = [];
       for (const event of locked) {
         const snapshot = ((event.metadata ?? {}) as Prisma.JsonObject).user_snapshot as
-          | Prisma.JsonObject
-          | undefined;
+          Prisma.JsonObject | undefined;
         const joinedAt = snapshot?.joined_at;
         const expectedJoin = metadata.report_ban_membership_joined_at;
         if (

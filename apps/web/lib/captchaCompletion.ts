@@ -24,13 +24,7 @@ const CAPTCHA_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const CAPTCHA_ATTEMPT_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 export type CaptchaPublicStatus =
-  | 'pending'
-  | 'passed'
-  | 'failed'
-  | 'expired'
-  | 'bypassed'
-  | 'cancelled'
-  | 'unavailable';
+  'pending' | 'passed' | 'failed' | 'expired' | 'bypassed' | 'cancelled' | 'unavailable';
 
 interface CaptchaChallengeRow {
   readonly id: string;

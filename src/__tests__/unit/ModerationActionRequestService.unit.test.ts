@@ -1095,22 +1095,18 @@ describe('ModerationActionRequestService', () => {
       user_id: 'user-1',
     } as any;
     const verificationEventRepository = {
-      claimCaptchaPresentation: jest.fn(
-        async (input: { attemptId: string }): Promise<any> => ({
-          ...pendingVerificationEvent,
-          containment_status: CaseContainmentStatus.IN_PROGRESS,
-          quarantine_attempt_id: input.attemptId,
-        })
-      ),
-      findById: jest.fn(
-        async (): Promise<any> => ({
-          ...pendingVerificationEvent,
-          status:
-            requests[0]?.action_type === ModerationActionRequestType.REOPEN_CASE
-              ? 'verified'
-              : 'pending',
-        })
-      ),
+      claimCaptchaPresentation: jest.fn(async (input: { attemptId: string }): Promise<any> => ({
+        ...pendingVerificationEvent,
+        containment_status: CaseContainmentStatus.IN_PROGRESS,
+        quarantine_attempt_id: input.attemptId,
+      })),
+      findById: jest.fn(async (): Promise<any> => ({
+        ...pendingVerificationEvent,
+        status:
+          requests[0]?.action_type === ModerationActionRequestType.REOPEN_CASE
+            ? 'verified'
+            : 'pending',
+      })),
       findActiveByUserAndServer: jest.fn(async () =>
         requests[0]?.action_type === ModerationActionRequestType.REOPEN_CASE
           ? null
@@ -1138,9 +1134,9 @@ describe('ModerationActionRequestService', () => {
     };
     const captchaChallengeService = {
       bypassChallenge: jest.fn(async () => ({ generation: 1, id: 'challenge-1' })),
-      evaluatePassedChallenge: jest.fn(
-        async (): Promise<CaptchaAutoResolutionDecision> => ({ status: 'eligible' })
-      ),
+      evaluatePassedChallenge: jest.fn(async (): Promise<CaptchaAutoResolutionDecision> => ({
+        status: 'eligible',
+      })),
       findById: jest.fn(async () => ({
         generation: 1,
         id: 'challenge-1',

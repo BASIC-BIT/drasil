@@ -42,33 +42,17 @@ export interface CaptchaBrowserChallenge {
   readonly serverId: string;
   readonly userId: string;
   readonly status:
-    | 'pending'
-    | 'passed'
-    | 'failed'
-    | 'expired'
-    | 'bypassed'
-    | 'cancelled'
-    | 'unavailable';
+    'pending' | 'passed' | 'failed' | 'expired' | 'bypassed' | 'cancelled' | 'unavailable';
   readonly generation: number;
   readonly caseRevision: number;
   readonly expiresAt: Date;
 }
 export interface CaptchaAttemptStart {
   readonly state:
-    | 'ready'
-    | 'duplicate'
-    | 'identity_mismatch'
-    | 'rate_limited'
-    | 'stale'
-    | 'unavailable';
+    'ready' | 'duplicate' | 'identity_mismatch' | 'rate_limited' | 'stale' | 'unavailable';
   readonly attemptId?: string;
   readonly previousState?:
-    | 'started'
-    | 'identity_mismatch'
-    | 'invalid'
-    | 'passed'
-    | 'provider_error'
-    | 'stale';
+    'started' | 'identity_mismatch' | 'invalid' | 'passed' | 'provider_error' | 'stale';
   readonly challenge?: CaptchaBrowserChallenge;
 }
 export type CaptchaAttemptCompletion = 'passed' | 'invalid' | 'failed' | 'provider_error' | 'stale';

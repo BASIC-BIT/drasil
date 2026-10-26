@@ -19,8 +19,7 @@ export type QueuedDetectionOutcome =
       (
         | {
             readonly action_type:
-              | 'dismiss_observed_detection'
-              | 'mark_observed_detection_false_positive';
+              'dismiss_observed_detection' | 'mark_observed_detection_false_positive';
             readonly dismissed: boolean;
           }
         | {
