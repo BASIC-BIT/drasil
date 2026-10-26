@@ -140,14 +140,9 @@ export function createModerationWorkspaceDataAdapter(
       banReasonRequired: current.moderatorBanActionRequiresReason,
     };
   }
-  async function selectedRequests(input: {
-    guildId: string;
-    userId: string | null;
-    caseId?: string;
-    reportId?: string;
-    detectionId?: string;
-    detectionIds?: readonly string[];
-  }): Promise<ModerationActionRequestSummary[]> {
+  async function selectedRequests(
+    input: RequestSelection
+  ): Promise<ModerationActionRequestSummary[]> {
     const detectionIds = input.detectionIds ?? (input.detectionId ? [input.detectionId] : []);
     const result = await getPostgresPool().query<{ id: string }>(
       `select id::text from moderation_action_requests where server_id = $1 and
@@ -159,19 +154,9 @@ export function createModerationWorkspaceDataAdapter(
     const loaded = await Promise.all(
       result.rows.map((row) => requests.getRequest(input.guildId, row.id))
     );
-    return loaded.filter((request): request is ModerationActionRequestSummary =>
-      Boolean(
-        request &&
-        request.targetUserId === input.userId &&
-        (!request.verificationEventId || request.verificationEventId === input.caseId) &&
-        (!request.reportIntakeId || request.reportIntakeId === input.reportId) &&
-        (!request.detectionEventId || detectionIds.includes(request.detectionEventId)) &&
-        ((input.caseId && request.verificationEventId === input.caseId) ||
-          (input.reportId && request.reportIntakeId === input.reportId) ||
-          (request.detectionEventId && detectionIds.includes(request.detectionEventId)))
-      )
-    );
+    return filterSelectedRequests(loaded, input);
   }
+
   async function getCaseWorkspaceData({
     guildId,
     caseId,
@@ -180,7 +165,7 @@ export function createModerationWorkspaceDataAdapter(
     caseId: string;
   }): Promise<CaseWorkspaceData | null> {
     if (!inScope(guildId)) return null;
-    const [detail, linkage] = await Promise.all([
+    const [initialDetail, linkage] = await Promise.all([
       cases.getCaseDetail(guildId, caseId),
       getPostgresPool().query<{ report_id: string | null; detection_id: string | null }>(
         `select de.metadata->>'reportIntakeId' as report_id, de.id::text as detection_id
@@ -190,8 +175,28 @@ export function createModerationWorkspaceDataAdapter(
         [guildId, caseId]
       ),
     ]);
-    if (!detail || detail.guildId !== guildId || detail.id !== caseId) return null;
+    if (!initialDetail || initialDetail.guildId !== guildId || initialDetail.id !== caseId)
+      return null;
     const linked = linkage.rows.find((row) => row.report_id) ?? linkage.rows[0];
+    const matchingRequests = await selectedRequests({
+      guildId,
+      userId: initialDetail.userId,
+      caseId,
+      reportId: linked?.report_id ?? undefined,
+      detectionIds: linkage.rows.flatMap((row) => (row.detection_id ? [row.detection_id] : [])),
+    });
+    // A worker can finish between the first case read and the request read.
+    // Capture requests once, then read their terminal effects before dependent data.
+    const detail = hasTerminalRequests(matchingRequests)
+      ? await cases.getCaseDetail(guildId, caseId)
+      : initialDetail;
+    if (
+      !detail ||
+      detail.guildId !== initialDetail.guildId ||
+      detail.id !== initialDetail.id ||
+      detail.userId !== initialDetail.userId
+    )
+      return null;
     const effectivePolicy = await policy(caseSummaryToInboxItem(detail));
     const attention =
       detail.caseKind === 'compromised_account'
@@ -217,16 +222,9 @@ export function createModerationWorkspaceDataAdapter(
         const item = parseModerationQueueRow(row);
         return item?.kind === 'support_attention' ? [item] : [];
       });
-    const [report, member, matchingRequests, workspace] = await Promise.all([
+    const [report, member, workspace] = await Promise.all([
       linked?.report_id ? reports.getReportDetail(guildId, linked.report_id) : null,
       createMemberProfileDataAdapter().getMemberProfile(guildId, detail.userId),
-      selectedRequests({
-        guildId,
-        userId: detail.userId,
-        caseId,
-        reportId: linked?.report_id ?? undefined,
-        detectionIds: linkage.rows.flatMap((row) => (row.detection_id ? [row.detection_id] : [])),
-      }),
       effectivePolicy.canManageCleanup ? cleanup.getCaseWorkspace(guildId, caseId) : null,
     ]);
     const matchingWorkspace =
@@ -346,6 +344,95 @@ export function createModerationWorkspaceDataAdapter(
       reply: attention?.reply ?? { kind: 'unavailable', sourceUrl: intake.reportThreadUrl },
     });
   }
+  async function getSubmittedReportDetail(
+    guildId: string,
+    id: string
+  ): Promise<WorkspaceItemDetail | null> {
+    const initial = await reports.getReportDetail(guildId, id);
+    if (!initial) return getEarlyReportDetail(guildId, id);
+    if (initial.guildId !== guildId || initial.id !== id) return null;
+    const captured = await selectedRequests(reportRequestSelection(initial));
+    const report = hasTerminalRequests(captured)
+      ? await reports.getReportDetail(guildId, id)
+      : initial;
+    if (
+      !report ||
+      report.guildId !== guildId ||
+      report.id !== id ||
+      report.targetUserId !== initial.targetUserId
+    )
+      return null;
+    const item = reportItem(report);
+    const effectivePolicy = await policy(item);
+    return workspaceItemDetailSchema.parse({
+      kind: 'submitted_report',
+      conversationSources: reportConversationSources(report),
+      item: { ...item, allowedActions: effectivePolicy.allowedActions },
+      policy: effectivePolicy,
+      report,
+      requests: filterSelectedRequests(captured, reportRequestSelection(report)),
+    });
+  }
+  async function detectionRequestSelection(
+    guildId: string,
+    row: WorkspaceDetectionRow
+  ): Promise<RequestSelection> {
+    const reportReference = z
+      .object({ reportIntakeId: z.string().optional() })
+      .passthrough()
+      .safeParse(row.metadata);
+    const reportId = reportReference.success ? reportReference.data.reportIntakeId : undefined;
+    const report = reportId ? await reports.getReportDetail(guildId, reportId) : null;
+    const matchingReportId =
+      report?.guildId === guildId &&
+      report.id === reportId &&
+      report.targetUserId === row.user_id &&
+      report.latestDetectionId === row.id
+        ? report.id
+        : undefined;
+    return {
+      guildId,
+      userId: row.user_id,
+      detectionId: row.id,
+      caseId: row.latest_verification_event_id ?? undefined,
+      reportId: matchingReportId,
+    };
+  }
+  async function getObservedDetail(
+    guildId: string,
+    id: string
+  ): Promise<WorkspaceItemDetail | null> {
+    const initial = await readWorkspaceDetection(guildId, id);
+    if (!initial) return null;
+    const selection = await detectionRequestSelection(guildId, initial);
+    const captured = await selectedRequests(selection);
+    const terminal = hasTerminalRequests(captured);
+    const row = terminal ? await readWorkspaceDetection(guildId, id) : initial;
+    if (!row || row.user_id !== initial.user_id) return null;
+    const freshSelection = terminal ? await detectionRequestSelection(guildId, row) : selection;
+    const detection = memberProfileDetectionSchema.parse(parseDetectionRow(guildId, row));
+    const observedState = z
+      .object({
+        observed_action: z.string().nullable().optional(),
+        observed_action_at: z.string().datetime().nullable().optional().catch(null),
+      })
+      .passthrough()
+      .safeParse(row.metadata);
+    const item = detectionItem(
+      guildId,
+      row.user_id,
+      detection,
+      observedState.success ? observedState.data : {}
+    );
+    const effectivePolicy = await policy(item);
+    return workspaceItemDetailSchema.parse({
+      kind: 'observed_alert',
+      item: { ...item, allowedActions: effectivePolicy.allowedActions },
+      policy: effectivePolicy,
+      detection,
+      requests: filterSelectedRequests(captured, freshSelection),
+    });
+  }
   async function getInboxItemDetail({
     guildId,
     itemId,
@@ -367,87 +454,8 @@ export function createModerationWorkspaceDataAdapter(
       };
       return workspaceItemDetailSchema.parse({ kind: 'case', item, policy: data.policy, data });
     }
-    if (kind === 'report') {
-      const report = await reports.getReportDetail(guildId, id);
-      if (!report) return getEarlyReportDetail(guildId, id);
-      if (report.guildId !== guildId || report.id !== id) return null;
-      const item = reportItem(report);
-      const [effectivePolicy, matchingRequests] = await Promise.all([
-        policy(item),
-        selectedRequests({
-          guildId,
-          userId: report.targetUserId,
-          reportId: id,
-          caseId: report.latestCaseId ?? undefined,
-          detectionId: report.latestDetectionId ?? undefined,
-        }),
-      ]);
-      return workspaceItemDetailSchema.parse({
-        kind: 'submitted_report',
-        conversationSources: reportConversationSources(report),
-        item: { ...item, allowedActions: effectivePolicy.allowedActions },
-        policy: effectivePolicy,
-        report,
-        requests: matchingRequests,
-      });
-    }
-    if (kind === 'detection') {
-      const result = await getPostgresPool().query<
-        Parameters<typeof parseDetectionRow>[1] & { server_id: string; user_id: string }
-      >(
-        `select de.*, linked_case.id as latest_verification_event_id, accounting.action_type as latest_accounting_action_type, accounting.action_at as latest_accounting_action_at
-         from detection_events de
-         left join verification_events linked_case on linked_case.id = de.latest_verification_event_id and linked_case.server_id = de.server_id and linked_case.user_id = de.user_id
-         left join lateral (select action_type::text, action_at from admin_actions where server_id = de.server_id and detection_event_id = de.id and action_type in ('false_positive', 'undo_observed_action') order by action_at desc nulls last limit 1) accounting on true
-         where de.server_id = $1 and de.id::text = $2 limit 1`,
-        [guildId, id]
-      );
-      const row = result.rows[0];
-      if (!row || row.server_id !== guildId || row.id !== id) return null;
-      const detection = memberProfileDetectionSchema.parse(parseDetectionRow(guildId, row));
-      const reportReference = z
-        .object({ reportIntakeId: z.string().optional() })
-        .passthrough()
-        .safeParse(row.metadata);
-      const reportId = reportReference.success ? reportReference.data.reportIntakeId : undefined;
-      const linkedReport = reportId ? await reports.getReportDetail(guildId, reportId) : null;
-      const matchingReportId =
-        linkedReport?.guildId === guildId &&
-        linkedReport.targetUserId === row.user_id &&
-        linkedReport.latestDetectionId === id
-          ? linkedReport.id
-          : undefined;
-      const observedState = z
-        .object({
-          observed_action: z.string().nullable().optional(),
-          observed_action_at: z.string().datetime().nullable().optional().catch(null),
-        })
-        .passthrough()
-        .safeParse(row.metadata);
-      const item = detectionItem(
-        guildId,
-        row.user_id,
-        detection,
-        observedState.success ? observedState.data : {}
-      );
-      const [effectivePolicy, matchingRequests] = await Promise.all([
-        policy(item),
-        selectedRequests({
-          guildId,
-          userId: row.user_id,
-          detectionId: id,
-          caseId: detection.latestCaseId ?? undefined,
-          reportId: matchingReportId,
-        }),
-      ]);
-      return workspaceItemDetailSchema.parse({
-        kind: 'observed_alert',
-        item: { ...item, allowedActions: effectivePolicy.allowedActions },
-        policy: effectivePolicy,
-        detection,
-        requests: matchingRequests,
-      });
-    }
+    if (kind === 'report') return getSubmittedReportDetail(guildId, id);
+    if (kind === 'detection') return getObservedDetail(guildId, id);
     if (kind !== 'queue') return null;
     const attention = await createModerationAttentionDataAdapter().getAttentionDetail({
       guildId,
@@ -572,4 +580,63 @@ function detectionItem(
           'open_discord',
         ],
   });
+}
+
+interface RequestSelection {
+  readonly guildId: string;
+  readonly userId: string | null;
+  readonly caseId?: string;
+  readonly reportId?: string;
+  readonly detectionId?: string;
+  readonly detectionIds?: readonly string[];
+}
+function filterSelectedRequests(
+  loaded: readonly (ModerationActionRequestSummary | null)[],
+  input: RequestSelection
+): ModerationActionRequestSummary[] {
+  const detectionIds = input.detectionIds ?? (input.detectionId ? [input.detectionId] : []);
+  return loaded.filter((request): request is ModerationActionRequestSummary =>
+    Boolean(
+      request &&
+      request.targetUserId === input.userId &&
+      (!request.verificationEventId || request.verificationEventId === input.caseId) &&
+      (!request.reportIntakeId || request.reportIntakeId === input.reportId) &&
+      (!request.detectionEventId || detectionIds.includes(request.detectionEventId)) &&
+      ((input.caseId && request.verificationEventId === input.caseId) ||
+        (input.reportId && request.reportIntakeId === input.reportId) ||
+        (request.detectionEventId && detectionIds.includes(request.detectionEventId)))
+    )
+  );
+}
+function hasTerminalRequests(requests: readonly ModerationActionRequestSummary[]): boolean {
+  return requests.some((request) => request.status === 'completed' || request.status === 'failed');
+}
+function reportRequestSelection(report: ReportDetail): RequestSelection {
+  return {
+    guildId: report.guildId,
+    userId: report.targetUserId,
+    reportId: report.id,
+    caseId: report.latestCaseId ?? undefined,
+    detectionId: report.latestDetectionId ?? undefined,
+  };
+}
+type WorkspaceDetectionRow = Parameters<typeof parseDetectionRow>[1] & {
+  server_id: string;
+  user_id: string;
+};
+async function readWorkspaceDetection(
+  guildId: string,
+  id: string
+): Promise<WorkspaceDetectionRow | null> {
+  const result = await getPostgresPool().query<WorkspaceDetectionRow>(
+    `select de.*, linked_case.id as latest_verification_event_id, accounting.action_type as latest_accounting_action_type, accounting.action_at as latest_accounting_action_at
+         from detection_events de
+         left join verification_events linked_case on linked_case.id = de.latest_verification_event_id and linked_case.server_id = de.server_id and linked_case.user_id = de.user_id
+         left join lateral (select action_type::text, action_at from admin_actions where server_id = de.server_id and detection_event_id = de.id and action_type in ('false_positive', 'undo_observed_action') order by action_at desc nulls last limit 1) accounting on true
+         where de.server_id = $1 and de.id::text = $2 limit 1`,
+    [guildId, id]
+  );
+  const row = result.rows[0];
+  if (!row || row.server_id !== guildId || row.id !== id) return null;
+  return row;
 }

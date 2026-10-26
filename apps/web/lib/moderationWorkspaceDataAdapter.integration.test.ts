@@ -1,4 +1,8 @@
-import { createModerationActionRequestDataAdapter } from './moderationActionRequestDataAdapter';
+import { PostgresActiveCaseDataAdapter } from './activeCaseDataAdapter';
+import {
+  createModerationActionRequestDataAdapter,
+  PostgresModerationActionRequestDataAdapter,
+} from './moderationActionRequestDataAdapter';
 import { randomUUID } from 'node:crypto';
 import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ownedTestDatabase } from '../../../scripts/owned-test-database.js';
@@ -490,3 +494,98 @@ it('reads a canonical early intake independently of disposable attention and sco
     })
   ).toBeNull();
 });
+
+it('reads terminal case effects after capturing a worker completion during the initial read', async () => {
+  await pool.query("update moderation_action_requests set status='queued' where id=$1", [
+    requestId,
+  ]);
+  const original = PostgresActiveCaseDataAdapter.prototype.getCaseDetail;
+  let completed = false;
+  const read = vi
+    .spyOn(PostgresActiveCaseDataAdapter.prototype, 'getCaseDetail')
+    .mockImplementation(async function (this: PostgresActiveCaseDataAdapter, guild, selectedCase) {
+      const snapshot = await original.call(this, guild, selectedCase);
+      if (!completed && guild === guildId && selectedCase === caseId) {
+        completed = true;
+        await pool.query(
+          "update verification_events set status='verified',resolved_at=now(),updated_at=now() where id=$1",
+          [caseId]
+        );
+        await pool.query(
+          "update moderation_action_requests set status='completed',completed_at=now(),updated_at=now() where id=$1",
+          [requestId]
+        );
+      }
+      return snapshot;
+    });
+  try {
+    const selected = await adapter().getInboxItemDetail({ guildId, itemId: `case:${caseId}` });
+    expect(selected).toMatchObject({
+      kind: 'case',
+      item: { statusLabel: 'verified' },
+      data: {
+        detail: { id: caseId, status: 'verified' },
+        requests: [{ id: requestId, status: 'completed', verificationEventId: caseId }],
+        cleanup: { workspace: { caseStatus: 'verified' } },
+      },
+    });
+    expect(selected?.policy.allowedActions).not.toContain('verify_user');
+    expect(read).toHaveBeenCalledTimes(2);
+  } finally {
+    read.mockRestore();
+  }
+});
+
+it.each(['report', 'detection'] as const)(
+  'reads %s ban effects after a completion captured between live reads',
+  async (kind) => {
+    const detectionId = kind === 'report' ? caseDetectionId : observedDetectionId;
+    await pool.query(
+      "update moderation_action_requests set status='queued',action_type='ban_observed_detection',verification_event_id=null,detection_event_id=$2,report_intake_id=$3 where id=$1",
+      [requestId, detectionId, kind === 'report' ? reportId : null]
+    );
+    const original = PostgresModerationActionRequestDataAdapter.prototype.getRequest;
+    let completed = false;
+    const read = vi
+      .spyOn(PostgresModerationActionRequestDataAdapter.prototype, 'getRequest')
+      .mockImplementation(async function (
+        this: PostgresModerationActionRequestDataAdapter,
+        guild,
+        selectedRequest
+      ) {
+        if (!completed && guild === guildId && selectedRequest === requestId) {
+          completed = true;
+          if (kind === 'report')
+            await pool.query(
+              "update report_intakes set status='actioned',updated_at=now() where id=$1",
+              [reportId]
+            );
+          await pool.query(
+            'update detection_events set metadata=metadata||\'{"observed_action":"ban"}\'::jsonb where id=$1',
+            [detectionId]
+          );
+          await pool.query(
+            'update moderation_action_requests set status=\'completed\',completed_at=now(),updated_at=now(),result=\'{"observed_ban_result":{"status":"banned"}}\'::jsonb where id=$1',
+            [requestId]
+          );
+        }
+        return original.call(this, guild, selectedRequest);
+      });
+    try {
+      const selected = await adapter().getInboxItemDetail({
+        guildId,
+        itemId: kind === 'report' ? `report:${reportId}` : `detection:${detectionId}`,
+      });
+      expect(selected).toMatchObject({
+        requests: [{ id: requestId, status: 'completed', observedBanResult: { status: 'banned' } }],
+        ...(kind === 'report'
+          ? { report: { status: 'actioned' } }
+          : { item: { statusLabel: 'ban' } }),
+      });
+      expect(selected?.policy.allowedActions).not.toContain('ban_user');
+      expect(read).toHaveBeenCalledTimes(1);
+    } finally {
+      read.mockRestore();
+    }
+  }
+);
