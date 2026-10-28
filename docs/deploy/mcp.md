@@ -1,6 +1,6 @@
 # MCP rollout and operations
 
-MCP is disabled by default. A separately authorized controlled production web deployment has been enabled for read-only diagnostics; worker-side MCP remains disabled. Deployment and production enablement require separate explicit authorization after review. Apply additive migrations and deploy the compatible bot worker before the web submitter; keep admission disabled until both versions and their queue support are verified. Existing web/Discord moderation stays available.
+Production web and worker MCP admission are enabled following the authorized rollout. On 2026-10-28, a controlled reversible configuration change and its restoration completed through native confirmation, queue execution, and receipts; separate reads verified both values. See [disablement and recovery](#disablement-and-recovery) for the enablement controls. For future incompatible releases, apply additive migrations and deploy the compatible bot worker before the web submitter; keep admission disabled until both versions and their queue support are verified. Existing web/Discord moderation stays available.
 
 ## Configuration and ingress
 
@@ -10,7 +10,7 @@ The only supported registration topology is client → default direct Vercel ing
 
 Environment markers are configuration, not ingress attestation. Before enabling registration, verify the actual deployed project/revision, custom domain, every reachable deployment/branch alias, default forwarding-header replacement, and absence of unreviewed proxies or header rewrites. Test forged single addresses, comma/duplicate chains, missing/invalid headers, alternate forwarding/internal headers and equivalent IP spellings. Verify no self-hosted origin can bypass this boundary. Source configuration and synthetic tests do not establish deployed spoof resistance. Unsupported proxy chains require separate design and verification; never accept an arbitrary forwarding header as a fallback.
 
-Add the extra Discord OAuth callback `/api/mcp-auth/callback/discord` on the configured origin while retaining `/api/auth/discord/callback`. Check preview protection/data separation separately from ingress identity. Complete the real-client acceptance matrix before public enablement; limited live diagnostic tool reads have been observed, but product versions, client UI behavior and deployed ingress acceptance remain unverified. See [client acceptance](../dev/mcp-client-compatibility.md).
+Add the extra Discord OAuth callback `/api/mcp-auth/callback/discord` on the configured origin while retaining `/api/auth/discord/callback`. Check preview protection/data separation separately from ingress identity. Live reads and native confirmation have been verified on the connected hosted client. The full real-client acceptance matrix, exact client product versions and deployed ingress acceptance remain unverified. See [client acceptance](../dev/mcp-client-compatibility.md).
 
 ## Disablement and recovery
 
@@ -22,11 +22,11 @@ Stale processing is settled conservatively without generic effect replay. A tran
 
 ## Read recovery rollout status
 
-Diagnostic revision `d8fc857` was deployed to an explicitly authorized controlled production web host. Four small concurrent read batches returned thirteen allowed results and two unavailable message-context results. Fresh authority and visibility dependency events identified Discord HTTP 429. Both identical later sequential message reads allowed, one populated and one empty, without a permission or configuration change. No moderation/configuration calls were made and no scopes or OAuth secrets changed.
+Initial diagnostics at revision `d8fc857` identified Discord HTTP 429 during concurrent reads. After the bounded GET recovery rollout, a production acceptance sample returned fifteen allowed reads, including two observed HTTP 429 responses that recovered on their second attempt. Keep raw diagnostic evidence and private identifiers outside the repository.
 
-The bounded GET recovery implementation has local composition and transport coverage. It has not been deployed or verified in production. Synthetic recovery results do not establish that the observed live failure is fixed. Keep raw diagnostic evidence and private identifiers outside the repository. After any separately authorized recovery rollout, record its exact revision, logical tools, outcomes, timings and safe correlation IDs, then repeat the bounded concurrent sample on the actual client. Keep production testing read-only and worker-side MCP disabled unless separately authorized.
+Future recovery changes should record their exact deployed revision, logical tools, outcomes, timings and safe correlation IDs, then repeat the bounded concurrent sample on the actual client. Synthetic recovery results alone do not establish deployed behavior. Production mutation tests require an authorized scope and target.
 
-For recovery defaults, public outcomes and safe correlation fields, see [temporary read failures](../dev/mcp.md#temporary-read-failures). OAuth refresh/revoke, UI confirmation, mutations and ingress acceptance remain separate gates.
+For recovery defaults, public outcomes and safe correlation fields, see [temporary read failures](../dev/mcp.md#temporary-read-failures). OAuth refresh/revoke, other clients' confirmation flows, other mutation families and ingress acceptance remain separate gates.
 
 ## Continuation diagnostics
 
