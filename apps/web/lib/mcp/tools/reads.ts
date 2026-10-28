@@ -85,7 +85,10 @@ export function createMcpReadTools(
             await audit?.({
               event: 'observation',
               ...principal,
-              guildId: parsed.success && 'guildId' in parsed.data ? parsed.data.guildId : undefined,
+              guildId:
+                parsed.success && typeof parsed.data.guildId === 'string'
+                  ? parsed.data.guildId
+                  : undefined,
               outcome:
                 result.kind === 'allowed'
                   ? 'completed'

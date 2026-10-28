@@ -61,11 +61,14 @@ export function isQueuedMessageCleanupCommand(
 
 function schemaFor<K extends QueuedCommand['kind']>(
   kind: K
-): z.ZodType<Extract<QueuedCommand, { kind: K }>, z.ZodTypeDef, unknown> {
-  return queuedCommandSchema.refine(
-    (command): command is Extract<QueuedCommand, { kind: K }> => command.kind === kind,
-    'Queued command kind mismatch.'
-  );
+): z.ZodType<Extract<QueuedCommand, { kind: K }>, unknown> {
+  const matchesKind = (command: QueuedCommand): command is Extract<QueuedCommand, { kind: K }> =>
+    command.kind === kind;
+  return queuedCommandSchema.transform((command, context) => {
+    if (matchesKind(command)) return command;
+    context.addIssue({ code: 'custom', message: 'Queued command kind mismatch.' });
+    return z.NEVER;
+  });
 }
 /** Exhaustive persisted command registry; direct-only operations are deliberately absent. */
 export const queuedCommandSchemas = {
@@ -125,4 +128,4 @@ export const queuedCommandSchemas = {
   close_report_intake: schemaFor('close_report_intake'),
   complete_setup_verification: schemaFor('complete_setup_verification'),
   upsert_report_instructions: schemaFor('upsert_report_instructions'),
-} satisfies Record<QueuedCommand['kind'], z.ZodType<QueuedCommand, z.ZodTypeDef, unknown>>;
+} satisfies Record<QueuedCommand['kind'], z.ZodType<QueuedCommand, unknown>>;

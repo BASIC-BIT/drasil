@@ -31,7 +31,7 @@ const reportBanStateSchema = z.object({
   report_ban_reason: z.string().nullish(),
   report_ban_source_detail: z.string().nullish(),
   report_ban_membership_joined_at: timestamp.nullish(),
-  report_ban_target_snapshot: z.record(z.string()).nullish(),
+  report_ban_target_snapshot: z.record(z.string(), z.string()).nullish(),
   report_ban_confirmed_at: timestamp.nullish(),
   report_ban_retry_count: z.number().int().nonnegative().nullish(),
   report_ban_retry_at: timestamp.nullish(),

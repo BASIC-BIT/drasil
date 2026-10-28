@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { z } from 'zod';
 import {
   workflowDefinitions,
   type WorkflowCommandBindings,
@@ -83,12 +84,13 @@ export function createContainmentIntentResolver(
           previewExpiresAt: null,
           summary: `Acknowledge attention items: ${JSON.stringify(options.itemIds)}. Each item is checked independently.`,
         };
-      const state = await resources.loadCase(invocation.guildId, options.caseId);
+      const targetUserId = z.string().parse(options.targetUserId);
+      const state = await resources.loadCase(invocation.guildId, z.string().parse(options.caseId));
       if (
         !state ||
         state.id !== options.caseId ||
         state.guildId !== invocation.guildId ||
-        state.targetUserId !== options.targetUserId ||
+        state.targetUserId !== targetUserId ||
         state.status !== 'pending'
       )
         throw new ActionDeniedError('stale_state');
@@ -101,7 +103,8 @@ export function createContainmentIntentResolver(
       };
       let preview: ResolvedPreview | undefined;
       if (definition.family === 'cleanup') {
-        if (!options.reason.trim()) throw new ActionDeniedError('reason_required');
+        if (!z.string().parse(options.reason).trim())
+          throw new ActionDeniedError('reason_required');
         if (!state.evidenceThreadId || options.detectionEventId !== state.detectionEventId)
           throw new ActionDeniedError('stale_state');
         if (definition.commandKind === 'preview_case_message_deletion') {
@@ -112,13 +115,16 @@ export function createContainmentIntentResolver(
             kind: 'cleanup_job_provision',
             jobId,
             caseId: state.id,
-            targetUserId: options.targetUserId,
+            targetUserId,
             revision: state.revision,
             evidenceThreadId: state.evidenceThreadId,
             detectionEventId: state.detectionEventId,
           };
         } else {
-          preview = await resources.resolvePreviewReference(principal, options.cleanupReference);
+          preview = await resources.resolvePreviewReference(
+            principal,
+            z.string().parse(options.cleanupReference)
+          );
           if (!matchesCleanupPreview(preview, state, options.detectionEventId, principal.userId))
             throw new ActionDeniedError('binding_mismatch');
           bindings = { cleanup: { jobId: preview.job.id, generation: preview.job.generation } };
@@ -131,7 +137,10 @@ export function createContainmentIntentResolver(
         }
       }
       if (definition.commandKind === 'quarantine_compromised_account') {
-        preview = await resources.resolvePreviewReference(principal, options.previewReference);
+        preview = await resources.resolvePreviewReference(
+          principal,
+          z.string().parse(options.previewReference)
+        );
         if (!matchesQuarantinePreview(preview, state)) throw new ActionDeniedError('stale_state');
         bindings = { quarantine: { requestId: preview.requestId } };
         preconditions = {

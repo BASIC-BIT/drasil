@@ -611,7 +611,7 @@ describe('GPT generation observations', () => {
   });
   const cases: Array<{
     name: string;
-    parsed: unknown;
+    parsed: Record<string, unknown>;
     // eslint-disable-next-line no-unused-vars
     run: (_service: GPTService) => Promise<unknown>;
   }> = [
@@ -714,6 +714,15 @@ describe('GPT generation observations', () => {
           apiKey: 'synthetic-runtime-secret',
         } as unknown as OpenAI)
       );
+      const format = parse.mock.calls[0][0].text.format;
+      expect(format).toMatchObject({
+        type: 'json_schema',
+        strict: true,
+        schema: { type: 'object', additionalProperties: false },
+      });
+      expect(format.schema.required).toEqual(Object.keys(parsed));
+      expect(format.$parseRaw(JSON.stringify(parsed))).toEqual(parsed);
+      expect(() => format.$parseRaw('{}')).toThrow();
       expect(recorder.spans).toHaveLength(1);
       const span = recorder.spans[0];
       expect(span.name).toBe(name);
