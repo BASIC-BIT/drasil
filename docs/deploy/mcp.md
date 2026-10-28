@@ -46,7 +46,7 @@ Each HTTP request receives a fresh server-generated `correlationId`. Its wire an
 
 Events include only fixed event/stage/outcome/reason values, an allowlisted protocol revision or `unknown`, a state type category, and string byte length capped at four MiB. Non-string values report zero bytes. They never contain state values, signatures, tokens, principals, guild IDs, commands, summaries or raw errors. Observation is best effort; a failing sink cannot change codec results, thrown values or public SDK errors. Codec success does not prove that saved-action validation or action acceptance succeeded.
 
-This instrumentation does not fix or establish the cause of the hosted continuation failure. Deployment and another live acceptance test require separately reviewed authorization through the normal release process. The SDK codec, ten-minute TTL, principal/method binding, permission checks and saved-action validation remain in effect.
+Instrumentation alone does not fix or establish the cause of a hosted continuation failure. During authorized acceptance on 2026-10-28, mint and verify timestamps showed one continuation returning after almost thirteen minutes and failing with `expired`. A fresh continuation returned within two minutes and verified successfully. After worker enablement, the controlled configuration change and restoration completed. These observations establish expiry for the failed attempt, but do not establish the source of the client delay. Future diagnostic deployments and mutation tests require an authorized rollout and test scope. The SDK codec, ten-minute TTL, principal/method binding, permission checks and saved-action validation remain in effect.
 
 ## Metadata permits
 
