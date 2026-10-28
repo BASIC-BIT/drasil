@@ -205,7 +205,7 @@ variable "langfuse_base_url" {
 }
 
 variable "drasil_mcp_enabled" {
-  description = "Enable new delegated MCP worker admission after separate reviewed rollout."
+  description = "Enable delegated MCP worker admission; set false to disable new worker starts."
   type        = bool
-  default     = false
+  default     = true
 }
