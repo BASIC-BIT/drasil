@@ -23,7 +23,7 @@ const queuedRowSchema = z
     report_intake_id: id.nullable().optional(),
     verification_event_id: id.nullable().optional(),
     message_deletion_job_id: id.nullable().optional(),
-    metadata: z.record(z.unknown()).nullable().optional(),
+    metadata: z.record(z.string(), z.unknown()).nullable().optional(),
   })
   .superRefine((row, ctx) => {
     if (

@@ -1,34 +1,12 @@
 import type { StandardSchemaWithJSON } from '@drasil/mcp-runtime/server';
 import { z } from 'zod';
-import { ignoreOverride, zodToJsonSchema } from 'zod-to-json-schema';
 
-/** Advertise canonical input, but always validate with the original Zod 3 parser. */
-export function toMcpSchema<T>(
-  schema: z.ZodType<T, z.ZodTypeDef, unknown>
-): StandardSchemaWithJSON<unknown, T> {
-  const input = (): Record<string, unknown> =>
-    zodToJsonSchema(schema, {
-      target: 'jsonSchema7',
-      effectStrategy: 'input',
-      $refStrategy: 'none',
-      override(definition) {
-        // A preprocessor accepts unknown input and may map values outside the
-        // inner enum. Only the canonical parser can decide which ones succeed.
-        if (
-          'effect' in definition &&
-          typeof definition.effect === 'object' &&
-          definition.effect !== null &&
-          'type' in definition.effect &&
-          definition.effect.type === 'preprocess'
-        )
-          return {};
-        return ignoreOverride;
-      },
-    });
+/** Advertise canonical input and validate with its original parser. */
+export function toMcpSchema<T>(schema: z.ZodType<T, unknown>): StandardSchemaWithJSON<unknown, T> {
   return {
     '~standard': {
       version: 1,
-      vendor: 'drasil-zod3',
+      vendor: 'drasil-zod4',
       async validate(value) {
         const result = await schema.safeParseAsync(value);
         return result.success
@@ -41,9 +19,19 @@ export function toMcpSchema<T>(
             };
       },
       jsonSchema: {
-        input,
-        // Zod effects may transform the output. This input-only adapter makes no
-        // narrower output promise; tools define their own allowlisted results.
+        input: ({ target }) =>
+          z.toJSONSchema(schema, {
+            target,
+            io: 'input',
+            reused: 'inline',
+            override({ zodSchema, jsonSchema }) {
+              // Preprocessors can accept values outside their inner schema.
+              // Only the canonical parser can decide which inputs succeed.
+              if (zodSchema instanceof z.ZodPipe && zodSchema.in instanceof z.ZodTransform)
+                for (const key of Object.keys(jsonSchema)) delete jsonSchema[key];
+            },
+          }),
+        // Transforms may change the output. Tools define their own allowlisted results.
         output: () => ({}),
       },
     },

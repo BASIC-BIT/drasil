@@ -145,3 +145,29 @@ it('exposes maintained OAuth verification helpers for the issuer and resource ad
   expect(oauth2.requestToResourceInput).toBeTypeOf('function');
   expect(oauth2.verifyAccessTokenRequest).toBeTypeOf('function');
 });
+
+it.each([
+  ['draft-07', 'http://json-schema.org/draft-07/schema#'],
+  ['draft-2020-12', 'https://json-schema.org/draft/2020-12/schema'],
+] as const)('advertises the requested %s input dialect', (target, dialect) => {
+  const bridge = toMcpSchema(z.object({ name: z.string() }).strict());
+  expect(bridge['~standard'].jsonSchema.input({ target })).toMatchObject({
+    $schema: dialect,
+    type: 'object',
+    additionalProperties: false,
+    required: ['name'],
+  });
+});
+
+it('advertises transformed input and validates the canonical output', async () => {
+  const bridge = toMcpSchema(
+    z.object({ label: z.string().transform((value) => value.length) }).strict()
+  );
+  expect(bridge['~standard'].jsonSchema.input({ target: 'draft-07' })).toMatchObject({
+    properties: { label: { type: 'string' } },
+  });
+  expect(await bridge['~standard'].validate({ label: 'name' })).toEqual({
+    value: { label: 4 },
+  });
+  expect(bridge['~standard'].jsonSchema.output({ target: 'draft-07' })).toEqual({});
+});

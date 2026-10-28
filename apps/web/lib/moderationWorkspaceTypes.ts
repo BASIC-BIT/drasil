@@ -55,15 +55,10 @@ const previewSchema = z.object({
 });
 export const moderationActionRequestSummarySchema: z.ZodType<
   ModerationActionRequestSummary,
-  z.ZodTypeDef,
   unknown
 > = z.object({
   id: z.string(),
-  actionType: z
-    .string()
-    .refine((value): value is keyof typeof queuedCommandSchemas =>
-      Object.prototype.hasOwnProperty.call(queuedCommandSchemas, value)
-    ),
+  actionType: z.keyof(z.object(queuedCommandSchemas)),
   actorSurface: z.string(),
   actorUserId: z.string().nullable().optional(),
   guildId: z.string().optional(),
