@@ -393,7 +393,7 @@ async function queuedPermissionState(
     request.actor_id !== context.actor.userId
   )
     throw new Error('Setup request binding mismatch.');
-  const metadata = z.record(z.unknown()).parse(request.metadata ?? {});
+  const metadata = z.record(z.string(), z.unknown()).parse(request.metadata ?? {});
   function read(key: string): VerificationChannelPermissionSyncState | undefined {
     const parsed = permissionSyncSchema.safeParse(metadata[key]);
     return parsed.success ? parsed.data : undefined;

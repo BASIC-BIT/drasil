@@ -113,12 +113,12 @@ export interface WorkflowDefinition {
   readonly delivery: 'direct' | 'queued';
   readonly resultContract: WorkflowFamily;
   readonly publicMethods: readonly string[];
-  readonly inputSchema: z.AnyZodObject;
+  readonly inputSchema: z.ZodObject;
   readonly settingsFields: readonly string[];
   readonly parseCommand: (input: unknown, bindings?: WorkflowCommandBindings) => HumanCommand;
 }
 
-function objects(schema: z.ZodTypeAny): z.AnyZodObject[] {
+function objects(schema: z.core.$ZodType): z.ZodObject[] {
   if (schema instanceof z.ZodObject) return [schema];
   if (schema instanceof z.ZodUnion || schema instanceof z.ZodDiscriminatedUnion)
     return schema.options.flatMap(objects);
@@ -153,23 +153,25 @@ function define(
   if (!canonical) throw new Error(`Missing canonical command schema: ${kind}`);
   const fixed = variant.fixed ?? {};
   // Provenance, interaction tokens and runtime-created jobs are not public options.
-  let inputSchema = canonical
-    .omit({
-      kind: true,
-      intent: true,
-      origin: true,
-      interactionContext: true,
-      passUndefinedReason: true,
-      submissionId: true,
-      jobId: true,
-      promptToken: true,
-      promptMessageId: true,
-      threadId: true,
-      expectedMessageId: true,
-      expectedChannelId: true,
-      ...Object.fromEntries(Object.keys(fixed).map((key) => [key, true])),
-    })
-    .strict();
+  const privateFields = [
+    'kind',
+    'intent',
+    'origin',
+    'interactionContext',
+    'passUndefinedReason',
+    'submissionId',
+    'jobId',
+    'promptToken',
+    'promptMessageId',
+    'threadId',
+    'expectedMessageId',
+    'expectedChannelId',
+    ...Object.keys(fixed),
+  ];
+  const publicShape = Object.fromEntries(
+    Object.entries(canonical.shape).filter(([key]) => !privateFields.includes(key))
+  );
+  let inputSchema: z.ZodObject = z.object(publicShape).strict();
   if (kind === 'update_settings') {
     const [first, second, ...rest] = updateSettingsCommandSchema.options;
     inputSchema = z
@@ -177,7 +179,7 @@ function define(
         patch: z.union([
           first.omit({ kind: true }),
           second.omit({ kind: true }),
-          ...rest.map((schema: z.AnyZodObject) => schema.omit({ kind: true })),
+          ...rest.map((schema: z.ZodObject) => schema.omit({ kind: true })),
         ]),
       })
       .strict();
@@ -249,7 +251,11 @@ function define(
       const options = inputSchema.parse(input);
       delete options.intakePromptReference;
       delete options.cleanupReference;
-      if (kind === 'update_settings') return humanCommandSchema.parse({ kind, ...options.patch });
+      if (kind === 'update_settings')
+        return humanCommandSchema.parse({
+          kind,
+          ...z.record(z.string(), z.unknown()).parse(options.patch),
+        });
       if (kind === 'ban_observed_detection') {
         const { reportId, ...rest } = options;
         return humanCommandSchema.parse({

@@ -5,8 +5,8 @@ import {
   detectionResponseModeSchema,
 } from './settings';
 const id = z.string().trim().min(1);
-export const setupChangesSchema = guildSetupUpdateSchema
-  .innerType()
+export const setupChangesSchema = z
+  .object(guildSetupUpdateSchema.shape)
   .omit({ guildId: true, updatedBy: true })
   .strict();
 const sectionCommands = [
@@ -125,9 +125,9 @@ export const upsertReportInstructionsCommandSchema = z.discriminatedUnion('repos
 ]);
 export const heuristicChangesSchema = z
   .object({
-    messageThreshold: guildSetupUpdateSchema.innerType().shape.heuristicMessageThreshold,
-    timeframeSeconds: guildSetupUpdateSchema.innerType().shape.heuristicMessageTimeframeSeconds,
-    suspiciousKeywords: guildSetupUpdateSchema.innerType().shape.heuristicSuspiciousKeywords,
+    messageThreshold: guildSetupUpdateSchema.shape.heuristicMessageThreshold,
+    timeframeSeconds: guildSetupUpdateSchema.shape.heuristicMessageTimeframeSeconds,
+    suspiciousKeywords: guildSetupUpdateSchema.shape.heuristicSuspiciousKeywords,
   })
   .strict();
 export const queuedSetupCommandSchema = z.union([

@@ -9,7 +9,7 @@ import { messageCleanupCommandSchema } from '../messageCleanup/commands';
 import { queuedQuarantineCommandSchema } from '../containment/commands';
 import { captchaCommandSchema } from '../containment/captcha';
 
-function kinds(schema: z.ZodTypeAny): string[] {
+function kinds(schema: z.core.$ZodType): string[] {
   if (schema instanceof z.ZodObject) return [schema.shape.kind.value];
   if (schema instanceof z.ZodUnion || schema instanceof z.ZodDiscriminatedUnion)
     return schema.options.flatMap(kinds);
