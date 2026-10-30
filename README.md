@@ -178,3 +178,5 @@ Licensed under the [MIT License](LICENSE.md).
 
 Open an issue or reach out in the discussions tab. We love hearing from the community!
 Thanks for helping keep Discord communities safe and spam-free.
+
+<!-- Shared Claude reviewer canary; this PR is closed without merging. -->
