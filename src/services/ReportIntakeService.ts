@@ -509,7 +509,28 @@ export class ReportIntakeService implements IReportIntakeService {
       });
 
       const ready = await this.finishConfirmationPrompt(snapshot, prompt, persisted);
-      if (persisted) return Boolean(ready && candidateSuggestions.length > 0);
+      if (persisted) {
+        if (
+          !preserveAnalysis &&
+          input.candidates.length === 0 &&
+          candidateSuggestions.length === 0 &&
+          hasMessageSend(input.message.channel)
+        ) {
+          const explanation = input.extraction?.isFallback
+            ? "I couldn't analyze this evidence."
+            : "I couldn't match this evidence to a current member of this server.";
+          await input.message.channel
+            .send({
+              content: `${explanation} Please add an @mention, Discord user ID, or message link so I can identify the person you want to report.`,
+              components: [],
+              allowedMentions: { parse: [] },
+            })
+            .catch((error: unknown) => {
+              console.warn('Failed to deliver report intake analysis notice:', error);
+            });
+        }
+        return Boolean(ready && candidateSuggestions.length > 0);
+      }
       if (attempt + 1 < REPORT_INTAKE_STATE_WRITE_ATTEMPTS)
         current = await this.reportIntakeRepository.findById(intake.id);
     }

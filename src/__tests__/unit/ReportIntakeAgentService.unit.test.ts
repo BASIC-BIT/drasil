@@ -179,6 +179,58 @@ describe('ReportIntakeAgentService', () => {
       })
     );
   });
+  it.each([false, true])(
+    'explains an unmatched screenshot without repeating the notice (fallback: %s)',
+    async (isFallback) => {
+      const { agentService, intakeService, reportIntakeRepository, candidateService, gptService } =
+        buildServices();
+      const intake = await intakeService.openIntakeFromThread({
+        serverId: 'guild-1',
+        reporter: buildReporter(),
+        threadId: 'thread-1',
+        channelId: 'channel-1',
+      });
+      candidateService.resolveCandidatesFromSignals.mockResolvedValue([]);
+      gptService.extractReportIntakeEvidence.mockResolvedValue({
+        visibleNames: ['Example Person'],
+        visibleUsernames: ['example.person'],
+        visibleUserIds: [],
+        visibleMessageLinks: [],
+        quotedMessageText: [],
+        platformHints: [],
+        abuseSignals: [],
+        uncertainty: [],
+        confidence: isFallback ? 0 : 0.95,
+        analyzedImageCount: 1,
+        model: 'gpt-test',
+        promptVersion: 'test',
+        isFallback,
+      });
+      const message = buildMessage();
+      await intakeService.handleThreadMessage(message);
+
+      await agentService.runAnalysisForThreadMessage(message);
+      await agentService.runAnalysisForThreadMessage(message);
+
+      expect((message.channel as any).send).toHaveBeenCalledTimes(1);
+      expect((message.channel as any).send).toHaveBeenCalledWith({
+        content: isFallback
+          ? "I couldn't analyze this evidence. Please add an @mention, Discord user ID, or message link so I can identify the person you want to report."
+          : "I couldn't match this evidence to a current member of this server. Please add an @mention, Discord user ID, or message link so I can identify the person you want to report.",
+        components: [],
+        allowedMentions: { parse: [] },
+      });
+      expect((await reportIntakeRepository.findById(intake.id))?.status).toBe(
+        ReportIntakeStatus.COLLECTING_EVIDENCE
+      );
+      expect(candidateService.searchMembersByName).toHaveBeenCalledWith(
+        message.guild,
+        'example.person',
+        5
+      );
+    }
+  );
+
   it.each(['no-candidates', 'lookup-failure', 'send-failure', 'persistence-failure'] as const)(
     'tracks the full intake outcome for %s',
     async (mode) => {
