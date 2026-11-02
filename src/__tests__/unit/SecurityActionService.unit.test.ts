@@ -90,8 +90,17 @@ describe('SecurityActionService (unit)', () => {
   let adminActionService: jest.Mocked<IAdminActionService>;
   let gptService: { analyzeReportEvidence: jest.Mock; describeProfileImages: jest.Mock };
   let fetchSpy: jest.SpiedFunction<typeof fetch>;
+  let timeoutSpy: jest.SpiedFunction<typeof setTimeout>;
+  let pendingTimeouts: Set<ReturnType<typeof setTimeout>>;
+  const realSetTimeout = global.setTimeout;
 
   beforeEach(() => {
+    pendingTimeouts = new Set();
+    timeoutSpy = jest.spyOn(global, 'setTimeout').mockImplementation((callback, delay, ...args) => {
+      const timer = realSetTimeout(callback, delay, ...args);
+      pendingTimeouts.add(timer);
+      return timer;
+    });
     fetchSpy = jest.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,
       headers: { get: jest.fn().mockReturnValue('4') },
@@ -211,6 +220,9 @@ describe('SecurityActionService (unit)', () => {
   });
 
   afterEach(() => {
+    // Delayed repair belongs to its test, even when its timer is unref'd.
+    for (const timer of pendingTimeouts) clearTimeout(timer);
+    timeoutSpy.mockRestore();
     fetchSpy.mockRestore();
   });
 
@@ -4198,7 +4210,6 @@ describe('SecurityActionService (unit)', () => {
     const recorder = createTracingRecorder();
     const previousEnvironment = process.env.LANGFUSE_TRACING_ENVIRONMENT;
     process.env.LANGFUSE_TRACING_ENVIRONMENT = 'development';
-    const realSetTimeout = setTimeout;
     const timerSpy = jest
       .spyOn(global, 'setTimeout')
       .mockImplementation((callback, delay, ...args) =>
