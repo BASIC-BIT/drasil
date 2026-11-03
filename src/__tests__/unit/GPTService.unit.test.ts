@@ -327,10 +327,103 @@ describe('GPTService (unit)', () => {
       ).resolves.toEqual({
         kind: 'failed',
         reason: 'evidence_unavailable',
+        retryable: false,
         includedEvidenceIds: [],
         excludedEvidenceIds: ['evidence-text'],
       });
       expect(parse).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      [
+        'rate limit',
+        new OpenAI.APIError(
+          429,
+          { message: 'synthetic raw payload' },
+          'synthetic error text',
+          new Headers()
+        ),
+        true,
+      ],
+      [
+        'server failure',
+        new OpenAI.APIError(
+          503,
+          { message: 'synthetic raw payload' },
+          'synthetic error text',
+          new Headers()
+        ),
+        true,
+      ],
+      [
+        'connection',
+        new OpenAI.APIConnectionError({ cause: new Error('synthetic transport detail') }),
+        true,
+      ],
+      ['timeout', new OpenAI.APIConnectionTimeoutError(), true],
+      [
+        'authentication',
+        new OpenAI.APIError(
+          401,
+          { message: 'synthetic raw payload' },
+          'synthetic error text',
+          new Headers()
+        ),
+        false,
+      ],
+      [
+        'permission',
+        new OpenAI.APIError(
+          403,
+          { message: 'synthetic raw payload' },
+          'synthetic error text',
+          new Headers()
+        ),
+        false,
+      ],
+      ['unknown', new Error('synthetic unknown error'), false],
+    ])(
+      'classifies SDK provider retryability without exposing raw errors (%s)',
+      async (_name, error, retryable) => {
+        const parse = jest.fn().mockRejectedValue(error);
+        const result = await new GPTService({
+          responses: { create: parse },
+        } as unknown as OpenAI).extractReportIdentity({ sources: [textSource], signal });
+        expect(result).toEqual({
+          kind: 'failed',
+          reason: 'provider_failure',
+          retryable,
+          includedEvidenceIds: ['evidence-text'],
+          excludedEvidenceIds: [],
+        });
+        expect(JSON.stringify(result)).not.toContain('synthetic');
+        expect(parse).toHaveBeenCalledTimes(1);
+      }
+    );
+
+    it('marks schema and unavailable evidence failures non-retryable', async () => {
+      const { openai } = buildOpenAiMock({ subjects: [{}], contextLabels: [] });
+      await expect(
+        new GPTService(openai).extractReportIdentity({ sources: [textSource], signal })
+      ).resolves.toMatchObject({ kind: 'failed', reason: 'invalid_output', retryable: false });
+      const missing = buildOpenAiMock({ subjects: [], contextLabels: [] });
+      await expect(
+        new GPTService(missing.openai).extractReportIdentity({ sources: [], signal })
+      ).resolves.toMatchObject({
+        kind: 'failed',
+        reason: 'evidence_unavailable',
+        retryable: false,
+      });
+    });
+
+    it('propagates the SDK abort type even when its Error name is generic', async () => {
+      const abort = new OpenAI.APIUserAbortError();
+      const parse = jest.fn().mockRejectedValue(abort);
+      const service = new GPTService({ responses: { create: parse } } as unknown as OpenAI);
+      await expect(service.extractReportIdentity({ sources: [textSource], signal })).rejects.toBe(
+        abort
+      );
+      expect(parse).toHaveBeenCalledTimes(1);
     });
 
     it('returns provider failure without retrying and propagates aborts', async () => {

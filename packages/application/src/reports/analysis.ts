@@ -198,6 +198,7 @@ export type ReportIdentityExtraction =
   | {
       kind: 'failed';
       reason: 'provider_failure' | 'invalid_output' | 'evidence_unavailable';
+      retryable: boolean;
       includedEvidenceIds: string[];
       excludedEvidenceIds: string[];
     };

@@ -713,6 +713,7 @@ export class GPTService implements IGPTService {
       return {
         kind: 'failed',
         reason: 'evidence_unavailable',
+        retryable: false,
         ...coverage,
         excludedEvidenceIds: input.sources.map((source) => source.ref.evidenceId),
       };
@@ -752,7 +753,7 @@ export class GPTService implements IGPTService {
               item.sourceRefs.some((ref) => !originalRef(ref))
             )
           ) {
-            return { kind: 'failed', reason: 'invalid_output', ...coverage };
+            return { kind: 'failed', reason: 'invalid_output', retryable: false, ...coverage };
           }
           const normalizeLabel = (value: string): string =>
             value.normalize('NFC').trim().replace(/\s+/gu, ' ').toLowerCase();
@@ -770,7 +771,8 @@ export class GPTService implements IGPTService {
                   )
               )
           );
-          if (contextIsTarget) return { kind: 'failed', reason: 'invalid_output', ...coverage };
+          if (contextIsTarget)
+            return { kind: 'failed', reason: 'invalid_output', retryable: false, ...coverage };
           const anchors = submitted.flatMap((source) =>
             (source.anchors ?? []).map((anchor) => ({ ...anchor, sourceRefs: [source.ref] }))
           );
@@ -792,7 +794,10 @@ export class GPTService implements IGPTService {
           };
         } catch (error) {
           input.signal.throwIfAborted();
-          if (error instanceof Error && ['AbortError', 'APIUserAbortError'].includes(error.name))
+          if (
+            error instanceof OpenAI.APIUserAbortError ||
+            (error instanceof Error && error.name === 'AbortError')
+          )
             throw error;
           return {
             kind: 'failed',
@@ -800,6 +805,11 @@ export class GPTService implements IGPTService {
               error instanceof SyntaxError || error instanceof z.ZodError
                 ? 'invalid_output'
                 : 'provider_failure',
+            retryable:
+              error instanceof OpenAI.APIConnectionError ||
+              (error instanceof OpenAI.APIError &&
+                typeof error.status === 'number' &&
+                (error.status === 429 || (error.status >= 500 && error.status < 600))),
             ...coverage,
           };
         }
