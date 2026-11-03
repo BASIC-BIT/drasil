@@ -468,4 +468,111 @@ describeIntegration('durable report intake processing', () => {
       metadata: { analysis: { sources: { message: { operation: 'delete', sourceVersion: 10 } } } },
     });
   });
+  it.each([
+    { analysis: { schemaVersion: 1, sources: 'broken' }, unrelated: 'preserved' },
+    ['malformed-root'],
+  ])('quarantines malformed earliest-due metadata and claims valid work: %j', async (metadata) => {
+    const { prisma, repository, intake } = await fixture();
+    await repository.addEvidence({
+      intakeId: intake.id,
+      kind: ReportIntakeEvidenceKind.REPORTER_TEXT,
+      content: 'original evidence',
+    });
+    const evidence = await repository.listEvidence(intake.id);
+    await prisma.report_intakes.update({
+      where: { id: intake.id },
+      data: {
+        metadata,
+        evidence_revision: 1,
+        analysis_due_at: now,
+        analysis_started_at: now,
+        analysis_deadline_at: new Date('2026-11-03T00:00:45.000Z'),
+        analysis_attempts: 1,
+      },
+    });
+    const valid = await fixture();
+    await repository.recordEvidenceBatch(valid.batch);
+
+    await expect(repository.claimAnalysis(due, 10_000)).resolves.toMatchObject({
+      intake: { id: valid.intake.id },
+    });
+    const quarantined = await repository.findById(intake.id);
+    expect(quarantined).toMatchObject({
+      status: ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION,
+      analysis_failure_code: 'invalid_metadata',
+      analysis_deadline_at: new Date('2026-11-03T00:00:45.000Z'),
+      analysis_attempts: 1,
+      analysis_due_at: null,
+      analysis_lease_token: null,
+      analysis_lease_until: null,
+      updated_at: due,
+    });
+    expect(quarantined?.metadata).toEqual(metadata);
+    expect(await repository.listEvidence(intake.id)).toEqual(evidence);
+    expect(await repository.claimAnalysis(due, 10_000)).toBeNull();
+    expect(await repository.findById(intake.id)).toEqual(quarantined);
+  });
+
+  it('keeps malformed-row quarantine parity in the fake', async () => {
+    const fake = new InMemoryReportIntakeRepository();
+    const { batch } = await fixture();
+    const bad = await fake.create({
+      serverId: 'guild-processing',
+      reporterId: 'reporter-processing',
+    });
+    await fake.recordEvidenceBatch({
+      ...batch,
+      intakeId: bad.id,
+      observedAt: new Date(now.getTime() - 1000),
+    });
+    const evidence = await fake.listEvidence(bad.id);
+    const metadata = { analysis: { schemaVersion: 1, sources: 'broken' }, unrelated: true };
+    await fake.update(bad.id, { metadata });
+    const valid = await fake.create({
+      serverId: 'guild-processing',
+      reporterId: 'reporter-processing',
+    });
+    await fake.recordEvidenceBatch({ ...batch, intakeId: valid.id });
+
+    await expect(fake.claimAnalysis(due, 10_000)).resolves.toMatchObject({
+      intake: { id: valid.id },
+    });
+    expect(await fake.findById(bad.id)).toMatchObject({
+      analysis_failure_code: 'invalid_metadata',
+      analysis_due_at: null,
+      metadata,
+    });
+    expect(await fake.listEvidence(bad.id)).toEqual(evidence);
+  });
+  it('bounds quarantine scanning and continues progress on the next claim', async () => {
+    const fake = new InMemoryReportIntakeRepository();
+    const { batch } = await fixture();
+    const badIds: string[] = [];
+    for (let index = 0; index < 11; index++) {
+      const bad = await fake.create({
+        serverId: 'guild-processing',
+        reporterId: 'reporter-processing',
+      });
+      badIds.push(bad.id);
+      await fake.recordEvidenceBatch({
+        ...batch,
+        intakeId: bad.id,
+        observedAt: new Date(now.getTime() - 1000),
+      });
+      await fake.update(bad.id, { metadata: { analysis: 'broken' } });
+    }
+    const valid = await fake.create({
+      serverId: 'guild-processing',
+      reporterId: 'reporter-processing',
+    });
+    await fake.recordEvidenceBatch({ ...batch, intakeId: valid.id });
+    expect(await fake.claimAnalysis(due, 10_000)).toBeNull();
+    const firstPass = await Promise.all(badIds.map((id) => fake.findById(id)));
+    expect(
+      firstPass.filter((intake) => intake?.analysis_failure_code === 'invalid_metadata')
+    ).toHaveLength(10);
+    await expect(fake.claimAnalysis(due, 10_000)).resolves.toMatchObject({
+      intake: { id: valid.id },
+    });
+  });
 });

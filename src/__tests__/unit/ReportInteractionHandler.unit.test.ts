@@ -122,6 +122,7 @@ const buildReportIntake = (overrides: Partial<ReportIntake> = {}): ReportIntake 
   analysis_lease_until: null,
   analysis_lease_token: null,
   analysis_attempts: 0,
+  analysis_failure_code: null,
   id: 'intake-1',
   server_id: 'guild-1',
   reporter_id: 'reporter-1',

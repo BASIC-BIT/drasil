@@ -35,6 +35,7 @@ function fixture() {
     analysis_lease_until: null,
     analysis_lease_token: null,
     analysis_attempts: 0,
+    analysis_failure_code: null,
     id: 'intake',
     server_id: 'guild',
     reporter_id: 'reporter',

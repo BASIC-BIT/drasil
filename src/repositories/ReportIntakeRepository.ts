@@ -2,6 +2,7 @@ import { getReportIntakeSettings } from '../utils/reportIntakeSettings';
 import type { ReportAnalysisOutcome } from '@drasil/application';
 import {
   analysisClaimChange,
+  ANALYSIS_CLAIM_SCAN_LIMIT,
   OPEN_ANALYSIS_STATUSES as OPEN_INTAKE_STATUSES,
   completeAnalysisChange,
   evidenceBatchChange,
@@ -144,14 +145,16 @@ export class ReportIntakeRepository implements IReportIntakeRepository {
         SELECT * FROM report_intakes
         WHERE analysis_due_at <= ${now} AND (analysis_lease_until IS NULL OR analysis_lease_until <= ${now})
           AND status IN ('collecting_evidence', 'needs_reporter_confirmation', 'needs_admin_confirmation')
-          AND confirmed_target_user_id IS NULL AND closed_at IS NULL
+          AND confirmed_target_user_id IS NULL AND closed_at IS NULL AND analysis_failure_code IS NULL
           AND (evidence_revision > analysis_revision OR status = 'needs_reporter_confirmation')
-        ORDER BY analysis_due_at, id FOR UPDATE SKIP LOCKED LIMIT 1`;
-      if (!rows[0]) return null;
-      const result = analysisClaimChange(rows[0], now, leaseMs);
-      if (!result) return null;
-      await this.writeProcessing(transaction, rows[0], result.change);
-      return result.claim;
+        ORDER BY analysis_due_at, id FOR UPDATE SKIP LOCKED LIMIT ${ANALYSIS_CLAIM_SCAN_LIMIT}`;
+      for (const intake of rows) {
+        const result = analysisClaimChange(intake, now, leaseMs);
+        if (!result) continue;
+        await this.writeProcessing(transaction, intake, result.change);
+        if (result.claim) return result.claim;
+      }
+      return null;
     });
   }
 

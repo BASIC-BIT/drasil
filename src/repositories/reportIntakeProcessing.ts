@@ -15,6 +15,7 @@ import {
 } from './types';
 import { getReportIntakeSettings, type ReportIntakeSettings } from '../utils/reportIntakeSettings';
 
+export const ANALYSIS_CLAIM_SCAN_LIMIT = 10;
 export const ANALYSIS_DEADLINE_MS = 45_000;
 export const CONFIRMATION_TIMEOUT_MS = 10 * 60_000;
 const MAX_BATCH_DELAY_MS = 30_000;
@@ -85,7 +86,7 @@ export function evidenceBatchChange(
     metadata: { ...metadata, analysis } as ReportIntake['metadata'],
     updated_at: input.observedAt,
   };
-  if (OPEN_ANALYSIS_STATUSES.includes(intake.status) && !intake.confirmed_target_user_id) {
+  if (canAnalyze(intake)) {
     const batchingStartedAt =
       typeof analysis.batchingStartedAt === 'string'
         ? new Date(analysis.batchingStartedAt).getTime()
@@ -127,6 +128,7 @@ export function evidenceBatchChange(
 export function canAnalyze(intake: ReportIntake): boolean {
   return (
     OPEN_ANALYSIS_STATUSES.includes(intake.status) &&
+    intake.analysis_failure_code === null &&
     intake.closed_at === null &&
     intake.confirmed_target_user_id === null
   );
@@ -135,7 +137,7 @@ export function analysisClaimChange(
   intake: ReportIntake,
   now: Date,
   leaseMs: number
-): { claim: ReportAnalysisClaim; change: Partial<ReportIntake> } | null {
+): { claim: ReportAnalysisClaim | null; change: Partial<ReportIntake> } | null {
   if (
     !canAnalyze(intake) ||
     !intake.analysis_due_at ||
@@ -144,7 +146,25 @@ export function analysisClaimChange(
   )
     return null;
   if (!Number.isFinite(leaseMs) || leaseMs <= 0) throw new Error('Analysis lease must be positive');
-  const { metadata, analysis } = processingMetadata(intake);
+  let parsed: ReturnType<typeof processingMetadata>;
+  try {
+    parsed = processingMetadata(intake);
+  } catch (error) {
+    if (!(error instanceof z.ZodError)) throw error;
+    // Keep malformed metadata verbatim so operators can diagnose and explicitly repair it.
+    return {
+      claim: null,
+      change: {
+        analysis_failure_code: 'invalid_metadata',
+        status: ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION,
+        analysis_due_at: null,
+        analysis_lease_token: null,
+        analysis_lease_until: null,
+        updated_at: now,
+      },
+    };
+  }
+  const { metadata, analysis } = parsed;
   const kind =
     intake.status === ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION &&
     intake.analysis_revision === intake.evidence_revision &&

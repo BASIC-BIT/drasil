@@ -1,5 +1,7 @@
 import {
   analysisClaimChange,
+  ANALYSIS_CLAIM_SCAN_LIMIT,
+  canAnalyze,
   completeAnalysisChange,
   evidenceBatchChange,
   ownsAnalysis,
@@ -1613,14 +1615,24 @@ export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
     return result.result;
   }
   async claimAnalysis(now: Date, leaseMs: number): Promise<ReportAnalysisClaim | null> {
-    for (const intake of [...this.intakes].sort(
+    const due = this.intakes.filter(
+      (intake) =>
+        canAnalyze(intake) &&
+        intake.analysis_due_at !== null &&
+        intake.analysis_due_at <= now &&
+        (intake.analysis_lease_until === null || intake.analysis_lease_until <= now) &&
+        (intake.evidence_revision > intake.analysis_revision ||
+          intake.status === ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION)
+    );
+    due.sort(
       (a, b) =>
         (a.analysis_due_at?.getTime() ?? Infinity) - (b.analysis_due_at?.getTime() ?? Infinity)
-    )) {
+    );
+    for (const intake of due.slice(0, ANALYSIS_CLAIM_SCAN_LIMIT)) {
       const result = analysisClaimChange(intake, now, leaseMs);
       if (result) {
         Object.assign(intake, result.change);
-        return structuredClone(result.claim);
+        if (result.claim) return structuredClone(result.claim);
       }
     }
     return null;
@@ -1729,6 +1741,7 @@ export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
       analysis_lease_until: null,
       analysis_lease_token: null,
       analysis_attempts: 0,
+      analysis_failure_code: null,
       id: this.nextIntakeId(),
       server_id: data.serverId,
       reporter_id: data.reporterId,

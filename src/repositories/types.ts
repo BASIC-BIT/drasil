@@ -908,6 +908,7 @@ export interface ReportIntake {
   analysis_lease_until: Date | null;
   analysis_lease_token: string | null;
   analysis_attempts: number;
+  analysis_failure_code: 'invalid_metadata' | null;
   id: string;
   server_id: string;
   reporter_id: string;
