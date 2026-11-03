@@ -160,21 +160,32 @@ export function prepareReportEvidenceSource(input: {
         }
       : unavailable;
   }
+  if (!settings.analyzeImages || settings.maxImages < 1) return excluded;
   const attachment = messageAttachmentsToReportMetadata(message).find(
     (item) => item.id === input.attachmentId
   );
   if (!attachment) return unavailable;
   if (
+    (attachment.contentType &&
+      !['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(
+        attachment.contentType.toLowerCase()
+      )) ||
+    (typeof attachment.size === 'number' && attachment.size > settings.maxImageBytes)
+  )
+    return excluded;
+  if (
+    !attachment.id ||
+    !attachment.url?.trim() ||
+    !attachment.contentType ||
+    typeof attachment.size !== 'number'
+  )
+    return unavailable;
+  if (
     !selectEligibleMessageReportImageAttachments(message, settings).some(
       (item) => item.id === attachment.id
-    ) ||
-    !attachment.contentType ||
-    !['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(
-      attachment.contentType.toLowerCase()
     )
   )
     return excluded;
-  if (!attachment.id || !attachment.url || typeof attachment.size !== 'number') return unavailable;
   const image = {
     kind: 'image' as const,
     attachmentId: attachment.id,

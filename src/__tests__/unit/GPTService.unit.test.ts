@@ -245,6 +245,48 @@ describe('GPTService (unit)', () => {
       ).resolves.toMatchObject({ kind: 'extracted', subjects: [anchor] });
     });
 
+    it('retains conflicting extracted clues when their subject ID collides with an anchor from another source', async () => {
+      const anchor = { ...subject('target', 'target', 'Alder'), userIds: ['123456789012345678'] };
+      const secondRef = {
+        ...sourceRef,
+        evidenceId: 'second-evidence',
+        messageId: 'second-message',
+        role: 'staff' as const,
+      };
+      const extracted = {
+        ...subject('target', 'target', 'Birch'),
+        sourceRefs: [secondRef],
+        userIds: ['223456789012345678'],
+        readability: 'uncertain' as const,
+        uncertainty: ['The displayed account ID conflicts with the first source'],
+        messageLinks: [
+          'https://discord.com/channels/123456789012345678/223456789012345678/323456789012345678',
+        ],
+      };
+      const { openai } = buildOpenAiMock({ subjects: [extracted], contextLabels: [] });
+      const extraction = await new GPTService(openai).extractReportIdentity({
+        sources: [
+          { ...textSource, anchors: [anchor] },
+          {
+            ref: secondRef,
+            content: { kind: 'text', text: 'A different displayed account ID and uncertain name' },
+          },
+        ],
+        signal,
+      });
+      expect(extraction.kind).toBe('extracted');
+      if (extraction.kind !== 'extracted')
+        throw new Error('Expected source-associated conflicting clues');
+      expect(extraction.includedEvidenceIds).toEqual(['evidence-text', 'second-evidence']);
+      expect(extraction.subjects).toHaveLength(2);
+      expect(extraction.subjects).toContainEqual(anchor);
+      const retained = extraction.subjects.find(
+        (entry) => entry.sourceRefs[0].evidenceId === 'second-evidence'
+      );
+      expect(retained).toMatchObject({ ...extracted, subjectId: expect.any(String) });
+      expect(new Set(extraction.subjects.map((entry) => entry.subjectId)).size).toBe(2);
+    });
+
     it('rejects anchors associated with a different original source before dispatch', async () => {
       const anchor = subject('explicit', 'target', 'Alder');
       anchor.sourceRefs[0] = { ...sourceRef, messageId: 'different' };

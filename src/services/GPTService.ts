@@ -776,12 +776,18 @@ export class GPTService implements IGPTService {
           const anchors = submitted.flatMap((source) =>
             (source.anchors ?? []).map((anchor) => ({ ...anchor, sourceRefs: [source.ref] }))
           );
-          const subjects = parsed.data.subjects
-            .filter((subject) => !anchors.some((anchor) => anchor.subjectId === subject.subjectId))
-            .map((subject) => ({
+          const subjectIds = new Set(anchors.map((anchor) => anchor.subjectId));
+          const subjects = parsed.data.subjects.map((subject) => {
+            let subjectId = subject.subjectId;
+            // Model-generated IDs cannot establish that two source-associated people are the same.
+            while (subjectIds.has(subjectId)) subjectId = `extracted:${subjectId}`;
+            subjectIds.add(subjectId);
+            return {
               ...subject,
+              subjectId,
               sourceRefs: subject.sourceRefs.map((ref) => originalRef(ref) ?? ref),
-            }));
+            };
+          });
           subjects.push(...anchors);
           return {
             kind: 'extracted',
