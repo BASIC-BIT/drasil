@@ -49,6 +49,7 @@ export interface IReportCandidateService {
 
 const DISCORD_MESSAGE_LINK_PATTERN =
   /https?:\/\/(?:(?:canary|ptb)\.)?discord(?:app)?\.com\/channels\/(\d{17,20}|@me)\/(\d{17,20})\/(\d{17,20})/gi;
+const DISCORD_MEMBER_SEARCH_LIMIT = 1000;
 const DISCORD_MENTION_PATTERN = /<@!?(\d{17,20})>/g;
 const EXPLICIT_USER_ID_PATTERN = /\b(?:discord\s*)?(?:user\s*)?id[:#\s]+(\d{17,20})\b/gi;
 const STANDALONE_USER_ID_PATTERN = /\b\d{17,20}\b/g;
@@ -152,7 +153,7 @@ export class ReportCandidateService implements IReportCandidateService {
     }
 
     const fetchedMembers = await guild.members
-      .fetch({ query: searchTerm, limit })
+      .search({ query: searchTerm.trim(), limit: DISCORD_MEMBER_SEARCH_LIMIT })
       .catch((error) => {
         console.warn(`Failed to search report candidate members in guild ${guild.id}:`, error);
         return null;
@@ -164,6 +165,7 @@ export class ReportCandidateService implements IReportCandidateService {
 
     return [...fetchedMembers.values()]
       .filter((member) => this.memberMatchesName(member, normalizedSearchTerm))
+      .slice(0, limit)
       .map((member) => ({
         ...this.buildCandidate(member, 'current-server name match'),
         confidence: 0.55,

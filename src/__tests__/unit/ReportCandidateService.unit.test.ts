@@ -104,14 +104,71 @@ describe('ReportCandidateService', () => {
     });
   });
 
+  it('finds an exact name after the first five prefix matches', async () => {
+    const service = new ReportCandidateService();
+    const members: GuildMember[] = [];
+    const lookup = jest.fn(
+      async ({ limit }: { limit: number }) =>
+        new Map(members.slice(0, limit).map((member) => [member.id, member]))
+    );
+    const guild = {
+      id: '333333333333333333',
+      members: { fetch: lookup, search: lookup },
+    } as unknown as Guild;
+    for (let i = 0; i < 5; i++) {
+      const member = buildMember(guild, `${i}`);
+      member.user.username = `target-user-${i}`;
+      members.push(member);
+    }
+    members.push(buildMember(guild));
+
+    const candidates = await service.searchMembersByName(guild, 'target-user');
+
+    expect(candidates.map((candidate) => candidate.discordUserId)).toEqual([USER_ID]);
+    expect(candidates[0].confirmationRequired).toBe(true);
+  });
+
+  it('uses the username-and-nickname search for a nickname-only match', async () => {
+    const service = new ReportCandidateService();
+    const search = jest.fn();
+    const guild = {
+      id: '333333333333333333',
+      members: { fetch: jest.fn().mockResolvedValue(new Map()), search },
+    } as unknown as Guild;
+    search.mockResolvedValue(new Map([[USER_ID, buildMember(guild)]]));
+
+    const candidates = await service.searchMembersByName(guild, 'Target Nick');
+
+    expect(candidates.map((candidate) => candidate.discordUserId)).toEqual([USER_ID]);
+    expect(guild.members.fetch).not.toHaveBeenCalled();
+    expect(search).toHaveBeenCalledWith({ query: 'Target Nick', limit: 1000 });
+  });
+
+  it('limits exact candidates after discarding prefix-only matches', async () => {
+    const service = new ReportCandidateService();
+    const search = jest.fn();
+    const guild = { id: '333333333333333333', members: { search } } as unknown as Guild;
+    const members = [
+      buildMember(guild, 'prefix-only'),
+      buildMember(guild),
+      buildMember(guild, OTHER_USER_ID),
+    ];
+    members[0].nickname = 'Target Nick Extra';
+    search.mockResolvedValue(new Map(members.map((member) => [member.id, member])));
+
+    const candidates = await service.searchMembersByName(guild, 'Target Nick', 1);
+
+    expect(candidates.map((candidate) => candidate.discordUserId)).toEqual([USER_ID]);
+  });
+
   it('marks name-search candidates as requiring human confirmation', async () => {
     const service = new ReportCandidateService();
     const guild = {
       id: '333333333333333333',
-      members: { fetch: jest.fn() },
+      members: { search: jest.fn() },
     } as unknown as Guild;
     const member = buildMember(guild);
-    (guild.members.fetch as jest.Mock).mockResolvedValue(new Map([[USER_ID, member]]));
+    (guild.members.search as jest.Mock).mockResolvedValue(new Map([[USER_ID, member]]));
 
     const candidates = await service.searchMembersByName(guild, 'Target Nick');
 
