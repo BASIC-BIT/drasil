@@ -151,6 +151,8 @@ const createReportIntakeService = (): jest.Mocked<IReportIntakeService> => ({
     })
   ),
   handleThreadMessage: jest.fn().mockResolvedValue(false),
+  handleThreadMessageUpdate: jest.fn().mockResolvedValue(false),
+  handleThreadMessageDelete: jest.fn().mockResolvedValue(false),
   confirmCandidate: jest.fn().mockResolvedValue({ confirmed: false, message: '' }),
   rejectCandidates: jest.fn().mockResolvedValue({ rejected: false, message: '' }),
   closeIntakeForThread: jest.fn().mockResolvedValue({ closed: false, message: '' }),

@@ -3,6 +3,7 @@ import {
   reportDirectoryCoverageSchema,
   reportAnalysisMetadataSchema,
   reportHandoffSchema,
+  reportSourceVersionSchema,
 } from '../index';
 
 const schemas = {
@@ -100,4 +101,26 @@ test('allows staff resolution before delivery without inventing receipt identifi
       resolvedAt: coverage.scannedAt,
     }).success
   ).toBe(true);
+});
+
+test('allows an unknown author only for deletion tombstones and validates availability', () => {
+  const source = {
+    sourceVersion: 0,
+    sourceFingerprint: 'deleted',
+    sourceChannelId: 'thread',
+    sourceAuthorId: null,
+    observedAt: '2026-11-03T00:00:00.000Z',
+    editedAt: null,
+    operation: 'delete',
+  };
+  expect(reportSourceVersionSchema.parse(source)).toMatchObject({
+    availability: 'available',
+    sourceAuthorId: null,
+  });
+  expect(reportSourceVersionSchema.safeParse({ ...source, operation: 'upsert' }).success).toBe(
+    false
+  );
+  expect(reportSourceVersionSchema.safeParse({ ...source, availability: 'unknown' }).success).toBe(
+    false
+  );
 });

@@ -7,7 +7,7 @@ import { createBotApplication, type BotApplication } from '../application/create
 import { ModerationEvidenceService } from '../services/ModerationEvidenceService';
 import 'reflect-metadata';
 import { Container } from 'inversify';
-import { Client, GatewayIntentBits } from 'discord.js';
+import { Client, GatewayIntentBits, Partials } from 'discord.js';
 import OpenAI from 'openai';
 import { createPrismaClient, PrismaClient } from '../db/prisma';
 
@@ -186,6 +186,7 @@ function configureExternalDependencies(container: Container): void {
   // Discord client
   container.bind<Client>(TYPES.DiscordClient).toConstantValue(
     new Client({
+      partials: [Partials.Message],
       intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,

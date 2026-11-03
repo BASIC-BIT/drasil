@@ -1464,6 +1464,72 @@ describe('EventHandler (unit)', () => {
     consoleWarn.mockRestore();
   });
 
+  it('uses only durable staged scheduling for accepted staged evidence', async () => {
+    const reportIntakeService = { handleThreadMessage: jest.fn().mockResolvedValue(true) };
+    const reportIntakeAgentService = { scheduleAnalysisForThreadMessage: jest.fn() };
+    const handler = buildHandler({
+      reportIntakeService,
+      reportIntakeAgentService,
+      configService: {
+        getServerConfig: jest
+          .fn()
+          .mockResolvedValue({ settings: { report_intake_staged_enabled: true } }),
+      },
+    });
+    const message = buildMessage(new PermissionsBitField()) as Message;
+    Object.assign(message, { channel: { isThread: () => true } });
+    await (handler as any).handleMessage(message);
+    expect(reportIntakeService.handleThreadMessage).toHaveBeenCalledWith(message);
+    expect(reportIntakeAgentService.scheduleAnalysisForThreadMessage).not.toHaveBeenCalled();
+  });
+
+  it('routes report edits and deletions through recoverable listeners', async () => {
+    const client = { on: jest.fn(), user: { id: 'bot-1' } };
+    const reportIntakeService = {
+      handleThreadMessageUpdate: jest.fn().mockResolvedValue(true),
+      handleThreadMessageDelete: jest.fn().mockResolvedValue(true),
+    };
+    const handler = buildHandler({ client, reportIntakeService });
+    await handler.setupEventHandlers();
+    const update = client.on.mock.calls.find(([event]) => event === Events.MessageUpdate)?.[1];
+    const deletion = client.on.mock.calls.find(([event]) => event === Events.MessageDelete)?.[1];
+    const message = buildMessage(new PermissionsBitField());
+    Object.assign(message, { id: 'message-1', guildId: 'guild-1' });
+    await update?.(null, message);
+    await deletion?.(message);
+    expect(reportIntakeService.handleThreadMessageUpdate).toHaveBeenCalledWith(message);
+    expect(reportIntakeService.handleThreadMessageDelete).toHaveBeenCalledWith({
+      guildId: 'guild-1',
+      threadId: message.channelId,
+      messageId: message.id,
+    });
+  });
+
+  it.each([Events.MessageUpdate, Events.MessageDelete])(
+    'contains failed report evidence %s events',
+    async (event) => {
+      const client = { on: jest.fn(), user: { id: 'bot-1' } };
+      const error = new Error('evidence write failed');
+      const reportIntakeService = {
+        handleThreadMessageUpdate: jest.fn().mockRejectedValue(error),
+        handleThreadMessageDelete: jest.fn().mockRejectedValue(error),
+      };
+      const handler = buildHandler({ client, reportIntakeService });
+      const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+      await handler.setupEventHandlers();
+      const listener = client.on.mock.calls.find(([registered]) => registered === event)?.[1];
+      const message = { id: 'message', guildId: 'guild', channelId: 'thread' };
+      await expect(
+        event === Events.MessageUpdate ? listener?.(null, message) : listener?.(message)
+      ).resolves.toBeUndefined();
+      expect(consoleError).toHaveBeenCalledWith(
+        `Unexpected error in recoverable Discord event "${event}":`,
+        error
+      );
+      consoleError.mockRestore();
+    }
+  );
+
   it('schedules report intake agent analysis after intake thread evidence is recorded', async () => {
     const reportIntakeService = { handleThreadMessage: jest.fn().mockResolvedValue(true) };
     const reportIntakeAgentService = { scheduleAnalysisForThreadMessage: jest.fn() };
@@ -2826,7 +2892,9 @@ describe('EventHandler (unit)', () => {
       getCachedServerConfig: jest.fn().mockReturnValue({
         settings: { automatic_detection_exempt_moderators: true },
       }),
-      getServerConfig: jest.fn(),
+      getServerConfig: jest
+        .fn()
+        .mockResolvedValue({ settings: { automatic_detection_exempt_moderators: true } }),
     };
     const reportIntakeService = {
       handleThreadMessage: jest.fn().mockResolvedValue(true),

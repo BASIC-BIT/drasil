@@ -1,3 +1,4 @@
+import { getReportIntakeSettings } from '../../utils/reportIntakeSettings';
 import {
   analysisClaimChange,
   ANALYSIS_CLAIM_SCAN_LIMIT,
@@ -1581,6 +1582,8 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
 }
 
 export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
+  constructor(private serverRepository?: IServerRepository) {}
+
   private intakes: ReportIntake[] = [];
   private evidence: ReportIntakeEvidence[] = [];
   private intakeIdCounter = 0;
@@ -1591,9 +1594,10 @@ export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
   ): Promise<'recorded' | 'duplicate' | 'stale' | 'closed'> {
     const intake = this.intakes.find((item) => item.id === input.intakeId);
     if (!intake) return 'closed';
-    const result = evidenceBatchChange(intake, input);
+    const server = await this.serverRepository?.findByGuildId(intake.server_id);
+    const result = evidenceBatchChange(intake, input, getReportIntakeSettings(server?.settings));
     if (!result.change) return result.result;
-    if (input.operation === 'upsert')
+    if (input.operation === 'upsert' && result.appendEvidence)
       for (const evidence of input.evidence)
         this.evidence.push({
           id: this.nextEvidenceId(),

@@ -30,8 +30,11 @@ const buildMessage = (overrides: Record<string, unknown> = {}): Message =>
   ({
     id: 'message-1',
     content: 'I want to report this message link',
+    createdTimestamp: 0,
+    editedTimestamp: null,
     channelId: 'thread-1',
     guild: { id: 'guild-1' },
+    guildId: 'guild-1',
     channel: {
       id: 'thread-1',
       isThread: jest.fn().mockReturnValue(true),
@@ -71,8 +74,8 @@ const buildCandidate = (discordUserId = 'user-1'): ReportCandidate => ({
 
 describe('ReportIntakeService', () => {
   function buildService(candidateOverrides: Partial<IReportCandidateService> = {}) {
-    const reportIntakeRepository = new InMemoryReportIntakeRepository();
     const serverRepository = new InMemoryServerRepository();
+    const reportIntakeRepository = new InMemoryReportIntakeRepository(serverRepository);
     const userRepository = new InMemoryUserRepository();
     const serverMemberRepository = new InMemoryServerMemberRepository();
     const configService = {
@@ -116,6 +119,7 @@ describe('ReportIntakeService', () => {
 
     return {
       service,
+      configService,
       reportIntakeRepository,
       candidateService,
       moderationQueueService,
@@ -136,6 +140,275 @@ describe('ReportIntakeService', () => {
     const message = buildMessage({ channel: { id: 'thread-1', isThread: () => true, send } });
     return { ...setup, intake, prompt, send, message };
   }
+
+  async function stagedSetup() {
+    const setup = await preparePrompt();
+    jest.mocked(setup.configService.getServerConfig).mockResolvedValue({
+      settings: { report_intake_staged_enabled: true },
+    } as Awaited<ReturnType<IConfigService['getServerConfig']>>);
+    return setup;
+  }
+
+  it('saves one complete screenshot-only revision before acknowledging once', async () => {
+    const {
+      service,
+      reportIntakeRepository,
+      intake,
+      message,
+      send,
+      candidateService,
+      moderationQueueService,
+    } = await stagedSetup();
+    message.content = '';
+    send.mockImplementation(async () => {
+      expect(await reportIntakeRepository.listEvidence(intake.id)).toHaveLength(1);
+      return buildPrompt();
+    });
+    await Promise.all([service.handleThreadMessage(message), service.handleThreadMessage(message)]);
+    expect(await reportIntakeRepository.findById(intake.id)).toMatchObject({
+      evidence_revision: 1,
+      analysis_due_at: expect.any(Date),
+    });
+    expect(await reportIntakeRepository.listEvidence(intake.id)).toEqual([
+      expect.objectContaining({ kind: ReportIntakeEvidenceKind.SCREENSHOT }),
+    ]);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(candidateService.resolvePlatformBackedCandidates).not.toHaveBeenCalled();
+    expect(moderationQueueService.recordReportThreadAttention).not.toHaveBeenCalled();
+  });
+
+  it('marks a known inaccessible edit unavailable and clears it on same-version recovery', async () => {
+    const { service, reportIntakeRepository, intake, message } = await stagedSetup();
+    await service.handleThreadMessage(message);
+    const partial = buildMessage({
+      partial: true,
+      author: null,
+      fetch: jest.fn().mockRejectedValue(new Error('missing access')),
+    });
+    await service.handleThreadMessageUpdate(partial);
+    expect(await reportIntakeRepository.findById(intake.id)).toMatchObject({
+      metadata: {
+        analysis: { sources: { 'message-1': { availability: 'unavailable', sourceVersion: 0 } } },
+      },
+    });
+    const fetch = jest.fn().mockResolvedValue(message);
+    await service.handleThreadMessageUpdate(buildMessage({ fetch }));
+    expect(await reportIntakeRepository.findById(intake.id)).toMatchObject({
+      evidence_revision: 3,
+      metadata: {
+        analysis: { sources: { 'message-1': { availability: 'available', sourceVersion: 0 } } },
+      },
+    });
+    expect(await reportIntakeRepository.listEvidence(intake.id)).toHaveLength(2);
+  });
+
+  it('does not clear source unavailability from a delayed cached create', async () => {
+    const { service, reportIntakeRepository, intake, message } = await stagedSetup();
+    await service.handleThreadMessage(message);
+    const fetch = jest.fn().mockRejectedValue(new Error('missing access'));
+    await service.handleThreadMessageUpdate(buildMessage({ partial: true, author: null, fetch }));
+    await service.handleThreadMessage(buildMessage({ fetch }));
+    expect(await reportIntakeRepository.findById(intake.id)).toMatchObject({
+      evidence_revision: 2,
+      metadata: { analysis: { sources: { 'message-1': { availability: 'unavailable' } } } },
+    });
+  });
+
+  it('does not authorize unknown inaccessible partial messages', async () => {
+    const { service, reportIntakeRepository, intake } = await stagedSetup();
+    await service.handleThreadMessageUpdate(
+      buildMessage({
+        partial: true,
+        author: null,
+        fetch: jest.fn().mockRejectedValue(new Error('missing access')),
+      })
+    );
+    expect(await reportIntakeRepository.findById(intake.id)).toMatchObject({
+      evidence_revision: 0,
+    });
+  });
+
+  it('tombstones a delete before the first create without inventing its author', async () => {
+    const { service, reportIntakeRepository, intake, message } = await stagedSetup();
+    await service.handleThreadMessageDelete({
+      guildId: 'other-guild',
+      threadId: 'thread-1',
+      messageId: message.id,
+    });
+    await service.handleThreadMessageDelete({
+      guildId: 'guild-1',
+      threadId: 'other-thread',
+      messageId: message.id,
+    });
+    expect(await reportIntakeRepository.findById(intake.id)).toMatchObject({
+      evidence_revision: 0,
+    });
+    await service.handleThreadMessageDelete({
+      guildId: 'guild-1',
+      threadId: 'thread-1',
+      messageId: message.id,
+    });
+    expect(await reportIntakeRepository.findById(intake.id)).toMatchObject({
+      evidence_revision: 0,
+      analysis_due_at: null,
+      metadata: {
+        analysis: { sources: { 'message-1': { operation: 'delete', sourceAuthorId: null } } },
+      },
+    });
+    await service.handleThreadMessage(message);
+    expect(await reportIntakeRepository.listEvidence(intake.id)).toHaveLength(0);
+    expect(await reportIntakeRepository.findById(intake.id)).toMatchObject({
+      evidence_revision: 0,
+      analysis_due_at: null,
+    });
+  });
+
+  it('fetches the current authorized edit instead of trusting an old update payload', async () => {
+    const { service, reportIntakeRepository, intake, message } = await stagedSetup();
+    await service.handleThreadMessage(message);
+    const current = buildMessage({ content: 'current correction', editedTimestamp: 2000 });
+    const fetch = jest.fn().mockResolvedValue(current);
+    await service.handleThreadMessageUpdate(
+      buildMessage({ content: 'stale update', editedTimestamp: 1000, fetch })
+    );
+    expect(fetch).toHaveBeenCalledWith(true);
+    expect(await reportIntakeRepository.findById(intake.id)).toMatchObject({
+      evidence_revision: 2,
+    });
+    expect(
+      (await reportIntakeRepository.listEvidence(intake.id)).map((row) => row.content)
+    ).toContain('current correction');
+    expect(
+      (await reportIntakeRepository.listEvidence(intake.id)).map((row) => row.content)
+    ).not.toContain('stale update');
+  });
+
+  it('preserves explicit closure when new staged evidence arrives', async () => {
+    const { service, reportIntakeRepository, intake, message } = await stagedSetup();
+    await reportIntakeRepository.update(intake.id, {
+      closedAt: new Date(),
+      status: ReportIntakeStatus.CLOSED_BY_REPORTER,
+    });
+    await service.handleThreadMessage(message);
+    expect(await reportIntakeRepository.findById(intake.id)).toMatchObject({
+      evidence_revision: 0,
+      analysis_due_at: null,
+    });
+    expect(await reportIntakeRepository.listEvidence(intake.id)).toHaveLength(0);
+  });
+
+  it('accepts staff corrections and retains author association for deletion', async () => {
+    const { service, reportIntakeRepository, intake } = await stagedSetup();
+    const message = buildMessage({
+      author: { id: 'staff', bot: false },
+      guild: {
+        id: 'guild-1',
+        members: { fetch: jest.fn().mockResolvedValue({ permissions: { has: () => true } }) },
+      },
+    });
+    await service.handleThreadMessage(message);
+    expect(await reportIntakeRepository.listEvidence(intake.id)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: ReportIntakeEvidenceKind.ADMIN_NOTE,
+          content: message.content,
+        }),
+      ])
+    );
+    await service.handleThreadMessageDelete({
+      guildId: 'guild-1',
+      threadId: 'thread-1',
+      messageId: message.id,
+    });
+    await service.handleThreadMessage(message);
+    expect(await reportIntakeRepository.findById(intake.id)).toMatchObject({
+      evidence_revision: 2,
+      metadata: {
+        analysis: { sources: { 'message-1': { operation: 'delete', sourceAuthorId: 'staff' } } },
+      },
+    });
+  });
+
+  it('acknowledges concurrent distinct evidence batches only once', async () => {
+    const { service, reportIntakeRepository, intake, message, send } = await stagedSetup();
+    await Promise.all([
+      service.handleThreadMessage(message),
+      service.handleThreadMessage(buildMessage({ id: 'message-2', channel: message.channel })),
+    ]);
+    expect(await reportIntakeRepository.findById(intake.id)).toMatchObject({
+      evidence_revision: 2,
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps accepted evidence when the initial acknowledgement fails', async () => {
+    const { service, reportIntakeRepository, intake, message, send } = await stagedSetup();
+    send.mockRejectedValue(new Error('transport unavailable'));
+    await expect(service.handleThreadMessage(message)).resolves.toBe(true);
+    expect(await reportIntakeRepository.findById(intake.id)).toMatchObject({
+      evidence_revision: 1,
+      metadata: { evidence_acknowledgement: { state: 'failed' } },
+    });
+    expect(await reportIntakeRepository.listEvidence(intake.id)).toHaveLength(2);
+  });
+
+  it('retains original versions and rejects reversed edits', async () => {
+    const { service, reportIntakeRepository, intake, message } = await stagedSetup();
+    await service.handleThreadMessage(message);
+    const newer = buildMessage({ content: 'corrected subject', editedTimestamp: 2000 });
+    await service.handleThreadMessage(newer);
+    await service.handleThreadMessage(
+      buildMessage({ content: 'older subject', editedTimestamp: 1000 })
+    );
+    const evidence = await reportIntakeRepository.listEvidence(intake.id);
+    expect(
+      evidence
+        .filter((row) => row.kind === ReportIntakeEvidenceKind.REPORTER_TEXT)
+        .map((row) => row.content)
+    ).toEqual(['I want to report this message link', 'corrected subject']);
+    expect(await reportIntakeRepository.findById(intake.id)).toMatchObject({
+      evidence_revision: 2,
+    });
+  });
+
+  it('does not mutate unrelated channels or unauthorized users', async () => {
+    const { service, reportIntakeRepository, intake, message } = await stagedSetup();
+    const guild = {
+      id: 'guild-1',
+      members: {
+        fetch: jest
+          .fn()
+          .mockResolvedValue({ permissions: { has: () => false }, roles: { cache: new Map() } }),
+      },
+    };
+    await service.handleThreadMessage(
+      buildMessage({ author: { id: 'outsider', bot: false }, guild })
+    );
+    await service.handleThreadMessage(buildMessage({ guild: { id: 'other-guild' } }));
+    await service.handleThreadMessage(
+      buildMessage({ channel: { id: 'other-thread', isThread: () => true } })
+    );
+    expect(await reportIntakeRepository.listEvidence(intake.id)).toHaveLength(0);
+    expect(await reportIntakeRepository.findById(intake.id)).toMatchObject({
+      evidence_revision: 0,
+    });
+    expect(message.channelId).toBe('thread-1');
+  });
+
+  it('retains submitted evidence without retargeting or scheduling identity analysis', async () => {
+    const { service, reportIntakeRepository, intake, message } = await stagedSetup();
+    await reportIntakeRepository.update(intake.id, {
+      status: ReportIntakeStatus.SUBMITTED,
+      confirmedTargetUserId: 'target-1',
+    });
+    await service.handleThreadMessage(message);
+    expect(await reportIntakeRepository.findById(intake.id)).toMatchObject({
+      status: ReportIntakeStatus.SUBMITTED,
+      confirmed_target_user_id: 'target-1',
+      evidence_revision: 1,
+      analysis_due_at: null,
+    });
+  });
 
   it('unpublished prompt keeps disabled controls until persistence succeeds', async () => {
     const { service, reportIntakeRepository, intake, prompt, send, message } =

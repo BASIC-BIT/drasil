@@ -3,8 +3,19 @@ import {
   recordObservation,
   recordWorkflowOutcome,
 } from '../observability/langfuse';
-import { createHash } from 'crypto';
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, GuildMember, Message } from 'discord.js';
+import { createHash } from 'node:crypto';
+import { getReportIntakeSettings } from '../utils/reportIntakeSettings';
+import { canModerateReportIntake } from '../utils/reportIntakeStaffAuthorization';
+import { buildReportEvidenceBatch, activeReportEvidence } from '../utils/reportIntakeEvidence';
+import { processingMetadata } from '../repositories/reportIntakeProcessing';
+import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  GuildMember,
+  Message,
+  type PartialMessage,
+} from 'discord.js';
 import { injectable, inject, optional } from 'inversify';
 import { IConfigService } from '../config/ConfigService';
 import { TYPES } from '../di/symbols';
@@ -75,6 +86,12 @@ export interface IReportIntakeService {
   }): Promise<ReportIntake | null>;
   findIntakeById(intakeId: string): Promise<ReportIntake | null>;
   handleThreadMessage(message: Message): Promise<boolean>;
+  handleThreadMessageUpdate(message: Message | PartialMessage): Promise<boolean>;
+  handleThreadMessageDelete(input: {
+    guildId: string;
+    threadId: string;
+    messageId: string;
+  }): Promise<boolean>;
   confirmCandidate(input: {
     intakeId: string;
     targetUserId: string;
@@ -177,10 +194,20 @@ export class ReportIntakeService implements IReportIntakeService {
       return false;
     }
 
-    const intake = await this.reportIntakeRepository.findOpenByThreadId(message.channel.id);
-    if (!intake) {
-      return false;
+    const config = await this.configService.getServerConfig(message.guild.id);
+    if (getReportIntakeSettings(config.settings).stagedEnabled) {
+      const intake = await this.reportIntakeRepository.findByThreadId(message.channel.id);
+      if (!intake || intake.server_id !== message.guild.id) return false;
+      const sources = processingMetadata(intake).analysis.sources;
+      if (
+        Object.prototype.hasOwnProperty.call(sources, message.id) &&
+        sources[message.id].availability === 'unavailable'
+      )
+        return this.handleThreadMessageUpdate(message);
+      return this.recordStagedEvidence(intake, message, true);
     }
+    const intake = await this.reportIntakeRepository.findOpenByThreadId(message.channel.id);
+    if (!intake) return false;
 
     await this.recordMessageEvidence(intake, message);
     if (message.author.id === intake.reporter_id && !this.isReporterCloseCommand(message.content)) {
@@ -194,6 +221,137 @@ export class ReportIntakeService implements IReportIntakeService {
         });
     }
     return true;
+  }
+
+  async handleThreadMessageUpdate(message: Message | PartialMessage): Promise<boolean> {
+    if (!message.guild || !message.channel.isThread()) return false;
+    const config = await this.configService.getServerConfig(message.guild.id);
+    if (!getReportIntakeSettings(config.settings).stagedEnabled) return false;
+    const intake = await this.reportIntakeRepository.findByThreadId(message.channel.id);
+    if (!intake || intake.server_id !== message.guild.id) return false;
+    const current = await message.fetch(true).catch(() => null);
+    if (current) {
+      if (
+        current.id !== message.id ||
+        current.channelId !== message.channel.id ||
+        current.guildId !== intake.server_id
+      )
+        return true;
+      return this.recordStagedEvidence(intake, current, false);
+    }
+    const sources = processingMetadata(intake).analysis.sources;
+    const source = Object.prototype.hasOwnProperty.call(sources, message.id)
+      ? sources[message.id]
+      : undefined;
+    if (source && source.operation !== 'delete' && source.sourceChannelId === message.channel.id) {
+      await this.reportIntakeRepository.recordEvidenceBatch({
+        ...source,
+        intakeId: intake.id,
+        sourceMessageId: message.id,
+        observedAt: new Date(),
+        editedAt: source.editedAt ? new Date(source.editedAt) : null,
+        availability: 'unavailable',
+        evidence: [],
+      });
+    }
+    return true;
+  }
+
+  async handleThreadMessageDelete(input: {
+    guildId: string;
+    threadId: string;
+    messageId: string;
+  }): Promise<boolean> {
+    const config = await this.configService.getServerConfig(input.guildId);
+    if (!getReportIntakeSettings(config.settings).stagedEnabled) return false;
+    const intake = await this.reportIntakeRepository.findByThreadId(input.threadId);
+    if (!intake || intake.server_id !== input.guildId) return false;
+    const sources = processingMetadata(intake).analysis.sources;
+    const source = Object.prototype.hasOwnProperty.call(sources, input.messageId)
+      ? sources[input.messageId]
+      : undefined;
+    if (source && source.sourceChannelId !== input.threadId) return true;
+    await this.reportIntakeRepository.recordEvidenceBatch({
+      intakeId: intake.id,
+      sourceMessageId: input.messageId,
+      sourceChannelId: input.threadId,
+      sourceAuthorId: source?.sourceAuthorId ?? null,
+      sourceVersion: source?.sourceVersion ?? 0,
+      sourceFingerprint:
+        source?.sourceFingerprint ??
+        createHash('sha256').update(JSON.stringify(input)).digest('hex'),
+      operation: 'delete',
+      observedAt: new Date(),
+      editedAt: source?.editedAt ? new Date(source.editedAt) : null,
+      evidence: [],
+    });
+    return true;
+  }
+
+  private async recordStagedEvidence(
+    intake: ReportIntake,
+    message: Message,
+    allowClose: boolean
+  ): Promise<boolean> {
+    if (!message.guild || message.author.bot || message.system) return true;
+    if (
+      message.author.id !== intake.reporter_id &&
+      !(await canModerateReportIntake(message.guild, message.author.id, this.configService))
+    )
+      return true;
+    if (this.isReporterCloseCommand(message.content)) {
+      if (allowClose && message.author.id === intake.reporter_id) {
+        const result = await this.closeIntakeForThread({
+          threadId: message.channel.id,
+          closedById: message.author.id,
+        });
+        if (hasMessageSend(message.channel))
+          await message.channel.send({
+            content: result.message,
+            components: [],
+            allowedMentions: { parse: [] },
+          });
+        if (result.shouldArchiveThread) await archiveClosedThread(message.channel);
+      }
+      return true;
+    }
+    const result = await this.reportIntakeRepository.recordEvidenceBatch(
+      buildReportEvidenceBatch(message, intake, 'upsert')
+    );
+    if (result === 'recorded') await this.acknowledgeStagedEvidence(intake.id, message);
+    return true;
+  }
+
+  private async acknowledgeStagedEvidence(intakeId: string, message: Message): Promise<void> {
+    if (!hasMessageSend(message.channel)) return;
+    const current = await this.reportIntakeRepository.findById(intakeId);
+    if (!current) return;
+    const metadata = toRecord(current.metadata);
+    if (metadata.evidence_acknowledgement) return;
+    const reserved = await this.reportIntakeRepository.updateIfCurrent(current, {
+      metadata: { ...metadata, evidence_acknowledgement: { state: 'reserved' } },
+    });
+    if (!reserved) return;
+    let state = 'sent';
+    try {
+      await message.channel.send({
+        content: 'Evidence saved.',
+        components: [],
+        allowedMentions: { parse: [] },
+      });
+    } catch {
+      state = 'failed';
+    }
+    for (let attempt = 0; attempt < REPORT_INTAKE_STATE_WRITE_ATTEMPTS; attempt++) {
+      const latest = await this.reportIntakeRepository.findById(intakeId);
+      if (!latest) return;
+      if (
+        await this.reportIntakeRepository.updateIfCurrent(latest, {
+          metadata: { ...toRecord(latest.metadata), evidence_acknowledgement: { state } },
+        })
+      )
+        return;
+    }
   }
 
   async confirmCandidate(input: {
@@ -289,7 +447,10 @@ export class ReportIntakeService implements IReportIntakeService {
       },
     });
 
-    const evidence = await this.reportIntakeRepository.listEvidence(intake.id);
+    const evidence = activeReportEvidence(
+      confirmedIntake,
+      await this.reportIntakeRepository.listEvidence(intake.id)
+    );
     return {
       confirmed: true,
       message: `Confirmed <@${input.targetUserId}> as the report target.`,

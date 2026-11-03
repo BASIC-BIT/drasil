@@ -81,6 +81,105 @@ describeIntegration('durable report intake processing', () => {
     ]);
   });
 
+  it('recovers source availability without changing semantic version or duplicating history', async () => {
+    const { repository, intake, batch } = await fixture();
+    await repository.recordEvidenceBatch(batch);
+    await repository.recordEvidenceBatch({
+      ...batch,
+      availability: 'unavailable',
+      evidence: [],
+      observedAt: due,
+    });
+    expect(await repository.findById(intake.id)).toMatchObject({
+      evidence_revision: 2,
+      metadata: {
+        analysis: { sources: { message: { availability: 'unavailable', sourceVersion: 1 } } },
+      },
+    });
+    await repository.recordEvidenceBatch(batch);
+    expect(await repository.listEvidence(intake.id)).toHaveLength(1);
+    expect(await repository.findById(intake.id)).toMatchObject({
+      evidence_revision: 3,
+      metadata: {
+        analysis: { sources: { message: { availability: 'available', sourceVersion: 1 } } },
+      },
+    });
+  });
+
+  it('uses configured scheduling in the production and in-memory repositories', async () => {
+    const { repository, prisma, intake, batch } = await fixture();
+    const serverRepository = new ServerRepository(prisma);
+    await prisma.servers.update({
+      where: { guild_id: intake.server_id },
+      data: { settings: { report_intake_agent_debounce_ms: 5000 } },
+    });
+    const fake = new InMemoryReportIntakeRepository(serverRepository);
+    const fakeIntake = await fake.create({
+      serverId: intake.server_id,
+      reporterId: intake.reporter_id,
+    });
+    await repository.recordEvidenceBatch(batch);
+    await fake.recordEvidenceBatch({ ...batch, intakeId: fakeIntake.id });
+    const configuredDue = new Date('2026-11-03T00:00:05.000Z');
+    expect(await repository.findById(intake.id)).toMatchObject({ analysis_due_at: configuredDue });
+    expect(await fake.findById(fakeIntake.id)).toMatchObject({ analysis_due_at: configuredDue });
+  });
+
+  it('keeps an unknown deletion out of investigation revisions, budgets and prompts', async () => {
+    const { repository, intake, batch } = await fixture();
+    await repository.recordEvidenceBatch(batch);
+    const claim = (await repository.claimAnalysis(due, 10_000))!;
+    await repository.reserveModelAttempt(claim, due);
+    const before = (await repository.findById(intake.id))!;
+    await repository.recordEvidenceBatch({
+      ...batch,
+      sourceMessageId: 'unseen',
+      sourceAuthorId: null,
+      operation: 'delete',
+      evidence: [],
+      observedAt: due,
+    });
+    expect(await repository.findById(intake.id)).toMatchObject({
+      evidence_revision: before.evidence_revision,
+      analysis_attempts: 1,
+      analysis_lease_token: before.analysis_lease_token,
+      analysis_deadline_at: before.analysis_deadline_at,
+      analysis_due_at: before.analysis_due_at,
+      metadata: {
+        analysis: { sources: { unseen: { operation: 'delete', sourceAuthorId: null } } },
+      },
+    });
+    expect(await repository.recordEvidenceBatch({ ...batch, sourceMessageId: 'unseen' })).toBe(
+      'stale'
+    );
+    expect(await repository.listEvidence(intake.id)).toHaveLength(1);
+  });
+
+  it('retains the persisted author when a delete was observed before the first commit', async () => {
+    const { repository, intake, batch } = await fixture();
+    await repository.recordEvidenceBatch(batch);
+    await repository.recordEvidenceBatch({
+      ...batch,
+      sourceAuthorId: null,
+      sourceVersion: 0,
+      operation: 'delete',
+      evidence: [],
+    });
+    expect(await repository.findById(intake.id)).toMatchObject({
+      metadata: {
+        analysis: {
+          sources: {
+            message: {
+              sourceAuthorId: 'reporter-processing',
+              sourceVersion: 1,
+              operation: 'delete',
+            },
+          },
+        },
+      },
+    });
+  });
+
   it('allows only one claim for a revision', async () => {
     const { repository, batch } = await fixture();
     expect(await repository.recordEvidenceBatch(batch)).toBe('recorded');

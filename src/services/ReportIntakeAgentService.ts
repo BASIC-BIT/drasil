@@ -80,7 +80,12 @@ export class ReportIntakeAgentService implements IReportIntakeAgentService {
         const serverConfig = await this.configService.getServerConfig(intake.server_id);
         const intakeSettings = getReportIntakeSettings(serverConfig.settings);
         const reportAiSettings = getReportAiSettings(serverConfig.settings);
-        if (!intakeSettings.agentEnabled || !reportAiSettings.enabled || !this.gptService) {
+        if (
+          intakeSettings.stagedEnabled ||
+          !intakeSettings.agentEnabled ||
+          !reportAiSettings.enabled ||
+          !this.gptService
+        ) {
           recordObservation('chain', { output: { actual_outcome: 'analysis_disabled' } });
           return false;
         }
@@ -153,7 +158,7 @@ export class ReportIntakeAgentService implements IReportIntakeAgentService {
 
     const serverConfig = await this.configService.getServerConfig(intake.server_id);
     const settings = getReportIntakeSettings(serverConfig.settings);
-    if (!settings.agentEnabled) {
+    if (settings.stagedEnabled || !settings.agentEnabled) {
       return;
     }
 

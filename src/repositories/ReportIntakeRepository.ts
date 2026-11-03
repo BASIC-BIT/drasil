@@ -117,7 +117,7 @@ export class ReportIntakeRepository implements IReportIntakeRepository {
       const settings = getReportIntakeSettings((server?.settings ?? {}) as ServerSettings);
       const result = evidenceBatchChange(intake, input, settings);
       if (!result.change) return result.result;
-      if (input.operation === 'upsert' && input.evidence.length)
+      if (input.operation === 'upsert' && result.appendEvidence && input.evidence.length)
         await transaction.report_intake_evidence.createMany({
           data: input.evidence.map((evidence) => ({
             intake_id: intake.id,

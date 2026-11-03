@@ -49,7 +49,11 @@ export function evidenceBatchChange(
   intake: ReportIntake,
   input: ReportEvidenceBatch,
   settings: ReportIntakeSettings = getReportIntakeSettings()
-): { result: 'recorded' | 'duplicate' | 'stale' | 'closed'; change?: Partial<ReportIntake> } {
+): {
+  result: 'recorded' | 'duplicate' | 'stale' | 'closed';
+  change?: Partial<ReportIntake>;
+  appendEvidence?: boolean;
+} {
   if (
     intake.closed_at ||
     intake.status === ReportIntakeStatus.CLOSED_BY_REPORTER ||
@@ -71,16 +75,34 @@ export function evidenceBatchChange(
     if (
       previous.sourceVersion === source.sourceVersion &&
       previous.sourceFingerprint === source.sourceFingerprint &&
-      previous.operation === source.operation
+      previous.operation === source.operation &&
+      previous.availability === source.availability
     )
       return { result: 'duplicate' };
-    if (source.operation === 'upsert' && previous.sourceVersion >= source.sourceVersion)
+    if (
+      source.operation === 'upsert' &&
+      (previous.sourceVersion > source.sourceVersion ||
+        (previous.sourceVersion === source.sourceVersion &&
+          previous.sourceFingerprint !== source.sourceFingerprint))
+    )
       return { result: 'stale' };
     // Discord message IDs cannot be recreated; an observed deletion outranks clock ordering.
-    if (source.operation === 'delete')
+    if (source.operation === 'delete') {
       source.sourceVersion = Math.max(previous.sourceVersion, source.sourceVersion);
+      source.sourceAuthorId = previous.sourceAuthorId;
+    }
   }
   analysis.sources = { ...analysis.sources, [input.sourceMessageId]: source };
+  // An unseen deletion establishes ordering only, not eligible evidence or a new investigation.
+  if (!previous && source.operation === 'delete')
+    return {
+      result: 'recorded',
+      change: {
+        metadata: { ...metadata, analysis } as ReportIntake['metadata'],
+        updated_at: input.observedAt,
+      },
+      appendEvidence: false,
+    };
   const change: Partial<ReportIntake> = {
     evidence_revision: intake.evidence_revision + 1,
     metadata: { ...metadata, analysis } as ReportIntake['metadata'],
@@ -122,7 +144,15 @@ export function evidenceBatchChange(
           : intake.status,
     });
   }
-  return { result: 'recorded', change };
+  return {
+    result: 'recorded',
+    change,
+    appendEvidence:
+      source.availability === 'available' &&
+      (!previous ||
+        previous.sourceVersion !== source.sourceVersion ||
+        previous.sourceFingerprint !== source.sourceFingerprint),
+  };
 }
 
 export function canAnalyze(intake: ReportIntake): boolean {

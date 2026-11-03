@@ -980,10 +980,11 @@ export interface ModerationOutcomeCreate extends Omit<
 }
 
 export interface ReportEvidenceBatch {
+  availability?: 'available' | 'unavailable';
   intakeId: string;
   sourceMessageId: string;
   sourceChannelId: string;
-  sourceAuthorId: string;
+  sourceAuthorId: string | null;
   sourceVersion: number;
   sourceFingerprint: string;
   observedAt: Date;

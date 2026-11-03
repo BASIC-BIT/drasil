@@ -134,8 +134,45 @@ describe('ReportIntakeAgentService', () => {
       gptService as unknown as IGPTService
     );
 
-    return { agentService, intakeService, reportIntakeRepository, candidateService, gptService };
+    return {
+      agentService,
+      intakeService,
+      reportIntakeRepository,
+      candidateService,
+      gptService,
+      configService,
+    };
   }
+
+  it('does not run a legacy timer after staged intake is enabled', async () => {
+    jest.useFakeTimers();
+    try {
+      const { agentService, intakeService, gptService, configService } = buildServices();
+      await intakeService.openIntakeFromThread({
+        serverId: 'guild-1',
+        reporter: buildReporter(),
+        threadId: 'thread-1',
+        channelId: 'channel-1',
+      });
+      const message = buildMessage();
+      await intakeService.handleThreadMessage(message);
+      agentService.scheduleAnalysisForThreadMessage(message);
+      await jest.advanceTimersByTimeAsync(0);
+      const config = await configService.getServerConfig('guild-1');
+      jest.mocked(configService.getServerConfig).mockResolvedValue({
+        ...config,
+        settings: { ...config.settings, report_intake_staged_enabled: true },
+      });
+      await jest.advanceTimersByTimeAsync(15000);
+      expect(gptService.extractReportIntakeEvidence).not.toHaveBeenCalled();
+      expect(await agentService.runAnalysisForThreadMessage(message)).toBe(false);
+      agentService.scheduleAnalysisForThreadMessage(message);
+      await jest.advanceTimersByTimeAsync(0);
+      expect(jest.getTimerCount()).toBe(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 
   it('analyzes screenshot-only evidence and asks the reporter for target confirmation', async () => {
     const { agentService, intakeService, reportIntakeRepository, candidateService, gptService } =

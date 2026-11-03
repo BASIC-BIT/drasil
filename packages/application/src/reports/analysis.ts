@@ -134,15 +134,21 @@ export const reportHandoffSchema = z.discriminatedUnion('state', [
       'Delivery and acknowledgement fields must be present together'
     ),
 ]);
-export const reportSourceVersionSchema = z.object({
-  sourceVersion: revision,
-  sourceFingerprint: id,
-  sourceChannelId: id,
-  sourceAuthorId: id,
-  observedAt: timestamp,
-  editedAt: timestamp.nullable(),
-  operation: z.enum(['upsert', 'delete']),
-});
+export const reportSourceVersionSchema = z
+  .object({
+    availability: z.enum(['available', 'unavailable']).default('available'),
+    sourceVersion: revision,
+    sourceFingerprint: id,
+    sourceChannelId: id,
+    sourceAuthorId: id.nullable(),
+    observedAt: timestamp,
+    editedAt: timestamp.nullable(),
+    operation: z.enum(['upsert', 'delete']),
+  })
+  .refine(
+    (source) => source.operation === 'delete' || source.sourceAuthorId !== null,
+    'Upserts require an authorized author'
+  );
 export const reportAnalysisMetadataSchema = z
   .object({
     schemaVersion: z.literal(1),

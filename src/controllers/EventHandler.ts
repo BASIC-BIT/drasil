@@ -18,6 +18,7 @@ import {
   PermissionFlagsBits,
   User,
   type MessageCreateOptions,
+  type PartialMessage,
 } from 'discord.js';
 import * as dotenv from 'dotenv';
 import { randomUUID } from 'node:crypto';
@@ -85,6 +86,7 @@ import {
   ModerationQueueAttentionResult,
 } from '../services/ModerationQueueService';
 import { ICaseRoleReleaseReconciliationService } from '../services/CaseRoleReleaseReconciliationService';
+import { getReportIntakeSettings } from '../utils/reportIntakeSettings';
 import { getManualIntakeSettings } from '../utils/manualIntakeSettings';
 import { getRoleGateSettings } from '../utils/roleGateSettings';
 import { IRoleQuarantineService } from '../services/RoleQuarantineService';
@@ -273,6 +275,29 @@ export class EventHandler implements IEventHandler {
       this.createRecoverableEventHandler(Events.MessageCreate, this.handleMessage.bind(this))
     );
     this.client.on(
+      Events.MessageUpdate,
+      this.createRecoverableEventHandler(
+        Events.MessageUpdate,
+        async (_previous, message: Message | PartialMessage) => {
+          await this.reportIntakeService?.handleThreadMessageUpdate(message);
+        }
+      )
+    );
+    this.client.on(
+      Events.MessageDelete,
+      this.createRecoverableEventHandler(
+        Events.MessageDelete,
+        async (message: Message | PartialMessage) => {
+          if (!message.guildId) return;
+          await this.reportIntakeService?.handleThreadMessageDelete({
+            guildId: message.guildId,
+            threadId: message.channelId,
+            messageId: message.id,
+          });
+        }
+      )
+    );
+    this.client.on(
       Events.GuildMemberAdd,
       this.createRecoverableEventHandler(
         Events.GuildMemberAdd,
@@ -404,7 +429,9 @@ export class EventHandler implements IEventHandler {
       try {
         const reportIntakeHandled = await this.reportIntakeService?.handleThreadMessage(message);
         if (reportIntakeHandled) {
-          this.reportIntakeAgentService?.scheduleAnalysisForThreadMessage(message);
+          const config = await this.configService.getServerConfig(message.guild.id);
+          if (!getReportIntakeSettings(config.settings).stagedEnabled)
+            this.reportIntakeAgentService?.scheduleAnalysisForThreadMessage(message);
           this.rememberRecentMessage(message);
           return;
         }
