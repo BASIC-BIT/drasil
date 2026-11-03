@@ -27,6 +27,14 @@ function fixture() {
     threadManager: mock<BotReportDependencies['threadManager']>(),
   };
   const intake: ReportIntake = {
+    evidence_revision: 0,
+    analysis_revision: 0,
+    analysis_due_at: null,
+    analysis_started_at: null,
+    analysis_deadline_at: null,
+    analysis_lease_until: null,
+    analysis_lease_token: null,
+    analysis_attempts: 0,
     id: 'intake',
     server_id: 'guild',
     reporter_id: 'reporter',

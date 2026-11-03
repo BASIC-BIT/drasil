@@ -1,4 +1,12 @@
 import {
+  analysisClaimChange,
+  completeAnalysisChange,
+  evidenceBatchChange,
+  ownsAnalysis,
+  reserveAnalysisChange,
+} from '../../repositories/reportIntakeProcessing';
+import {
+  type ReportAnalysisOutcome,
   materializeSetupStoredChange,
   setupStateMatches,
   parseSetupStoredRecord,
@@ -37,6 +45,8 @@ import {
   ModerationOutcome,
   ModerationOutcomeCreate,
   ModerationOutcomeType,
+  type ReportEvidenceBatch,
+  type ReportAnalysisClaim,
   ReportIntake,
   ReportIntakeCreate,
   ReportIntakeEvidence,
@@ -159,6 +169,7 @@ const baseSettings: ServerSettings = {
   report_intake_agent_enabled: true,
   report_intake_agent_debounce_ms: 15_000,
   report_intake_agent_min_interval_ms: 60_000,
+  report_intake_staged_enabled: false,
   report_intake_confirmed_response_mode: 'observed_alert',
   [ROLE_QUARANTINE_MODE_SETTING_KEY]: DEFAULT_ROLE_QUARANTINE_MODE,
   [ROLE_QUARANTINE_EXEMPT_ROLE_IDS_SETTING_KEY]: [],
@@ -1573,6 +1584,81 @@ export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
   private intakeIdCounter = 0;
   private evidenceIdCounter = 0;
 
+  async recordEvidenceBatch(
+    input: ReportEvidenceBatch
+  ): Promise<'recorded' | 'duplicate' | 'stale' | 'closed'> {
+    const intake = this.intakes.find((item) => item.id === input.intakeId);
+    if (!intake) return 'closed';
+    const result = evidenceBatchChange(intake, input);
+    if (!result.change) return result.result;
+    if (input.operation === 'upsert')
+      for (const evidence of input.evidence)
+        this.evidence.push({
+          id: this.nextEvidenceId(),
+          intake_id: intake.id,
+          kind: evidence.kind,
+          source_message_id: input.sourceMessageId,
+          source_channel_id: input.sourceChannelId,
+          attachment_id: evidence.attachmentId ?? null,
+          content: evidence.content ?? null,
+          created_at: new Date(),
+          metadata: {
+            ...evidence.metadata,
+            sourceVersion: input.sourceVersion,
+            sourceFingerprint: input.sourceFingerprint,
+            sourceAuthorId: input.sourceAuthorId,
+          } as ReportIntakeEvidence['metadata'],
+        });
+    Object.assign(intake, result.change);
+    return result.result;
+  }
+  async claimAnalysis(now: Date, leaseMs: number): Promise<ReportAnalysisClaim | null> {
+    for (const intake of [...this.intakes].sort(
+      (a, b) =>
+        (a.analysis_due_at?.getTime() ?? Infinity) - (b.analysis_due_at?.getTime() ?? Infinity)
+    )) {
+      const result = analysisClaimChange(intake, now, leaseMs);
+      if (result) {
+        Object.assign(intake, result.change);
+        return structuredClone(result.claim);
+      }
+    }
+    return null;
+  }
+  async reserveModelAttempt(claim: ReportAnalysisClaim, now: Date): Promise<boolean> {
+    const intake = this.intakes.find((item) => item.id === claim.intake.id);
+    if (!intake) return false;
+    const change = reserveAnalysisChange(intake, claim, now);
+    if (!change) return false;
+    Object.assign(intake, change);
+    return true;
+  }
+  async renewAnalysisLease(
+    claim: ReportAnalysisClaim,
+    now: Date,
+    leaseMs: number
+  ): Promise<boolean> {
+    if (!Number.isFinite(leaseMs) || leaseMs <= 0)
+      throw new Error('Analysis lease must be positive');
+    const intake = this.intakes.find((item) => item.id === claim.intake.id);
+    if (!intake || !ownsAnalysis(intake, claim, now)) return false;
+    intake.analysis_lease_until = new Date(now.getTime() + leaseMs);
+    intake.updated_at = now;
+    return true;
+  }
+  async completeAnalysis(
+    claim: ReportAnalysisClaim,
+    outcome: ReportAnalysisOutcome,
+    now: Date
+  ): Promise<boolean> {
+    const intake = this.intakes.find((item) => item.id === claim.intake.id);
+    if (!intake) return false;
+    const change = completeAnalysisChange(intake, claim, outcome, now);
+    if (!change) return false;
+    Object.assign(intake, change);
+    return true;
+  }
+
   private nextIntakeId(): string {
     this.intakeIdCounter += 1;
     return `intake-${this.intakeIdCounter}`;
@@ -1635,6 +1721,14 @@ export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
   async create(data: ReportIntakeCreate): Promise<ReportIntake> {
     const now = new Date();
     const intake: ReportIntake = {
+      evidence_revision: 0,
+      analysis_revision: 0,
+      analysis_due_at: null,
+      analysis_started_at: null,
+      analysis_deadline_at: null,
+      analysis_lease_until: null,
+      analysis_lease_token: null,
+      analysis_attempts: 0,
       id: this.nextIntakeId(),
       server_id: data.serverId,
       reporter_id: data.reporterId,

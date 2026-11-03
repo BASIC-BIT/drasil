@@ -114,6 +114,14 @@ const buildModalInteraction = (
   }) as unknown as ModalSubmitInteraction;
 
 const buildReportIntake = (overrides: Partial<ReportIntake> = {}): ReportIntake => ({
+  evidence_revision: 0,
+  analysis_revision: 0,
+  analysis_due_at: null,
+  analysis_started_at: null,
+  analysis_deadline_at: null,
+  analysis_lease_until: null,
+  analysis_lease_token: null,
+  analysis_attempts: 0,
   id: 'intake-1',
   server_id: 'guild-1',
   reporter_id: 'reporter-1',

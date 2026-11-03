@@ -394,6 +394,14 @@ model users {
 }
 
 model report_intakes {
+  evidence_revision          Int                          @default(0)
+  analysis_revision          Int                          @default(0)
+  analysis_due_at            DateTime?                    @db.Timestamptz(6)
+  analysis_started_at        DateTime?                    @db.Timestamptz(6)
+  analysis_deadline_at       DateTime?                    @db.Timestamptz(6)
+  analysis_lease_until       DateTime?                    @db.Timestamptz(6)
+  analysis_lease_token       String?                      @db.Uuid
+  analysis_attempts          Int                          @default(0)
   id                         String                       @id @default(dbgenerated("extensions.uuid_generate_v4()")) @db.Uuid
   server_id                  String
   reporter_id                String

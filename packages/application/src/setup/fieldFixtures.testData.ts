@@ -232,6 +232,13 @@ export const fixtures = {
       value: 'off',
     },
     {
+      input: 'reportIntakeStagedEnabled',
+      location: 'settings.report_intake_staged_enabled',
+      normalizer: null,
+      section: 'report',
+      value: true,
+    },
+    {
       input: 'reportIntakeConfirmedResponseMode',
       location: 'settings.report_intake_confirmed_response_mode',
       normalizer: null,
@@ -552,6 +559,7 @@ export const fixtures = {
       'report_instructions_channel_id',
       'user_report_reason_required',
       'user_report_external_response_mode',
+      'report_intake_staged_enabled',
       'report_intake_confirmed_response_mode',
       'report_ai_triage_enabled',
       'report_ai_analyze_text',

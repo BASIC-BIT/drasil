@@ -1,3 +1,13 @@
+import { getReportIntakeSettings } from '../utils/reportIntakeSettings';
+import type { ReportAnalysisOutcome } from '@drasil/application';
+import {
+  analysisClaimChange,
+  OPEN_ANALYSIS_STATUSES as OPEN_INTAKE_STATUSES,
+  completeAnalysisChange,
+  evidenceBatchChange,
+  ownsAnalysis,
+  reserveAnalysisChange,
+} from './reportIntakeProcessing';
 import { injectable, inject } from 'inversify';
 import {
   Prisma,
@@ -9,18 +19,15 @@ import { TYPES } from '../di/symbols';
 import { RepositoryError } from './BaseRepository';
 import {
   ReportIntake,
+  ServerSettings,
+  ReportEvidenceBatch,
+  ReportAnalysisClaim,
   ReportIntakeCreate,
   ReportIntakeEvidence,
   ReportIntakeEvidenceCreate,
   ReportIntakeStatus,
   ReportIntakeUpdate,
 } from './types';
-
-const OPEN_INTAKE_STATUSES: ReportIntakeStatus[] = [
-  ReportIntakeStatus.COLLECTING_EVIDENCE,
-  ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION,
-  ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION,
-];
 
 export interface ReportBanClaim {
   reportId: string;
@@ -31,6 +38,17 @@ export interface ReportBanClaim {
   attemptToken?: string;
 }
 export interface IReportIntakeRepository {
+  recordEvidenceBatch(
+    input: ReportEvidenceBatch
+  ): Promise<'recorded' | 'duplicate' | 'stale' | 'closed'>;
+  claimAnalysis(now: Date, leaseMs: number): Promise<ReportAnalysisClaim | null>;
+  reserveModelAttempt(claim: ReportAnalysisClaim, now: Date): Promise<boolean>;
+  renewAnalysisLease(claim: ReportAnalysisClaim, now: Date, leaseMs: number): Promise<boolean>;
+  completeAnalysis(
+    claim: ReportAnalysisClaim,
+    outcome: ReportAnalysisOutcome,
+    now: Date
+  ): Promise<boolean>;
   claimBan(input: ReportBanClaim): Promise<ReportIntake | null>;
   updateBan(
     reportId: string,
@@ -59,6 +77,125 @@ export interface IReportIntakeRepository {
 @injectable()
 export class ReportIntakeRepository implements IReportIntakeRepository {
   constructor(@inject(TYPES.PrismaClient) private prisma: PrismaClient) {}
+
+  private async lockedIntake(
+    transaction: Prisma.TransactionClient,
+    id: string
+  ): Promise<ReportIntake | null> {
+    const rows = await transaction.$queryRaw<
+      ReportIntake[]
+    >`SELECT * FROM report_intakes WHERE id = ${id}::uuid FOR UPDATE`;
+    return rows[0] ?? null;
+  }
+
+  private async writeProcessing(
+    transaction: Prisma.TransactionClient,
+    intake: ReportIntake,
+    change: Partial<ReportIntake>
+  ): Promise<void> {
+    await transaction.report_intakes.update({
+      where: { id: intake.id },
+      data: {
+        ...change,
+        status: change.status as report_intake_status | undefined,
+        metadata: change.metadata as Prisma.InputJsonValue | undefined,
+      },
+    });
+  }
+
+  async recordEvidenceBatch(
+    input: ReportEvidenceBatch
+  ): Promise<'recorded' | 'duplicate' | 'stale' | 'closed'> {
+    return this.prisma.$transaction(async (transaction) => {
+      const intake = await this.lockedIntake(transaction, input.intakeId);
+      if (!intake) return 'closed';
+      const server = await transaction.servers.findUnique({
+        where: { guild_id: intake.server_id },
+        select: { settings: true },
+      });
+      const settings = getReportIntakeSettings((server?.settings ?? {}) as ServerSettings);
+      const result = evidenceBatchChange(intake, input, settings);
+      if (!result.change) return result.result;
+      if (input.operation === 'upsert' && input.evidence.length)
+        await transaction.report_intake_evidence.createMany({
+          data: input.evidence.map((evidence) => ({
+            intake_id: intake.id,
+            kind: evidence.kind as report_intake_evidence_kind,
+            source_message_id: input.sourceMessageId,
+            source_channel_id: input.sourceChannelId,
+            attachment_id: evidence.attachmentId,
+            content: evidence.content,
+            metadata: {
+              ...evidence.metadata,
+              sourceVersion: input.sourceVersion,
+              sourceFingerprint: input.sourceFingerprint,
+              sourceAuthorId: input.sourceAuthorId,
+            } as Prisma.InputJsonValue,
+          })),
+        });
+      await this.writeProcessing(transaction, intake, result.change);
+      return result.result;
+    });
+  }
+
+  async claimAnalysis(now: Date, leaseMs: number): Promise<ReportAnalysisClaim | null> {
+    return this.prisma.$transaction(async (transaction) => {
+      const rows = await transaction.$queryRaw<ReportIntake[]>`
+        SELECT * FROM report_intakes
+        WHERE analysis_due_at <= ${now} AND (analysis_lease_until IS NULL OR analysis_lease_until <= ${now})
+          AND status IN ('collecting_evidence', 'needs_reporter_confirmation', 'needs_admin_confirmation')
+          AND confirmed_target_user_id IS NULL AND closed_at IS NULL
+          AND (evidence_revision > analysis_revision OR status = 'needs_reporter_confirmation')
+        ORDER BY analysis_due_at, id FOR UPDATE SKIP LOCKED LIMIT 1`;
+      if (!rows[0]) return null;
+      const result = analysisClaimChange(rows[0], now, leaseMs);
+      if (!result) return null;
+      await this.writeProcessing(transaction, rows[0], result.change);
+      return result.claim;
+    });
+  }
+
+  private async mutateAnalysis(
+    claim: ReportAnalysisClaim,
+    transition: (intake: ReportIntake) => Partial<ReportIntake> | null
+  ): Promise<boolean> {
+    return this.prisma.$transaction(async (transaction) => {
+      const intake = await this.lockedIntake(transaction, claim.intake.id);
+      if (!intake) return false;
+      const change = transition(intake);
+      if (!change) return false;
+      await this.writeProcessing(transaction, intake, change);
+      return true;
+    });
+  }
+
+  async reserveModelAttempt(claim: ReportAnalysisClaim, now: Date): Promise<boolean> {
+    return this.mutateAnalysis(claim, (intake) => reserveAnalysisChange(intake, claim, now));
+  }
+
+  async renewAnalysisLease(
+    claim: ReportAnalysisClaim,
+    now: Date,
+    leaseMs: number
+  ): Promise<boolean> {
+    if (!Number.isFinite(leaseMs) || leaseMs <= 0)
+      throw new Error('Analysis lease must be positive');
+    return this.mutateAnalysis(claim, (intake) =>
+      ownsAnalysis(intake, claim, now)
+        ? { analysis_lease_until: new Date(now.getTime() + leaseMs), updated_at: now }
+        : null
+    );
+  }
+
+  async completeAnalysis(
+    claim: ReportAnalysisClaim,
+    outcome: ReportAnalysisOutcome,
+    now: Date
+  ): Promise<boolean> {
+    return this.mutateAnalysis(claim, (intake) =>
+      completeAnalysisChange(intake, claim, outcome, now)
+    );
+  }
 
   private handleError(error: unknown, operation: string): never {
     console.error(`Repository error during ${operation}:`, error);
