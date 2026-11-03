@@ -170,3 +170,34 @@ export type ReportAnalysisOutcome = z.infer<typeof reportAnalysisOutcomeSchema>;
 export type ReportHandoffReason = z.infer<typeof reportHandoffReasonSchema>;
 export type ReportAnalysisMetadata = z.infer<typeof reportAnalysisMetadataSchema>;
 export type ReportHandoff = z.infer<typeof reportHandoffSchema>;
+
+/** Source content is prepared from the caller's authorized current Discord message. */
+export interface ReportEvidenceSource {
+  ref: ReportEvidenceRef;
+  content:
+    | { kind: 'text'; text: string }
+    | { kind: 'image'; url: string; attachmentId: string; contentType: string; size: number }
+    | { kind: 'unavailable'; reason: 'excluded' | 'evidence_unavailable' };
+  anchors?: readonly ReportSubjectClues[];
+}
+
+export interface ReportContextLabel {
+  kind: 'server' | 'channel' | 'other';
+  text: string;
+  sourceRefs: ReportEvidenceRef[];
+}
+
+export type ReportIdentityExtraction =
+  | {
+      kind: 'extracted';
+      subjects: ReportSubjectClues[];
+      contextLabels: ReportContextLabel[];
+      includedEvidenceIds: string[];
+      excludedEvidenceIds: string[];
+    }
+  | {
+      kind: 'failed';
+      reason: 'provider_failure' | 'invalid_output' | 'evidence_unavailable';
+      includedEvidenceIds: string[];
+      excludedEvidenceIds: string[];
+    };

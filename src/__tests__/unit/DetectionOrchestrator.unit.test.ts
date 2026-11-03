@@ -60,6 +60,7 @@ describe('DetectionOrchestrator (unit)', () => {
       analyzeReportEvidence: jest.fn(),
       describeProfileImages: jest.fn(),
       extractReportIntakeEvidence: jest.fn(),
+      extractReportIdentity: jest.fn(),
     };
     detectionEventsRepository = new InMemoryDetectionEventsRepository();
     serverRepository = new InMemoryServerRepository();
