@@ -271,6 +271,25 @@ export class EventHandler implements IEventHandler {
   }
 
   public async setupEventHandlers(): Promise<void> {
+    // Member events depend on SDK cache presence; raw dispatches also cover uncached members.
+    this.client.on(Events.Raw, (packet: unknown) => {
+      if (!packet || typeof packet !== 'object' || !('t' in packet) || !('d' in packet)) return;
+      if (
+        packet.t !== 'GUILD_MEMBER_ADD' &&
+        packet.t !== 'GUILD_MEMBER_UPDATE' &&
+        packet.t !== 'GUILD_MEMBER_REMOVE'
+      )
+        return;
+      const data = packet.d;
+      if (
+        data &&
+        typeof data === 'object' &&
+        'guild_id' in data &&
+        typeof data.guild_id === 'string'
+      ) {
+        this.reportMemberDirectory?.invalidate(data.guild_id);
+      }
+    });
     this.client.on(Events.UserUpdate, () => this.reportMemberDirectory?.invalidate());
     this.client.on(Events.ShardDisconnect, () => this.reportMemberDirectory?.invalidate());
     this.client.on(Events.ShardReconnecting, () => this.reportMemberDirectory?.invalidate());

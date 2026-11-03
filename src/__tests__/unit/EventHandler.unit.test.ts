@@ -1,6 +1,16 @@
-import type { IReportMemberDirectory } from '../../services/ReportMemberDirectory';
+import { EventEmitter } from 'node:events';
+import { WebSocketShardEvents } from '@discordjs/ws';
+import { ReportCandidateService } from '../../services/ReportCandidateService';
+import {
+  ReportMemberDirectory,
+  type IReportMemberDirectory,
+} from '../../services/ReportMemberDirectory';
 import { createTracingRecorder } from '../fakes/recordingTracing';
 import {
+  Client,
+  Partials,
+  Status,
+  WebSocketShard,
   AuditLogEvent,
   Events,
   Guild,
@@ -40,7 +50,7 @@ const GLOBAL_WATCHLIST_MESSAGE = `watch this ${GLOBAL_WATCHLIST_ENTRY.term} clip
 
 describe('EventHandler (unit)', () => {
   function buildHandler(overrides?: {
-    client?: Record<string, unknown>;
+    client?: Client | Record<string, unknown>;
     detectionOrchestrator?: Record<string, jest.Mock>;
     configService?: Record<string, jest.Mock>;
     notificationManager?: Record<string, jest.Mock>;
@@ -283,6 +293,131 @@ describe('EventHandler (unit)', () => {
       },
     } as unknown as GuildMember;
   }
+
+  it.each(['GUILD_MEMBER_UPDATE', 'GUILD_MEMBER_REMOVE'])(
+    'invalidates complete and loading directory generations for uncached SDK %s dispatches',
+    async (event) => {
+      const client = new Client({ intents: [], partials: [Partials.Message] });
+      const gateway = new EventEmitter();
+      // Exercise the installed SDK dispatch handler, including raw-before-action routing.
+      Reflect.set(client.ws, '_ws', gateway);
+      Reflect.get(client.ws, 'attachEvents').call(client.ws);
+      Reflect.set(client.ws, 'status', Status.Ready);
+      const shard = Reflect.construct(WebSocketShard, [client.ws, 0]);
+      shard.status = Status.Ready;
+      client.ws.shards.set(0, shard);
+      const guild: Guild = Reflect.get(client.guilds, '_add').call(client.guilds, {
+        id: '333333333333333333',
+        name: 'Test',
+        unavailable: false,
+      });
+      const first = {
+        user: {
+          id: '111111111111111111',
+          username: 'first',
+          discriminator: '0',
+          avatar: null,
+          global_name: null,
+          public_flags: 0,
+        },
+        roles: [],
+        nick: 'Target',
+      };
+      const second = {
+        user: {
+          id: '222222222222222222',
+          username: 'second',
+          discriminator: '0',
+          avatar: null,
+          global_name: null,
+          public_flags: 0,
+        },
+        roles: [],
+        nick: 'Other',
+      };
+      let listed = [first, second];
+      const rest = jest
+        .spyOn(client.rest, 'get')
+        .mockImplementation(async (route) => (route.endsWith('/members') ? listed : first));
+      const directory = new ReportMemberDirectory();
+      await buildHandler({ client, reportMemberDirectory: directory }).setupEventHandlers();
+      const available = jest.fn();
+      const update = jest.fn();
+      const removal = jest.fn();
+      client.on(Events.GuildMemberAvailable, available);
+      client.on(Events.GuildMemberUpdate, update);
+      client.on(Events.GuildMemberRemove, removal);
+      const signal = new AbortController().signal;
+      const snapshot = await directory.snapshot(guild, signal);
+      expect(snapshot.coverage.kind).toBe('complete');
+      expect(guild.members.cache.size).toBe(0);
+      const dispatch = (): void => {
+        gateway.emit(WebSocketShardEvents.Dispatch, {
+          shardId: 0,
+          data: { op: 0, s: 1, t: event, d: { ...second, nick: 'Target', guild_id: guild.id } },
+        });
+      };
+      listed = event === 'GUILD_MEMBER_UPDATE' ? [first, { ...second, nick: 'Target' }] : [first];
+      dispatch();
+      expect(update).not.toHaveBeenCalled();
+      expect(removal).not.toHaveBeenCalled();
+      expect(available).toHaveBeenCalledTimes(event === 'GUILD_MEMBER_UPDATE' ? 1 : 0);
+      const refreshed = await directory.snapshot(guild, signal);
+      expect(refreshed.coverage).not.toBe(snapshot.coverage);
+      expect(refreshed.members).toHaveLength(listed.length);
+      if (event === 'GUILD_MEMBER_UPDATE') {
+        const outcome = await new ReportCandidateService(directory).resolveIdentity({
+          guild,
+          reporterId: 'reporter',
+          signal,
+          subjects: [
+            {
+              subjectId: 'target',
+              role: 'target',
+              readability: 'clear',
+              sourceRefs: [],
+              userIds: [],
+              usernames: [],
+              displayNames: ['Target'],
+              messageLinks: [],
+              uncertainty: [],
+            },
+          ],
+        });
+        expect(outcome).toMatchObject({ kind: 'admin_review', reason: 'ambiguous' });
+      }
+      directory.invalidate(guild.id);
+      guild.members.cache.clear();
+      const resolvePage = jest.fn();
+      rest.mockReturnValueOnce(new Promise(resolvePage));
+      const loading = directory.snapshot(guild, signal);
+      dispatch();
+      expect((await loading).coverage).toMatchObject({ kind: 'partial', reason: 'interrupted' });
+      resolvePage.mock.calls[0][0](listed);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect((await directory.snapshot(guild, signal)).coverage.kind).toBe('complete');
+    }
+  );
+
+  it('scopes raw member invalidation and ignores unrelated or malformed packets', async () => {
+    const client = { on: jest.fn(), user: { id: 'bot' } };
+    const directory = { snapshot: jest.fn(), invalidate: jest.fn() };
+    await buildHandler({ client, reportMemberDirectory: directory }).setupEventHandlers();
+    const raw = client.on.mock.calls.find(([event]) => event === Events.Raw)![1];
+    for (const packet of [
+      null,
+      {},
+      { t: 'MESSAGE_CREATE', d: { guild_id: 'other' } },
+      { t: 'GUILD_MEMBER_UPDATE', d: null },
+      { t: 'GUILD_MEMBER_REMOVE', d: { guild_id: 123 } },
+    ])
+      raw(packet);
+    expect(directory.invalidate).not.toHaveBeenCalled();
+    for (const t of ['GUILD_MEMBER_ADD', 'GUILD_MEMBER_UPDATE', 'GUILD_MEMBER_REMOVE'])
+      raw({ t, d: { guild_id: 'guild-1' } });
+    expect(directory.invalidate.mock.calls).toEqual([['guild-1'], ['guild-1'], ['guild-1']]);
+  });
 
   it('invalidates report directories on identity and gateway events', async () => {
     const client = { on: jest.fn(), user: { id: 'bot' } };
