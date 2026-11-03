@@ -453,7 +453,9 @@ describeIntegration('durable report intake processing', () => {
       nickname: null,
       displayName: 'name',
       avatarUrl: null,
-      subjectId: 'subject',
+      subjectMatches: [
+        { subjectId: 'subject', sourceRefs: [], matchedFields: ['userId' as const] },
+      ],
       sourceRefs: [],
       matchedFields: ['userId' as const],
     };
@@ -565,7 +567,9 @@ describeIntegration('durable report intake processing', () => {
       nickname: null,
       displayName: 'name',
       avatarUrl: null,
-      subjectId: 'subject',
+      subjectMatches: [
+        { subjectId: 'subject', sourceRefs: [], matchedFields: ['userId' as const] },
+      ],
       sourceRefs: [],
       matchedFields: ['userId' as const],
     };

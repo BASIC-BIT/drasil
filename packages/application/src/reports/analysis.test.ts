@@ -1,4 +1,5 @@
 import {
+  reportIdentityCandidateSchema,
   reportAnalysisOutcomeSchema,
   reportDirectoryCoverageSchema,
   reportAnalysisMetadataSchema,
@@ -123,4 +124,43 @@ test('allows an unknown author only for deletion tombstones and validates availa
   expect(reportSourceVersionSchema.safeParse({ ...source, availability: 'unknown' }).success).toBe(
     false
   );
+});
+
+test('represents validated anchors without claiming a directory scan', () => {
+  expect(
+    reportDirectoryCoverageSchema.parse({ kind: 'not_required', reason: 'validated_anchor' })
+  ).toEqual({ kind: 'not_required', reason: 'validated_anchor' });
+  expect(
+    reportDirectoryCoverageSchema.safeParse({ kind: 'not_required', reason: 'name_match' }).success
+  ).toBe(false);
+});
+
+test('requires source-associated subject matches for deduplicated candidates', () => {
+  const candidate = {
+    candidateId: 'guild:user',
+    discordUserId: 'user',
+    serverId: 'guild',
+    username: 'name',
+    globalName: null,
+    nickname: null,
+    displayName: 'name',
+    avatarUrl: null,
+    sourceRefs: [],
+    matchedFields: ['username'],
+    subjectMatches: [
+      { subjectId: 'first', sourceRefs: [], matchedFields: ['username'] },
+      { subjectId: 'second', sourceRefs: [], matchedFields: ['userId'] },
+    ],
+  };
+  expect(reportIdentityCandidateSchema.parse(candidate).subjectMatches).toHaveLength(2);
+  expect(
+    reportIdentityCandidateSchema.safeParse({ ...candidate, subjectMatches: [] }).success
+  ).toBe(false);
+  expect(
+    reportIdentityCandidateSchema.safeParse({
+      ...candidate,
+      subjectMatches: undefined,
+      subjectId: 'first',
+    }).success
+  ).toBe(false);
 });

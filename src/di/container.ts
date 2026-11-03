@@ -1,3 +1,4 @@
+import { IReportMemberDirectory, ReportMemberDirectory } from '../services/ReportMemberDirectory';
 import { createCaptchaCompletionStore } from '@drasil/application/postgres';
 import { createBotDelegationDatabase } from '../application/adapters/delegationDatabase';
 import { CaptchaImageService, type ICaptchaImageService } from '../services/CaptchaImageService';
@@ -415,6 +416,11 @@ function configureServices(container: Container): void {
   container
     .bind<ICaseRoleLockdownService>(TYPES.CaseRoleLockdownService)
     .to(CaseRoleLockdownService)
+    .inSingletonScope();
+
+  container
+    .bind<IReportMemberDirectory>(TYPES.ReportMemberDirectory)
+    .to(ReportMemberDirectory)
     .inSingletonScope();
 
   container

@@ -1,3 +1,4 @@
+import { IReportMemberDirectory } from '../services/ReportMemberDirectory';
 import { withObservation, recordWorkflowOutcome } from '../observability/langfuse';
 import { hashIdentifier } from '../observability/hash';
 import {
@@ -241,7 +242,10 @@ export class EventHandler implements IEventHandler {
     caseRoleReleaseReconciliationService?: ICaseRoleReleaseReconciliationService,
     @inject(TYPES.ActiveAccountQuarantineCache)
     @optional()
-    activeQuarantineCache?: IActiveAccountQuarantineCache
+    activeQuarantineCache?: IActiveAccountQuarantineCache,
+    @inject(TYPES.ReportMemberDirectory)
+    @optional()
+    private reportMemberDirectory?: IReportMemberDirectory
   ) {
     this.client = client;
     this.detectionOrchestrator = detectionOrchestrator;
@@ -267,6 +271,13 @@ export class EventHandler implements IEventHandler {
   }
 
   public async setupEventHandlers(): Promise<void> {
+    this.client.on(Events.UserUpdate, () => this.reportMemberDirectory?.invalidate());
+    this.client.on(Events.ShardDisconnect, () => this.reportMemberDirectory?.invalidate());
+    this.client.on(Events.ShardReconnecting, () => this.reportMemberDirectory?.invalidate());
+    this.client.on(Events.Invalidated, () => this.reportMemberDirectory?.invalidate());
+    this.client.on(Events.GuildUnavailable, (guild) =>
+      this.reportMemberDirectory?.invalidate(guild.id)
+    );
     // Ready-time initialization is critical startup work and intentionally remains outside the
     // recoverable operational event boundary.
     this.client.on(Events.ClientReady, this.handleReady.bind(this));
@@ -1016,6 +1027,7 @@ export class EventHandler implements IEventHandler {
   }
 
   private async handleGuildMemberAdd(member: GuildMember): Promise<void> {
+    this.reportMemberDirectory?.invalidate(member.guild.id);
     try {
       console.log(`New member joined: ${member.user.tag} (${member.id})`);
 
@@ -1044,6 +1056,7 @@ export class EventHandler implements IEventHandler {
     oldMember: GuildMember | PartialGuildMember,
     newMember: GuildMember
   ): Promise<void> {
+    this.reportMemberDirectory?.invalidate(newMember.guild.id);
     try {
       if (oldMember.partial || newMember.user.bot) {
         return;
@@ -1622,6 +1635,7 @@ export class EventHandler implements IEventHandler {
   }
 
   private async handleGuildMemberRemove(member: GuildMember | PartialGuildMember): Promise<void> {
+    this.reportMemberDirectory?.invalidate(member.guild.id);
     this.cancelManualIntakeForMember(member.guild.id, member.id);
 
     if (!this.userModerationService) {
@@ -2076,6 +2090,7 @@ export class EventHandler implements IEventHandler {
   }
 
   private async handleGuildDelete(guild: Guild): Promise<void> {
+    this.reportMemberDirectory?.invalidate(guild.id);
     await runSerializedGuildSetup(guild.id, () =>
       this.configService.updateServerConfig(guild.id, { is_active: false })
     );

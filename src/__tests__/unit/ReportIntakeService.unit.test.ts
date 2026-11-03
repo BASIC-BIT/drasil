@@ -82,6 +82,7 @@ describe('ReportIntakeService', () => {
       getServerConfig: jest.fn().mockResolvedValue({ settings: {} }),
     } as unknown as IConfigService;
     const candidateService: IReportCandidateService = {
+      resolveIdentity: jest.fn(),
       extractCandidateSignals: jest.fn().mockReturnValue({
         mentions: [],
         explicitUserIds: [],

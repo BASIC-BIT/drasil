@@ -25,6 +25,7 @@ export const TYPES = {
   ProductAnalyticsService: Symbol.for('ProductAnalyticsService'),
   SetupDiagnosticsService: Symbol.for('SetupDiagnosticsService'),
   CaseRoleLockdownService: Symbol.for('CaseRoleLockdownService'),
+  ReportMemberDirectory: Symbol.for('ReportMemberDirectory'),
   ReportCandidateService: Symbol.for('ReportCandidateService'),
   ReportIntakeService: Symbol.for('ReportIntakeService'),
   ReportIntakeAgentService: Symbol.for('ReportIntakeAgentService'),

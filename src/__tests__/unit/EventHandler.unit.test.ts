@@ -1,3 +1,4 @@
+import type { IReportMemberDirectory } from '../../services/ReportMemberDirectory';
 import { createTracingRecorder } from '../fakes/recordingTracing';
 import {
   AuditLogEvent,
@@ -56,6 +57,7 @@ describe('EventHandler (unit)', () => {
     globalMessageWatchlistRepository?: Record<string, jest.Mock>;
     caseRoleReleaseReconciliationService?: Record<string, jest.Mock>;
     activeQuarantineCache?: IActiveAccountQuarantineCache;
+    reportMemberDirectory?: IReportMemberDirectory;
     interactionHandler?: Record<string, jest.Mock>;
   }): EventHandler {
     const client = overrides?.client ?? { on: jest.fn(), user: { id: 'bot-1' } };
@@ -174,7 +176,8 @@ describe('EventHandler (unit)', () => {
         findEnabled: jest.fn().mockResolvedValue([]),
       }) as any,
       overrides?.caseRoleReleaseReconciliationService as any,
-      overrides?.activeQuarantineCache
+      overrides?.activeQuarantineCache,
+      overrides?.reportMemberDirectory
     );
   }
 
@@ -280,6 +283,43 @@ describe('EventHandler (unit)', () => {
       },
     } as unknown as GuildMember;
   }
+
+  it('invalidates report directories on identity and gateway events', async () => {
+    const client = { on: jest.fn(), user: { id: 'bot' } };
+    const directory = { snapshot: jest.fn(), invalidate: jest.fn() };
+    await buildHandler({ client, reportMemberDirectory: directory }).setupEventHandlers();
+    for (const event of [
+      Events.UserUpdate,
+      Events.ShardDisconnect,
+      Events.ShardReconnecting,
+      Events.Invalidated,
+    ]) {
+      await client.on.mock.calls.find(([name]) => name === event)![1]();
+      expect(directory.invalidate).toHaveBeenLastCalledWith();
+    }
+    await client.on.mock.calls.find(([name]) => name === Events.GuildUnavailable)![1]({
+      id: 'guild-1',
+    });
+    expect(directory.invalidate).toHaveBeenLastCalledWith('guild-1');
+    const member = {
+      guild: { id: 'guild-1' },
+      user: { bot: true },
+      partial: true,
+      permissions: { any: jest.fn().mockReturnValue(true) },
+    };
+    for (const event of [
+      Events.GuildMemberAdd,
+      Events.GuildMemberRemove,
+      Events.GuildMemberUpdate,
+    ]) {
+      directory.invalidate.mockClear();
+      await client.on.mock.calls.find(([name]) => name === event)![1](member, member);
+      expect(directory.invalidate).toHaveBeenCalledWith('guild-1');
+    }
+    directory.invalidate.mockClear();
+    await client.on.mock.calls.find(([name]) => name === Events.GuildDelete)![1]({ id: 'guild-1' });
+    expect(directory.invalidate).toHaveBeenCalledWith('guild-1');
+  });
 
   it('registers Discord event handlers with current event names', async () => {
     const client = { on: jest.fn(), user: { id: 'bot-1' } };

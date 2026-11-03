@@ -24,6 +24,7 @@ export const reportSubjectCluesSchema = z.object({
 });
 const scan = { scannedAt: timestamp, expiresAt: timestamp, memberCount: revision };
 export const reportDirectoryCoverageSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('not_required'), reason: z.literal('validated_anchor') }),
   z.object({ kind: z.literal('complete'), ...scan }),
   z.object({
     kind: z.literal('partial'),
@@ -35,6 +36,9 @@ export const reportDirectoryCoverageSchema = z.discriminatedUnion('kind', [
     reason: z.enum(['permissions', 'rate_limited', 'transport']),
   }),
 ]);
+const matchedFields = z.array(
+  z.enum(['username', 'globalName', 'nickname', 'displayName', 'userId', 'messageAuthor'])
+);
 export const reportIdentityCandidateSchema = z.object({
   candidateId: id,
   discordUserId: id,
@@ -44,11 +48,11 @@ export const reportIdentityCandidateSchema = z.object({
   nickname: z.string().nullable(),
   displayName: z.string().nullable(),
   avatarUrl: z.string().nullable(),
-  subjectId: id,
+  subjectMatches: z
+    .array(z.object({ subjectId: id, sourceRefs: z.array(reportEvidenceRefSchema), matchedFields }))
+    .min(1),
   sourceRefs: z.array(reportEvidenceRefSchema),
-  matchedFields: z.array(
-    z.enum(['username', 'globalName', 'nickname', 'displayName', 'userId', 'messageAuthor'])
-  ),
+  matchedFields,
 });
 export const reportHandoffReasonSchema = z.enum([
   'no_match',
