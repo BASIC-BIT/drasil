@@ -6,9 +6,9 @@ Use a staged report assistant: preserve the evidence, extract person-specific cl
 
 This design covers the Discord report-panel intake, its identity resolver, the moderator handoff, and the worker and status reads that support them. Existing person-menu and message-menu reports retain their direct entry paths. Existing moderation policy and destructive-action confirmation remain separate.
 
-**Confirmed:** the user selected the staged approach; server-visible names must be considered; unresolved reports must reach admins without another reporter action. **Proposed for approval:** the lookup strategy, limits, durable processing, and moderator experience below. **Unproven:** the exact reason the original account was not found. The earlier local patches are provisional, not a complete solution.
+**Confirmed:** the user selected the staged approach; server-visible names must be considered; unresolved reports must reach admins without another reporter action. **Approved on November 3, 2026:** the lookup strategy, limits, durable processing, and moderator experience below. **Unproven:** the exact reason the original account was not found. The earlier local patches are provisional, not a complete solution.
 
-Approve or revise this design before implementation planning. The material tradeoffs are a bounded directory scan to support global display names, a small persistence change for restart recovery, and explicit admin workload when identification cannot finish. Engineering defaults are labeled below and can change during review.
+The user approved this design and authorized implementation planning on November 3, 2026. The material tradeoffs are a bounded directory scan to support global display names, a small persistence change for restart recovery, and explicit admin workload when identification cannot finish. Engineering defaults are labeled below and can change during review.
 
 ## What the reporter and admin experience
 
@@ -178,7 +178,7 @@ Deferred: persistent name history, fuzzy/visual identity matching, a general too
 
 ## Design review
 
-The independent builder check identified three consequential ambiguities. This revision resolves them as engineering proposals for approval: explicit criteria for the single candidate shown to a reporter; fresh analysis of voluntary evidence after handoff without returning responsibility to the reporter; and persisted request/deadline budgets that survive failures and restarts. It also removes the inconsistent earlier wording that offered ambiguous candidates to the reporter. A second independent builder check found no important questions left. The document is ready for user review; implementation is not approved.
+The independent builder check identified three consequential ambiguities. This revision resolves them as engineering proposals for approval: explicit criteria for the single candidate shown to a reporter; fresh analysis of voluntary evidence after handoff without returning responsibility to the reporter; and persisted request/deadline budgets that survive failures and restarts. It also removes the inconsistent earlier wording that offered ambiguous candidates to the reporter. A second independent builder check found no important questions left. The user subsequently approved the design and requested the implementation plan. Implementation has not started.
 
 ## Evidence appendix
 

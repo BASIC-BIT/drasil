@@ -6,7 +6,7 @@ The report assistant needs a complete identity-resolution and admin-handoff desi
 
 The user has confirmed that unresolved identification should direct an admin to the situation without requiring another action from the reporter. The user also requires consideration of the person's name displayed within the server, even when it differs from their account name.
 
-This is an investigation record, not an approved design or implementation plan. The user subsequently selected the staged assistant; the full design is awaiting document approval. Existing local implementation commits remain provisional and are not deployed.
+This is an investigation record, not an approved design or implementation plan. The user subsequently selected the staged assistant; the full design was approved on November 3, 2026 and implementation planning was authorized. Existing local implementation commits remain provisional and are not deployed.
 
 ## Name semantics
 
