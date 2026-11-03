@@ -202,6 +202,76 @@ describe('ReportIntakeService', () => {
     expect(await reportIntakeRepository.listEvidence(intake.id)).toHaveLength(2);
   });
 
+  it('rejects a cached create paused after reading an available intake when a failed update commits', async () => {
+    const { service, reportIntakeRepository, intake, message } = await stagedSetup();
+    await service.handleThreadMessage(message);
+    const findByThread = reportIntakeRepository.findByThreadId.bind(reportIntakeRepository);
+    let reportRead: () => void = () => undefined;
+    const read = new Promise<void>((resolve) => {
+      reportRead = resolve;
+    });
+    let releaseCreate: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    jest
+      .spyOn(reportIntakeRepository, 'findByThreadId')
+      .mockImplementationOnce(async (threadId) => {
+        const snapshot = await findByThread(threadId);
+        reportRead();
+        await held;
+        return snapshot;
+      });
+    const create = service.handleThreadMessage(message);
+    await read;
+    await service.handleThreadMessageUpdate(
+      buildMessage({
+        partial: true,
+        author: null,
+        fetch: jest.fn().mockRejectedValue(new Error('missing access')),
+      })
+    );
+    const afterFailure = await reportIntakeRepository.findById(intake.id);
+    releaseCreate();
+    await create;
+    expect(await reportIntakeRepository.findById(intake.id)).toEqual(afterFailure);
+  });
+
+  it('rejects a fetched recovery begun before a newer unavailable observation', async () => {
+    const { service, reportIntakeRepository, intake, message } = await stagedSetup();
+    await service.handleThreadMessage(message);
+    const failedMessage = buildMessage({
+      partial: true,
+      author: null,
+      fetch: jest.fn().mockRejectedValue(new Error('missing access')),
+    });
+    await service.handleThreadMessageUpdate(failedMessage);
+    let reportFetch: () => void = () => undefined;
+    const fetching = new Promise<void>((resolve) => {
+      reportFetch = resolve;
+    });
+    let completeFetch = (message: Message): void => {
+      void message;
+    };
+    const fetched = new Promise<Message>((resolve) => {
+      completeFetch = resolve;
+    });
+    const recovery = service.handleThreadMessageUpdate(
+      buildMessage({
+        fetch: jest.fn().mockImplementation(() => {
+          reportFetch();
+          return fetched;
+        }),
+      })
+    );
+    await fetching;
+    await service.handleThreadMessageUpdate(failedMessage);
+    const afterNewerFailure = await reportIntakeRepository.findById(intake.id);
+    completeFetch(message);
+    await recovery;
+    expect(await reportIntakeRepository.findById(intake.id)).toEqual(afterNewerFailure);
+  });
+
   it('does not clear source unavailability from a delayed cached create', async () => {
     const { service, reportIntakeRepository, intake, message } = await stagedSetup();
     await service.handleThreadMessage(message);

@@ -1,3 +1,4 @@
+import { processingMetadata } from '../../repositories/reportIntakeProcessing';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { InMemoryReportIntakeRepository } from '../fakes/inMemoryRepositories';
@@ -81,6 +82,20 @@ describeIntegration('durable report intake processing', () => {
     ]);
   });
 
+  it('atomically rejects cached recovery after a newer unavailable observation', async () => {
+    const { repository, intake, batch } = await fixture();
+    await repository.recordEvidenceBatch(batch);
+    await repository.recordEvidenceBatch({
+      ...batch,
+      availability: 'unavailable',
+      evidence: [],
+      observedAt: due,
+    });
+    const unavailable = await repository.findById(intake.id);
+    expect(await repository.recordEvidenceBatch(batch)).toBe('stale');
+    expect(await repository.findById(intake.id)).toEqual(unavailable);
+  });
+
   it('recovers source availability without changing semantic version or duplicating history', async () => {
     const { repository, intake, batch } = await fixture();
     await repository.recordEvidenceBatch(batch);
@@ -96,7 +111,10 @@ describeIntegration('durable report intake processing', () => {
         analysis: { sources: { message: { availability: 'unavailable', sourceVersion: 1 } } },
       },
     });
-    await repository.recordEvidenceBatch(batch);
+    const unavailable = (await repository.findById(intake.id))!;
+    const recoveryToken =
+      processingMetadata(unavailable).analysis.sources.message.availabilityFailureToken!;
+    await repository.recordEvidenceBatch({ ...batch, recoveryToken });
     expect(await repository.listEvidence(intake.id)).toHaveLength(1);
     expect(await repository.findById(intake.id)).toMatchObject({
       evidence_revision: 3,
@@ -104,6 +122,44 @@ describeIntegration('durable report intake processing', () => {
         analysis: { sources: { message: { availability: 'available', sourceVersion: 1 } } },
       },
     });
+  });
+
+  it('invalidates an older recovery token on repeated failures without resetting investigation state', async () => {
+    const { repository, intake, batch } = await fixture();
+    await repository.recordEvidenceBatch(batch);
+    const failed = {
+      ...batch,
+      availability: 'unavailable' as const,
+      evidence: [],
+      observedAt: due,
+    };
+    await repository.recordEvidenceBatch(failed);
+    const first = (await repository.findById(intake.id))!;
+    const oldToken = processingMetadata(first).analysis.sources.message.availabilityFailureToken!;
+    const claimAt = first.analysis_due_at!;
+    const claim = (await repository.claimAnalysis(claimAt, 10_000))!;
+    await repository.reserveModelAttempt(claim, claimAt);
+    const beforeRepeat = (await repository.findById(intake.id))!;
+    expect(await repository.recordEvidenceBatch(failed)).toBe('duplicate');
+    const afterRepeat = (await repository.findById(intake.id))!;
+    const currentToken =
+      processingMetadata(afterRepeat).analysis.sources.message.availabilityFailureToken!;
+    expect(currentToken).not.toBe(oldToken);
+    expect(afterRepeat).toMatchObject({
+      evidence_revision: beforeRepeat.evidence_revision,
+      analysis_attempts: 1,
+      analysis_due_at: beforeRepeat.analysis_due_at,
+      analysis_deadline_at: beforeRepeat.analysis_deadline_at,
+      analysis_lease_token: beforeRepeat.analysis_lease_token,
+    });
+    expect(await repository.recordEvidenceBatch({ ...batch, recoveryToken: oldToken })).toBe(
+      'stale'
+    );
+    expect(await repository.findById(intake.id)).toEqual(afterRepeat);
+    expect(await repository.recordEvidenceBatch({ ...batch, recoveryToken: currentToken })).toBe(
+      'recorded'
+    );
+    expect(await repository.listEvidence(intake.id)).toHaveLength(1);
   });
 
   it('uses configured scheduling in the production and in-memory repositories', async () => {

@@ -229,6 +229,10 @@ export class ReportIntakeService implements IReportIntakeService {
     if (!getReportIntakeSettings(config.settings).stagedEnabled) return false;
     const intake = await this.reportIntakeRepository.findByThreadId(message.channel.id);
     if (!intake || intake.server_id !== message.guild.id) return false;
+    const sources = processingMetadata(intake).analysis.sources;
+    const source = Object.prototype.hasOwnProperty.call(sources, message.id)
+      ? sources[message.id]
+      : undefined;
     const current = await message.fetch(true).catch(() => null);
     if (current) {
       if (
@@ -237,12 +241,13 @@ export class ReportIntakeService implements IReportIntakeService {
         current.guildId !== intake.server_id
       )
         return true;
-      return this.recordStagedEvidence(intake, current, false);
+      return this.recordStagedEvidence(
+        intake,
+        current,
+        false,
+        source?.availabilityFailureToken ?? undefined
+      );
     }
-    const sources = processingMetadata(intake).analysis.sources;
-    const source = Object.prototype.hasOwnProperty.call(sources, message.id)
-      ? sources[message.id]
-      : undefined;
     if (source && source.operation !== 'delete' && source.sourceChannelId === message.channel.id) {
       await this.reportIntakeRepository.recordEvidenceBatch({
         ...source,
@@ -291,7 +296,8 @@ export class ReportIntakeService implements IReportIntakeService {
   private async recordStagedEvidence(
     intake: ReportIntake,
     message: Message,
-    allowClose: boolean
+    allowClose: boolean,
+    recoveryToken?: string
   ): Promise<boolean> {
     if (!message.guild || message.author.bot || message.system) return true;
     if (
@@ -315,9 +321,10 @@ export class ReportIntakeService implements IReportIntakeService {
       }
       return true;
     }
-    const result = await this.reportIntakeRepository.recordEvidenceBatch(
-      buildReportEvidenceBatch(message, intake, 'upsert')
-    );
+    const result = await this.reportIntakeRepository.recordEvidenceBatch({
+      ...buildReportEvidenceBatch(message, intake, 'upsert'),
+      recoveryToken,
+    });
     if (result === 'recorded') await this.acknowledgeStagedEvidence(intake.id, message);
     return true;
   }

@@ -1,9 +1,68 @@
+import { processingMetadata } from '../../repositories/reportIntakeProcessing';
 import { Collection, type Message } from 'discord.js';
 import { activeReportEvidence, buildReportEvidenceBatch } from '../../utils/reportIntakeEvidence';
 import { InMemoryReportIntakeRepository } from '../fakes/inMemoryRepositories';
 import { ReportIntakeEvidenceKind } from '../../repositories/types';
 
 describe('report evidence revisions', () => {
+  it('does not recover an unavailable source from an unverified cached batch', async () => {
+    const repository = new InMemoryReportIntakeRepository();
+    const intake = await repository.create({ serverId: 'guild', reporterId: 'reporter' });
+    const batch = {
+      intakeId: intake.id,
+      sourceMessageId: 'source',
+      sourceChannelId: 'thread',
+      sourceAuthorId: 'reporter',
+      sourceVersion: 1,
+      sourceFingerprint: 'original',
+      observedAt: new Date(),
+      editedAt: null,
+      operation: 'upsert' as const,
+      evidence: [{ kind: ReportIntakeEvidenceKind.REPORTER_TEXT, content: 'original' }],
+    };
+    await repository.recordEvidenceBatch(batch);
+    await repository.recordEvidenceBatch({ ...batch, availability: 'unavailable', evidence: [] });
+    const unavailable = await repository.findById(intake.id);
+    expect(await repository.recordEvidenceBatch(batch)).toBe('stale');
+    expect(await repository.findById(intake.id)).toEqual(unavailable);
+  });
+
+  it('requires the latest failure token for same-millisecond fetched recovery', async () => {
+    const repository = new InMemoryReportIntakeRepository();
+    const intake = await repository.create({ serverId: 'guild', reporterId: 'reporter' });
+    const batch = {
+      intakeId: intake.id,
+      sourceMessageId: 'source',
+      sourceChannelId: 'thread',
+      sourceAuthorId: 'reporter',
+      sourceVersion: 1,
+      sourceFingerprint: 'original',
+      observedAt: new Date('2026-11-03T00:00:00.000Z'),
+      editedAt: null,
+      operation: 'upsert' as const,
+      evidence: [{ kind: ReportIntakeEvidenceKind.REPORTER_TEXT, content: 'original' }],
+    };
+    await repository.recordEvidenceBatch(batch);
+    const failure = { ...batch, availability: 'unavailable' as const, evidence: [] };
+    await repository.recordEvidenceBatch(failure);
+    const first = (await repository.findById(intake.id))!;
+    const oldToken = processingMetadata(first).analysis.sources.source.availabilityFailureToken!;
+    await repository.recordEvidenceBatch(failure);
+    const latest = (await repository.findById(intake.id))!;
+    const currentToken =
+      processingMetadata(latest).analysis.sources.source.availabilityFailureToken!;
+    expect(currentToken).not.toBe(oldToken);
+    expect(latest.evidence_revision).toBe(first.evidence_revision);
+    expect(latest.analysis_due_at).toEqual(first.analysis_due_at);
+    expect(await repository.recordEvidenceBatch({ ...batch, recoveryToken: oldToken })).toBe(
+      'stale'
+    );
+    expect(await repository.recordEvidenceBatch({ ...batch, recoveryToken: currentToken })).toBe(
+      'recorded'
+    );
+    expect(await repository.listEvidence(intake.id)).toHaveLength(1);
+  });
+
   it('preserves the known author when deletion raced the first evidence commit', async () => {
     const repository = new InMemoryReportIntakeRepository();
     const intake = await repository.create({ serverId: 'guild', reporterId: 'reporter' });

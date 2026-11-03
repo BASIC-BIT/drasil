@@ -63,6 +63,7 @@ export function evidenceBatchChange(
   const { metadata, analysis } = processingMetadata(intake);
   const source = reportSourceVersionSchema.parse({
     ...input,
+    availabilityFailureToken: input.availability === 'unavailable' ? randomUUID() : null,
     observedAt: input.observedAt.toISOString(),
     editedAt: input.editedAt?.toISOString() ?? null,
   });
@@ -72,13 +73,33 @@ export function evidenceBatchChange(
   if (previous) {
     if (previous.operation === 'delete')
       return { result: source.operation === 'delete' ? 'duplicate' : 'stale' };
+    // Only a fetch begun from the latest failure observation may recover unavailable evidence.
+    if (
+      source.operation === 'upsert' &&
+      source.availability === 'available' &&
+      previous.availability === 'unavailable' &&
+      (!input.recoveryToken || input.recoveryToken !== previous.availabilityFailureToken)
+    )
+      return { result: 'stale' };
     if (
       previous.sourceVersion === source.sourceVersion &&
       previous.sourceFingerprint === source.sourceFingerprint &&
       previous.operation === source.operation &&
       previous.availability === source.availability
-    )
+    ) {
+      if (source.availability === 'unavailable') {
+        analysis.sources = { ...analysis.sources, [input.sourceMessageId]: source };
+        return {
+          result: 'duplicate',
+          change: {
+            metadata: { ...metadata, analysis } as ReportIntake['metadata'],
+            updated_at: input.observedAt,
+          },
+          appendEvidence: false,
+        };
+      }
       return { result: 'duplicate' };
+    }
     if (
       source.operation === 'upsert' &&
       (previous.sourceVersion > source.sourceVersion ||

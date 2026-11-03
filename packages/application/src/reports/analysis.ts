@@ -137,6 +137,7 @@ export const reportHandoffSchema = z.discriminatedUnion('state', [
 export const reportSourceVersionSchema = z
   .object({
     availability: z.enum(['available', 'unavailable']).default('available'),
+    availabilityFailureToken: id.nullable().default(null),
     sourceVersion: revision,
     sourceFingerprint: id,
     sourceChannelId: id,

@@ -980,6 +980,7 @@ export interface ModerationOutcomeCreate extends Omit<
 }
 
 export interface ReportEvidenceBatch {
+  recoveryToken?: string;
   availability?: 'available' | 'unavailable';
   intakeId: string;
   sourceMessageId: string;
