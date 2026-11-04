@@ -412,7 +412,7 @@ export class ReportIntakeService implements IReportIntakeService {
       ? sources[input.messageId]
       : undefined;
     if (source && source.sourceChannelId !== input.threadId) return true;
-    await this.reportIntakeRepository.recordEvidenceBatch({
+    const result = await this.reportIntakeRepository.recordEvidenceBatch({
       intakeId: intake.id,
       sourceMessageId: input.messageId,
       sourceChannelId: input.threadId,
@@ -426,7 +426,12 @@ export class ReportIntakeService implements IReportIntakeService {
       editedAt: source?.editedAt ? new Date(source.editedAt) : null,
       evidence: [],
     });
-    await this.retireConfirmationPrompts(intake, getReportConfirmationMessageIds(intake));
+    if (result === 'recorded') {
+      const current = await this.reportIntakeRepository.findById(intake.id);
+      // Unknown-source tombstones preserve the current confirmation's evidence revision.
+      if (current && current.evidence_revision > intake.evidence_revision)
+        await this.retireConfirmationPrompts(intake, getReportConfirmationMessageIds(intake));
+    }
     return true;
   }
 

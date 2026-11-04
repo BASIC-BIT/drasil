@@ -123,6 +123,7 @@ describe('ReportIntakeService', () => {
 
     return {
       service,
+      serverRepository,
       configService,
       reportIntakeRepository,
       candidateService,
@@ -584,6 +585,175 @@ describe('ReportIntakeService', () => {
       evidence_revision: 0,
       analysis_due_at: null,
     });
+  });
+
+  async function publishedStagedCandidate(deleteEarlierSource = false) {
+    const f = await stagedSetup();
+    await f.serverRepository.updateSettings('guild-1', { report_intake_staged_enabled: true });
+    await f.service.handleThreadMessage(f.message);
+    if (deleteEarlierSource) {
+      await f.service.handleThreadMessageDelete({
+        guildId: 'guild-1',
+        threadId: 'thread-1',
+        messageId: f.message.id,
+      });
+      await f.service.handleThreadMessage(
+        buildMessage({ id: 'message-2', channel: f.message.channel })
+      );
+    }
+    const at = new Date(Date.now() + 16_000);
+    const claim = await f.reportIntakeRepository.claimAnalysis(at, 30_000);
+    if (!claim) throw new Error('Expected analysis claim');
+    expect(
+      await f.reportIntakeRepository.completeAnalysis(
+        claim,
+        {
+          kind: 'confirm',
+          candidate: {
+            ...buildCandidate(),
+            matchedFields: ['username'],
+            sourceRefs: [],
+            subjectMatches: [{ subjectId: 'target', sourceRefs: [], matchedFields: ['username'] }],
+          },
+          coverage: { kind: 'not_required', reason: 'validated_anchor' },
+          includedEvidenceIds: [],
+          excludedEvidenceIds: [],
+        },
+        at
+      )
+    ).toBe(true);
+    const presentation = await f.reportIntakeRepository.claimPendingPresentation(at, f.intake.id);
+    if (!presentation) throw new Error('Expected presentation claim');
+    expect(await f.service.publishSavedConfirmation(f.intake.id, f.message, presentation)).toBe(
+      true
+    );
+    expect(
+      await f.reportIntakeRepository.completePresentation(presentation, { kind: 'published' })
+    ).toBe(true);
+    jest.mocked(f.threadManager.retireReportConfirmationPrompts).mockClear();
+    return f;
+  }
+
+  it.each([
+    { deletion: 'unknown', enabled: true },
+    { deletion: 'unknown', enabled: false },
+    { deletion: 'duplicate', enabled: true },
+    { deletion: 'duplicate', enabled: false },
+  ])(
+    'preserves published confirmation after $deletion deletion with processing enabled=$enabled',
+    async ({ deletion, enabled }) => {
+      const f = await publishedStagedCandidate(deletion === 'duplicate');
+      const before = (await f.reportIntakeRepository.findById(f.intake.id))!;
+      const beforeMetadata = processingMetadata(before);
+      const evidence = await f.reportIntakeRepository.listEvidence(f.intake.id);
+      const sends = f.send.mock.calls.length;
+      jest.mocked(f.configService.getServerConfig).mockResolvedValue({
+        settings: { report_intake_staged_enabled: enabled },
+      } as Awaited<ReturnType<IConfigService['getServerConfig']>>);
+      await f.serverRepository.updateSettings('guild-1', { report_intake_staged_enabled: enabled });
+
+      expect(
+        await f.service.handleThreadMessageDelete({
+          guildId: 'guild-1',
+          threadId: 'thread-1',
+          messageId: deletion === 'unknown' ? 'untracked-bot-message' : f.message.id,
+        })
+      ).toBe(true);
+
+      const after = (await f.reportIntakeRepository.findById(f.intake.id))!;
+      const { metadata, analysis } = processingMetadata(after);
+      expect(after).toMatchObject({
+        evidence_revision: before.evidence_revision,
+        analysis_revision: before.analysis_revision,
+        analysis_due_at: before.analysis_due_at,
+        status: before.status,
+        confirmed_target_user_id: null,
+      });
+      expect(analysis.outcome).toEqual(beforeMetadata.analysis.outcome);
+      expect(analysis.presentation).toEqual(beforeMetadata.analysis.presentation);
+      expect(metadata.last_confirmation_prompt_token).toBe(
+        beforeMetadata.metadata.last_confirmation_prompt_token
+      );
+      expect(metadata.last_confirmation_prompt_message_id).toBe(f.prompt.id);
+      expect(metadata.last_confirmation_prompt_revision).toBe(before.evidence_revision);
+      expect(
+        analysis.sources[deletion === 'unknown' ? 'untracked-bot-message' : f.message.id]
+      ).toMatchObject({
+        operation: 'delete',
+        sourceAuthorId: deletion === 'unknown' ? null : 'reporter-1',
+      });
+      expect(f.threadManager.retireReportConfirmationPrompts).not.toHaveBeenCalled();
+      expect(f.prompt.edit).not.toHaveBeenCalledWith({ components: [] });
+      expect(f.send).toHaveBeenCalledTimes(sends);
+      expect(await f.reportIntakeRepository.listEvidence(f.intake.id)).toEqual(evidence);
+      expect(await f.reportIntakeRepository.claimAnalysis(new Date(), 30_000)).toBeNull();
+      expect(await f.reportIntakeRepository.claimPendingPresentation(new Date())).toBeNull();
+      expect(f.candidateService.resolveIdentity).not.toHaveBeenCalled();
+      expect(f.candidateService.resolvePlatformBackedCandidates).not.toHaveBeenCalled();
+      expect(
+        await f.service.confirmCandidate({
+          intakeId: f.intake.id,
+          targetUserId: 'user-1',
+          confirmedById: 'reporter-1',
+          promptMessageId: f.prompt.id,
+          expectedEvidenceRevision: before.evidence_revision,
+          currentMember: {
+            ...buildCandidate(),
+            id: 'user-1',
+            username: 'target-user-1',
+            displayName: 'Target user-1',
+          },
+        })
+      ).toMatchObject({ confirmed: true });
+    }
+  );
+
+  it('retires published confirmation when deleting eligible evidence with processing disabled', async () => {
+    const f = await publishedStagedCandidate();
+    const before = (await f.reportIntakeRepository.findById(f.intake.id))!;
+    jest.mocked(f.configService.getServerConfig).mockResolvedValue({
+      settings: { report_intake_staged_enabled: false },
+    } as Awaited<ReturnType<IConfigService['getServerConfig']>>);
+    await f.serverRepository.updateSettings('guild-1', { report_intake_staged_enabled: false });
+
+    await f.service.handleThreadMessageDelete({
+      guildId: 'guild-1',
+      threadId: 'thread-1',
+      messageId: f.message.id,
+    });
+
+    const after = (await f.reportIntakeRepository.findById(f.intake.id))!;
+    expect(after.evidence_revision).toBe(before.evidence_revision + 1);
+    const { metadata, analysis } = processingMetadata(after);
+    expect(analysis.outcome).toBeNull();
+    expect(analysis.sources[f.message.id]).toMatchObject({
+      operation: 'delete',
+      sourceAuthorId: 'reporter-1',
+    });
+    expect(metadata.last_confirmation_prompt_token).toBeUndefined();
+    expect(metadata.last_confirmation_prompt_message_id).toBeUndefined();
+    expect(f.threadManager.retireReportConfirmationPrompts).toHaveBeenCalledWith(
+      expect.objectContaining({ id: f.intake.id }),
+      [f.prompt.id]
+    );
+    expect(
+      await f.service.confirmCandidate({
+        intakeId: f.intake.id,
+        targetUserId: 'user-1',
+        confirmedById: 'reporter-1',
+        promptMessageId: f.prompt.id,
+        expectedEvidenceRevision: before.evidence_revision,
+        currentMember: {
+          ...buildCandidate(),
+          id: 'user-1',
+          username: 'target-user-1',
+          displayName: 'Target user-1',
+        },
+      })
+    ).toMatchObject({ confirmed: false });
+    expect(
+      (await f.reportIntakeRepository.findById(f.intake.id))?.confirmed_target_user_id
+    ).toBeNull();
   });
 
   it('fetches the current authorized edit instead of trusting an old update payload', async () => {
