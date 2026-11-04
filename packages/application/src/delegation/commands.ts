@@ -88,6 +88,7 @@ export interface WorkflowCommandBindings {
     readonly threadId: string;
     readonly promptMessageId: string;
     readonly promptToken: string;
+    readonly expectedEvidenceRevision?: number;
   };
   readonly cleanup?: { readonly jobId: string; readonly generation: string | null };
   readonly panel?: {
@@ -162,6 +163,7 @@ function define(
     'submissionId',
     'jobId',
     'promptToken',
+    'expectedEvidenceRevision',
     'promptMessageId',
     'threadId',
     'expectedMessageId',
@@ -184,6 +186,8 @@ function define(
       })
       .strict();
   }
+  if (kind === 'close_report_intake')
+    inputSchema = inputSchema.extend({ intakePromptReference: id.optional() }).strict();
   if (kind === 'confirm_intake_candidate' || kind === 'reject_intake_candidates')
     inputSchema = inputSchema.extend({ intakePromptReference: id }).strict();
   if (family === 'cleanup')
@@ -283,12 +287,18 @@ function define(
             ? {
                 threadId: bindings.intakePrompt?.threadId,
                 promptMessageId: bindings.intakePrompt?.promptMessageId,
+                expectedEvidenceRevision: bindings.intakePrompt?.expectedEvidenceRevision,
               }
-            : kind === 'reject_intake_candidates'
-              ? bindings.intakePrompt
-              : variant.id === 'upsert_report_instructions_repost'
-                ? bindings.panel
-                : {};
+            : kind === 'close_report_intake' && bindings.intakePrompt
+              ? {
+                  promptMessageId: bindings.intakePrompt.promptMessageId,
+                  expectedEvidenceRevision: bindings.intakePrompt.expectedEvidenceRevision,
+                }
+              : kind === 'reject_intake_candidates'
+                ? bindings.intakePrompt
+                : variant.id === 'upsert_report_instructions_repost'
+                  ? bindings.panel
+                  : {};
       return humanCommandSchema.parse({ ...options, ...resolved, kind, ...fixed });
     },
   };

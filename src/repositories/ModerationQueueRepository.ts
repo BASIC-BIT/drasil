@@ -1,3 +1,4 @@
+import { acknowledgeIdentityReviewMetadata, isIdentityReviewItem } from '@drasil/application';
 import { ownsPresentation } from './reportIntakeProcessing';
 import { injectable, inject } from 'inversify';
 import { Prisma, PrismaClient, moderation_queue_item_type } from '../db/prisma';
@@ -43,6 +44,12 @@ export interface IModerationQueueRepository {
     queueMessageId: string | null,
     claim?: ReportPresentationClaim
   ): Promise<ModerationQueueItem | null>;
+  acknowledgeIdentityReview(input: {
+    itemId: string;
+    guildId: string;
+    actorId: string;
+    acknowledgedAt: Date;
+  }): Promise<'acknowledged' | 'already_handled'>;
   deleteById(id: string): Promise<ModerationQueueItem | null>;
 }
 
@@ -311,6 +318,54 @@ export class ModerationQueueRepository implements IModerationQueueRepository {
       }
       this.handleError(error, 'updateModerationQueueDiscordMessage');
     }
+  }
+
+  async acknowledgeIdentityReview(input: {
+    itemId: string;
+    guildId: string;
+    actorId: string;
+    acknowledgedAt: Date;
+  }): Promise<'acknowledged' | 'already_handled'> {
+    return this.prisma.$transaction(async (transaction) => {
+      const snapshot = await transaction.moderation_queue_items.findUnique({
+        where: { id: input.itemId },
+      });
+      if (
+        !snapshot?.report_intake_id ||
+        snapshot.server_id !== input.guildId ||
+        !isIdentityReviewItem(snapshot)
+      )
+        return 'already_handled';
+      // Keep report-first lock order with presentation and resolution.
+      const rows = await transaction.$queryRaw<
+        ReportIntake[]
+      >`SELECT * FROM report_intakes WHERE id = ${snapshot.report_intake_id}::uuid FOR UPDATE`;
+      const intake = rows.at(0);
+      if (
+        !intake ||
+        intake.server_id !== input.guildId ||
+        intake.status !== 'needs_admin_confirmation' ||
+        intake.closed_at ||
+        intake.confirmed_target_user_id
+      )
+        return 'already_handled';
+      const metadata = acknowledgeIdentityReviewMetadata(
+        intake.metadata,
+        input.actorId,
+        input.acknowledgedAt
+      );
+      if (!metadata) return 'already_handled';
+      const updated = await transaction.moderation_queue_items.updateMany({
+        where: { id: input.itemId, server_id: input.guildId, report_intake_id: intake.id },
+        data: { updated_at: input.acknowledgedAt },
+      });
+      if (!updated.count) return 'already_handled';
+      await transaction.report_intakes.update({
+        where: { id: intake.id },
+        data: { metadata: metadata as Prisma.InputJsonValue, updated_at: input.acknowledgedAt },
+      });
+      return 'acknowledged';
+    });
   }
 
   async deleteById(id: string): Promise<ModerationQueueItem | null> {

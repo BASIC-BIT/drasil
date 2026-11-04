@@ -1,6 +1,8 @@
+import { createBotReportActions } from '../../application/adapters/reports';
+import type { ISecurityActionService } from '../../services/SecurityActionService';
 import { processingMetadata } from '../../repositories/reportIntakeProcessing';
 import type { IThreadManager } from '../../services/ThreadManager';
-import { GuildMember, Message, User } from 'discord.js';
+import { GuildMember, Message, User, type Client } from 'discord.js';
 import { IConfigService } from '../../config/ConfigService';
 import {
   InMemoryReportIntakeRepository,
@@ -150,6 +152,142 @@ describe('ReportIntakeService', () => {
     } as Awaited<ReturnType<IConfigService['getServerConfig']>>);
     return setup;
   }
+
+  it('hands a real staged reporter rejection to admin review and retires confirmation authority', async () => {
+    const f = await preparePrompt();
+    await f.service.handleThreadMessage(f.message);
+    const current = (await f.reportIntakeRepository.findById(f.intake.id))!;
+    const { metadata, analysis } = processingMetadata(current);
+    analysis.outcome = {
+      kind: 'confirm',
+      candidate: {
+        ...buildCandidate(),
+        matchedFields: ['username'],
+        sourceRefs: [],
+        subjectMatches: [{ subjectId: 'target', sourceRefs: [], matchedFields: ['username'] }],
+      },
+      coverage: { kind: 'not_required', reason: 'validated_anchor' },
+      includedEvidenceIds: [],
+      excludedEvidenceIds: [],
+    };
+    await f.reportIntakeRepository.update(current.id, {
+      metadata: { ...metadata, analysis, last_confirmation_prompt_revision: 0 },
+    });
+    const evidenceBefore = await f.reportIntakeRepository.listEvidence(current.id);
+    const publishOutcome = jest.fn(async () => {
+      expect((await f.reportIntakeRepository.findById(current.id))?.status).toBe(
+        'needs_admin_confirmation'
+      );
+    });
+    const actions = createBotReportActions(
+      {
+        client: {} as Client,
+        configService: f.configService,
+        reportIntakeService: f.service,
+        threadManager: f.threadManager,
+        securityActionService: {} as ISecurityActionService,
+        reportIntakeHandoffService: { publishOutcome, deliverPending: jest.fn() },
+      },
+      {
+        loadFresh: async (guildId, userId) => ({
+          guildId,
+          userId,
+          present: true,
+          owner: false,
+          permissions: '0',
+          roleIds: [],
+        }),
+      }
+    );
+    const result = await actions.execute(
+      {
+        guildId: 'guild-1',
+        requestId: 'reject',
+        source: 'discord_interaction',
+        actor: { kind: 'user', userId: 'reporter-1' },
+      },
+      {
+        kind: 'reject_intake_candidates',
+        intakeId: current.id,
+        threadId: 'thread-1',
+        promptMessageId: 'prompt-1',
+        promptToken: String(metadata.last_confirmation_prompt_token),
+        expectedEvidenceRevision: 0,
+      }
+    );
+    expect(result).toMatchObject({ outcome: { status: 'rejected' } });
+    expect(publishOutcome).toHaveBeenCalledWith(current.id);
+    const saved = (await f.reportIntakeRepository.findById(current.id))!;
+    expect(saved.status).toBe('needs_admin_confirmation');
+    expect(saved.metadata).toMatchObject({
+      analysis: {
+        outcome: { kind: 'admin_review', reason: 'rejected' },
+        handoff: { state: 'pending', reason: 'rejected' },
+        presentation: { revision: 0, lease: null },
+      },
+      last_confirmation_prompt_candidate_ids: [],
+    });
+    expect(saved.analysis_due_at).toBeNull();
+    expect(await f.reportIntakeRepository.listEvidence(current.id)).toHaveLength(
+      evidenceBefore.length + 1
+    );
+  });
+
+  it.each([
+    { field: 'globalName' as const, currentName: 'Changed name', accepted: false },
+    { field: 'globalName' as const, currentName: '  ALDER  ', accepted: true },
+    { field: 'userId' as const, currentName: 'Changed name', accepted: true },
+    { field: 'messageAuthor' as const, currentName: 'Changed name', accepted: true },
+  ])(
+    'revalidates $field before reporter acceptance: $accepted',
+    async ({ field, currentName, accepted }) => {
+      const f = await preparePrompt();
+      await f.service.handleThreadMessage(f.message);
+      const current = (await f.reportIntakeRepository.findById(f.intake.id))!;
+      const { metadata, analysis } = processingMetadata(current);
+      analysis.outcome = {
+        kind: 'confirm',
+        candidate: {
+          ...buildCandidate(),
+          globalName: 'Alder',
+          matchedFields: [field],
+          sourceRefs: [],
+          subjectMatches: [{ subjectId: 'target', sourceRefs: [], matchedFields: [field] }],
+        },
+        coverage: { kind: 'not_required', reason: 'validated_anchor' },
+        includedEvidenceIds: [],
+        excludedEvidenceIds: [],
+      };
+      await f.reportIntakeRepository.update(current.id, {
+        metadata: { ...metadata, analysis, last_confirmation_prompt_revision: 0 },
+      });
+      expect(
+        await f.service.confirmCandidate(
+          Object.assign(
+            {
+              intakeId: current.id,
+              targetUserId: 'user-1',
+              confirmedById: 'reporter-1',
+              promptMessageId: 'prompt-1',
+              expectedEvidenceRevision: 0,
+            },
+            {
+              currentMember: {
+                id: 'user-1',
+                username: 'target-user-1',
+                globalName: currentName,
+                nickname: null,
+                displayName: currentName,
+              },
+            }
+          )
+        )
+      ).toMatchObject({ confirmed: accepted });
+      expect((await f.reportIntakeRepository.findById(current.id))?.confirmed_target_user_id).toBe(
+        accepted ? 'user-1' : null
+      );
+    }
+  );
 
   async function savedCandidate() {
     const setup = await stagedSetup();
@@ -466,6 +604,7 @@ describe('ReportIntakeService', () => {
       author: { id: 'staff', bot: false },
       guild: {
         id: 'guild-1',
+        roles: { fetch: jest.fn().mockResolvedValue(undefined) },
         members: { fetch: jest.fn().mockResolvedValue({ permissions: { has: () => true } }) },
       },
     });
@@ -538,6 +677,7 @@ describe('ReportIntakeService', () => {
     const { service, reportIntakeRepository, intake, message } = await stagedSetup();
     const guild = {
       id: 'guild-1',
+      roles: { fetch: jest.fn().mockResolvedValue(undefined) },
       members: {
         fetch: jest
           .fn()

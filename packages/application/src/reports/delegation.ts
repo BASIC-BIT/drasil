@@ -23,6 +23,9 @@ export interface ResolvedIntakeChoice {
   readonly promptMessageId: string;
   readonly promptToken: string;
   readonly candidateIds: readonly string[];
+  readonly reporterId: string;
+  readonly adminReview: boolean;
+  readonly expectedEvidenceRevision?: number;
   readonly precondition: IntakePromptPrecondition;
 }
 export interface IntakeChoiceDependencies {
@@ -39,22 +42,20 @@ export async function prepareIntakeChoice(
   const intake = await deps.intakes.load(intakeId);
   if (!intake || intake.id !== intakeId || intake.guildId !== guildId)
     throw new ActionDeniedError('binding_mismatch');
-  if (intake.reporterId !== principal.userId) {
-    const facts = await deps.authority.loadFresh(guildId, principal.userId);
-    if (
-      !facts?.present ||
-      facts.guildId !== guildId ||
-      facts.userId !== principal.userId ||
-      !(
-        hasAuthority(facts, MODERATION_PERMISSIONS) ||
-        hasStaffAuthority(facts, await deps.staffRoles.loadRoleIds(guildId))
-      )
-    )
-      throw new ActionDeniedError('permission_denied');
-  }
+  const { evidenceRevision, presentationRevision, staged, ...legacy } = intake;
+  const facts = await deps.authority.loadFresh(guildId, principal.userId);
+  if (!facts?.present || facts.guildId !== guildId || facts.userId !== principal.userId)
+    throw new ActionDeniedError('permission_denied');
+  const isStaff =
+    hasAuthority(facts, MODERATION_PERMISSIONS) ||
+    hasStaffAuthority(facts, await deps.staffRoles.loadRoleIds(guildId));
+  const adminReview = intake.status === 'needs_admin_confirmation';
+  if ((intake.reporterId !== principal.userId || adminReview) && !isStaff)
+    throw new ActionDeniedError('permission_denied');
   if (
     intake.claimed ||
-    intake.status !== 'needs_reporter_confirmation' ||
+    (intake.status !== 'needs_reporter_confirmation' && !adminReview) ||
+    (staged && presentationRevision !== evidenceRevision) ||
     intake.confirmedTargetUserId ||
     !intake.threadId ||
     !intake.promptMessageId ||
@@ -62,6 +63,9 @@ export async function prepareIntakeChoice(
   )
     throw new ActionDeniedError('stale_state');
   return {
+    reporterId: intake.reporterId,
+    adminReview,
+    ...(staged ? { expectedEvidenceRevision: evidenceRevision } : {}),
     intakeId,
     guildId,
     threadId: intake.threadId,
@@ -72,7 +76,7 @@ export async function prepareIntakeChoice(
       kind: 'intake_prompt',
       intakeId,
       guildId,
-      fingerprint: canonicalDigest(intake),
+      fingerprint: canonicalDigest(staged ? intake : legacy),
     },
   };
 }
@@ -166,14 +170,17 @@ export async function revalidateSavedIntakeChoice(
 ): Promise<ResolvedIntakeChoice> {
   const command = previous.command;
   if (
-    (command.kind !== 'confirm_intake_candidate' && command.kind !== 'reject_intake_candidates') ||
+    (command.kind !== 'confirm_intake_candidate' &&
+      command.kind !== 'reject_intake_candidates' &&
+      !(command.kind === 'close_report_intake' && command.closeMode?.kind === 'resolve_review')) ||
     previous.preconditions.kind !== 'intake_prompt'
   )
     throw new ActionDeniedError('binding_mismatch');
   const current = await prepareIntakeChoice(principal, previous.guildId, command.intakeId, deps);
   if (
     canonicalDigest(current.precondition) !== canonicalDigest(previous.preconditions) ||
-    command.threadId !== current.threadId ||
+    ('threadId' in command && command.threadId !== current.threadId) ||
+    command.expectedEvidenceRevision !== current.expectedEvidenceRevision ||
     command.promptMessageId !== current.promptMessageId ||
     ('promptToken' in command && command.promptToken !== current.promptToken)
   )

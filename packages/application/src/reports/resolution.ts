@@ -1,3 +1,4 @@
+import { reportCloseModeSchema } from './commands';
 import { IntentError } from '../delegation/intents';
 import { ActionDeniedError } from '../results';
 import { workflowDefinitions, type HumanCommand } from '../delegation/commands';
@@ -54,7 +55,9 @@ function reportSummary(
     case 'start_report_intake':
       return `Start report intake: channel ${display(command.channelId)}.`;
     case 'close_report_intake':
-      return `Close report intake: intake ${display(command.intakeId)}.`;
+      return command.closeMode?.kind === 'resolve_review'
+        ? `Resolve report identity review: intake ${display(command.intakeId)}; reason ${display(command.closeMode.reason)}. Saved evidence remains recorded.`
+        : `Close report thread: intake ${display(command.intakeId)}.`;
     case 'confirm_intake_candidate':
       return `Confirm intake candidate: intake ${display(command.intakeId)}; target ${display(command.targetUserId)}.`;
     case 'reject_intake_candidates':
@@ -124,7 +127,9 @@ export function createReportIntentResolver(deps: {
         let previewExpiresAt: Date | null = null;
         if (
           workflow.id === 'confirm_intake_candidate' ||
-          workflow.id === 'reject_intake_candidates'
+          workflow.id === 'reject_intake_candidates' ||
+          (workflow.id === 'close_report_intake' &&
+            reportCloseModeSchema.safeParse(input.closeMode).data?.kind === 'resolve_review')
         ) {
           const choice = await resources.resolveIntakeChoice(String(input.intakePromptReference));
           if (choice.guildId !== invocation.guildId || choice.intakeId !== input.intakeId)
@@ -132,14 +137,20 @@ export function createReportIntentResolver(deps: {
           if (
             workflow.id === 'confirm_intake_candidate' &&
             (input.targetUserId === principal.userId ||
-              !choice.candidateIds.includes(String(input.targetUserId)))
+              input.targetUserId === choice.reporterId ||
+              (!choice.adminReview && !choice.candidateIds.includes(String(input.targetUserId))))
           )
             throw new ActionDeniedError('confirmation_required');
+          if (workflow.id === 'reject_intake_candidates' && choice.adminReview)
+            throw new ActionDeniedError('confirmation_required');
+          if (workflow.id === 'close_report_intake' && !choice.adminReview)
+            throw new ActionDeniedError('stale_state');
           bindings = {
             intakePrompt: {
               threadId: choice.threadId,
               promptMessageId: choice.promptMessageId,
               promptToken: choice.promptToken,
+              expectedEvidenceRevision: choice.expectedEvidenceRevision,
             },
           };
           candidateIds = choice.candidateIds;

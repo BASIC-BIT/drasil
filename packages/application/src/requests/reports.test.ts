@@ -29,3 +29,43 @@ it.each<QueuedReportCommand>([
   });
   expect(decoded).toEqual({ context, command });
 });
+
+it.each<QueuedReportCommand>([
+  {
+    kind: 'confirm_intake_candidate',
+    intakeId: 'intake',
+    threadId: 'thread',
+    promptMessageId: 'prompt',
+    targetUserId: 'target',
+    expectedEvidenceRevision: 4,
+  },
+  {
+    kind: 'reject_intake_candidates',
+    intakeId: 'intake',
+    threadId: 'thread',
+    promptMessageId: 'prompt',
+    promptToken: 'token',
+    expectedEvidenceRevision: 4,
+  },
+  {
+    kind: 'close_report_intake',
+    intakeId: 'intake',
+    promptMessageId: 'prompt',
+    closeMode: { kind: 'resolve_review', reason: 'No reliable match' },
+    expectedEvidenceRevision: 4,
+  },
+])('retains staged $kind bindings through durable queue storage', (command) => {
+  const encoded = encodeQueuedAction(context, command);
+  expect(
+    decodeQueuedAction({
+      id: 'request',
+      server_id: encoded.serverId,
+      action_type: encoded.actionType,
+      actor_id: encoded.actorId,
+      actor_surface: encoded.actorSurface,
+      target_user_id: encoded.targetUserId,
+      report_intake_id: encoded.reportIntakeId,
+      metadata: encoded.metadata,
+    })
+  ).toEqual({ context, command });
+});

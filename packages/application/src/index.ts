@@ -93,3 +93,5 @@ export type { CaptchaCompletionStore } from './postgres/captchaCompletion';
 export * from './setup/captchaReadiness';
 
 export * from './reports/analysis';
+
+export * from './reports/intakeState';

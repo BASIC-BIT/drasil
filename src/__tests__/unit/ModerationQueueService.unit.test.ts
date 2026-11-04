@@ -1,6 +1,6 @@
 import { ownsPresentation, processingMetadata } from '../../repositories/reportIntakeProcessing';
 import { InMemoryReportIntakeRepository } from '../fakes/inMemoryRepositories';
-import { createAttentionActions } from '@drasil/application';
+import { acknowledgeIdentityReviewMetadata, createAttentionActions } from '@drasil/application';
 import { createBotAttentionMessageDeleter } from '../../application/adapters/attention';
 import {
   ActionRowBuilder,
@@ -113,6 +113,34 @@ class FakeModerationQueueRepository implements IModerationQueueRepository {
   public items: ModerationQueueItem[] = [];
   public intakeRepository?: InMemoryReportIntakeRepository;
   private nextId = 0;
+
+  async acknowledgeIdentityReview(input: {
+    itemId: string;
+    guildId: string;
+    actorId: string;
+    acknowledgedAt: Date;
+  }): Promise<'acknowledged' | 'already_handled'> {
+    const item = await this.findById(input.itemId);
+    const intake =
+      item?.report_intake_id && (await this.intakeRepository?.findById(item.report_intake_id));
+    if (
+      !item ||
+      item.server_id !== input.guildId ||
+      !intake ||
+      intake.status !== 'needs_admin_confirmation' ||
+      intake.closed_at ||
+      intake.confirmed_target_user_id
+    )
+      return 'already_handled';
+    const metadata = acknowledgeIdentityReviewMetadata(
+      intake.metadata,
+      input.actorId,
+      input.acknowledgedAt
+    );
+    if (!metadata || !(await this.intakeRepository?.updateIfCurrent(intake, { metadata })))
+      return 'already_handled';
+    return 'acknowledged';
+  }
 
   async findById(id: string): Promise<ModerationQueueItem | null> {
     return this.clone(this.items.find((item) => item.id === id) ?? null);

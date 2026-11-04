@@ -1838,6 +1838,8 @@ export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
       (item) =>
         item.server_id === serverId &&
         item.reporter_id === reporterId &&
+        !item.closed_at &&
+        !(item.metadata as Record<string, unknown> | null)?.thread_closed_at &&
         [
           ReportIntakeStatus.COLLECTING_EVIDENCE,
           ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION,
@@ -1864,6 +1866,16 @@ export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
           ? data.confirmedTargetUserId
           : existing.confirmed_target_user_id,
       closed_at: data.closedAt !== undefined ? data.closedAt : existing.closed_at,
+      analysis_due_at:
+        data.analysisDueAt !== undefined ? data.analysisDueAt : existing.analysis_due_at,
+      analysis_lease_token:
+        data.analysisLeaseToken !== undefined
+          ? data.analysisLeaseToken
+          : existing.analysis_lease_token,
+      analysis_lease_until:
+        data.analysisLeaseUntil !== undefined
+          ? data.analysisLeaseUntil
+          : existing.analysis_lease_until,
       metadata:
         data.metadata !== undefined
           ? (data.metadata as ReportIntake['metadata'])
@@ -1882,6 +1894,8 @@ export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
     if (
       !current ||
       current.status !== intake.status ||
+      current.evidence_revision !== intake.evidence_revision ||
+      !isDeepStrictEqual(current.closed_at, intake.closed_at) ||
       current.confirmed_target_user_id !== intake.confirmed_target_user_id ||
       !isDeepStrictEqual(current.metadata, intake.metadata)
     )
@@ -1894,13 +1908,18 @@ export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
     data: {
       targetUserId: string;
       expectedMetadata: ReportIntake['metadata'];
+      expectedEvidenceRevision?: number;
+      expectedStatus?: ReportIntakeStatus;
       metadata: Record<string, unknown>;
     }
   ): Promise<ReportIntake | null> {
     const index = this.intakes.findIndex(
       (item) =>
         item.id === id &&
-        item.status === ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION &&
+        item.status === (data.expectedStatus ?? ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION) &&
+        item.evidence_revision === (data.expectedEvidenceRevision ?? 0) &&
+        !item.closed_at &&
+        !(item.metadata as Record<string, unknown> | null)?.report_ban_operation_id &&
         item.confirmed_target_user_id === null &&
         isDeepStrictEqual(item.metadata, data.expectedMetadata)
     );

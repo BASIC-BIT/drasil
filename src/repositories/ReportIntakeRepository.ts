@@ -75,6 +75,8 @@ export interface IReportIntakeRepository {
     data: {
       targetUserId: string;
       expectedMetadata: ReportIntake['metadata'];
+      expectedEvidenceRevision?: number;
+      expectedStatus?: ReportIntakeStatus;
       metadata: Record<string, unknown>;
     }
   ): Promise<ReportIntake | null>;
@@ -417,6 +419,8 @@ export class ReportIntakeRepository implements IReportIntakeRepository {
         where: {
           server_id: serverId,
           reporter_id: reporterId,
+          closed_at: null,
+          metadata: { path: ['thread_closed_at'], equals: Prisma.AnyNull },
           status: { in: OPEN_INTAKE_STATUSES as report_intake_status[] },
         },
         orderBy: { created_at: 'desc' },
@@ -482,6 +486,8 @@ export class ReportIntakeRepository implements IReportIntakeRepository {
             { metadata: { path: ['report_ban_operation_id'], equals: '' } },
           ],
           status: intake.status,
+          evidence_revision: intake.evidence_revision,
+          closed_at: intake.closed_at,
           confirmed_target_user_id: intake.confirmed_target_user_id,
           metadata: { equals: intake.metadata ?? Prisma.AnyNull },
         },
@@ -490,6 +496,9 @@ export class ReportIntakeRepository implements IReportIntakeRepository {
           summary: data.summary,
           confirmed_target_user_id: data.confirmedTargetUserId,
           closed_at: data.closedAt,
+          analysis_due_at: data.analysisDueAt,
+          analysis_lease_token: data.analysisLeaseToken,
+          analysis_lease_until: data.analysisLeaseUntil,
           metadata:
             data.metadata === undefined
               ? undefined
@@ -510,6 +519,8 @@ export class ReportIntakeRepository implements IReportIntakeRepository {
     data: {
       targetUserId: string;
       expectedMetadata: ReportIntake['metadata'];
+      expectedEvidenceRevision?: number;
+      expectedStatus?: ReportIntakeStatus;
       metadata: Record<string, unknown>;
     }
   ): Promise<ReportIntake | null> {
@@ -517,7 +528,13 @@ export class ReportIntakeRepository implements IReportIntakeRepository {
       const updated = await this.prisma.report_intakes.updateManyAndReturn({
         where: {
           id,
-          status: ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION,
+          status: data.expectedStatus ?? ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION,
+          evidence_revision: data.expectedEvidenceRevision ?? 0,
+          closed_at: null,
+          OR: [
+            { metadata: { path: ['report_ban_operation_id'], equals: Prisma.AnyNull } },
+            { metadata: { path: ['report_ban_operation_id'], equals: '' } },
+          ],
           confirmed_target_user_id: null,
           metadata: { equals: data.expectedMetadata ?? Prisma.AnyNull },
         },

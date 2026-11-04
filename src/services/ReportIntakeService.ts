@@ -1,4 +1,9 @@
 import {
+  projectReportIntakeState,
+  reportAnalysisMetadataSchema,
+  type ReportCommand,
+} from '@drasil/application';
+import {
   withObservation,
   recordObservation,
   recordWorkflowOutcome,
@@ -33,7 +38,12 @@ import { getReportAiSettings, ReportAttachmentMetadata } from '../utils/reportAi
 import { selectEligibleMessageReportImageAttachments } from '../utils/reportAttachments';
 import type { IThreadManager } from './ThreadManager';
 import type { ReportIntakeEvidenceExtraction } from './GPTService';
-import { IReportCandidateService, ReportCandidate } from './ReportCandidateService';
+import {
+  IReportCandidateService,
+  ReportCandidate,
+  reportCandidateStillMatches,
+} from './ReportCandidateService';
+import type { ReportDirectoryMember } from './ReportMemberDirectory';
 import { IModerationQueueService } from './ModerationQueueService';
 import { formatInlineIdentifier } from '../utils/discordUserIdentity';
 
@@ -107,7 +117,9 @@ export interface IReportIntakeService {
     targetUserId: string;
     confirmedById: string;
     confirmedByStaff?: boolean;
+    currentMember?: ReportDirectoryMember;
     promptMessageId?: string;
+    expectedEvidenceRevision?: number;
   }): Promise<{
     confirmed: boolean;
     message: string;
@@ -121,11 +133,15 @@ export interface IReportIntakeService {
     promptToken: string;
     rejectedByStaff?: boolean;
     promptMessageId?: string;
+    expectedEvidenceRevision?: number;
   }): Promise<{ rejected: boolean; message: string }>;
   closeIntakeForThread(input: {
     threadId: string;
     closedById: string;
     closedByStaff?: boolean;
+    closeMode?: Extract<ReportCommand, { kind: 'close_report_intake' }>['closeMode'];
+    expectedEvidenceRevision?: number;
+    promptMessageId?: string;
   }): Promise<ReportIntakeCloseResult>;
   recordAgentAnalysis(input: {
     intakeId: string;
@@ -463,7 +479,9 @@ export class ReportIntakeService implements IReportIntakeService {
     targetUserId: string;
     confirmedById: string;
     confirmedByStaff?: boolean;
+    currentMember?: ReportDirectoryMember;
     promptMessageId?: string;
+    expectedEvidenceRevision?: number;
   }): Promise<{
     confirmed: boolean;
     message: string;
@@ -482,8 +500,19 @@ export class ReportIntakeService implements IReportIntakeService {
         message: 'Only the reporter or a moderator can confirm the person.',
       };
     }
+    const state = projectReportIntakeState(intake);
     if (
-      intake.status !== ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION ||
+      state.staged &&
+      (input.expectedEvidenceRevision !== state.evidenceRevision ||
+        state.presentationRevision !== state.evidenceRevision ||
+        input.promptMessageId !== state.promptMessageId)
+    )
+      return { confirmed: false, message: 'Use the latest report review message.' };
+    const adminSelection =
+      input.confirmedByStaff === true &&
+      intake.status === ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION;
+    if (
+      (intake.status !== ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION && !adminSelection) ||
       intake.confirmed_target_user_id
     ) {
       await this.retireConfirmationPrompts(
@@ -500,6 +529,7 @@ export class ReportIntakeService implements IReportIntakeService {
     }
     const metadata = toRecord(intake.metadata);
     if (
+      !adminSelection &&
       typeof metadata.last_confirmation_prompt_message_id === 'string' &&
       metadata.last_confirmation_prompt_message_id !== input.promptMessageId
     ) {
@@ -507,17 +537,32 @@ export class ReportIntakeService implements IReportIntakeService {
         await this.retireConfirmationPrompts(intake, [input.promptMessageId]);
       return { confirmed: false, message: 'Use the latest confirmation message in this thread.' };
     }
-    if (!this.hasSuggestedCandidate(metadata, input.targetUserId)) {
+    if (!adminSelection && !this.hasSuggestedCandidate(metadata, input.targetUserId)) {
       return {
         confirmed: false,
         message: 'Use the latest confirmation message in this thread.',
       };
     }
 
+    if (state.staged && !adminSelection) {
+      const outcome = processingMetadata(intake).analysis.outcome;
+      if (
+        outcome?.kind !== 'confirm' ||
+        !input.currentMember ||
+        !reportCandidateStillMatches(outcome.candidate, input.currentMember)
+      )
+        return {
+          confirmed: false,
+          message: 'The suggested identity changed. Please ask a moderator to review this report.',
+        };
+    }
+
     const confirmedAt = new Date().toISOString();
     const confirmedIntake = await this.reportIntakeRepository.confirmTargetIfUnset(intake.id, {
       targetUserId: input.targetUserId,
       expectedMetadata: intake.metadata,
+      expectedEvidenceRevision: intake.evidence_revision,
+      expectedStatus: intake.status,
       metadata: {
         ...metadata,
         confirmed_target_user_id: input.targetUserId,
@@ -570,6 +615,7 @@ export class ReportIntakeService implements IReportIntakeService {
     promptToken: string;
     rejectedByStaff?: boolean;
     promptMessageId?: string;
+    expectedEvidenceRevision?: number;
   }): Promise<{ rejected: boolean; message: string }> {
     const intake = await this.reportIntakeRepository.findById(input.intakeId);
     if (!intake) {
@@ -596,6 +642,14 @@ export class ReportIntakeService implements IReportIntakeService {
       };
     }
 
+    const state = projectReportIntakeState(intake);
+    if (
+      state.staged &&
+      (input.expectedEvidenceRevision !== state.evidenceRevision ||
+        state.presentationRevision !== state.evidenceRevision ||
+        input.promptMessageId !== state.promptMessageId)
+    )
+      return { rejected: false, message: 'Use the latest confirmation message in this thread.' };
     const metadata = toRecord(intake.metadata);
     if (
       typeof metadata.last_confirmation_prompt_message_id === 'string' &&
@@ -629,10 +683,50 @@ export class ReportIntakeService implements IReportIntakeService {
     );
     const now = new Date().toISOString();
 
+    const staged = state.staged ? processingMetadata(intake).analysis : null;
+    if (staged) {
+      if (staged.outcome?.kind !== 'confirm')
+        return { rejected: false, message: 'Use the latest confirmation message in this thread.' };
+      const previous = staged.outcome;
+      staged.outcome = {
+        kind: 'admin_review',
+        reason: 'rejected',
+        candidates: [],
+        coverage: previous.coverage,
+        includedEvidenceIds: previous.includedEvidenceIds,
+        excludedEvidenceIds: previous.excludedEvidenceIds,
+      };
+      if (staged.handoff.state === 'none')
+        staged.handoff = {
+          state: 'pending',
+          reason: 'rejected',
+          attempts: 0,
+          nextDueAt: now,
+          receipt: 'pending',
+        };
+      staged.presentation = {
+        revision: intake.evidence_revision,
+        attempts: 0,
+        nextDueAt: now,
+        lease: null,
+      };
+    }
     const updated = await this.reportIntakeRepository.updateIfCurrent(intake, {
-      status: ReportIntakeStatus.COLLECTING_EVIDENCE,
+      status: staged
+        ? ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION
+        : ReportIntakeStatus.COLLECTING_EVIDENCE,
+      ...(staged
+        ? { analysisDueAt: null, analysisLeaseToken: null, analysisLeaseUntil: null }
+        : {}),
       metadata: {
         ...metadata,
+        ...(staged
+          ? {
+              analysis: staged,
+              last_confirmation_prompt_message_id: null,
+              last_confirmation_prompt_token: null,
+            }
+          : {}),
         candidate_suggestions: remainingCandidates,
         rejected_candidate_ids: allRejectedCandidateIds,
         last_rejected_candidate_ids: rejectedCandidateIds,
@@ -674,7 +768,9 @@ export class ReportIntakeService implements IReportIntakeService {
 
     return {
       rejected: true,
-      message: 'Selection cleared.',
+      message: staged
+        ? "Your evidence is saved for moderator review. You don't need to do anything else."
+        : 'Selection cleared.',
     };
   }
 
@@ -825,7 +921,7 @@ export class ReportIntakeService implements IReportIntakeService {
         confirmedTargetUserId: input.targetUserId,
         closedAt: intake.closed_at ?? submittedAt,
         metadata: {
-          ...metadata,
+          ...resolveReportHandoff(intake, input.submittedById, submittedAt),
           submitted_by: input.submittedById,
           submitted_at: submittedAt.toISOString(),
           ...(metadata.closed_reason ? {} : { closed_reason: 'submitted' }),
@@ -862,6 +958,9 @@ export class ReportIntakeService implements IReportIntakeService {
     threadId: string;
     closedById: string;
     closedByStaff?: boolean;
+    closeMode?: Extract<ReportCommand, { kind: 'close_report_intake' }>['closeMode'];
+    expectedEvidenceRevision?: number;
+    promptMessageId?: string;
   }): Promise<ReportIntakeCloseResult> {
     for (let attempt = 0; attempt < REPORT_INTAKE_STATE_WRITE_ATTEMPTS; attempt++) {
       const intake = await this.reportIntakeRepository.findByThreadId(input.threadId);
@@ -872,6 +971,65 @@ export class ReportIntakeService implements IReportIntakeService {
           closed: false,
           message: 'Only the reporter or a moderator can close this report.',
         };
+      if (input.closeMode?.kind === 'resolve_review') {
+        const state = projectReportIntakeState(intake);
+        if (
+          input.closedByStaff !== true ||
+          !input.closeMode.reason.trim() ||
+          intake.status !== ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION ||
+          intake.confirmed_target_user_id ||
+          input.expectedEvidenceRevision !== intake.evidence_revision ||
+          state.presentationRevision !== intake.evidence_revision ||
+          !input.promptMessageId ||
+          input.promptMessageId !== state.promptMessageId
+        )
+          return {
+            closed: false,
+            message: 'Use the latest moderator review message and include a reason.',
+          };
+        const now = new Date();
+        const updated = await this.reportIntakeRepository.updateIfCurrent(intake, {
+          status: ReportIntakeStatus.CLOSED_BY_REPORTER,
+          closedAt: now,
+          analysisDueAt: null,
+          analysisLeaseToken: null,
+          analysisLeaseUntil: null,
+          metadata: {
+            ...resolveReportHandoff(intake, input.closedById, now),
+            closed_by: input.closedById,
+            closed_by_staff: true,
+            closed_reason: input.closeMode.reason.trim(),
+            review_resolved_at: now.toISOString(),
+          },
+        });
+        if (!updated) continue;
+        await this.retireConfirmationPrompts(updated, getReportConfirmationMessageIds(updated));
+        await this.clearReportThreadAttention(intake.id);
+        return {
+          closed: true,
+          message: 'Moderator review resolved. Saved evidence remains recorded.',
+          shouldArchiveThread: true,
+        };
+      }
+      if (
+        intake.status === ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION &&
+        !intake.confirmed_target_user_id
+      ) {
+        const updated = await this.reportIntakeRepository.updateIfCurrent(intake, {
+          metadata: {
+            ...toRecord(intake.metadata),
+            thread_closed_by: input.closedById,
+            thread_closed_at: new Date().toISOString(),
+            thread_closed_reason: 'thread_only',
+          },
+        });
+        if (!updated) continue;
+        return {
+          closed: true,
+          message: 'The thread is closed. Moderator review remains open.',
+          shouldArchiveThread: true,
+        };
+      }
       if (this.isOpenIntakeStatus(intake.status) && !intake.confirmed_target_user_id) {
         if (
           !(await this.closeIntake(intake, {
@@ -1637,4 +1795,31 @@ export function getReportConfirmationMessageIds(
       ...(clickedId ? [clickedId] : []),
     ]),
   ];
+}
+
+function resolveReportHandoff(
+  intake: ReportIntake,
+  actorId: string,
+  at: Date
+): Record<string, unknown> {
+  const metadata = toRecord(intake.metadata);
+  const parsed = reportAnalysisMetadataSchema.safeParse(metadata.analysis);
+  if (!parsed.success || parsed.data.handoff.state === 'none') return metadata;
+  const analysis = parsed.data;
+  return {
+    ...metadata,
+    analysis: {
+      ...analysis,
+      handoff: {
+        ...analysis.handoff,
+        state: 'resolved',
+        resolvedBy: actorId,
+        resolvedAt: at.toISOString(),
+        nextDueAt: null,
+      },
+      ...(analysis.presentation
+        ? { presentation: { ...analysis.presentation, nextDueAt: null, lease: null } }
+        : {}),
+    },
+  };
 }

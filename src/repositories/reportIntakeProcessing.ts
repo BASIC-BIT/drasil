@@ -486,7 +486,9 @@ export function completePresentationChange(
   };
   if (analysis.handoff.state !== 'none') {
     const handoff = analysis.handoff;
-    if (result.kind === 'delivered')
+    if (result.kind === 'delivered') {
+      metadata.admin_review_prompt_revision = claim.revision;
+      metadata.admin_review_prompt_message_id = result.messageId;
       analysis.handoff = reportHandoffSchema.parse({
         ...handoff,
         state: handoff.state === 'pending' ? 'delivered' : handoff.state,
@@ -496,7 +498,7 @@ export function completePresentationChange(
         attempts,
         nextDueAt,
       });
-    else analysis.handoff = { ...handoff, attempts, nextDueAt: nextDueAt ?? now.toISOString() };
+    } else analysis.handoff = { ...handoff, attempts, nextDueAt: nextDueAt ?? now.toISOString() };
   }
   return { metadata: { ...metadata, analysis } as ReportIntake['metadata'], updated_at: now };
 }

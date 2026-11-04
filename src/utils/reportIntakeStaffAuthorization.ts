@@ -12,7 +12,8 @@ export async function canModerateReportIntake(
   userId: string,
   configService: IConfigService
 ): Promise<boolean> {
-  const member = await guild.members.fetch(userId).catch(() => null);
+  await guild.roles.fetch();
+  const member = await guild.members.fetch({ user: userId, force: true }).catch(() => null);
   if (!member) {
     return false;
   }
@@ -21,10 +22,12 @@ export async function canModerateReportIntake(
     return true;
   }
 
-  const serverConfig = await configService.getServerConfig(guild.id).catch((error) => {
-    console.warn(`Failed to load report intake staff settings for guild ${guild.id}:`, error);
-    return null;
-  });
+  const serverConfig = await configService
+    .getServerConfig(guild.id, { forceRefresh: true, failOnReadError: true })
+    .catch((error) => {
+      console.warn(`Failed to load report intake staff settings for guild ${guild.id}:`, error);
+      return null;
+    });
   if (!serverConfig) {
     return false;
   }

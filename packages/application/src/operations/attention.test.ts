@@ -64,6 +64,7 @@ function arrange(): {
   const actions = createAttentionActions({
     authority: { loadFresh: async () => facts },
     repository: {
+      acknowledgeIdentityReview: async () => 'acknowledged',
       findById: async (id) => items.get(id) ?? null,
       deleteById: async (id) => {
         const item = items.get(id) ?? null;
@@ -202,3 +203,22 @@ it.each(['support_thread_attention', 'report_thread_attention', 'quarantine_brea
     expect(items.has(item.id)).toBe(false);
   }
 );
+
+it('acknowledges identity review without deleting the unresolved item or its message', async () => {
+  const f = arrange();
+  const item = f.items.get('queue-1')!;
+  f.items.set(
+    item.id,
+    Object.assign({}, item, {
+      item_type: 'report_thread_attention',
+      report_intake_id: 'intake',
+      metadata: { identity_review: { revision: 2 } },
+    })
+  );
+  expect(await f.actions.acknowledge(context, { itemId: item.id })).toMatchObject({
+    outcome: { status: 'acknowledged' },
+  });
+  expect(f.items.has(item.id)).toBe(true);
+  expect(f.deletedItemIds).toEqual([]);
+  expect(f.messageIds).toEqual([]);
+});

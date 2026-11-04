@@ -945,6 +945,9 @@ export interface ReportIntakeCreate {
 }
 
 export interface ReportIntakeUpdate {
+  analysisDueAt?: Date | null;
+  analysisLeaseToken?: string | null;
+  analysisLeaseUntil?: Date | null;
   status?: ReportIntakeStatus;
   summary?: string | null;
   confirmedTargetUserId?: string | null;

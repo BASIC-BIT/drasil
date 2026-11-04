@@ -740,6 +740,7 @@ describe('InteractionHandler (unit)', () => {
     } as unknown as GuildMember;
     (client.guilds.fetch as jest.Mock).mockResolvedValueOnce({
       id: 'guild-1',
+      roles: { fetch: jest.fn().mockResolvedValue(undefined) },
       members: { fetch: jest.fn().mockResolvedValue(staffMember) },
     });
     const reportIntakeService = {
@@ -3498,6 +3499,7 @@ describe('InteractionHandler (unit)', () => {
       (configService.getAdminChannel as jest.Mock).mockResolvedValue(adminChannel);
       (client.guilds.fetch as jest.Mock).mockResolvedValue({
         id: 'guild-1',
+        roles: { fetch: jest.fn().mockResolvedValue(undefined) },
         members: {
           fetch: jest.fn().mockResolvedValue({ permissions: { has: () => true } }),
           fetchMe: jest.fn().mockResolvedValue({ permissions: { has: () => true } }),

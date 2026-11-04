@@ -2597,6 +2597,10 @@ export class InteractionHandler implements IInteractionHandler {
       return;
     }
 
+    if (this.reportInteractionHandler.isReportIntakeAdminActionCustomId(interaction.customId)) {
+      await this.reportInteractionHandler.handleReportIntakeReviewModal(interaction);
+      return;
+    }
     switch (interaction.customId) {
       case REPORT_USER_TYPED_MODAL_ID:
         await this.reportInteractionHandler.handleReportUserModalSubmit(interaction);

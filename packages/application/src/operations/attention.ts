@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { reportHandoffSchema } from '../reports/analysis';
 import { authorizeAttention, type AuthorityPort } from '../authorization';
 import type { ActionContext } from '../context';
 import type { ActionResult } from '../results';
@@ -20,9 +21,17 @@ export interface QueueAttentionItemRecord {
   readonly item_type: string;
   readonly queue_channel_id: string | null;
   readonly queue_message_id: string | null;
+  readonly report_intake_id?: string | null;
+  readonly metadata?: unknown;
 }
 export interface QueueAttentionRepository {
   findById(id: string): Promise<QueueAttentionItemRecord | null>;
+  acknowledgeIdentityReview(input: {
+    itemId: string;
+    guildId: string;
+    actorId: string;
+    acknowledgedAt: Date;
+  }): Promise<QueueAttentionAcknowledgeStatus>;
   deleteById(id: string): Promise<QueueAttentionItemRecord | null>;
 }
 export interface QueueMessageDeleter {
@@ -68,6 +77,15 @@ export function createAttentionActions(deps: AttentionDependencies): AttentionAc
     if (!item || item.server_id !== context.guildId || !isQueueAttentionItemType(item.item_type)) {
       return { kind: 'outcome', outcome: { actor, itemId, status: 'already_handled' } };
     }
+    if (isIdentityReviewItem(item)) {
+      const status = await deps.repository.acknowledgeIdentityReview({
+        itemId,
+        guildId: context.guildId,
+        actorId: actor.id,
+        acknowledgedAt: new Date(),
+      });
+      return { kind: 'outcome', outcome: { actor, itemId, status } };
+    }
     await deps.messageDeleter.deleteQueueMessage(item);
     const deleted = await deps.repository.deleteById(item.id);
     return {
@@ -82,6 +100,44 @@ export function createAttentionActions(deps: AttentionDependencies): AttentionAc
       const results: ActionResult<AttentionOutcome>[] = [];
       for (const itemId of itemIds) results.push(await acknowledge(context, { itemId }));
       return results;
+    },
+  };
+}
+
+export function isIdentityReviewItem(item: QueueAttentionItemRecord): boolean {
+  const metadata = z
+    .object({ identity_review: z.record(z.string(), z.unknown()) })
+    .safeParse(item.metadata);
+  return (
+    item.item_type === 'report_thread_attention' &&
+    Boolean(item.report_intake_id) &&
+    metadata.success
+  );
+}
+
+/** Preserve the independently validated handoff even when other analysis metadata is quarantined. */
+export function acknowledgeIdentityReviewMetadata(
+  metadata: unknown,
+  actorId: string,
+  at: Date
+): Record<string, unknown> | null {
+  const parsed = z
+    .object({ analysis: z.object({ handoff: reportHandoffSchema }).passthrough() })
+    .passthrough()
+    .safeParse(metadata);
+  if (!parsed.success) return null;
+  const { analysis } = parsed.data;
+  if (analysis.handoff.state !== 'pending' && analysis.handoff.state !== 'delivered') return null;
+  return {
+    ...parsed.data,
+    analysis: {
+      ...analysis,
+      handoff: {
+        ...analysis.handoff,
+        state: 'acknowledged',
+        acknowledgedBy: actorId,
+        acknowledgedAt: at.toISOString(),
+      },
     },
   };
 }

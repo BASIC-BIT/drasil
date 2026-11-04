@@ -67,6 +67,8 @@ it('projects exact saved report confirmations with public fields and frozen chil
     }),
     resolveIntakeChoice: async () => ({
       intakeId: 'intake',
+      reporterId: 'reporter',
+      adminReview: false,
       guildId,
       threadId: 'PRIVATE-THREAD',
       promptMessageId: 'PRIVATE-PROMPT',
@@ -128,7 +130,7 @@ it('projects exact saved report confirmations with public fields and frozen chil
       'Submit message report: target "target"; channel "channel"; message "message"; reason "spam".',
     ],
     ['start_report_intake', { channelId: 'channel' }, 'Start report intake: channel "channel".'],
-    ['close_report_intake', { intakeId: 'intake' }, 'Close report intake: intake "intake".'],
+    ['close_report_intake', { intakeId: 'intake' }, 'Close report thread: intake "intake".'],
     [
       'confirm_intake_candidate',
       { intakeId: 'intake', targetUserId: 'target', intakePromptReference: 'PRIVATE-REFERENCE' },

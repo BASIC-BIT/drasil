@@ -1,5 +1,11 @@
 import {
+  reportDirectoryMember,
+  type ReportDirectoryMember,
+} from '../../services/ReportMemberDirectory';
+import type { IReportIntakeHandoffService } from '../../services/ReportIntakeHandoffService';
+import {
   ActionDeniedError,
+  projectReportIntakeState,
   createReportActions,
   type ActionContext,
   type ActionResult,
@@ -44,37 +50,12 @@ export interface BotReportDependencies {
   readonly client: Client;
   readonly configService: IConfigService;
   readonly reportIntakeService: IReportIntakeService;
+  readonly reportIntakeHandoffService?: IReportIntakeHandoffService;
   readonly threadManager: IThreadManager;
   readonly securityActionService: ISecurityActionService;
 }
 export function projectReportIntake(intake: ReportIntake): ReportIntakeState {
-  const metadata =
-    intake.metadata && typeof intake.metadata === 'object' && !Array.isArray(intake.metadata)
-      ? intake.metadata
-      : {};
-  const candidates = metadata.last_confirmation_prompt_candidate_ids;
-  return {
-    id: intake.id,
-    guildId: intake.server_id,
-    reporterId: intake.reporter_id,
-    threadId: intake.thread_id,
-    status: intake.status,
-    confirmedTargetUserId: intake.confirmed_target_user_id,
-    promptMessageId:
-      typeof metadata.last_confirmation_prompt_message_id === 'string'
-        ? metadata.last_confirmation_prompt_message_id
-        : null,
-    promptToken:
-      typeof metadata.last_confirmation_prompt_token === 'string'
-        ? metadata.last_confirmation_prompt_token
-        : null,
-    candidateIds: Array.isArray(candidates)
-      ? candidates.filter((id): id is string => typeof id === 'string')
-      : [],
-    claimed:
-      typeof metadata.report_ban_operation_id === 'string' &&
-      metadata.report_ban_operation_id.length > 0,
-  };
+  return projectReportIntakeState(intake);
 }
 function actorId(context: ActionContext): string {
   if (context.actor.kind !== 'user')
@@ -130,30 +111,64 @@ export function createBotReportActions(
         await intakes.markOpenFailed({ intakeId, reason: 'thread_activation_failed' });
       },
       async confirm(context, command, staff) {
+        const intake = await intakes.findIntakeById(command.intakeId);
+        let currentMember: ReportDirectoryMember | undefined;
+        if (
+          intake &&
+          projectReportIntake(intake).staged &&
+          intake.status === 'needs_reporter_confirmation'
+        ) {
+          const guild = await client.guilds.fetch({ guild: context.guildId, force: true });
+          const member = await guild.members
+            .fetch({ user: command.targetUserId, force: true, cache: false })
+            .catch(() => null);
+          if (
+            !member ||
+            member.id !== command.targetUserId ||
+            guild.id !== context.guildId ||
+            member.guild.id !== context.guildId
+          )
+            return {
+              confirmed: false,
+              message: 'The suggested member could not be verified in this server.',
+            };
+          currentMember = reportDirectoryMember(member);
+        }
         return intakes.confirmCandidate({
           intakeId: command.intakeId,
           targetUserId: command.targetUserId,
           confirmedById: actorId(context),
           confirmedByStaff: staff,
+          ...(currentMember ? { currentMember } : {}),
           promptMessageId: command.promptMessageId,
+          expectedEvidenceRevision: command.expectedEvidenceRevision,
         });
       },
       async reject(context, command, staff) {
-        return intakes.rejectCandidates({
+        const result = await intakes.rejectCandidates({
           intakeId: command.intakeId,
           rejectedById: actorId(context),
           rejectedByStaff: staff,
           promptToken: command.promptToken,
           promptMessageId: command.promptMessageId,
+          expectedEvidenceRevision: command.expectedEvidenceRevision,
         });
+        if (result.rejected)
+          await deps.reportIntakeHandoffService?.publishOutcome(command.intakeId).catch((error) => {
+            console.warn('Saved report handoff publication deferred to reconciliation:', error);
+          });
+        return result;
       },
-      async close(context, intake, staff) {
+      async close(context, intake, staff, command) {
         if (!intake.threadId)
           throw new Error('Report intake does not have a Discord thread to close.');
         return intakes.closeIntakeForThread({
           threadId: intake.threadId,
           closedById: actorId(context),
           closedByStaff: staff,
+          closeMode: command.closeMode,
+          expectedEvidenceRevision: command.expectedEvidenceRevision,
+          promptMessageId: command.promptMessageId,
         });
       },
       async markSubmitted(context, intake) {

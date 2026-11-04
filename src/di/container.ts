@@ -313,6 +313,9 @@ function configureServices(container: Container): void {
           TYPES.SetupDiagnosticsService
         ),
         reportIntakeService: context.get<IReportIntakeService>(TYPES.ReportIntakeService),
+        reportIntakeHandoffService: context.get<IReportIntakeHandoffService>(
+          TYPES.ReportIntakeHandoffService
+        ),
         caseThreadClosureSweepService: context.get<ICaseThreadClosureSweepService>(
           TYPES.CaseThreadClosureSweepService
         ),

@@ -1,4 +1,9 @@
-import { hasAuthority, hasStaffAuthority, MODERATION_PERMISSIONS } from '../authorization';
+import {
+  hasAuthority,
+  hasStaffAuthority,
+  MODERATION_PERMISSIONS,
+  type AuthorityFacts,
+} from '../authorization';
 import type { ActionContext } from '../context';
 import type { ActionResult } from '../results';
 import { reportCommandSchema, type ReportCommand } from './commands';
@@ -48,9 +53,10 @@ export interface ReportActions {
   execute(context: ActionContext, command: ReportCommand): Promise<ActionResult<ReportOutcome>>;
 }
 export function createReportActions(deps: ReportDependencies): ReportActions {
-  async function staff(context: ActionContext): Promise<boolean> {
+  async function staff(context: ActionContext, currentFacts?: AuthorityFacts): Promise<boolean> {
     if (context.actor.kind !== 'user') return false;
-    const facts = await deps.authority.loadFresh(context.guildId, context.actor.userId);
+    const facts =
+      currentFacts ?? (await deps.authority.loadFresh(context.guildId, context.actor.userId));
     if (
       !facts?.present ||
       facts.guildId !== context.guildId ||
@@ -129,9 +135,27 @@ export function createReportActions(deps: ReportDependencies): ReportActions {
     if (!intake || intake.guildId !== context.guildId)
       return { kind: 'denied', code: 'binding_mismatch' };
     const isReporter = context.actor.kind === 'user' && intake.reporterId === context.actor.userId;
-    const isStaff = !isReporter && (await staff(context));
+    const resolvesReview =
+      command.kind === 'close_report_intake' && command.closeMode?.kind === 'resolve_review';
+    const isStaff =
+      (!isReporter ||
+        resolvesReview ||
+        (command.kind !== 'close_report_intake' && intake.status === 'needs_admin_confirmation')) &&
+      (await staff(context));
     if (!isReporter && !isStaff) return { kind: 'denied', code: 'permission_denied' };
     if (command.kind === 'close_report_intake') {
+      if (resolvesReview) {
+        if (!isStaff) return { kind: 'denied', code: 'permission_denied' };
+        if (
+          intake.status !== 'needs_admin_confirmation' ||
+          intake.confirmedTargetUserId ||
+          command.expectedEvidenceRevision !== intake.evidenceRevision ||
+          intake.presentationRevision !== intake.evidenceRevision ||
+          !command.promptMessageId ||
+          command.promptMessageId !== intake.promptMessageId
+        )
+          return { kind: 'denied', code: 'stale_state' };
+      }
       if (intake.claimed)
         return {
           kind: 'outcome',
@@ -146,7 +170,7 @@ export function createReportActions(deps: ReportDependencies): ReportActions {
           },
         };
       const thread = await deps.threads.prepareClose(context, intake);
-      const result = await deps.intakes.close(context, intake, isStaff);
+      const result = await deps.intakes.close(context, intake, isStaff, command);
       const claimed = !result.closed && (await deps.intakes.load(intake.id))?.claimed === true;
       const closed = result.closed ? await thread.finish(result) : null;
       return {
@@ -162,18 +186,54 @@ export function createReportActions(deps: ReportDependencies): ReportActions {
     }
     if (intake.threadId !== command.threadId) return { kind: 'denied', code: 'binding_mismatch' };
     if (
-      intake.status !== 'needs_reporter_confirmation' ||
+      (intake.status !== 'needs_reporter_confirmation' &&
+        !(isStaff && intake.status === 'needs_admin_confirmation')) ||
       intake.confirmedTargetUserId ||
       intake.promptMessageId !== command.promptMessageId
     )
       return { kind: 'denied', code: 'confirmation_required' };
+    if (
+      intake.staged &&
+      (command.expectedEvidenceRevision !== intake.evidenceRevision ||
+        intake.presentationRevision !== intake.evidenceRevision)
+    )
+      return { kind: 'denied', code: 'stale_state' };
+    if (context.actor.kind !== 'user') return { kind: 'denied', code: 'permission_denied' };
     if (command.kind === 'confirm_intake_candidate') {
-      if (!intake.candidateIds.includes(command.targetUserId))
+      if (
+        command.targetUserId === intake.reporterId ||
+        command.targetUserId === context.actor.userId
+      )
+        return { kind: 'denied', code: 'permission_denied' };
+      if (
+        !(isStaff && intake.status === 'needs_admin_confirmation') &&
+        !intake.candidateIds.includes(command.targetUserId)
+      )
         return { kind: 'denied', code: 'confirmation_required' };
+    } else if (
+      intake.status !== 'needs_reporter_confirmation' ||
+      intake.promptToken !== command.promptToken
+    )
+      return { kind: 'denied', code: 'confirmation_required' };
+    const actor = await deps.authority.loadFresh(context.guildId, context.actor.userId);
+    if (
+      !actor?.present ||
+      actor.guildId !== context.guildId ||
+      actor.userId !== context.actor.userId
+    )
+      return { kind: 'denied', code: 'actor_unavailable' };
+    if (isStaff && !(await staff(context, actor)))
+      return { kind: 'denied', code: 'permission_denied' };
+    if (command.kind === 'confirm_intake_candidate') {
+      const target = await deps.authority.loadFresh(context.guildId, command.targetUserId);
+      if (
+        !target?.present ||
+        target.guildId !== context.guildId ||
+        target.userId !== command.targetUserId
+      )
+        return { kind: 'denied', code: 'stale_state' };
       return confirm(context, command, isStaff);
     }
-    if (intake.promptToken !== command.promptToken)
-      return { kind: 'denied', code: 'confirmation_required' };
     const result = await deps.intakes.reject(context, command, isStaff);
     return {
       kind: 'outcome',

@@ -520,3 +520,24 @@ function supportsAllNames(member: ReportDirectoryMember, subject: ReportSubjectC
     )
   );
 }
+
+export function reportCandidateStillMatches(
+  candidate: ReportIdentityCandidate,
+  member: ReportDirectoryMember
+): boolean {
+  if (candidate.discordUserId !== member.id) return false;
+  const fields = new Set([
+    ...candidate.matchedFields,
+    ...candidate.subjectMatches.flatMap((match) => match.matchedFields),
+  ]);
+  return (
+    fields.size > 0 &&
+    [...fields].every(
+      (field) =>
+        field === 'userId' ||
+        field === 'messageAuthor' ||
+        (Boolean(normalizedName(candidate[field])) &&
+          normalizedName(candidate[field]) === normalizedName(member[field]))
+    )
+  );
+}
