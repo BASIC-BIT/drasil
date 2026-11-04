@@ -217,7 +217,9 @@ for (const theme of ['everyday-review', 'light']) {
   for (const width of [320, 1440]) {
     test(`report inbox accessibility and reflow: ${theme} at ${width}px`, async ({ page }) => {
       await page.setViewportSize({ width, height: 1000 });
-      await page.goto(`/iframe.html?id=design-foundation-report-inbox--${theme}&viewMode=story`);
+      await page.goto(
+        `/iframe.html?id=design-foundation-report-inbox--${theme}&viewMode=story&globals=a11y.manual:!true`
+      );
       await expect(page.getByRole('heading', { name: 'Inbox', exact: true })).toBeVisible();
       await page.evaluate(() => document.fonts.ready);
       await page.addScriptTag({ content: axe.source });
@@ -429,7 +431,7 @@ test('mobile workspace menu exposes destinations and closes with Escape or an ou
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   // Avoid competing with the addon scan while this test audits the open menu.
-  await page.goto(`${story}&globals=a11y.manual:true`);
+  await page.goto(`${story}&globals=a11y.manual:!true`);
   const menu = page.getByRole('button', { name: 'Community workspace menu', exact: true });
   await menu.click();
   const navigation = page.getByRole('navigation', { name: 'Workspace', exact: true });

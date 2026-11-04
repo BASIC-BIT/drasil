@@ -7,7 +7,7 @@ for (const width of [320, 390, 1440]) {
     context,
   }, testInfo) => {
     await page.setViewportSize({ width, height: 900 });
-    await page.goto(story);
+    await page.goto(`${story}&globals=a11y.manual:!true`);
     const open = page.getByRole('button', { name: 'View conversation' });
     await open.click();
     const reader = page.getByRole('region', { name: 'Channel conversation' });

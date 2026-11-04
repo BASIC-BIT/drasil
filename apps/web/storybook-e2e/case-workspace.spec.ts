@@ -227,7 +227,7 @@ for (const width of [320, 1440])
     }) => {
       await page.setViewportSize({ width, height: 900 });
       // This test owns the scans before and after confirmation opens.
-      await page.goto(`${story.replace('everyday-case', theme)}&globals=a11y.manual:true`);
+      await page.goto(`${story.replace('everyday-case', theme)}&globals=a11y.manual:!true`);
       await expect(page.getByRole('heading', { name: 'riverstone', exact: true })).toBeVisible();
       await page.addScriptTag({ content: axe.source });
       const audit = async () => {

@@ -14,7 +14,9 @@ test('public shell stories keep one landmark, keyboard form focus and shared bra
     'captcha-pending',
     'read-failure',
   ]) {
-    await page.goto(`/iframe.html?id=moderation-workspace-public-shell--${story}&viewMode=story`);
+    await page.goto(
+      `/iframe.html?id=moderation-workspace-public-shell--${story}&viewMode=story&globals=a11y.manual:!true`
+    );
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
     if (story === 'captcha-pending') await expect(page.getByText(/ask a moderator/)).toBeVisible();
     await inspectEntryPresentation(page, `storybook-${story}`);

@@ -136,7 +136,7 @@ test('delivery failure reports the concrete error without a delivered date', asy
 for (const width of [320, 1440])
   test(`security panel and confirmation reflow and accessibility at ${width}`, async ({ page }) => {
     await page.setViewportSize({ width, height: 1000 });
-    await page.goto(url);
+    await page.goto(`${url}&globals=a11y.manual:!true`);
     await page.addScriptTag({ content: axe.source });
     await confirm(page, 'Continue without security check');
     expect(
