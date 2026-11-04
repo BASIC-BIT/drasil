@@ -222,6 +222,7 @@ describe('ReportInteractionHandler (unit)', () => {
     securityActionService = {
       handleUserReport: jest.fn().mockResolvedValue(true),
       handleConfirmedReportIntake: jest.fn().mockResolvedValue(true),
+      hasConfirmedReportIntakeReceipt: jest.fn().mockResolvedValue(false),
       handleMessageReport: jest.fn().mockResolvedValue(true),
     } as unknown as jest.Mocked<ISecurityActionService>;
     configService = {
