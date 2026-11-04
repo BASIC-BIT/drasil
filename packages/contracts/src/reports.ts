@@ -151,12 +151,7 @@ export function projectReporterIdentityReview(
   const review = projectReportIdentityReview(input);
   return review ? reporterIdentityReviewSchema.parse(review) : null;
 }
-export function reportIntakeStatusLabel(
-  status: string,
-  review?: ReportIdentityReview | ReporterIdentityReview | null,
-  metadata?: unknown
-): string {
-  if (review?.phase === 'resolved') return 'Resolved by staff';
+export function reportIntakeStatusLabel(status: string, metadata?: unknown): string {
   if (status === 'needs_admin_confirmation') return 'Needs admin review';
   if (status === 'closed_by_reporter') {
     const closure = z

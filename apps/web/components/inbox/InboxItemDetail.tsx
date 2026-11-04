@@ -688,8 +688,7 @@ function SelectedDetail({
         <>
           <p>
             Report {detail.intake.id} ·{' '}
-            {detail.intake.statusLabel ??
-              reportIntakeStatusLabel(detail.intake.status, detail.intake.identityReview)}
+            {detail.intake.statusLabel ?? reportIntakeStatusLabel(detail.intake.status)}
           </p>
           <ReportIdentityReview review={detail.intake.identityReview} />
           <Reply reply={detail.reply} />

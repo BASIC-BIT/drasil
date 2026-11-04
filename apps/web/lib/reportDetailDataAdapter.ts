@@ -160,7 +160,7 @@ function reportFields(row: ReportDetailRow, evidenceRows: readonly ReportEvidenc
     evidenceRevision: row.evidence_revision,
   });
   return {
-    statusLabel: reportIntakeStatusLabel(row.status, identityReview, row.metadata),
+    statusLabel: reportIntakeStatusLabel(row.status, row.metadata),
     analysisFailureCode: reportAnalysisFailure(row.analysis_failure_code),
     identityReview,
     id: row.id,

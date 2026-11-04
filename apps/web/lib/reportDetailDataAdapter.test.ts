@@ -233,3 +233,42 @@ it('projects saved unidentified review without creating a target or enforcement 
     allowedActions: [],
   });
 });
+
+it.each([
+  ['submitted', 'submitted'],
+  ['actioned', 'actioned'],
+  ['dismissed', 'dismissed'],
+  ['false_positive', 'false positive'],
+] as const)(
+  'keeps %s as the report lifecycle label after identity handoff resolution',
+  (status, expectedLabel) => {
+    const detail = parseReportDetailRows(
+      {
+        ...baseReportRow,
+        status,
+        metadata: {
+          analysis: {
+            schemaVersion: 1,
+            sources: {},
+            requestReservations: [],
+            outcome: null,
+            coverage: null,
+            handoff: {
+              state: 'resolved',
+              reason: 'no_match',
+              receipt: 'sent',
+              attempts: 1,
+              nextDueAt: null,
+              resolvedBy: 'staff',
+              resolvedAt: '2026-11-03T00:00:00.000Z',
+            },
+          },
+          submitted_by: 'staff',
+        },
+      },
+      []
+    );
+    expect(detail.identityReview?.phase).toBe('resolved');
+    expect(detail.statusLabel).toBe(expectedLabel);
+  }
+);

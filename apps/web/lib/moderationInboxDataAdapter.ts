@@ -1,4 +1,4 @@
-import { projectReportIdentityReview, reportIntakeStatusLabel } from '@drasil/contracts';
+import { reportIntakeStatusLabel } from '@drasil/contracts';
 import { getAttentionCleanupSource, isIdentityReviewItem } from '@drasil/application';
 import {
   moderationInboxItemSchema,
@@ -438,13 +438,7 @@ export function parseModerationQueueRow(
     statusLabel: row.attention_cleanup_pending
       ? 'Acknowledged, cleanup pending'
       : kind === 'report_attention' && row.report_status === 'needs_admin_confirmation'
-        ? reportIntakeStatusLabel(
-            row.report_status,
-            projectReportIdentityReview({
-              status: row.report_status,
-              metadata: row.report_metadata,
-            })
-          )
+        ? reportIntakeStatusLabel(row.report_status, row.report_metadata)
         : queueStatusLabel(kind, row),
     signalLabel: confidenceSignal(row.detection_confidence),
     createdAt: toIsoString(row.created_at),

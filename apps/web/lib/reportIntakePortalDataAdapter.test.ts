@@ -1,6 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { FixtureReportIntakePortalDataAdapter } from '../e2e/legacy/reportIntakePortalDataAdapter';
-import { parseOpenReportIntakeRow } from './reportIntakePortalDataAdapter';
+import {
+  parseOpenReportIntakeRow,
+  PostgresReportIntakePortalDataAdapter,
+} from './reportIntakePortalDataAdapter';
 
 describe('reportIntakePortalDataAdapter', () => {
   it('parses open report intake rows with Discord thread links', () => {
@@ -81,4 +84,20 @@ it('returns only the reporter status and receipt with unknown notification deliv
     identityReview: { phase: 'pending', receipt: 'sent', delivery: 'pending' },
   });
   expect(JSON.stringify(view)).not.toMatch(/provider_failure|candidates|RAW/);
+});
+
+const db = vi.hoisted(() => ({ query: vi.fn() }));
+vi.mock('./setupDataAdapter', () => ({ getPostgresPool: () => db }));
+it('limits active reporter collection discovery to contexts whose intake and thread remain open', async () => {
+  db.query.mockResolvedValueOnce({ rows: [] });
+  const result = await new PostgresReportIntakePortalDataAdapter().getOpenIntakeForReporter({
+    guildId: 'guild-1',
+    reporterId: 'reporter-1',
+  });
+  expect(result).toBeNull();
+  const [sql, values] = db.query.mock.calls[0];
+  expect(values).toEqual(['guild-1', 'reporter-1']);
+  expect(sql).toMatch(/and closed_at is null/i);
+  expect(sql).toMatch(/and metadata\s*->>\s*'thread_closed_at' is null/i);
+  expect(sql).toContain("'needs_admin_confirmation'");
 });

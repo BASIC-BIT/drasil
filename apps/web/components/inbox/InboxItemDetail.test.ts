@@ -315,3 +315,32 @@ it('shows acknowledged review without claiming notification or exposing enforcem
   expect(html).toContain('Notification delivery unknown');
   expect(html).not.toMatch(/Ban member|Open case|Report submitted/);
 });
+
+import { ReportIdentityReview } from './ReportIdentityReview';
+import { projectReportIdentityReview } from '@drasil/contracts';
+it('renders a completed identity handoff as review resolved without claiming staff report closure', () => {
+  const review = projectReportIdentityReview({
+    status: 'submitted',
+    metadata: {
+      analysis: {
+        schemaVersion: 1,
+        sources: {},
+        requestReservations: [],
+        outcome: null,
+        coverage: null,
+        handoff: {
+          state: 'resolved',
+          reason: 'no_match',
+          receipt: 'sent',
+          attempts: 1,
+          nextDueAt: null,
+          resolvedBy: 'staff',
+          resolvedAt: '2026-11-03T00:00:00.000Z',
+        },
+      },
+    },
+  });
+  const html = renderToStaticMarkup(createElement(ReportIdentityReview, { review }));
+  expect(html).toContain('<h2>Review resolved</h2>');
+  expect(html).not.toContain('Resolved by staff');
+});

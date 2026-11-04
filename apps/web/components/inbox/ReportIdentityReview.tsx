@@ -23,7 +23,7 @@ export function ReportIdentityReview({ review }: { review: Review | null | undef
   if (!review) return null;
   return (
     <section aria-label="Identity review">
-      <h2>{review.phase === 'resolved' ? 'Resolved by staff' : 'Needs admin review'}</h2>
+      <h2>{review.phase === 'resolved' ? 'Review resolved' : 'Needs admin review'}</h2>
       <p>Evidence saved for moderator review.</p>
       <p>
         {review.phase === 'acknowledged'

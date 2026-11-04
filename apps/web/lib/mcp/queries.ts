@@ -317,7 +317,7 @@ function project(query: ResourceQuery, binding: AccessBinding, value: JsonRecord
     projected.identityReview = review;
     if (!binding.reporterId)
       projected.analysisFailureCode = reportAnalysisFailure(value.analysisFailureCode);
-    projected.statusLabel = reportIntakeStatusLabel(input.status, review, value.metadata);
+    projected.statusLabel = reportIntakeStatusLabel(input.status, value.metadata);
   }
   if (Array.isArray(projected.attachments))
     projected.attachments = projected.attachments.map((item) => {

@@ -328,7 +328,7 @@ export function createModerationWorkspaceDataAdapter(
       statusLabel:
         intake.statusLabel ??
         (intake.identityReview || intake.status === 'needs_admin_confirmation'
-          ? reportIntakeStatusLabel(intake.status, intake.identityReview)
+          ? reportIntakeStatusLabel(intake.status)
           : attention
             ? 'needs attention'
             : reportIntakeStatusLabel(intake.status)),

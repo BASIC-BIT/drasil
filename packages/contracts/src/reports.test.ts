@@ -212,15 +212,15 @@ it('does not treat extra unvalidated pending fields as proof of delivery or ackn
   expect(view).toMatchObject({ delivery: 'pending', acknowledgedAt: null });
 });
 it('distinguishes staff closure, reporter closure and unknown historical closure', () => {
-  expect(reportIntakeStatusLabel('closed_by_reporter', null, { closed_by_staff: true })).toBe(
+  expect(reportIntakeStatusLabel('closed_by_reporter', { closed_by_staff: true })).toBe(
     'Resolved by staff'
   );
-  expect(reportIntakeStatusLabel('closed_by_reporter', null, { closed_by: 'reporter' })).toBe(
+  expect(reportIntakeStatusLabel('closed_by_reporter', { closed_by: 'reporter' })).toBe(
     'Closed by reporter'
   );
-  expect(reportIntakeStatusLabel('closed_by_reporter', null)).toBe('Closed');
+  expect(reportIntakeStatusLabel('closed_by_reporter')).toBe('Closed');
   expect(
-    reportIntakeStatusLabel('needs_admin_confirmation', null, { thread_closed_by_staff: true })
+    reportIntakeStatusLabel('needs_admin_confirmation', { thread_closed_by_staff: true })
   ).toBe('Needs admin review');
 });
 
@@ -251,5 +251,31 @@ it.each(['acknowledged', 'resolved'] as const)(
       receipt: 'pending',
       acknowledgedBy: 'staff',
     });
+  }
+);
+
+it.each([
+  ['submitted', 'submitted'],
+  ['actioned', 'actioned'],
+  ['dismissed', 'dismissed'],
+  ['false_positive', 'false positive'],
+] as const)(
+  'preserves %s report status after the identity review resolves',
+  (status, expectedLabel) => {
+    const metadata = reviewMetadata({
+      state: 'resolved',
+      reason: 'no_match',
+      receipt: 'sent',
+      attempts: 1,
+      nextDueAt: null,
+      resolvedBy: 'staff',
+      resolvedAt: '2026-11-03T00:00:00.000Z',
+    });
+    const review = projectReportIdentityReview({ status, metadata });
+    expect(review?.phase).toBe('resolved');
+    expect(reportIntakeStatusLabel(status, metadata)).toBe(expectedLabel);
+    expect(
+      reportIntakeStatusLabel('closed_by_reporter', { ...metadata, closed_by: 'reporter' })
+    ).toBe('Closed by reporter');
   }
 );

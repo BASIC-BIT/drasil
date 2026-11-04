@@ -52,7 +52,7 @@ export function parseOpenReportIntakeRow(row: OpenReportIntakeRow): ReporterOpen
   });
   return {
     identityReview,
-    statusLabel: reportIntakeStatusLabel(row.status, identityReview, row.metadata),
+    statusLabel: reportIntakeStatusLabel(row.status, row.metadata),
     createdAt: toIsoString(row.created_at),
     guildId: row.server_id,
     id: row.id,
@@ -80,6 +80,8 @@ export class PostgresReportIntakePortalDataAdapter implements ReportIntakePortal
        from report_intakes
        where server_id = $1
          and reporter_id = $2
+         and closed_at is null
+         and metadata ->> 'thread_closed_at' is null
          and status in (
            'collecting_evidence',
            'needs_reporter_confirmation',
