@@ -1,3 +1,4 @@
+import { getCaseResponderSettings } from '../utils/caseResponderSettings';
 import { findAuthoredReportMessage } from '../utils/reportPresentationDiscord';
 import { IReportIntakeRepository } from '../repositories/ReportIntakeRepository';
 import { canPresent, presentationMetadata } from '../repositories/reportIntakeProcessing';
@@ -29,6 +30,7 @@ import {
   ModerationQueueItemType,
   ReportIntake,
   ServerMember,
+  Server,
   VerificationEvent,
   VerificationStatus,
 } from '../repositories/types';
@@ -488,6 +490,8 @@ export class ModerationQueueService implements IModerationQueueService {
     revision: number;
   }): Promise<ModerationQueueAttentionResult> {
     const unavailable = { delivered: false, created: false };
+    const lease = presentationMetadata(input.intake).analysis.presentation?.lease;
+    if (!lease) return unavailable;
     let current = await this.intakeRepository?.findById(input.intake.id);
     if (
       !current ||
@@ -516,12 +520,12 @@ export class ModerationQueueService implements IModerationQueueService {
       typeof identity.delivery_channel_id === 'string'
         ? identity.delivery_channel_id
         : (existing?.queue_channel_id ?? getModerationQueueSettings(config.settings).channelId);
-    let channel = preferred ? await this.reportReviewChannel(preferred, current.server_id) : null;
+    let channel = preferred ? await this.reportReviewChannel(preferred, config) : null;
     // An uncertain send must be reconciled in its original destination before falling back.
     if (!channel && identity.send_reserved === true && !existing?.queue_message_id)
       return unavailable;
     if (!channel && config.admin_channel_id)
-      channel = await this.reportReviewChannel(config.admin_channel_id, current.server_id);
+      channel = await this.reportReviewChannel(config.admin_channel_id, config);
     const beforeSave = await this.intakeRepository?.findById(current.id);
     if (
       !beforeSave ||
@@ -659,7 +663,8 @@ export class ModerationQueueService implements IModerationQueueService {
     const saved = await this.moderationQueueRepository.updateDiscordMessage(
       item.id,
       message.channelId,
-      message.id
+      message.id,
+      { intake: input.intake, revision: input.revision, leaseToken: lease.token }
     );
     if (!saved) throw new Error('Report review receipt was not saved');
     return {
@@ -680,15 +685,12 @@ export class ModerationQueueService implements IModerationQueueService {
     );
   }
 
-  private async reportReviewChannel(
-    id: string,
-    serverId: string
-  ): Promise<QueueTextChannel | null> {
+  private async reportReviewChannel(id: string, config: Server): Promise<QueueTextChannel | null> {
     const channel = await this.client.channels.fetch(id).catch(() => null);
     if (
       !channel ||
       !('guildId' in channel) ||
-      channel.guildId !== serverId ||
+      channel.guildId !== config.guild_id ||
       !('permissionsFor' in channel) ||
       !('send' in channel) ||
       !('messages' in channel) ||
@@ -696,14 +698,37 @@ export class ModerationQueueService implements IModerationQueueService {
     )
       return null;
     const permissions = channel.permissionsFor(this.client.user);
-    return permissions?.has([
-      PermissionFlagsBits.ViewChannel,
-      PermissionFlagsBits.SendMessages,
-      PermissionFlagsBits.ReadMessageHistory,
-      PermissionFlagsBits.EmbedLinks,
-    ])
-      ? (channel as QueueTextChannel)
-      : null;
+    if (
+      !permissions?.has([
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ReadMessageHistory,
+        PermissionFlagsBits.EmbedLinks,
+      ])
+    )
+      return null;
+    const roles = await channel.guild.roles.fetch().catch(() => null);
+    if (!roles) return null;
+    const explicitIds = new Set([
+      ...getCaseResponderSettings(config.settings).roleIds,
+      ...(config.admin_notification_role_id ? [config.admin_notification_role_id] : []),
+    ]);
+    const audience = explicitIds.size
+      ? [...explicitIds].map((id) => roles.get(id))
+      : [...roles.values()].filter(
+          (role) =>
+            role.permissions.has(PermissionFlagsBits.ManageGuild) ||
+            role.permissions.has(PermissionFlagsBits.ModerateMembers)
+        );
+    const canRead = (role: (typeof audience)[number]): boolean =>
+      !!role &&
+      !!channel
+        .permissionsFor(role)
+        ?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory]);
+    // Explicit audiences must all be reachable; otherwise require one authorized staff role.
+    if (!audience.length || !(explicitIds.size ? audience.every(canRead) : audience.some(canRead)))
+      return null;
+    return channel as QueueTextChannel;
   }
 
   public async deleteReportThreadAttention(reportIntakeId: string): Promise<void> {

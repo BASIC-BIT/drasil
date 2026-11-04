@@ -158,6 +158,20 @@ describe('saved report handoff', () => {
       expect.objectContaining({ intake: expect.objectContaining({ id: intake.id }) })
     );
   });
+  it('does not send a reporter receipt when the review destination is unavailable to staff', async () => {
+    const { service, repository, intake, queue, channel } = await fixture();
+    queue.upsertReportIdentityReview.mockResolvedValueOnce({
+      delivered: false,
+      created: false,
+      channelId: '',
+      messageId: '',
+    });
+    await service.publishOutcome(intake.id);
+    expect(channel.send).not.toHaveBeenCalled();
+    expect(
+      processingMetadata((await repository.findById(intake.id))!).analysis.handoff
+    ).toMatchObject({ state: 'pending', receipt: 'pending' });
+  });
   it('keeps a delivered review when receipt delivery fails and retries without extraction', async () => {
     const { service, repository, intake, channel, intakeService } = await fixture();
     channel.send.mockRejectedValueOnce(new Error('thread unavailable'));

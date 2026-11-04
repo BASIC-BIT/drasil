@@ -1,3 +1,4 @@
+import { ModerationQueueRepository } from '../../repositories/ModerationQueueRepository';
 import { ReportIntakeAnalysisWorker } from '../../services/ReportIntakeAnalysisWorker';
 import type { IReportIntakeAgentService } from '../../services/ReportIntakeAgentService';
 import type { IConfigService } from '../../config/ConfigService';
@@ -8,7 +9,11 @@ import { InMemoryReportIntakeRepository } from '../fakes/inMemoryRepositories';
 import { ReportIntakeRepository } from '../../repositories/ReportIntakeRepository';
 import { ServerRepository } from '../../repositories/ServerRepository';
 import { UserRepository } from '../../repositories/UserRepository';
-import { ReportIntakeStatus, ReportIntakeEvidenceKind } from '../../repositories/types';
+import {
+  ReportIntakeStatus,
+  ReportIntakeEvidenceKind,
+  ModerationQueueItemType,
+} from '../../repositories/types';
 import { getPrismaClient } from '../testDb';
 
 const describeIntegration = process.env.JEST_INTEGRATION === '1' ? describe : describe.skip;
@@ -61,6 +66,16 @@ describeIntegration('durable report intake processing', () => {
   it.each([
     'corrupt',
     ['corrupt'],
+    { analysis: { presentation: { nextDueAt: null } } },
+    { analysis: { handoff: { state: 'resolved' } } },
+    {
+      analysis: {
+        presentation: {
+          nextDueAt: '2999-01-01T00:00:00.000Z',
+          lease: { until: '2999-01-01T00:00:00.000Z' },
+        },
+      },
+    },
     {
       unrelated: 'retained',
       analysis: { broken: true },
@@ -108,6 +123,158 @@ describeIntegration('durable report intake processing', () => {
       expect(await repository.claimAnalysis(new Date(at.getTime() + 31_000), 30_000)).toBeNull();
     }
   );
+
+  it('advances beyond future and resolved quarantine envelopes without trusting malformed eligibility', async () => {
+    const { prisma, repository, intake } = await fixture();
+    const at = new Date();
+    const { analysis } = processingMetadata(intake);
+    analysis.outcome = outcome;
+    analysis.handoff = {
+      state: 'pending',
+      reason: 'no_match',
+      receipt: 'pending',
+      attempts: 1,
+      nextDueAt: '2999-01-01T00:00:00.000Z',
+    };
+    analysis.presentation = {
+      revision: 0,
+      attempts: 1,
+      nextDueAt: '2999-01-01T00:00:00.000Z',
+      lease: null,
+    };
+    for (let index = 0; index < 12; index++) {
+      const saved =
+        index % 2
+          ? {
+              ...analysis,
+              handoff: {
+                ...analysis.handoff,
+                state: 'resolved',
+                resolvedBy: 'staff',
+                resolvedAt: at.toISOString(),
+              },
+            }
+          : analysis;
+      await prisma.report_intakes.create({
+        data: {
+          id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+          server_id: intake.server_id,
+          reporter_id: intake.reporter_id,
+          status: 'needs_admin_confirmation',
+          analysis_failure_code: 'invalid_metadata',
+          metadata: JSON.parse(
+            JSON.stringify({ quarantined_metadata: ['original'], analysis: saved })
+          ),
+        },
+      });
+    }
+    const malformed = await prisma.report_intakes.create({
+      data: {
+        id: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+        server_id: intake.server_id,
+        reporter_id: intake.reporter_id,
+        status: 'needs_admin_confirmation',
+        analysis_failure_code: 'invalid_metadata',
+        metadata: { analysis: { handoff: { state: 'resolved' } } },
+      },
+    });
+    expect(await repository.claimPendingPresentation(at)).toBeNull();
+    const claim = (await repository.claimPendingPresentation(at))!;
+    expect(claim.intake.id).toBe(malformed.id);
+    expect(claim.intake.metadata).toMatchObject({ quarantined_metadata: malformed.metadata });
+    const future = (await repository.findById('00000000-0000-4000-8000-000000000000'))!;
+    expect(processingMetadata(future).analysis.presentation?.nextDueAt).toBe(
+      '2999-01-01T00:00:00.000Z'
+    );
+    expect(processingMetadata(future).analysis.presentation?.attempts).toBe(1);
+    const restarted = new ReportIntakeRepository(prisma);
+    expect(await restarted.claimPendingPresentation(at)).toBeNull();
+    expect(await restarted.claimPendingPresentation(at)).toBeNull();
+  });
+
+  it('rechecks quarantined presentation eligibility under concurrent claims', async () => {
+    const { prisma, repository, intake } = await fixture();
+    const raw = { analysis: { presentation: { nextDueAt: null } } };
+    await prisma.report_intakes.update({
+      where: { id: intake.id },
+      data: {
+        status: 'needs_admin_confirmation',
+        analysis_failure_code: 'invalid_metadata',
+        metadata: raw,
+      },
+    });
+    const at = new Date();
+    const claims = await Promise.all([
+      repository.claimPendingPresentation(at, intake.id),
+      new ReportIntakeRepository(prisma).claimPendingPresentation(at, intake.id),
+    ]);
+    expect(claims.filter(Boolean)).toHaveLength(1);
+    const claim = claims.find((value) => value !== null)!;
+    await repository.update(intake.id, {
+      status: ReportIntakeStatus.CLOSED_BY_REPORTER,
+      closedAt: new Date(),
+    });
+    expect(
+      await repository.completePresentation(claim, {
+        kind: 'delivered',
+        channelId: 'queue',
+        messageId: 'late',
+        receipt: 'sent',
+      })
+    ).toBe(false);
+    expect((await repository.findById(intake.id))?.metadata).toMatchObject({
+      quarantined_metadata: raw,
+    });
+  });
+
+  it('fences a queue receipt against a replaced presentation lease under the report lock', async () => {
+    const { prisma, repository, intake, batch } = await fixture();
+    const at = new Date();
+    await repository.recordEvidenceBatch({ ...batch, observedAt: new Date(at.getTime() - 15_000) });
+    const analysis = (await repository.claimAnalysis(at, 30_000))!;
+    await repository.completeAnalysis(analysis, outcome, at);
+    const oldClaim = (await repository.claimPendingPresentation(at))!;
+    const queue = new ModerationQueueRepository(prisma);
+    const item = await queue.upsert({
+      serverId: intake.server_id,
+      userId: intake.reporter_id,
+      reportIntakeId: intake.id,
+      sourceThreadId: 'thread',
+      itemType: ModerationQueueItemType.REPORT_THREAD_ATTENTION,
+    });
+    let locked!: () => void;
+    const lockReady = new Promise<void>((resolve) => {
+      locked = resolve;
+    });
+    let release!: () => void;
+    const mayCommit = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const replacement = prisma.$transaction(async (transaction) => {
+      await transaction.$queryRaw`SELECT id FROM report_intakes WHERE id=${intake.id}::uuid FOR UPDATE`;
+      const { metadata, analysis: saved } = processingMetadata(oldClaim.intake);
+      saved.presentation!.lease!.token = 'replacement-lease';
+      await transaction.report_intakes.update({
+        where: { id: intake.id },
+        data: { metadata: JSON.parse(JSON.stringify({ ...metadata, analysis: saved })) },
+      });
+      await transaction.moderation_queue_items.update({
+        where: { id: item.id },
+        data: { queue_channel_id: 'queue', queue_message_id: 'replacement' },
+      });
+      locked();
+      await mayCommit;
+    });
+    await lockReady;
+    const lateWrite = queue.updateDiscordMessage(item.id, 'queue', 'old-send', oldClaim);
+    release();
+    await replacement;
+    expect(await lateWrite).toBeNull();
+    expect((await queue.findById(item.id))?.queue_message_id).toBe('replacement');
+    expect(await queue.updateDiscordMessage(item.id, 'queue', 'ordinary-update')).toMatchObject({
+      queue_message_id: 'ordinary-update',
+    });
+  });
 
   it('grants one presentation lease and retains delivery proof across repository restart', async () => {
     const { prisma, repository, intake, batch } = await fixture();

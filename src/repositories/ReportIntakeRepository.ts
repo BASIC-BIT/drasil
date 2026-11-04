@@ -86,6 +86,8 @@ export interface IReportIntakeRepository {
 
 @injectable()
 export class ReportIntakeRepository implements IReportIntakeRepository {
+  // Fairness only; eligibility and ownership are rechecked under the report lock.
+  private quarantinePresentationAfter: string | null = null;
   constructor(@inject(TYPES.PrismaClient) private prisma: PrismaClient) {}
 
   private async lockedIntake(
@@ -173,15 +175,18 @@ export class ReportIntakeRepository implements IReportIntakeRepository {
     now: Date,
     intakeId?: string
   ): Promise<ReportPresentationClaim | null> {
+    const quarantined = await this.claimQuarantinedPresentation(now, intakeId);
+    if (quarantined) return quarantined;
     return this.prisma.$transaction(async (transaction) => {
       const rows = await transaction.$queryRaw<ReportIntake[]>`
         SELECT * FROM report_intakes WHERE (${intakeId ?? null}::uuid IS NULL OR id = ${intakeId ?? null}::uuid)
         AND status IN ('needs_reporter_confirmation', 'needs_admin_confirmation')
         AND closed_at IS NULL AND confirmed_target_user_id IS NULL
-        AND (analysis_failure_code = 'invalid_metadata' OR jsonb_typeof(metadata->'analysis'->'outcome') = 'object')
+        AND analysis_failure_code IS DISTINCT FROM 'invalid_metadata'
+        AND jsonb_typeof(metadata->'analysis'->'outcome') = 'object'
         AND (status <> 'needs_reporter_confirmation' OR EXISTS (SELECT 1 FROM servers WHERE guild_id = report_intakes.server_id
           AND settings->'report_intake_staged_enabled' = 'true'::jsonb))
-        AND (analysis_revision = evidence_revision OR analysis_failure_code = 'invalid_metadata')
+        AND analysis_revision = evidence_revision
         AND (metadata->'analysis'->'presentation' IS NULL OR
           (metadata->'analysis'->'presentation'->>'nextDueAt' <= ${now.toISOString()}
           AND (metadata->'analysis'->'presentation'->'lease'->>'until' IS NULL OR
@@ -196,6 +201,36 @@ export class ReportIntakeRepository implements IReportIntakeRepository {
       }
       return null;
     });
+  }
+
+  private async claimQuarantinedPresentation(
+    now: Date,
+    intakeId?: string
+  ): Promise<ReportPresentationClaim | null> {
+    const after = intakeId ? null : this.quarantinePresentationAfter;
+    const rows = await this.prisma.$queryRaw<ReportIntake[]>`
+      SELECT * FROM report_intakes WHERE analysis_failure_code = 'invalid_metadata'
+      AND status IN ('needs_reporter_confirmation', 'needs_admin_confirmation')
+      AND closed_at IS NULL AND confirmed_target_user_id IS NULL
+      AND (${intakeId ?? null}::uuid IS NULL OR id = ${intakeId ?? null}::uuid)
+      AND (${after}::uuid IS NULL OR id > ${after}::uuid)
+      ORDER BY id LIMIT ${ANALYSIS_CLAIM_SCAN_LIMIT}`;
+    if (!intakeId)
+      this.quarantinePresentationAfter =
+        rows.length === ANALYSIS_CLAIM_SCAN_LIMIT ? rows[rows.length - 1].id : null;
+    for (const snapshot of rows) {
+      if (!presentationClaimChange(snapshot, now)) continue;
+      const claim = await this.prisma.$transaction(async (transaction) => {
+        const current = await this.lockedIntake(transaction, snapshot.id);
+        if (!current || current.analysis_failure_code !== 'invalid_metadata') return null;
+        const result = presentationClaimChange(current, now);
+        if (!result) return null;
+        await this.writeProcessing(transaction, current, result.change);
+        return result.claim;
+      });
+      if (claim) return claim;
+    }
+    return null;
   }
 
   async completePresentation(

@@ -1,8 +1,15 @@
+import { ownsPresentation } from './reportIntakeProcessing';
 import { injectable, inject } from 'inversify';
 import { Prisma, PrismaClient, moderation_queue_item_type } from '../db/prisma';
 import { TYPES } from '../di/symbols';
 import { RepositoryError } from './BaseRepository';
-import { ModerationQueueItem, ModerationQueueItemType, ModerationQueueItemUpsert } from './types';
+import {
+  ModerationQueueItem,
+  ModerationQueueItemType,
+  ModerationQueueItemUpsert,
+  ReportPresentationClaim,
+  ReportIntake,
+} from './types';
 
 export interface IModerationQueueRepository {
   findById(id: string): Promise<ModerationQueueItem | null>;
@@ -33,7 +40,8 @@ export interface IModerationQueueRepository {
   updateDiscordMessage(
     id: string,
     queueChannelId: string | null,
-    queueMessageId: string | null
+    queueMessageId: string | null,
+    claim?: ReportPresentationClaim
   ): Promise<ModerationQueueItem | null>;
   deleteById(id: string): Promise<ModerationQueueItem | null>;
 }
@@ -257,9 +265,37 @@ export class ModerationQueueRepository implements IModerationQueueRepository {
   async updateDiscordMessage(
     id: string,
     queueChannelId: string | null,
-    queueMessageId: string | null
+    queueMessageId: string | null,
+    claim?: ReportPresentationClaim
   ): Promise<ModerationQueueItem | null> {
     try {
+      if (claim)
+        return await this.prisma.$transaction(async (transaction) => {
+          // Match the report-first lock order used by report actions and presentation completion.
+          const rows = await transaction.$queryRaw<
+            ReportIntake[]
+          >`SELECT * FROM report_intakes WHERE id = ${claim.intake.id}::uuid FOR UPDATE`;
+          const intake = rows[0];
+          if (!intake || !ownsPresentation(intake, claim, new Date())) return null;
+          const updated = await transaction.moderation_queue_items.updateMany({
+            where: {
+              id,
+              report_intake_id: intake.id,
+              server_id: intake.server_id,
+              item_type: ModerationQueueItemType.REPORT_THREAD_ATTENTION,
+            },
+            data: {
+              queue_channel_id: queueChannelId,
+              queue_message_id: queueMessageId,
+              updated_at: new Date(),
+            },
+          });
+          if (!updated.count) return null;
+          return (await transaction.moderation_queue_items.findUnique({
+            where: { id },
+          })) as ModerationQueueItem | null;
+        });
+
       const updated = await this.prisma.moderation_queue_items.update({
         where: { id },
         data: {
