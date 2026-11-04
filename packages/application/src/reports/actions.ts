@@ -135,15 +135,29 @@ export function createReportActions(deps: ReportDependencies): ReportActions {
     if (!intake || intake.guildId !== context.guildId)
       return { kind: 'denied', code: 'binding_mismatch' };
     const isReporter = context.actor.kind === 'user' && intake.reporterId === context.actor.userId;
+    const resolvesSubmission =
+      command.kind === 'close_report_intake' && command.closeMode?.kind === 'resolve_submission';
     const resolvesReview =
       command.kind === 'close_report_intake' && command.closeMode?.kind === 'resolve_review';
     const isStaff =
       (!isReporter ||
         resolvesReview ||
+        resolvesSubmission ||
         (command.kind !== 'close_report_intake' && intake.status === 'needs_admin_confirmation')) &&
       (await staff(context));
     if (!isReporter && !isStaff) return { kind: 'denied', code: 'permission_denied' };
     if (command.kind === 'close_report_intake') {
+      if (command.closeMode?.kind === 'resolve_submission') {
+        if (!isStaff || context.source !== 'discord_interaction')
+          return { kind: 'denied', code: 'permission_denied' };
+        if (
+          !intake.submission ||
+          intake.submission.token !== command.closeMode.token ||
+          !intake.confirmedTargetUserId ||
+          command.expectedEvidenceRevision !== intake.evidenceRevision
+        )
+          return { kind: 'denied', code: 'stale_state' };
+      }
       if (resolvesReview) {
         if (!isStaff) return { kind: 'denied', code: 'permission_denied' };
         if (

@@ -6,7 +6,7 @@ Use a staged report assistant: preserve the evidence, extract person-specific cl
 
 This design covers the Discord report-panel intake, its identity resolver, the moderator handoff, and the worker and status reads that support them. Existing person-menu and message-menu reports retain their direct entry paths. Existing moderation policy and destructive-action confirmation remain separate.
 
-**Confirmed:** the user selected the staged approach; server-visible names must be considered; unresolved reports must reach admins without another reporter action. **Approved on November 3, 2026:** the lookup strategy, limits, durable processing, and moderator experience below. **Unproven:** the exact reason the original account was not found. All nine implementation tasks and the full local acceptance gate are complete. Paid provider and live Discord validation remain pending. The [acceptance report](../reports/2026-11-03-staged-report-intake-acceptance.md) records exact source evidence and the known failed-submission recovery limitation; rollout is not approved by local test results.
+**Confirmed:** the user selected the staged approach; server-visible names must be considered; unresolved reports must reach admins without another reporter action. **Approved on November 3, 2026:** the lookup strategy, limits, durable processing, and moderator experience below. **Unproven:** the exact reason the original account was not found. All nine implementation tasks and the final review corrections are implemented locally. The correction gate and scoped rereview are pending. Paid provider and live Discord validation remain pending. The [acceptance report](../reports/2026-11-03-staged-report-intake-acceptance.md) records exact source evidence and the supported submission recovery and remaining operator reconciliation limit; rollout is not approved by local test results.
 
 The user approved this design and authorized implementation planning on November 3, 2026. The material tradeoffs are a bounded directory scan to support global display names, a small persistence change for restart recovery, and explicit admin workload when identification cannot finish. Engineering defaults are labeled below and can change during review.
 
@@ -61,6 +61,27 @@ flowchart TD
   Close --> Resolve
   Inspect -->|Voluntary new evidence arrives| Updated[Update same review item]
   Updated --> Inspect
+```
+
+## Recovering a selected report
+
+The final-review recovery decision was approved on November 4, 2026. A dispatch saves a staff recovery handoff with the selected target. Admin Actions remains available on the review message after selection and acknowledgement, and from the report thread. A durable receipt written after existing moderation routing returns is completion proof. Merely creating a detection record is not.
+
+Staff reconcile that receipt first. If present, Drasil records submission without repeating it. A known not-dispatched attempt can be resolved with a reason. For a call that durably settled with unknown acceptance, staff may record a verified outcome and reason, then confirm resolution. This preserves the target and original uncertainty and does not claim automatic submission success. A dispatch without a receipt or durable settlement remains visible and blocked, including after process interruption. Elapsed time does not establish failure.
+
+The supported recovery operation is a fresh-authorized Discord staff action. It neither retries submission nor changes the target. Existing moderation policy and destructive-action confirmations remain separate.
+
+```mermaid
+flowchart TD
+  Queue[Selected report in admin queue] --> Reconcile[Admin Actions: reconcile submission]
+  Reconcile --> Receipt{Completed routing receipt?}
+  Receipt -->|Yes| Submitted[Record submitted, no new dispatch]
+  Receipt -->|No, dispatch still unsettled| Blocked[Keep review open for operator reconciliation]
+  Receipt -->|No, never dispatched| Reason[Staff records a reason]
+  Receipt -->|No, call settled unknown| Verify[Staff verifies outcome and records a reason]
+  Reason --> Confirm[Confirm review resolution]
+  Verify --> Confirm
+  Confirm --> Resolved[Resolve review, preserve target and evidence]
 ```
 
 ## Names are clues, IDs are identities

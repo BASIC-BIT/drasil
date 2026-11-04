@@ -1,5 +1,6 @@
 import {
   acknowledgeIdentityReviewMetadata,
+  projectReportIntakeState,
   isIdentityReviewItem,
   type QueueAttentionItemRecord,
   type QueueAttentionRepository,
@@ -46,6 +47,10 @@ export interface IModerationQueueRepository extends Pick<
     itemTypes: ModerationQueueItemType[]
   ): Promise<ModerationQueueItem[]>;
   upsert(data: ModerationQueueItemUpsert): Promise<ModerationQueueItem>;
+  upsertIdentityReview(
+    data: ModerationQueueItemUpsert,
+    claim: ReportPresentationClaim
+  ): Promise<ModerationQueueItem | null>;
   updateDiscordMessage(
     id: string,
     queueChannelId: string | null,
@@ -251,6 +256,56 @@ export class ModerationQueueRepository implements IModerationQueueRepository {
     }
   }
 
+  async upsertIdentityReview(
+    data: ModerationQueueItemUpsert,
+    claim: ReportPresentationClaim
+  ): Promise<ModerationQueueItem | null> {
+    try {
+      return await this.prisma.$transaction(async (transaction) => {
+        // Serialize identity metadata and send reservations with resolution and evidence revisions.
+        const rows = await transaction.$queryRaw<
+          ReportIntake[]
+        >`SELECT * FROM report_intakes WHERE id=${claim.intake.id}::uuid FOR UPDATE`;
+        const intake = rows.at(0);
+        if (
+          !intake ||
+          !ownsPresentation(intake, claim, new Date()) ||
+          intake.status !== 'needs_admin_confirmation' ||
+          data.reportIntakeId !== intake.id ||
+          data.serverId !== intake.server_id ||
+          data.userId !== intake.reporter_id ||
+          data.itemType !== ModerationQueueItemType.REPORT_THREAD_ATTENTION ||
+          data.sourceThreadId !== intake.thread_id
+        )
+          return null;
+        const existing = await transaction.moderation_queue_items.findFirst({
+          where: {
+            item_type: data.itemType,
+            server_id: intake.server_id,
+            attention_cleanup_pending: false,
+            OR: [
+              { report_intake_id: intake.id },
+              ...(intake.thread_id ? [{ source_thread_id: intake.thread_id }] : []),
+            ],
+          },
+        });
+        const writeData = this.toPrismaWriteData(data);
+        if (existing) {
+          const updated = await transaction.moderation_queue_items.updateManyAndReturn({
+            where: { id: existing.id, attention_cleanup_pending: false },
+            data: { ...writeData, updated_at: new Date() },
+          });
+          if (updated[0]) return updated[0] as ModerationQueueItem;
+        }
+        return (await transaction.moderation_queue_items.create({
+          data: writeData,
+        })) as ModerationQueueItem;
+      });
+    } catch (error) {
+      this.handleError(error, 'upsertReportIdentityReview');
+    }
+  }
+
   async upsert(data: ModerationQueueItemUpsert): Promise<ModerationQueueItem> {
     try {
       if (
@@ -389,7 +444,7 @@ export class ModerationQueueRepository implements IModerationQueueRepository {
         intake.server_id !== input.guildId ||
         intake.status !== 'needs_admin_confirmation' ||
         intake.closed_at ||
-        intake.confirmed_target_user_id
+        (intake.confirmed_target_user_id && !projectReportIntakeState(intake).submission)
       )
         return 'already_handled';
       const metadata = acknowledgeIdentityReviewMetadata(

@@ -5,13 +5,14 @@ import {
   messageAttachmentsToReportMetadata,
 } from '../utils/reportAttachments';
 import { awaitReportLookup } from './ReportMemberDirectory';
-import type {
-  ReportAnalysisOutcome,
-  ReportEvidenceSource,
-  ReportEvidenceRef,
-  ReportSubjectClues,
-  ReportHandoffReason,
-  ReportIdentityExtraction,
+import {
+  projectReportIntakeState,
+  type ReportAnalysisOutcome,
+  type ReportEvidenceSource,
+  type ReportEvidenceRef,
+  type ReportSubjectClues,
+  type ReportHandoffReason,
+  type ReportIdentityExtraction,
 } from '@drasil/application';
 import type { ReportAnalysisClaim } from '../repositories/types';
 import { withObservation, recordObservation } from '../observability/langfuse';
@@ -537,7 +538,11 @@ export class ReportIntakeAgentService implements IReportIntakeAgentService {
   }
 
   private canAnalyzeIntake(intake: ReportIntake | null): intake is ReportIntake {
-    return Boolean(intake && intake.status === ReportIntakeStatus.COLLECTING_EVIDENCE);
+    return Boolean(
+      intake &&
+      intake.status === ReportIntakeStatus.COLLECTING_EVIDENCE &&
+      !projectReportIntakeState(intake).staged
+    );
   }
 
   private hasNewEvidenceForAgent(intake: ReportIntake, evidenceCount: number): boolean {

@@ -276,6 +276,61 @@ describeIntegration('durable report intake processing', () => {
     });
   });
 
+  it.each(['resolution', 'replacement revision'])(
+    'rejects delayed identity metadata and send reservations after %s wins the report lock',
+    async (winner) => {
+      const { prisma, repository, intake, batch } = await fixture();
+      const at = new Date();
+      await prisma.report_intakes.update({
+        where: { id: intake.id },
+        data: { thread_id: 'thread' },
+      });
+      await repository.recordEvidenceBatch({
+        ...batch,
+        observedAt: new Date(at.getTime() - 15_000),
+      });
+      await repository.completeAnalysis((await repository.claimAnalysis(at, 30_000))!, outcome, at);
+      const claim = (await repository.claimPendingPresentation(at))!;
+      const queue = new ModerationQueueRepository(prisma);
+      const data = {
+        serverId: intake.server_id,
+        userId: intake.reporter_id,
+        reportIntakeId: intake.id,
+        sourceThreadId: 'thread',
+        itemType: ModerationQueueItemType.REPORT_THREAD_ATTENTION,
+        metadata: { identity_review: { revision: claim.revision, send_reserved: true } },
+      };
+      await queue.upsert(data);
+      let locked!: () => void;
+      const ready = new Promise<void>((resolve) => {
+        locked = resolve;
+      });
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const winning = prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM report_intakes WHERE id=${intake.id}::uuid FOR UPDATE`;
+        await tx.report_intakes.update({
+          where: { id: intake.id },
+          data:
+            winner === 'resolution'
+              ? { status: 'closed_by_reporter', closed_at: at }
+              : { evidence_revision: { increment: 1 } },
+        });
+        await tx.moderation_queue_items.deleteMany({ where: { report_intake_id: intake.id } });
+        locked();
+        await held;
+      });
+      await ready;
+      const late = queue.upsertIdentityReview(data, claim);
+      release();
+      await winning;
+      expect(await late).toBeNull();
+      expect(await queue.listByReportIntake(intake.id)).toEqual([]);
+    }
+  );
+
   it('grants one presentation lease and retains delivery proof across repository restart', async () => {
     const { prisma, repository, intake, batch } = await fixture();
     const at = new Date();
@@ -898,7 +953,10 @@ describeIntegration('durable report intake processing', () => {
       evidence_revision: 1,
       analysis_due_at: null,
     });
-    await repository.update(intake.id, { closedAt: due });
+    await repository.update(intake.id, {
+      closedAt: due,
+      status: ReportIntakeStatus.CLOSED_BY_REPORTER,
+    });
     expect(
       await repository.recordEvidenceBatch({ ...batch, sourceVersion: 2, sourceFingerprint: 'v2' })
     ).toBe('closed');

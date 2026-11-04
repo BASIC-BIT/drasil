@@ -1,5 +1,6 @@
 import {
   reportAnalysisMetadataSchema,
+  projectReportIntakeState,
   reportAnalysisOutcomeSchema,
   reportSourceVersionSchema,
   reportHandoffSchema,
@@ -58,7 +59,7 @@ export function evidenceBatchChange(
   appendEvidence?: boolean;
 } {
   if (
-    intake.closed_at ||
+    (intake.closed_at && intake.status !== ReportIntakeStatus.SUBMITTED) ||
     intake.status === ReportIntakeStatus.CLOSED_BY_REPORTER ||
     intake.status === ReportIntakeStatus.EXPIRED
   )
@@ -395,7 +396,9 @@ export function canPresent(intake: ReportIntake): boolean {
   return (
     OPEN_ANALYSIS_STATUSES.includes(intake.status) &&
     !intake.closed_at &&
-    !intake.confirmed_target_user_id
+    (!intake.confirmed_target_user_id ||
+      (intake.status === ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION &&
+        Boolean(projectReportIntakeState(intake).submission)))
   );
 }
 
@@ -412,7 +415,8 @@ export function presentationClaimChange(
     !analysis.outcome ||
     analysis.handoff.state === 'resolved' ||
     (intake.analysis_revision !== intake.evidence_revision &&
-      intake.analysis_failure_code !== 'invalid_metadata')
+      intake.analysis_failure_code !== 'invalid_metadata' &&
+      !projectReportIntakeState(intake).submission)
   )
     return null;
   const previous = analysis.presentation;

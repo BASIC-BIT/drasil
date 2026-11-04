@@ -178,6 +178,8 @@ const buildStaffReviewIntake = (): ReportIntake =>
   });
 
 const createReportIntakeService = (): jest.Mocked<IReportIntakeService> => ({
+  beginConfirmedSubmission: jest.fn().mockResolvedValue(true),
+  settleConfirmedSubmission: jest.fn().mockResolvedValue(true),
   publishSavedConfirmation: jest.fn(),
   openIntakeFromThread: jest.fn().mockResolvedValue(buildReportIntake()),
   findOpenIntakeForReporter: jest.fn().mockResolvedValue(null),

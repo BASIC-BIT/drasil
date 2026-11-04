@@ -30,6 +30,7 @@ export interface CandidateSignalSummary {
 }
 
 export interface ReportCandidate {
+  matchedFields?: ReportIdentityCandidate['matchedFields'];
   candidateId: string;
   discordUserId: string;
   serverId: string;

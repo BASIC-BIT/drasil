@@ -69,6 +69,15 @@ export class ReportIntakeHandoffService implements IReportIntakeHandoffService {
       await this.repository.completePresentation(claim, { kind: 'published' });
       return;
     }
+    let receipt: 'pending' | 'sent' =
+      analysis.handoff.state !== 'none' ? analysis.handoff.receipt : 'pending';
+    if (receipt !== 'sent') {
+      try {
+        if (await this.sendReceipt(claim)) receipt = 'sent';
+      } catch {
+        /* Receipt delivery and moderator notification recover independently. */
+      }
+    }
     await this.threads.retireReportConfirmationPrompts(
       current,
       getReportConfirmationMessageIds(current)
@@ -81,15 +90,6 @@ export class ReportIntakeHandoffService implements IReportIntakeHandoffService {
     if (!result.delivered || !result.channelId || !result.messageId) {
       await this.repository.completePresentation(claim, { kind: 'failed' });
       return;
-    }
-    let receipt: 'pending' | 'sent' =
-      analysis.handoff.state !== 'none' ? analysis.handoff.receipt : 'pending';
-    if (receipt !== 'sent') {
-      try {
-        if (await this.sendReceipt(claim)) receipt = 'sent';
-      } catch {
-        /* The saved review remains delivered even when the reporter thread is unavailable. */
-      }
     }
     await this.repository.completePresentation(claim, {
       kind: 'delivered',
@@ -116,28 +116,37 @@ export class ReportIntakeHandoffService implements IReportIntakeHandoffService {
     )
       return false;
     const marker = `Report receipt ${current.id}`;
-    if (
+    const recovered =
       analysis.handoff.receipt_reserved === true &&
       (await findAuthoredReportMessage(
         channel,
         this.client.user.id,
         marker,
         current.created_at ?? new Date(0)
-      ))
-    )
-      return true;
-    analysis.handoff.receipt_reserved = true;
-    const reserved = await this.repository.updateIfCurrent(current, {
-      metadata: { ...metadata, analysis },
-    });
-    if (!reserved) return false;
-    const fresh = await this.repository.findById(current.id);
-    if (!fresh || !ownsPresentation(fresh, claim, new Date())) return false;
-    await channel.send({
-      content: REPORT_HANDOFF_RECEIPT,
-      embeds: [new EmbedBuilder().setFooter({ text: marker })],
-      allowedMentions: { parse: [] },
-    });
-    return true;
+      ));
+    if (!recovered) {
+      analysis.handoff.receipt_reserved = true;
+      const reserved = await this.repository.updateIfCurrent(current, {
+        metadata: { ...metadata, analysis },
+      });
+      if (!reserved) return false;
+      const fresh = await this.repository.findById(current.id);
+      if (!fresh || !ownsPresentation(fresh, claim, new Date())) return false;
+      await channel.send({
+        content: REPORT_HANDOFF_RECEIPT,
+        embeds: [new EmbedBuilder().setFooter({ text: marker })],
+        allowedMentions: { parse: [] },
+      });
+    }
+    const latest = await this.repository.findById(current.id);
+    if (!latest || !ownsPresentation(latest, claim, new Date())) return false;
+    const saved = presentationMetadata(latest);
+    if (saved.analysis.handoff.state === 'none') return false;
+    saved.analysis.handoff.receipt = 'sent';
+    return Boolean(
+      await this.repository.updateIfCurrent(latest, {
+        metadata: { ...saved.metadata, analysis: saved.analysis },
+      })
+    );
   }
 }

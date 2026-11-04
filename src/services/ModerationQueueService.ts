@@ -1,3 +1,5 @@
+import { formatReportIdentity } from '../utils/reportIdentityPresentation';
+import { buildReportIntakeAdminActionsCustomId } from '../utils/reportIntakeAdminActions';
 import { getCaseResponderSettings } from '../utils/caseResponderSettings';
 import { findAuthoredReportMessage } from '../utils/reportPresentationDiscord';
 import { IReportIntakeRepository } from '../repositories/ReportIntakeRepository';
@@ -37,7 +39,11 @@ import {
 import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
 import { getModerationQueueSettings } from '../utils/moderationQueueSettings';
 import { NotificationPresentationBuilder } from './NotificationPresentationBuilder';
-import type { ReportAnalysisOutcome, QueueAttentionItemRecord } from '@drasil/application';
+import {
+  projectReportIntakeState,
+  type ReportAnalysisOutcome,
+  type QueueAttentionItemRecord,
+} from '@drasil/application';
 
 const QUEUE_ACK_CUSTOM_ID_PREFIX = 'queue:ack';
 const DISCORD_EMBED_FIELD_MAX_LENGTH = 1024;
@@ -492,6 +498,7 @@ export class ModerationQueueService implements IModerationQueueService {
     const unavailable = { delivered: false, created: false };
     const lease = presentationMetadata(input.intake).analysis.presentation?.lease;
     if (!lease) return unavailable;
+    const claim = { intake: input.intake, revision: input.revision, leaseToken: lease.token };
     let current = await this.intakeRepository?.findById(input.intake.id);
     if (
       !current ||
@@ -537,33 +544,36 @@ export class ModerationQueueService implements IModerationQueueService {
     current = beforeSave;
     const handoff = presentationMetadata(current).analysis.handoff;
     let acknowledged = handoff.state === 'acknowledged';
-    const item = await this.moderationQueueRepository.upsert({
-      serverId: current.server_id,
-      userId: current.reporter_id,
-      itemType: ModerationQueueItemType.REPORT_THREAD_ATTENTION,
-      reportIntakeId: current.id,
-      sourceThreadId: current.thread_id,
-      lastSourceMessageId: existing?.last_source_message_id,
-      lastNotifiedAt: existing?.last_notified_at,
-      metadata: this.toJson({
-        ...oldMetadata,
-        identity_review: {
-          ...identity,
-          revision: input.revision,
-          marker,
-          reason:
-            handoff.state === 'none'
-              ? input.outcome.kind === 'admin_review'
-                ? input.outcome.reason
-                : 'ambiguous'
-              : handoff.reason,
-          outcome: input.outcome,
-          acknowledged,
-          ...(channel ? { delivery_channel_id: channel.id } : {}),
-        },
-      }),
-    });
-    if (!channel || !this.client.user) return unavailable;
+    const item = await this.moderationQueueRepository.upsertIdentityReview(
+      {
+        serverId: current.server_id,
+        userId: current.reporter_id,
+        itemType: ModerationQueueItemType.REPORT_THREAD_ATTENTION,
+        reportIntakeId: current.id,
+        sourceThreadId: current.thread_id,
+        lastSourceMessageId: existing?.last_source_message_id,
+        lastNotifiedAt: existing?.last_notified_at,
+        metadata: this.toJson({
+          ...oldMetadata,
+          identity_review: {
+            ...identity,
+            revision: input.revision,
+            marker,
+            reason:
+              handoff.state === 'none'
+                ? input.outcome.kind === 'admin_review'
+                  ? input.outcome.reason
+                  : 'ambiguous'
+                : handoff.reason,
+            outcome: input.outcome,
+            acknowledged,
+            ...(channel ? { delivery_channel_id: channel.id } : {}),
+          },
+        }),
+      },
+      claim
+    );
+    if (!item || !channel || !this.client.user) return unavailable;
     let message: Message | null = null;
     if (item.queue_message_id && item.queue_channel_id === channel.id) {
       try {
@@ -609,16 +619,36 @@ export class ModerationQueueService implements IModerationQueueService {
             ]
           : [])
       );
-    const components = acknowledged
-      ? []
-      : [
-          new ActionRowBuilder<ButtonBuilder>().addComponents(
-            new ButtonBuilder()
-              .setCustomId(ModerationQueueService.buildAcknowledgeCustomId(item.id))
-              .setLabel('Acknowledge')
-              .setStyle(ButtonStyle.Secondary)
-          ),
-        ];
+    const submission = projectReportIntakeState(fresh).submission;
+    if (submission)
+      embed.addFields({
+        name: 'Submission',
+        value: `${submission.state.replace('_', ' ')}. Use Admin Actions to reconcile the recorded outcome. The selected target remains fixed.`,
+      });
+    if (input.outcome.kind === 'admin_review') {
+      const candidates = input.outcome.candidates;
+      const coverage = input.outcome.coverage;
+      embed.addFields({
+        name: 'Identity lookup',
+        value: `${candidates.length} candidate${candidates.length === 1 ? '' : 's'}; ${coverage.kind.replace('_', ' ')} coverage${'memberCount' in coverage ? ` (${coverage.memberCount} members checked)` : ''}. Showing ${Math.min(5, candidates.length)}.`,
+      });
+      for (const [index, candidate] of candidates.slice(0, 5).entries())
+        embed.addFields({ name: `Candidate ${index + 1}`, value: formatReportIdentity(candidate) });
+    }
+    const controls = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(buildReportIntakeAdminActionsCustomId(current.id))
+        .setLabel('Admin Actions')
+        .setStyle(ButtonStyle.Primary)
+    );
+    if (!acknowledged)
+      controls.addComponents(
+        new ButtonBuilder()
+          .setCustomId(ModerationQueueService.buildAcknowledgeCustomId(item.id))
+          .setLabel('Acknowledge')
+          .setStyle(ButtonStyle.Secondary)
+      );
+    const components = [controls];
     if (message)
       message = await message.edit({ embeds: [embed], components, allowedMentions: { parse: [] } });
     else {
@@ -627,20 +657,24 @@ export class ModerationQueueService implements IModerationQueueService {
         (handoff.state === 'none' || handoff.state === 'pending') &&
         !acknowledged &&
         identity.send_reserved !== true;
-      await this.moderationQueueRepository.upsert({
-        serverId: current.server_id,
-        userId: current.reporter_id,
-        itemType: ModerationQueueItemType.REPORT_THREAD_ATTENTION,
-        reportIntakeId: current.id,
-        sourceThreadId: current.thread_id,
-        metadata: this.toJson({
-          ...this.toRecord(item.metadata),
-          identity_review: {
-            ...this.toRecord(this.toRecord(item.metadata).identity_review),
-            send_reserved: true,
-          },
-        }),
-      });
+      const reserved = await this.moderationQueueRepository.upsertIdentityReview(
+        {
+          serverId: current.server_id,
+          userId: current.reporter_id,
+          itemType: ModerationQueueItemType.REPORT_THREAD_ATTENTION,
+          reportIntakeId: current.id,
+          sourceThreadId: current.thread_id,
+          metadata: this.toJson({
+            ...this.toRecord(item.metadata),
+            identity_review: {
+              ...this.toRecord(this.toRecord(item.metadata).identity_review),
+              send_reserved: true,
+            },
+          }),
+        },
+        claim
+      );
+      if (!reserved) return unavailable;
       const beforeSend = await this.intakeRepository?.findById(current.id);
       if (
         !beforeSend ||

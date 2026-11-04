@@ -469,3 +469,46 @@ it('rejects staff whose refreshed membership no longer has the required role', a
   ).toMatchObject({ kind: 'denied' });
   expect(f.submissionCount()).toBe(0);
 });
+
+it.each(['staff', 'reporter', 'wrong token', 'changed evidence', 'mcp'] as const)(
+  'limits submission recovery to a current staff decision: %s',
+  async (scenario) => {
+    const f = fixture();
+    f.intake.status = 'needs_admin_confirmation';
+    f.intake.confirmedTargetUserId = 'target';
+    f.intake.submission = {
+      token: 'attempt',
+      targetUserId: 'target',
+      state: 'unknown',
+      claimedAt: '2026-11-03T00:00:00.000Z',
+      dispatchedAt: '2026-11-03T00:00:01.000Z',
+      settledAt: '2026-11-03T00:00:02.000Z',
+    };
+    f.deps.authority.loadFresh = async (guildId, userId) => ({
+      guildId,
+      userId,
+      present: true,
+      owner: scenario !== 'reporter',
+      permissions: '0',
+      roleIds: [],
+    });
+    const close = jest.spyOn(f.deps.intakes, 'close');
+    const result = await f.actions.execute(
+      { ...context, source: scenario === 'mcp' ? 'mcp' : 'discord_interaction' },
+      {
+        kind: 'close_report_intake',
+        intakeId: 'intake',
+        expectedEvidenceRevision: scenario === 'changed evidence' ? 4 : 0,
+        closeMode: {
+          kind: 'resolve_submission',
+          token: scenario === 'wrong token' ? 'stale' : 'attempt',
+          reason: 'Verified separately',
+          verifiedOutcome: 'handled_separately',
+        },
+      }
+    );
+    expect(result.kind).toBe(scenario === 'staff' ? 'outcome' : 'denied');
+    expect(close).toHaveBeenCalledTimes(scenario === 'staff' ? 1 : 0);
+    expect(f.submissionCount()).toBe(0);
+  }
+);

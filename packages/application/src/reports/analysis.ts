@@ -66,6 +66,7 @@ export const reportHandoffReasonSchema = z.enum([
   'lookup_failure',
   'rejected',
   'confirmation_timeout',
+  'submission_recovery',
 ]);
 const evidenceCoverage = {
   coverage: reportDirectoryCoverageSchema,

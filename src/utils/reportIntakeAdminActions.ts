@@ -8,6 +8,7 @@ const ACTION_TO_CODE = {
   menu: 'm',
   select_target: 'st',
   resolve_review: 'rr',
+  recover_submission: 'rs',
   ban: 'b',
   close: 'c',
   confirm_close: 'cc',
@@ -28,6 +29,7 @@ export interface ParsedReportIntakeAdminActionCustomId {
   readonly intakeId: string;
   readonly evidenceRevision?: number;
   readonly promptMessageId?: string;
+  readonly submissionToken?: string;
 }
 
 export function buildReportIntakeAdminActionsCustomId(intakeId: string): string {
@@ -72,7 +74,11 @@ export function parseReportIntakeAdminActionCustomId(
     return null;
   }
 
-  if (action === 'select_target' || action === 'resolve_review') {
+  if (
+    action === 'select_target' ||
+    action === 'resolve_review' ||
+    action === 'recover_submission'
+  ) {
     if (
       !revision ||
       !/^(0|[1-9][0-9]*)$/.test(revision) ||
@@ -81,7 +87,14 @@ export function parseReportIntakeAdminActionCustomId(
       parts.length !== 5
     )
       return null;
-    return { action, intakeId, evidenceRevision: Number(revision), promptMessageId };
+    return {
+      action,
+      intakeId,
+      evidenceRevision: Number(revision),
+      ...(action === 'recover_submission'
+        ? { submissionToken: promptMessageId }
+        : { promptMessageId }),
+    };
   }
   if (parts.length !== 3) return null;
   return { action, intakeId };
@@ -122,7 +135,7 @@ export async function isReportIntakeActionChannel(
 }
 
 export function buildReportIntakeReviewCustomId(
-  action: 'select_target' | 'resolve_review',
+  action: 'select_target' | 'resolve_review' | 'recover_submission',
   intakeId: string,
   revision: number,
   promptMessageId: string

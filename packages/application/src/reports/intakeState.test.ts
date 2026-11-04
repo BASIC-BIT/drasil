@@ -94,3 +94,31 @@ it('retains shipped legacy prompt state while distinguishing staged prompts at r
     })
   ).toMatchObject({ staged: true, presentationRevision: 0 });
 });
+
+it('retains workflow ownership at revision zero and rejects unbound or unsettled recovery facts', () => {
+  const base = { ...snapshot({ workflow: 'staged' }), evidence_revision: 0 };
+  expect(projectReportIntakeState(base).staged).toBe(true);
+  const submission = {
+    token: 'attempt',
+    targetUserId: 'target',
+    state: 'unknown',
+    claimedAt: '2026-11-03T00:00:00.000Z',
+    dispatchedAt: '2026-11-03T00:00:01.000Z',
+    settledAt: '2026-11-03T00:00:02.000Z',
+  };
+  expect(projectReportIntakeState({ ...base, metadata: { submission } }).submission).toBeNull();
+  expect(
+    projectReportIntakeState({
+      ...base,
+      confirmed_target_user_id: 'target',
+      metadata: { submission },
+    }).submission?.state
+  ).toBe('unknown');
+  expect(
+    projectReportIntakeState({
+      ...base,
+      confirmed_target_user_id: 'target',
+      metadata: { submission: { ...submission, settledAt: undefined } },
+    }).submission
+  ).toBeNull();
+});

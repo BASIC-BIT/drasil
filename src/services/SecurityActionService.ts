@@ -229,6 +229,12 @@ export interface ISecurityActionService {
    */
   handleUserReport(member: GuildMember, reporter: User, reason?: string): Promise<boolean>;
 
+  hasConfirmedReportIntakeReceipt(
+    intakeId: string,
+    targetUserId: string,
+    token: string,
+    serverId: string
+  ): Promise<boolean>;
   handleConfirmedReportIntake(
     member: GuildMember,
     reporter: User,
@@ -344,6 +350,7 @@ export interface MessageReportContext {
 export type MessageReportAttachment = ReportAttachmentMetadata;
 
 export interface ConfirmedReportIntakeContext {
+  submissionToken?: string;
   reason?: string;
   intakeId?: string;
   attachments?: MessageReportAttachment[];
@@ -3289,6 +3296,48 @@ export class SecurityActionService implements ISecurityActionService {
     );
   }
 
+  public async hasConfirmedReportIntakeReceipt(
+    intakeId: string,
+    targetUserId: string,
+    token: string,
+    serverId: string
+  ): Promise<boolean> {
+    const detection = await this.detectionEventsRepository.findByReportIntakeId(intakeId);
+    if (!detection || detection.user_id !== targetUserId || detection.server_id !== serverId)
+      return false;
+    const metadata = detection.metadata;
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return false;
+    const receipt = metadata.reportIntakeSubmissionReceipt;
+    return Boolean(
+      receipt &&
+      typeof receipt === 'object' &&
+      !Array.isArray(receipt) &&
+      'token' in receipt &&
+      receipt.token === token &&
+      'targetUserId' in receipt &&
+      receipt.targetUserId === targetUserId &&
+      'acceptedAt' in receipt &&
+      typeof receipt.acceptedAt === 'string'
+    );
+  }
+
+  private async recordConfirmedReportIntakeReceipt(
+    detectionId: string,
+    member: GuildMember,
+    report: ConfirmedReportIntakeContext
+  ): Promise<void> {
+    if (report.submissionToken) {
+      const saved = await this.detectionEventsRepository.patchMetadata(detectionId, {
+        reportIntakeSubmissionReceipt: {
+          token: report.submissionToken,
+          targetUserId: member.id,
+          acceptedAt: new Date().toISOString(),
+        },
+      });
+      if (!saved) throw new Error('Confirmed intake completion receipt was not saved');
+    }
+  }
+
   public async handleConfirmedReportIntake(
     member: GuildMember,
     reporter: User,
@@ -3324,6 +3373,11 @@ export class SecurityActionService implements ISecurityActionService {
               detectionResult,
               existingDetectionEvent.id
             );
+            await this.recordConfirmedReportIntakeReceipt(
+              existingDetectionEvent.id,
+              member,
+              report
+            );
             return true;
           }
 
@@ -3342,6 +3396,7 @@ export class SecurityActionService implements ISecurityActionService {
             );
 
           await this.routeConfirmedReportIntake(member, detectionResult, detectionEvent.id);
+          await this.recordConfirmedReportIntakeReceipt(detectionEvent.id, member, report);
           this.captureMemberAnalytics(
             member,
             'report intake submitted',

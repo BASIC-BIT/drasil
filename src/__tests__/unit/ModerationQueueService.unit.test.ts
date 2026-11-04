@@ -1,7 +1,18 @@
+import { ReportIntakeService, type IReportIntakeService } from '../../services/ReportIntakeService';
+import { ReportCandidateService } from '../../services/ReportCandidateService';
+import {
+  InMemoryReportIntakeRepository,
+  InMemoryServerRepository,
+  InMemoryUserRepository,
+  InMemoryServerMemberRepository,
+} from '../fakes/inMemoryRepositories';
+import { ReportInteractionHandler } from '../../controllers/ReportInteractionHandler';
+import type { ReportSubmissionService } from '../../services/ReportSubmissionService';
+import type { IThreadManager } from '../../services/ThreadManager';
 import { ownsPresentation, processingMetadata } from '../../repositories/reportIntakeProcessing';
-import { InMemoryReportIntakeRepository } from '../fakes/inMemoryRepositories';
 import {
   acknowledgeIdentityReviewMetadata,
+  projectReportIntakeState,
   isIdentityReviewItem,
   createAttentionActions,
 } from '@drasil/application';
@@ -12,6 +23,7 @@ import {
   ButtonBuilder,
   ButtonStyle,
   EmbedBuilder,
+  type ButtonInteraction,
   type Client,
   type Message,
   type MessageCreateOptions,
@@ -162,7 +174,7 @@ class FakeModerationQueueRepository implements IModerationQueueRepository {
       !intake ||
       intake.status !== 'needs_admin_confirmation' ||
       intake.closed_at ||
-      intake.confirmed_target_user_id
+      (intake.confirmed_target_user_id && !projectReportIntakeState(intake).submission)
     )
       return 'already_handled';
     const metadata = acknowledgeIdentityReviewMetadata(
@@ -286,6 +298,13 @@ class FakeModerationQueueRepository implements IModerationQueueRepository {
       .map((item) => ({ ...item }));
   }
 
+  async upsertIdentityReview(
+    data: Parameters<IModerationQueueRepository['upsert']>[0],
+    claim: ReportPresentationClaim
+  ): Promise<ModerationQueueItem | null> {
+    const current = await this.intakeRepository?.findById(claim.intake.id);
+    return current && ownsPresentation(current, claim, new Date()) ? this.upsert(data) : null;
+  }
   async upsert(
     data: Parameters<IModerationQueueRepository['upsert']>[0]
   ): Promise<ModerationQueueItem> {
@@ -571,6 +590,221 @@ async function createReviewIntake(
 }
 
 describe('ModerationQueueService', () => {
+  it.each([false, true])(
+    'connects rendered review controls to the actual staff modals, acknowledged=%s',
+    async (acknowledged) => {
+      const repo = new InMemoryReportIntakeRepository();
+      const f = buildService({ intakeRepository: repo });
+      let intake = await createReviewIntake(repo, {
+        serverId: 'guild-1',
+        reporterId: 'reporter',
+        threadId: 'thread',
+        status: ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION,
+      });
+      const outcome = processingMetadata(intake).analysis.outcome!;
+      const first = await f.service.upsertReportIdentityReview({ intake, revision: 0, outcome });
+      await repo.completePresentation(
+        {
+          intake,
+          revision: 0,
+          leaseToken: processingMetadata(intake).analysis.presentation!.lease!.token,
+        },
+        {
+          kind: 'delivered',
+          channelId: first.channelId!,
+          messageId: first.messageId!,
+          receipt: 'pending',
+        }
+      );
+      if (acknowledged) {
+        await f.attention.acknowledge(
+          {
+            guildId: 'guild-1',
+            requestId: 'ack',
+            source: 'discord_interaction',
+            actor: { kind: 'user', userId: 'staff' },
+          },
+          { itemId: f.queueRepository.items[0].id }
+        );
+        intake = (await repo.claimPendingPresentation(new Date(Date.now() + 31_000), intake.id))!
+          .intake;
+        await f.service.upsertReportIdentityReview({ intake, revision: 0, outcome });
+      }
+      const message = f.channel.sentMessages[0];
+      const rows = message.payload.components as ActionRowBuilder<ButtonBuilder>[];
+      const entry = rows
+        .flatMap((row) => row.components)
+        .find((button) => 'label' in button.data && button.data.label === 'Admin Actions');
+      expect(entry).toBeDefined();
+      const staffGuild = {
+        id: 'guild-1',
+        roles: { fetch: jest.fn() },
+        members: { fetch: jest.fn().mockResolvedValue({ permissions: { has: () => true } }) },
+      };
+      const client = {
+        user: { id: 'bot' },
+        guilds: { fetch: jest.fn().mockResolvedValue(staffGuild) },
+        channels: { fetch: jest.fn().mockResolvedValue(null) },
+      } as unknown as Client;
+      const handler = new ReportInteractionHandler(
+        client,
+        {} as ReportSubmissionService,
+        { getServerConfig: async () => ({ settings: {} }) } as unknown as IConfigService,
+        {} as IThreadManager,
+        { findIntakeById: async (id: string) => repo.findById(id) } as IReportIntakeService
+      );
+      const interaction = {
+        guildId: 'guild-1',
+        guild: staffGuild,
+        channelId: f.channel.id,
+        channel: null,
+        user: { id: 'staff' },
+        message,
+        deferred: true,
+        replied: false,
+        editReply: jest.fn(),
+        reply: jest.fn(),
+        showModal: jest.fn(),
+        memberPermissions: { has: () => true },
+      } as unknown as ButtonInteraction;
+      const entryId = entry!.data as { custom_id: string };
+      await handler.handleReportIntakeAdminAction(interaction, entryId.custom_id);
+      const decisions = (
+        jest.mocked(interaction.editReply).mock.calls[0][0] as {
+          components: ActionRowBuilder<ButtonBuilder>[];
+        }
+      ).components;
+      for (const label of ['Confirm target', 'Resolve review']) {
+        const button = decisions
+          .flatMap((row) => row.components)
+          .find((button) => 'label' in button.data && button.data.label === label)!;
+        await handler.handleReportIntakeAdminAction(
+          interaction,
+          (button.data as { custom_id: string }).custom_id
+        );
+        expect(interaction.showModal).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({
+              title:
+                label === 'Confirm target' ? 'Confirm report target' : 'Resolve identity review',
+            }),
+          })
+        );
+      }
+      const intakeService = new ReportIntakeService(
+        repo,
+        new InMemoryServerRepository(),
+        new InMemoryUserRepository(),
+        new InMemoryServerMemberRepository(),
+        { getServerConfig: async () => ({ settings: {} }) } as unknown as IConfigService,
+        new ReportCandidateService(),
+        {
+          retireReportConfirmationPrompts: async (_intake, ids) => {
+            if (ids.includes(message.id)) message.payload.components = [];
+          },
+        } as IThreadManager
+      );
+      expect(
+        await intakeService.confirmCandidate({
+          intakeId: intake.id,
+          targetUserId: 'selected-target',
+          confirmedById: 'staff',
+          confirmedByStaff: true,
+          expectedEvidenceRevision: 0,
+          promptMessageId: message.id,
+        })
+      ).toMatchObject({ confirmed: true });
+      expect(
+        (message.payload.components as ActionRowBuilder<ButtonBuilder>[])
+          .flatMap((row) => row.components)
+          .some((button) => 'label' in button.data && button.data.label === 'Admin Actions')
+      ).toBe(true);
+      const token = projectReportIntakeState((await repo.findById(intake.id))!).submission!.token;
+      await intakeService.beginConfirmedSubmission(intake.id, token);
+      await intakeService.settleConfirmedSubmission(intake.id, token, 'unknown');
+      const recovery = (await repo.claimPendingPresentation(new Date(), intake.id))!;
+      await f.service.upsertReportIdentityReview({
+        intake: recovery.intake,
+        revision: 0,
+        outcome: processingMetadata(recovery.intake).analysis.outcome!,
+      });
+      jest.mocked(interaction.editReply).mockClear();
+      await handler.handleReportIntakeAdminAction(interaction, entryId.custom_id);
+      const recoveryRows = (
+        jest.mocked(interaction.editReply).mock.calls[0][0] as {
+          components: ActionRowBuilder<ButtonBuilder>[];
+        }
+      ).components;
+      const recover = recoveryRows
+        .flatMap((row) => row.components)
+        .find((button) => 'label' in button.data && button.data.label === 'Reconcile submission')!;
+      expect(recover).toBeDefined();
+      await handler.handleReportIntakeAdminAction(
+        interaction,
+        (recover.data as { custom_id: string }).custom_id
+      );
+      expect(interaction.showModal).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ title: 'Reconcile submission' }),
+        })
+      );
+    }
+  );
+
+  it('shows at most five distinct candidates and actual matching fields with coverage context', async () => {
+    const repository = new InMemoryReportIntakeRepository();
+    const f = buildService({ intakeRepository: repository });
+    const intake = await createReviewIntake(repository, {
+      serverId: 'guild-1',
+      reporterId: 'reporter',
+      threadId: 'thread',
+      status: ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION,
+    });
+    const candidates = Array.from({ length: 6 }, (_, index) => ({
+      candidateId: `candidate-${index}`,
+      serverId: 'guild-1',
+      discordUserId: `user-${index}`,
+      username: `opaque_${index}`,
+      globalName: 'Alder',
+      displayName: `Nick ${index}`,
+      nickname: `Nick ${index}`,
+      avatarUrl: null,
+      sourceRefs: [],
+      matchedFields: ['globalName' as const],
+      subjectMatches: [
+        { subjectId: 'reported', sourceRefs: [], matchedFields: ['globalName' as const] },
+      ],
+    }));
+    await f.service.upsertReportIdentityReview({
+      intake,
+      revision: 0,
+      outcome: {
+        kind: 'admin_review',
+        reason: 'ambiguous',
+        candidates,
+        coverage: {
+          kind: 'partial',
+          memberCount: 1000,
+          scannedAt: new Date().toISOString(),
+          expiresAt: new Date().toISOString(),
+          reason: 'page_limit',
+        },
+        includedEvidenceIds: [],
+        excludedEvidenceIds: [],
+      },
+    });
+    const fields = f.channel.sentMessages[0].embeds[0].fields!;
+    expect(fields.filter((field) => field.name.startsWith('Candidate '))).toHaveLength(5);
+    expect(fields.find((field) => field.name === 'Candidate 1')?.value).toContain(
+      'Matched: account display name'
+    );
+    expect(fields.find((field) => field.name === 'Candidate 1')?.value).toContain('Alder');
+    expect(fields.find((field) => field.name === 'Identity lookup')?.value).toContain(
+      '6 candidates; partial coverage (1000 members checked). Showing 5'
+    );
+    expect(JSON.stringify(fields)).not.toContain('opaque_5');
+  });
+
   it.each([true, false])(
     'checks configured non-administrator responder access, allowed=%s',
     async (allowed) => {

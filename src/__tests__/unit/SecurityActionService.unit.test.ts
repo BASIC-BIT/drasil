@@ -2107,6 +2107,54 @@ describe('SecurityActionService (unit)', () => {
     expect(notificationManager.upsertObservedDetectionNotification).toHaveBeenCalled();
   });
 
+  it('records completion proof only after confirmed intake routing and validates its binding', async () => {
+    const member = buildMember('receipt-guild', 'receipt-target');
+    const service = buildService();
+    notificationManager.upsertObservedDetectionNotification.mockResolvedValueOnce(null);
+    const report = {
+      intakeId: 'receipt-intake',
+      submissionToken: 'receipt-token',
+      reason: 'Synthetic evidence',
+    };
+    await expect(
+      service.handleConfirmedReportIntake(member, { id: 'reporter' } as User, report)
+    ).rejects.toThrow();
+    expect(await detectionEventsRepository.findByReportIntakeId(report.intakeId)).not.toBeNull();
+    expect(
+      await service.hasConfirmedReportIntakeReceipt(
+        report.intakeId,
+        member.id,
+        report.submissionToken,
+        member.guild.id
+      )
+    ).toBe(false);
+    await service.handleConfirmedReportIntake(member, { id: 'reporter' } as User, report);
+    expect(
+      await service.hasConfirmedReportIntakeReceipt(
+        report.intakeId,
+        member.id,
+        report.submissionToken,
+        member.guild.id
+      )
+    ).toBe(true);
+    expect(
+      await service.hasConfirmedReportIntakeReceipt(
+        report.intakeId,
+        member.id,
+        'other-token',
+        member.guild.id
+      )
+    ).toBe(false);
+    expect(
+      await service.hasConfirmedReportIntakeReceipt(
+        report.intakeId,
+        member.id,
+        report.submissionToken,
+        'other-guild'
+      )
+    ).toBe(false);
+  });
+
   it('does not create duplicate detection events when confirmed report intake submission is retried', async () => {
     const guildId = 'guild-intake-retry';
     const userId = 'user-intake-retry';

@@ -180,6 +180,27 @@ describe('ReportIntakeAgentService', () => {
     }
   });
 
+  it('does not schedule or execute legacy analysis for persisted staged ownership while disabled', async () => {
+    jest.useFakeTimers();
+    try {
+      const f = buildServices();
+      const intake = await f.intakeService.openIntakeFromThread({
+        serverId: 'guild-1',
+        reporter: buildReporter(),
+        threadId: 'thread-1',
+        channelId: 'channel-1',
+      });
+      await f.reportIntakeRepository.update(intake.id, { metadata: { workflow: 'staged' } });
+      const message = buildMessage();
+      f.agentService.scheduleAnalysisForThreadMessage(message);
+      await jest.advanceTimersByTimeAsync(15_000);
+      expect(await f.agentService.runAnalysisForThreadMessage(message)).toBe(false);
+      expect(f.gptService.extractReportIntakeEvidence).not.toHaveBeenCalled();
+      expect(jest.getTimerCount()).toBe(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
   it('analyzes screenshot-only evidence and asks the reporter for target confirmation', async () => {
     const { agentService, intakeService, reportIntakeRepository, candidateService, gptService } =
       buildServices();

@@ -1,6 +1,6 @@
 # Staged report intake acceptance
 
-Automated implementation and local acceptance are complete. Rollout remains pending, and the staged selector still defaults to `false`. No paid provider evaluation, live Discord exercise, deployment, feature enablement, publication, or merge has run. A failed submission after a target claim has a known recovery limitation described below.
+The final technical review's eight Important findings and two Minor test gaps are corrected locally. Focused tests pass. The full gate for these corrections and the scoped rereview are pending. The staged selector still defaults to `false`. Paid provider evaluation, live Discord acceptance, publication, deployment, activation and merge remain pending.
 
 ## What the local journey proves
 
@@ -20,7 +20,7 @@ Automated implementation and local acceptance are complete. Rollout remains pend
 
 These are local restart simulations with a real database and replacement service instances. They do not prove recovery after an actual process crash or Discord acceptance. Existing queue tests cover role-ping deduplication and destination authorization; the journey's queue transport is mocked.
 
-## Local results
+## Previous local results before final review corrections
 
 - Focused extraction, directory, candidate, agent, worker, handoff and tooling: initially 8 suites, 171 tests passed. The final evaluator added one association assertion; its 5 tests and the 7 fixture-entry tests passed together after that change.
 - Focused application: 4 suites, 54 tests passed.
@@ -51,9 +51,21 @@ The fresh disposable database is guarded by `scripts/owned-test-database.js`. `T
 
 The legacy browser stage skips MCP cases because `DRASIL_MCP_E2E` is not true there. The dedicated stage provides the owned database and controlled Discord fixture and runs all 13. No other tests were skipped. Format, lint, typechecks, builds, package exports, dependency graph and coverage gates passed. Bot lint reported 32 nonblocking warnings and no errors.
 
-## Known recovery limitation
+## Final review corrections
 
-After staff confirm a target, a failing underlying submission leaves `confirmed_target_user_id` set and the review open. `resolve_review` rejects that state as stale, and another selection cannot re-claim the target. The journey regression reproduces this behavior and proves the evidence and attention item remain. No automatic retry or policy expansion was added. A supported recovery decision is still required before enabling staged intake. Acknowledgement or reporter thread closure does not resolve the failed submission.
+The current moderation-queue message retains Admin Actions after acknowledgement. Reporter confirmation and moderator review show the distinct names, immutable ID and actual matched fields. Moderator lists show at most five candidates with count and directory coverage.
+
+Persisted staged ownership survives flag disablement. New evidence, edits and deletions still advance source history and invalidate stale controls, while both analysis paths remain paused. Submitted reports retain later evidence without changing their target or starting another investigation. Staff web and MCP evidence reads label superseded, deleted and unavailable sources and their analysis coverage. Reporter reads do not expose staff analysis.
+
+The queue's identity metadata and send reservation now share the report lock, revision and presentation lease with resolution. A delayed write cannot recreate resolved attention. The saved-evidence receipt is independent of moderator notification delivery and remains truthful while that delivery is pending.
+
+## Submission recovery
+
+A target claim records whether submission has started. Dispatch saves a moderator-owned recovery handoff. Staff use Admin Actions on that queue item or the report thread's existing entry. Reporter confirmation remains retired. A failed member lookup before dispatch stays known not-dispatched. An error after dispatch is unknown, and the selected target remains fixed.
+
+Reconcile submission checks a durable routing-completion receipt before resolving anything. A created detection alone is not completion proof. Recorded completion marks the intake submitted without dispatching again. For a known not-dispatched attempt, staff may resolve with a reason. For a settled unknown attempt, staff must record a verified outcome and reason, then confirm the decision. The saved actor, time, attempt and outcome remain distinct from automatic submission success.
+
+An in-flight or process-interrupted dispatch with no completion receipt and no durable settlement remains visible and blocked. Time or lease expiry cannot authorize closure. This is the remaining operator reconciliation limit. There is no automatic retry, target clearing, reselection, or new moderation policy.
 
 ## Synthetic provider evaluation
 
@@ -91,7 +103,7 @@ Use synthetic evidence and controlled accounts in one approved server. Record ex
 - [ ] Forced unresolved handoff: use an unreadable or missing account. Verify the exact saved-evidence receipt, one accessible staff item, no required reporter step, and no moderation effect.
 - [ ] Restart: interrupt after evidence save, request reservation, saved outcome, and delivery reservation. Restart the actual worker and verify unchanged deadlines, budgets, and no duplicate ping/receipt/submission.
 - [ ] Delivery failure and recovery: remove access to the intended destination, verify saved pending failure and authorized fallback behavior, restore access, then verify recovery and the 30-second, two-minute, ten-minute retry progression where exercised.
-- [ ] Staff resolution: acknowledge without closing, append voluntary evidence, then resolve an unclaimed review with a reason. Separately confirm an identity and verify the existing submission policy. Exercise the failed-submission limitation only with an approved recovery procedure.
+- [ ] Staff resolution: acknowledge without closing, append voluntary evidence, then resolve an unclaimed review with a reason. Separately confirm an identity and verify the existing submission policy. Exercise pre-dispatch failure, settled unknown attestation and accepted-receipt reconciliation. Verify an in-flight attempt cannot be closed without completion proof.
 - [ ] Permission revocation: remove staff authority after controls appear, then attempt selection/resolution through Discord and web. Verify fresh authorization rejects the action. Restore permission only as separately approved.
 
 No live check above is complete. Local mocks do not satisfy these checks.

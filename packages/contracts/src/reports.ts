@@ -60,7 +60,62 @@ export const reportEvidenceAttachmentSchema = z.object({
   size: z.number().int().nonnegative().nullable(),
 });
 
+export const reportEvidenceSourceSchema = z.object({
+  sourceVersion: z.number().int().nonnegative().nullable(),
+  currentSourceVersion: z.number().int().nonnegative().nullable(),
+  versionState: z.enum(['current', 'superseded', 'unknown']),
+  sourceState: z.enum(['available', 'deleted', 'unavailable', 'unknown']),
+  analysisState: z.enum(['analyzed', 'excluded', 'not_analyzed', 'unknown']),
+});
+export type ReportEvidenceSourceState = z.infer<typeof reportEvidenceSourceSchema>;
+/** Project only bounded source facts, never the source map, author IDs or reservations. */
+export function projectReportEvidenceSource(input: {
+  reportMetadata: unknown;
+  evidenceId: string;
+  sourceMessageId: string | null;
+  evidenceMetadata: unknown;
+}): ReportEvidenceSourceState {
+  const root = z.record(z.string(), z.unknown()).safeParse(input.reportMetadata);
+  const parsed = reportAnalysisMetadataSchema.safeParse(root.success ? root.data.analysis : null);
+  const version = z
+    .object({ sourceVersion: z.number().int().nonnegative() })
+    .safeParse(input.evidenceMetadata);
+  const sourceVersion = version.success ? version.data.sourceVersion : null;
+  const analysis = parsed.success ? parsed.data : null;
+  const source =
+    analysis &&
+    input.sourceMessageId &&
+    Object.prototype.hasOwnProperty.call(analysis.sources, input.sourceMessageId)
+      ? analysis.sources[input.sourceMessageId]
+      : null;
+  return {
+    sourceVersion,
+    currentSourceVersion: source?.sourceVersion ?? null,
+    versionState:
+      source && sourceVersion !== null
+        ? sourceVersion === source.sourceVersion
+          ? 'current'
+          : sourceVersion < source.sourceVersion
+            ? 'superseded'
+            : 'unknown'
+        : 'unknown',
+    sourceState: source
+      ? source.operation === 'delete'
+        ? 'deleted'
+        : source.availability
+      : 'unknown',
+    analysisState: !analysis
+      ? 'unknown'
+      : analysis.outcome?.includedEvidenceIds.includes(input.evidenceId)
+        ? 'analyzed'
+        : analysis.outcome?.excludedEvidenceIds.includes(input.evidenceId)
+          ? 'excluded'
+          : 'not_analyzed',
+  };
+}
+
 export const reportEvidenceItemSchema = z.object({
+  source: reportEvidenceSourceSchema.optional(),
   id: z.string(),
   kind: reportEvidenceKindSchema,
   content: z.string().nullable(),

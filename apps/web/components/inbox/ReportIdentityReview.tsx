@@ -1,6 +1,7 @@
 import type { ReportIdentityReview as Review } from '@drasil/contracts';
 import { Timestamp } from '@/components/workspace/Timestamp';
 const reasons: Record<NonNullable<Review['reason']>, string> = {
+  submission_recovery: 'The selected report needs submission reconciliation',
   no_match: 'No matching account was found',
   ambiguous: 'More than one account matched',
   conflicting_anchors: 'Account references conflicted',

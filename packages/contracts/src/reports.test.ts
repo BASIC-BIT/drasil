@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { reportDetailSchema, sortReportQueueItems, type ReportQueueItem } from './reports';
+import {
+  projectReportEvidenceSource,
+  reportDetailSchema,
+  sortReportQueueItems,
+  type ReportQueueItem,
+} from './reports';
 
 const baseReport: ReportQueueItem = {
   id: 'report-1',
@@ -279,3 +284,67 @@ it.each([
     ).toBe('Closed by reporter');
   }
 );
+
+it('projects bounded source history and keeps corrupt metadata unknown', () => {
+  const input = {
+    reportMetadata: {
+      analysis: {
+        schemaVersion: 1,
+        sources: {
+          message: {
+            sourceVersion: 2,
+            sourceFingerprint: 'private',
+            sourceChannelId: 'thread',
+            sourceAuthorId: 'author',
+            observedAt: '2026-11-03T00:00:00.000Z',
+            editedAt: null,
+            operation: 'upsert',
+            availability: 'unavailable',
+          },
+        },
+        requestReservations: [],
+        handoff: { state: 'none' },
+        coverage: null,
+        outcome: {
+          kind: 'admin_review',
+          reason: 'no_match',
+          candidates: [],
+          coverage: { kind: 'unavailable', reason: 'transport' },
+          includedEvidenceIds: ['current'],
+          excludedEvidenceIds: ['old'],
+        },
+      },
+    },
+    evidenceId: 'old',
+    sourceMessageId: 'message',
+    evidenceMetadata: { sourceVersion: 1 },
+  };
+  expect(projectReportEvidenceSource(input)).toEqual({
+    sourceVersion: 1,
+    currentSourceVersion: 2,
+    sourceState: 'unavailable',
+    versionState: 'superseded',
+    analysisState: 'excluded',
+  });
+  expect(
+    projectReportEvidenceSource({
+      ...input,
+      evidenceId: 'current',
+      evidenceMetadata: { sourceVersion: 2 },
+    })
+  ).toMatchObject({ versionState: 'current', analysisState: 'analyzed' });
+  expect(
+    projectReportEvidenceSource({
+      ...input,
+      evidenceId: 'new',
+      evidenceMetadata: { sourceVersion: 3 },
+    })
+  ).toMatchObject({ versionState: 'unknown', analysisState: 'not_analyzed' });
+  expect(
+    projectReportEvidenceSource({
+      ...input,
+      reportMetadata: { analysis: 'broken' },
+      evidenceMetadata: {},
+    })
+  ).toMatchObject({ sourceVersion: null, sourceState: 'unknown', analysisState: 'unknown' });
+});

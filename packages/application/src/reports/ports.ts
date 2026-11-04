@@ -26,6 +26,7 @@ export interface ReportIntakeState {
   threadId: string | null;
   status: string;
   confirmedTargetUserId: string | null;
+  submission?: import('./intakeState').ReportSubmissionProgress | null;
   promptMessageId: string | null;
   promptToken: string | null;
   candidateIds: readonly string[];

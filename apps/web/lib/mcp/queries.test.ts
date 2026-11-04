@@ -469,3 +469,65 @@ it('separates reporter receipt from staff identity review and rechecks staff aut
     kind: 'denied',
   });
 });
+
+it('projects staff source history without leaking the source map or staff analysis to reporters', async () => {
+  const h = harness([
+    {
+      key: { id: id(1), timestamp: null },
+      value: {
+        id: id(1),
+        sourceMessageId: 'source',
+        metadata: { sourceVersion: 1 },
+        reportMetadata: {
+          analysis: {
+            schemaVersion: 1,
+            sources: {
+              source: {
+                sourceVersion: 2,
+                sourceFingerprint: 'internal',
+                sourceChannelId: 'thread',
+                sourceAuthorId: 'reporter',
+                observedAt: '2026-11-03T00:00:00.000Z',
+                editedAt: null,
+                operation: 'delete',
+              },
+            },
+            outcome: null,
+            coverage: null,
+            requestReservations: [],
+            handoff: { state: 'none' },
+          },
+        },
+      },
+    },
+  ]);
+  const staff = await h.service.execute(principal, {
+    kind: 'list_report_evidence',
+    guildId,
+    reportId: id(2),
+  });
+  expect(staff).toMatchObject({
+    kind: 'allowed',
+    items: [
+      {
+        source: {
+          sourceVersion: 1,
+          currentSourceVersion: 2,
+          sourceState: 'deleted',
+          versionState: 'superseded',
+        },
+      },
+    ],
+  });
+  expect(JSON.stringify(staff)).not.toMatch(/sourceFingerprint|reportMetadata|sourceAuthorId/);
+  const reporter = await h.service.execute(principal, {
+    kind: 'list_report_evidence',
+    guildId,
+    reportId: id(2),
+    audience: 'reporter',
+  });
+  expect(reporter).toMatchObject({ kind: 'allowed', items: [{ id: id(1) }] });
+  expect(JSON.stringify(reporter)).not.toMatch(
+    /sourceFingerprint|analysisState|reportMetadata|sourceAuthorId/
+  );
+});

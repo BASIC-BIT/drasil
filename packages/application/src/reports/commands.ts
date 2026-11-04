@@ -4,6 +4,14 @@ const id = z.string().min(1);
 const expectedEvidenceRevision = z.number().int().nonnegative().optional();
 export const reportCloseModeSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('thread_only') }).strict(),
+  z
+    .object({
+      kind: z.literal('resolve_submission'),
+      token: id,
+      reason: z.string().trim().min(1).max(1000),
+      verifiedOutcome: z.enum(['not_applied', 'handled_separately']),
+    })
+    .strict(),
   z.object({ kind: z.literal('resolve_review'), reason: z.string().trim().min(1) }).strict(),
 ]);
 export const queuedReportCommandSchema = z.discriminatedUnion('kind', [

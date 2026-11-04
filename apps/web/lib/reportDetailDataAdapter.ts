@@ -1,3 +1,4 @@
+import { projectReportEvidenceSource } from '@drasil/contracts';
 import { reportAnalysisFailure } from './readDiagnostics';
 import {
   reportAttentionRecordSchema,
@@ -178,7 +179,15 @@ function reportFields(row: ReportDetailRow, evidenceRows: readonly ReportEvidenc
     reportThreadUrl: row.thread_id ? discordMessageUrl(row.server_id, row.thread_id) : null,
     latestDetectionId: row.latest_detection_id,
     latestCaseId: row.latest_case_id,
-    evidence: evidenceRows.map((evidence) => parseEvidenceRow(row.server_id, evidence)),
+    evidence: evidenceRows.map((evidence) => ({
+      ...parseEvidenceRow(row.server_id, evidence),
+      source: projectReportEvidenceSource({
+        reportMetadata: row.metadata,
+        evidenceId: evidence.id,
+        sourceMessageId: evidence.source_message_id,
+        evidenceMetadata: evidence.metadata,
+      }),
+    })),
     allowedActions: resolveAllowedActions(row),
   };
 }

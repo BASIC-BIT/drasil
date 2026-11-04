@@ -133,14 +133,36 @@ describeIntegration('staged report journey through persisted boundaries', () => 
         ),
       },
     };
+    const directory = new Collection([[targetId, target]]);
+    if (initialScenario === 'multiple') {
+      for (const [id, name] of [
+        [reporterId, 'River'],
+        ['333333333333333333', 'Finch'],
+        ['444444444444444444', 'Synthetic workshop'],
+      ]) {
+        directory.set(id, {
+          ...target,
+          id,
+          nickname: null,
+          displayName: name,
+          user: { ...target.user, id, username: `account_${id}`, globalName: name },
+        } as GuildMember);
+      }
+    }
     const list = jest.fn(async () => {
       if (scenario === 'directory-unavailable') throw new Error('directory unavailable');
-      return new Collection([[targetId, target]]);
+      return directory;
     });
     const guild = {
       id: guildId,
       channels: { fetch: jest.fn().mockResolvedValue(channel) },
-      members: { list, fetch: jest.fn().mockResolvedValue(target) },
+      members: {
+        list,
+        fetch: jest.fn(
+          async (input: string | { user: string }) =>
+            directory.get(typeof input === 'string' ? input : input.user) ?? null
+        ),
+      },
     };
     const client = {
       user: { id: 'bot' },
@@ -362,7 +384,7 @@ describeIntegration('staged report journey through persisted boundaries', () => 
       expect(processingMetadata(analyzed).analysis.outcome).toMatchObject({
         kind: 'confirm',
         candidate: { discordUserId: targetId, matchedFields: ['globalName'] },
-        coverage: { kind: 'complete', memberCount: 1 },
+        coverage: { kind: 'complete', memberCount: scenario === 'multiple' ? 4 : 1 },
       });
       expect(analyzed.analysis_attempts).toBe(1);
       f.assertNoModeration();
@@ -389,6 +411,16 @@ describeIntegration('staged report journey through persisted boundaries', () => 
       ).toHaveLength(1);
       expect(f.confirmed).toHaveBeenCalledTimes(1);
       expect((await f.saved()).status).toBe('submitted');
+      const submitted = await f.saved();
+      const evidenceCount = (await f.repository.listEvidence(f.intake.id)).length;
+      await f.add('Additional evidence after completed submission');
+      expect((await f.repository.listEvidence(f.intake.id)).length).toBeGreaterThan(evidenceCount);
+      expect(await f.saved()).toMatchObject({
+        status: 'submitted',
+        confirmed_target_user_id: targetId,
+        analysis_revision: submitted.analysis_revision,
+      });
+      expect(await f.restart().worker.processPending()).toBe(0);
       expect(f.create).toHaveBeenCalledTimes(1);
     }
   );

@@ -162,7 +162,24 @@ export function createBotReportActions(
       async close(context, intake, staff, command) {
         if (!intake.threadId)
           throw new Error('Report intake does not have a Discord thread to close.');
+        const current =
+          command.closeMode?.kind === 'resolve_submission'
+            ? await intakes.findIntakeById(intake.id)
+            : null;
+        const progress = current ? projectReportIntake(current).submission : null;
+        const accepted =
+          progress &&
+          command.closeMode?.kind === 'resolve_submission' &&
+          progress.token === command.closeMode.token
+            ? await deps.securityActionService.hasConfirmedReportIntakeReceipt(
+                intake.id,
+                progress.targetUserId,
+                progress.token,
+                context.guildId
+              )
+            : false;
         return intakes.closeIntakeForThread({
+          ...(accepted && progress ? { acceptedSubmissionToken: progress.token } : {}),
           threadId: intake.threadId,
           closedById: actorId(context),
           closedByStaff: staff,
@@ -229,23 +246,47 @@ export function createBotReportActions(
       },
       async confirmed(context, intake, confirmation) {
         if (!intake.confirmedTargetUserId) throw new Error('Report target has not been confirmed.');
-        const guild = await client.guilds.fetch(context.guildId);
-        const member = await guild.members.fetch(intake.confirmedTargetUserId);
-        const reporter = await client.users
-          .fetch(intake.reporterId)
-          .catch(() => ({ id: intake.reporterId, username: 'unknown', tag: 'unknown' }) as User);
-        const result = await submission.submitConfirmedReportIntake(
-          member,
-          reporter,
-          confirmation.reason,
-          {
-            intakeId: intake.id,
-            attachments: confirmation.attachments,
+        const token = intake.submission?.token;
+        let dispatched = false;
+        try {
+          const guild = await client.guilds.fetch(context.guildId);
+          const member = await guild.members.fetch(intake.confirmedTargetUserId);
+          if (member.id !== intake.confirmedTargetUserId || member.guild.id !== context.guildId)
+            throw new Error('Selected member is unavailable');
+          const reporter = await client.users
+            .fetch(intake.reporterId)
+            .catch(() => ({ id: intake.reporterId, username: 'unknown', tag: 'unknown' }) as User);
+          if (token && !(await intakes.beginConfirmedSubmission(intake.id, token)))
+            throw new ActionDeniedError('stale_state');
+          dispatched = true;
+          const result = await submission.submitConfirmedReportIntake(
+            member,
+            reporter,
+            confirmation.reason,
+            {
+              intakeId: intake.id,
+              ...(token ? { submissionToken: token } : {}),
+              attachments: confirmation.attachments,
+            }
+          );
+          if (token)
+            await intakes.settleConfirmedSubmission(
+              intake.id,
+              token,
+              result.status === 'submitted' ? 'accepted' : 'unknown'
+            );
+          if (result.status === 'failed')
+            await deps.reportIntakeHandoffService?.publishOutcome(intake.id).catch(() => undefined);
+          return result.status === 'submitted'
+            ? { ...result, targetUsername: member.user.username }
+            : result;
+        } catch (error) {
+          if (token && !dispatched) {
+            await intakes.settleConfirmedSubmission(intake.id, token, 'not_dispatched');
+            await deps.reportIntakeHandoffService?.publishOutcome(intake.id).catch(() => undefined);
           }
-        );
-        return result.status === 'submitted'
-          ? { ...result, targetUsername: member.user.username }
-          : result;
+          throw error;
+        }
       },
     },
   });
@@ -348,9 +389,14 @@ async function notifySubmitted(
       await deps.threadManager
         .retireReportConfirmationPrompts(
           current,
-          getReportConfirmationMessageIds(current, input.promptMessageId)
+          getReportConfirmationMessageIds(
+            current,
+            input.statusRecorded ? input.promptMessageId : undefined
+          )
         )
         .catch((error) => console.warn('Failed to retire submitted report confirmations:', error));
+    if (!input.statusRecorded)
+      await deps.reportIntakeHandoffService?.publishOutcome(intake.id).catch(() => undefined);
     if (input.statusRecorded && thread && !thread.archived)
       await thread
         .setArchived(true, 'Report intake submitted')

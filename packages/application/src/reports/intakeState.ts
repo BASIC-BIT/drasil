@@ -2,6 +2,21 @@ import { z } from 'zod';
 import { reportAnalysisMetadataSchema } from './analysis';
 import type { ReportIntakeState } from './ports';
 
+export const reportSubmissionProgressSchema = z
+  .object({
+    token: z.string().min(1),
+    targetUserId: z.string().min(1),
+    state: z.enum(['not_dispatched', 'dispatching', 'unknown', 'accepted']),
+    claimedAt: z.iso.datetime(),
+    dispatchedAt: z.iso.datetime().optional(),
+    settledAt: z.iso.datetime().optional(),
+  })
+  .refine((value) => value.state === 'not_dispatched' || Boolean(value.dispatchedAt))
+  .refine(
+    (value) => (value.state !== 'unknown' && value.state !== 'accepted') || Boolean(value.settledAt)
+  );
+export type ReportSubmissionProgress = z.infer<typeof reportSubmissionProgressSchema>;
+
 export interface ReportIntakeSnapshot {
   id: string;
   server_id: string;
@@ -18,6 +33,7 @@ export function projectReportIntakeState(intake: ReportIntakeSnapshot): ReportIn
   const metadata = root.success ? root.data : {};
   const parsed = reportAnalysisMetadataSchema.safeParse(metadata.analysis);
   const analysis = parsed.success ? parsed.data : null;
+  const submission = reportSubmissionProgressSchema.safeParse(metadata.submission);
   const admin = intake.status === 'needs_admin_confirmation';
   const handoff = analysis?.handoff;
   const adminPrompt =
@@ -49,6 +65,10 @@ export function projectReportIntakeState(intake: ReportIntakeSnapshot): ReportIn
     threadId: intake.thread_id,
     status: intake.status,
     confirmedTargetUserId: intake.confirmed_target_user_id,
+    submission:
+      submission.success && submission.data.targetUserId === intake.confirmed_target_user_id
+        ? submission.data
+        : null,
     promptMessageId: typeof promptId === 'string' ? promptId : null,
     promptToken: admin
       ? typeof promptId === 'string'
@@ -73,6 +93,7 @@ export function projectReportIntakeState(intake: ReportIntakeSnapshot): ReportIn
         ? boundRevision
         : null,
     staged:
+      metadata.workflow === 'staged' ||
       metadata.analysis !== undefined ||
       intake.evidence_revision > 0 ||
       metadata.last_confirmation_prompt_revision !== undefined,

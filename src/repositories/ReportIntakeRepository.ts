@@ -183,12 +183,12 @@ export class ReportIntakeRepository implements IReportIntakeRepository {
       const rows = await transaction.$queryRaw<ReportIntake[]>`
         SELECT * FROM report_intakes WHERE (${intakeId ?? null}::uuid IS NULL OR id = ${intakeId ?? null}::uuid)
         AND status IN ('needs_reporter_confirmation', 'needs_admin_confirmation')
-        AND closed_at IS NULL AND confirmed_target_user_id IS NULL
+        AND closed_at IS NULL AND (confirmed_target_user_id IS NULL OR (status = 'needs_admin_confirmation' AND jsonb_typeof(metadata->'submission') = 'object'))
         AND analysis_failure_code IS DISTINCT FROM 'invalid_metadata'
         AND jsonb_typeof(metadata->'analysis'->'outcome') = 'object'
         AND (status <> 'needs_reporter_confirmation' OR EXISTS (SELECT 1 FROM servers WHERE guild_id = report_intakes.server_id
           AND settings->'report_intake_staged_enabled' = 'true'::jsonb))
-        AND analysis_revision = evidence_revision
+        AND (analysis_revision = evidence_revision OR jsonb_typeof(metadata->'submission') = 'object')
         AND (metadata->'analysis'->'presentation' IS NULL OR
           (metadata->'analysis'->'presentation'->>'nextDueAt' <= ${now.toISOString()}
           AND (metadata->'analysis'->'presentation'->'lease'->>'until' IS NULL OR

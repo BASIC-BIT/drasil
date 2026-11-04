@@ -176,6 +176,9 @@ function sqlSource(
           {
             id: 'rie.id',
             kind: 'rie.kind',
+            ...(!binding.reporterId
+              ? { metadata: 'rie.metadata', reportMetadata: 'ri.metadata' }
+              : {}),
             content: 'rie.content',
             sourceMessageId: 'rie.source_message_id',
             sourceChannelId: 'rie.source_channel_id',

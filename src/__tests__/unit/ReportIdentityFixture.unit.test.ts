@@ -55,7 +55,9 @@ describe('trusted report extraction fixture entry', () => {
       const bytes =
         kind === 'too large'
           ? Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(20 * 1024 * 1024)])
-          : Buffer.from('not a PNG');
+          : kind === 'wrong ref'
+            ? png()
+            : Buffer.from('not a PNG');
       await expect(
         f.service.extractReportIdentityFixture({
           ref: kind === 'wrong ref' ? sourceRef : imageRef,

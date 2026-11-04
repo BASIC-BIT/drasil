@@ -321,6 +321,28 @@ describe('ReportIntakeService', () => {
       });
     return { ...setup, read: () => saved };
   }
+  it('shows the distinct global name and actual match field in saved confirmation', async () => {
+    const f = await savedCandidate();
+    const saved = f.read();
+    const { analysis } = processingMetadata(saved);
+    if (analysis.outcome?.kind !== 'confirm') throw new Error('Expected candidate');
+    analysis.outcome.candidate = {
+      ...analysis.outcome.candidate,
+      username: 'opaque_account',
+      globalName: 'Alder',
+      nickname: 'Different nickname',
+      displayName: 'Different nickname',
+      matchedFields: ['globalName'],
+    };
+    saved.metadata = JSON.parse(JSON.stringify({ analysis }));
+    expect(await f.service.publishSavedConfirmation(f.intake.id, f.message)).toBe(true);
+    const content = f.send.mock.calls[0][0].content;
+    expect(content).toContain('Alder');
+    expect(content).toContain('opaque_account');
+    expect(content).toContain('Different nickname');
+    expect(content).toContain('Matched: account display name');
+    expect(content).toContain('user-1');
+  });
   it('publishes saved candidate controls disabled until persisted and binds the evidence revision', async () => {
     const { service, intake, message, prompt, send, read } = await savedCandidate();
     prompt.edit.mockImplementation(async (payload) => {
@@ -584,6 +606,63 @@ describe('ReportIntakeService', () => {
     ).not.toContain('stale update');
   });
 
+  it('keeps staged ownership and retires stale confirmation after disabling processing', async () => {
+    const f = await stagedSetup();
+    await f.service.handleThreadMessage(f.message);
+    const saved = (await f.reportIntakeRepository.findById(f.intake.id))!;
+    const { metadata, analysis } = processingMetadata(saved);
+    await f.reportIntakeRepository.update(saved.id, {
+      status: ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION,
+      metadata: {
+        ...metadata,
+        analysis,
+        last_confirmation_prompt_message_id: 'old-prompt',
+        last_confirmation_prompt_revision: 1,
+        last_confirmation_prompt_token: 'old-token',
+        last_confirmation_prompt_candidate_ids: ['user-1'],
+        candidate_suggestions: [buildCandidate()],
+      },
+    });
+    jest.mocked(f.configService.getServerConfig).mockResolvedValue({
+      settings: {
+        report_intake_staged_enabled: false,
+      },
+    } as Awaited<ReturnType<IConfigService['getServerConfig']>>);
+    await f.service.handleThreadMessage(
+      buildMessage({ id: 'correction', content: 'That person is not the target' })
+    );
+    expect(await f.reportIntakeRepository.findById(saved.id)).toMatchObject({
+      evidence_revision: 2,
+    });
+    expect(
+      await f.service.confirmCandidate({
+        intakeId: saved.id,
+        targetUserId: 'user-1',
+        confirmedById: 'reporter-1',
+        promptMessageId: 'old-prompt',
+        expectedEvidenceRevision: 1,
+      })
+    ).toMatchObject({ confirmed: false });
+    const edited = buildMessage({ content: 'Edited allegation', editedTimestamp: 2000 });
+    await f.service.handleThreadMessageUpdate(
+      buildMessage({ fetch: jest.fn().mockResolvedValue(edited) })
+    );
+    await f.service.handleThreadMessageDelete({
+      guildId: 'guild-1',
+      threadId: 'thread-1',
+      messageId: 'message-1',
+    });
+    expect(await f.reportIntakeRepository.findById(saved.id)).toMatchObject({
+      evidence_revision: 4,
+      metadata: { analysis: { sources: { 'message-1': { operation: 'delete' } } } },
+    });
+    expect(f.threadManager.retireReportConfirmationPrompts).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.arrayContaining(['old-prompt'])
+    );
+    expect(f.candidateService.resolvePlatformBackedCandidates).not.toHaveBeenCalled();
+  });
+
   it('preserves explicit closure when new staged evidence arrives', async () => {
     const { service, reportIntakeRepository, intake, message } = await stagedSetup();
     await reportIntakeRepository.update(intake.id, {
@@ -700,9 +779,10 @@ describe('ReportIntakeService', () => {
 
   it('retains submitted evidence without retargeting or scheduling identity analysis', async () => {
     const { service, reportIntakeRepository, intake, message } = await stagedSetup();
-    await reportIntakeRepository.update(intake.id, {
-      status: ReportIntakeStatus.SUBMITTED,
-      confirmedTargetUserId: 'target-1',
+    await service.markSubmitted({
+      intakeId: intake.id,
+      targetUserId: 'target-1',
+      submittedById: 'reporter-1',
     });
     await service.handleThreadMessage(message);
     expect(await reportIntakeRepository.findById(intake.id)).toMatchObject({

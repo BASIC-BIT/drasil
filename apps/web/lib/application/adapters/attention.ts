@@ -1,4 +1,8 @@
-import { acknowledgeIdentityReviewMetadata, isIdentityReviewItem } from '@drasil/application';
+import {
+  acknowledgeIdentityReviewMetadata,
+  isIdentityReviewItem,
+  reportSubmissionProgressSchema,
+} from '@drasil/application';
 import { createWebDelegationDatabase } from '../../mcp/adapters/database';
 import type {
   QueueAttentionItemRecord,
@@ -35,12 +39,25 @@ export class PostgresQueueAttentionRepository implements QueueAttentionRepositor
         !isIdentityReviewItem(item)
       )
         return 'already_handled';
-      const result = await client.query<{ id: string; metadata: unknown }>(
-        `select id, metadata from report_intakes where id=$1::uuid and server_id=$2
-         and status='needs_admin_confirmation' and closed_at is null and confirmed_target_user_id is null for update`,
+      const result = await client.query<{
+        id: string;
+        metadata: unknown;
+        confirmed_target_user_id: string | null;
+      }>(
+        `select id, metadata, confirmed_target_user_id from report_intakes where id=$1::uuid and server_id=$2
+         and status='needs_admin_confirmation' and closed_at is null for update`,
         [item.report_intake_id, input.guildId]
       );
       const intake = result.rows[0];
+      if (intake?.confirmed_target_user_id) {
+        const raw =
+          intake.metadata && typeof intake.metadata === 'object' && 'submission' in intake.metadata
+            ? intake.metadata.submission
+            : null;
+        const progress = reportSubmissionProgressSchema.safeParse(raw);
+        if (!progress.success || progress.data.targetUserId !== intake.confirmed_target_user_id)
+          return 'already_handled';
+      }
       const metadata =
         intake &&
         acknowledgeIdentityReviewMetadata(intake.metadata, input.actorId, input.acknowledgedAt);

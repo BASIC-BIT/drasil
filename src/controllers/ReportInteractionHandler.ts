@@ -321,7 +321,11 @@ export class ReportInteractionHandler {
         return;
       }
 
-      if (parsed.action === 'select_target' || parsed.action === 'resolve_review') {
+      if (
+        parsed.action === 'select_target' ||
+        parsed.action === 'resolve_review' ||
+        parsed.action === 'recover_submission'
+      ) {
         const intake = await this.currentIdentityReview(interaction, parsed);
         if (!intake) {
           await interaction.reply({
@@ -331,21 +335,46 @@ export class ReportInteractionHandler {
           return;
         }
         const target = parsed.action === 'select_target';
+        const recovery = parsed.action === 'recover_submission';
         await interaction.showModal(
           new ModalBuilder()
             .setCustomId(customId)
-            .setTitle(target ? 'Confirm report target' : 'Resolve identity review')
+            .setTitle(
+              target
+                ? 'Confirm report target'
+                : recovery
+                  ? 'Reconcile submission'
+                  : 'Resolve identity review'
+            )
             .addComponents(
               new ActionRowBuilder<TextInputBuilder>().addComponents(
                 new TextInputBuilder()
                   .setCustomId(target ? 'target' : 'reason')
                   .setLabel(
-                    target ? 'Current server member ID' : 'Reason for resolving without a target'
+                    target
+                      ? 'Current server member ID'
+                      : recovery
+                        ? 'Verified outcome and reason'
+                        : 'Reason for resolving without a target'
                   )
                   .setStyle(target ? TextInputStyle.Short : TextInputStyle.Paragraph)
                   .setRequired(true)
                   .setMaxLength(target ? 20 : 1000)
               )
+            )
+            .addComponents(
+              ...(recovery
+                ? [
+                    new ActionRowBuilder<TextInputBuilder>().addComponents(
+                      new TextInputBuilder()
+                        .setCustomId('verifiedOutcome')
+                        .setLabel('Type not_applied or handled_separately')
+                        .setStyle(TextInputStyle.Short)
+                        .setRequired(true)
+                        .setMaxLength(30)
+                    ),
+                  ]
+                : [])
             )
         );
         return;
@@ -420,14 +449,22 @@ export class ReportInteractionHandler {
     const intake = await this.reportIntakeService?.findIntakeById(parsed.intakeId);
     if (!intake || !interaction.guildId || intake.server_id !== interaction.guildId) return null;
     const state = projectReportIntakeState(intake);
+    const recovery = parsed.action === 'recover_submission';
     if (
-      state.status !== 'needs_admin_confirmation' ||
-      state.confirmedTargetUserId ||
-      state.claimed ||
-      parsed.evidenceRevision !== state.evidenceRevision ||
-      state.presentationRevision !== state.evidenceRevision ||
-      !parsed.promptMessageId ||
-      parsed.promptMessageId !== state.promptMessageId
+      recovery
+        ? !state.submission ||
+          state.submission.token !== parsed.submissionToken ||
+          !state.confirmedTargetUserId ||
+          state.claimed ||
+          intake.closed_at !== null ||
+          parsed.evidenceRevision !== state.evidenceRevision
+        : state.status !== 'needs_admin_confirmation' ||
+          state.confirmedTargetUserId ||
+          state.claimed ||
+          parsed.evidenceRevision !== state.evidenceRevision ||
+          state.presentationRevision !== state.evidenceRevision ||
+          !parsed.promptMessageId ||
+          parsed.promptMessageId !== state.promptMessageId
     )
       return null;
     const analysis = reportAnalysisMetadataSchema.safeParse(
@@ -451,7 +488,12 @@ export class ReportInteractionHandler {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     try {
       const parsed = parseReportIntakeAdminActionCustomId(interaction.customId);
-      if (!parsed || (parsed.action !== 'select_target' && parsed.action !== 'resolve_review')) {
+      if (
+        !parsed ||
+        (parsed.action !== 'select_target' &&
+          parsed.action !== 'resolve_review' &&
+          parsed.action !== 'recover_submission')
+      ) {
         await interaction.editReply({ content: 'This report review form is invalid.' });
         return;
       }
@@ -459,7 +501,7 @@ export class ReportInteractionHandler {
       if (
         !intake ||
         !intake.thread_id ||
-        !parsed.promptMessageId ||
+        (!parsed.promptMessageId && !parsed.submissionToken) ||
         parsed.evidenceRevision === undefined
       ) {
         await interaction.editReply({ content: 'Use the latest moderator review message.' });
@@ -468,6 +510,7 @@ export class ReportInteractionHandler {
       let command: ReportCommand;
       let message: string;
       if (parsed.action === 'select_target') {
+        if (!parsed.promptMessageId) throw new Error('Missing report confirmation binding');
         const targetUserId = interaction.fields.getTextInputValue('target').trim();
         const guild = await this.client.guilds.fetch(intake.server_id);
         const member = /^\d{17,20}$/.test(targetUserId)
@@ -499,14 +542,39 @@ export class ReportInteractionHandler {
           await interaction.editReply({ content: 'Include a reason for resolving this review.' });
           return;
         }
+        const recovery = parsed.action === 'recover_submission';
+        const verifiedOutcome = recovery
+          ? interaction.fields.getTextInputValue('verifiedOutcome').trim()
+          : null;
+        if (
+          recovery &&
+          verifiedOutcome !== 'not_applied' &&
+          verifiedOutcome !== 'handled_separately'
+        ) {
+          await interaction.editReply({
+            content:
+              'Record the verified outcome as not_applied or handled_separately. A submission still in progress cannot be resolved.',
+          });
+          return;
+        }
         command = {
           kind: 'close_report_intake',
           intakeId: intake.id,
-          closeMode: { kind: 'resolve_review', reason },
+          closeMode:
+            recovery && parsed.submissionToken && verifiedOutcome
+              ? {
+                  kind: 'resolve_submission',
+                  token: parsed.submissionToken,
+                  reason,
+                  verifiedOutcome: verifiedOutcome as 'not_applied' | 'handled_separately',
+                }
+              : { kind: 'resolve_review', reason },
           promptMessageId: parsed.promptMessageId,
           expectedEvidenceRevision: parsed.evidenceRevision,
         };
-        message = `Resolve this identity review without selecting a target? Saved evidence remains recorded. Reason: ${reason}`;
+        message = recovery
+          ? `Reconcile the recorded submission first. If no completed receipt exists and the call has settled, resolve review using your verified outcome (${verifiedOutcome}). This does not retry submission or clear the selected target. Reason: ${reason}`
+          : `Resolve this identity review without selecting a target? Saved evidence remains recorded. Reason: ${reason}`;
       }
       await requestSlashCommandConfirmation(interaction, {
         message,
@@ -917,7 +985,24 @@ export class ReportInteractionHandler {
   ): Promise<void> {
     const state = projectReportIntakeState(context.intake);
     const reviewRows: ActionRowBuilder<ButtonBuilder>[] = [];
-    if (state.status === 'needs_admin_confirmation' && state.staged) {
+    if (state.submission && state.confirmedTargetUserId && !context.intake.closed_at) {
+      if (interaction.message.author.id !== this.client.user?.id) return;
+      reviewRows.push(
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId(
+              buildReportIntakeReviewCustomId(
+                'recover_submission',
+                state.id,
+                state.evidenceRevision,
+                state.submission.token
+              )
+            )
+            .setLabel('Reconcile submission')
+            .setStyle(ButtonStyle.Primary)
+        )
+      );
+    } else if (state.status === 'needs_admin_confirmation' && state.staged) {
       if (
         !state.promptMessageId ||
         state.presentationRevision !== state.evidenceRevision ||
@@ -981,6 +1066,9 @@ export class ReportInteractionHandler {
       {
         content: [
           this.buildReportIntakeAdminMenuMessage(context.intake),
+          state.submission
+            ? `Submission: ${state.submission.state.replace('_', ' ')}. Reconcile recorded completion before resolving; a call still in progress cannot be closed without completion proof.`
+            : null,
           banUnavailableReason ? `Ban unavailable: ${banUnavailableReason}` : null,
         ]
           .filter(Boolean)

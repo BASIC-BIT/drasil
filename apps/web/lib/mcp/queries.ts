@@ -1,3 +1,4 @@
+import { projectReportEvidenceSource } from '@drasil/contracts';
 import { reportAnalysisFailure } from '../readDiagnostics';
 import {
   projectReportIdentityReview,
@@ -305,6 +306,14 @@ function project(query: ResourceQuery, binding: AccessBinding, value: JsonRecord
   const projected = Object.fromEntries(
     keys.filter((key) => key in value).map((key) => [key, value[key]])
   );
+  if (query.kind === 'list_report_evidence' && !binding.reporterId) {
+    projected.source = projectReportEvidenceSource({
+      reportMetadata: value.reportMetadata,
+      evidenceId: typeof value.id === 'string' ? value.id : '',
+      sourceMessageId: typeof value.sourceMessageId === 'string' ? value.sourceMessageId : null,
+      evidenceMetadata: value.metadata,
+    });
+  }
   if (query.kind === 'get_report' || query.kind === 'list_reports' || query.kind === 'get_intake') {
     const input = {
       status: typeof value.status === 'string' ? value.status : '',
