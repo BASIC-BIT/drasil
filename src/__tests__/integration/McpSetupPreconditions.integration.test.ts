@@ -226,7 +226,11 @@ integration('MCP setup approved writes', () => {
       ...fixtures.fields.map((f) => ({ location: f.location, value: f.value })),
       ...fixtures.sectionOnly.map((f) => ({ location: `settings.${f.key}`, value: f.value })),
     ];
-    expect(cases).toHaveLength(83);
+    expect(cases).toHaveLength(84);
+    expect(cases).toContainEqual({
+      location: 'settings.report_intake_staged_enabled',
+      value: true,
+    });
     for (const field of cases) {
       await pool.query(
         "update servers set settings='{}', case_role_id='initial', admin_channel_id='initial', verification_channel_id='initial', admin_notification_role_id='initial', heuristic_message_threshold=9, heuristic_message_timeframe_seconds=9, heuristic_suspicious_keywords=array['initial'] where guild_id='guild'"
