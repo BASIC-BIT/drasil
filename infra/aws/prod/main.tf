@@ -17,7 +17,15 @@ locals {
     "repo:${local.github_repo_owner}/${local.github_repo_name}:ref:refs/heads/main",
     "repo:${lower(local.github_repo_owner)}/${lower(local.github_repo_name)}:ref:refs/heads/main",
     "repo:${local.github_repo_owner}/${local.github_repo_name}:environment:Deploy - web-prod",
-    "repo:${lower(local.github_repo_owner)}/${lower(local.github_repo_name)}:environment:Deploy - web-prod"
+    "repo:${lower(local.github_repo_owner)}/${lower(local.github_repo_name)}:environment:Deploy - web-prod",
+    # Transition to the BITRATE-Labs org (owner ID 350167065, repo ID 961131517). Immutable form,
+    # which GitHub uses after a transfer, plus the short form as a fallback. Remove the
+    # var.github_repo entries above, and whichever form CloudTrail shows is unused, after a clean
+    # week under the new owner.
+    "repo:BITRATE-Labs@350167065/drasil@961131517:ref:refs/heads/main",
+    "repo:BITRATE-Labs@350167065/drasil@961131517:environment:Deploy - web-prod",
+    "repo:BITRATE-Labs/drasil:ref:refs/heads/main",
+    "repo:BITRATE-Labs/drasil:environment:Deploy - web-prod"
   ])
 
   github_oidc_provider_arn = var.github_oidc_provider_arn != null ? var.github_oidc_provider_arn : aws_iam_openid_connect_provider.github[0].arn
