@@ -3,7 +3,7 @@ import {
   reportAnalysisMetadataSchema,
   reportHandoffReasonSchema,
   reportIdentityCandidateSchema,
-} from '@drasil/application';
+} from '@drasil/application/report-analysis';
 
 export const reportQueueStatusSchema = z.enum([
   'submitted',
