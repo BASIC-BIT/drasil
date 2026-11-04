@@ -1,6 +1,10 @@
 import { ownsPresentation, processingMetadata } from '../../repositories/reportIntakeProcessing';
 import { InMemoryReportIntakeRepository } from '../fakes/inMemoryRepositories';
-import { acknowledgeIdentityReviewMetadata, createAttentionActions } from '@drasil/application';
+import {
+  acknowledgeIdentityReviewMetadata,
+  isIdentityReviewItem,
+  createAttentionActions,
+} from '@drasil/application';
 import { createBotAttentionMessageDeleter } from '../../application/adapters/attention';
 import {
   ActionRowBuilder,
@@ -114,6 +118,35 @@ class FakeModerationQueueRepository implements IModerationQueueRepository {
   public intakeRepository?: InMemoryReportIntakeRepository;
   private nextId = 0;
 
+  async reserveOrdinaryAcknowledgement(
+    itemId: string,
+    guildId: string
+  ): Promise<ModerationQueueItem | null> {
+    const item = this.items.find((row) => row.id === itemId && row.server_id === guildId);
+    if (!item) return null;
+    if (!isIdentityReviewItem(item) && !item.attention_cleanup_pending) {
+      item.metadata = {
+        ...(item.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata)
+          ? item.metadata
+          : {}),
+        attention_cleanup: {
+          source_thread_id: item.source_thread_id,
+          verification_event_id: item.verification_event_id,
+          detection_event_id: item.detection_event_id,
+        },
+      };
+      item.attention_cleanup_pending = true;
+      item.source_thread_id = null;
+      item.verification_event_id = null;
+      item.detection_event_id = null;
+    }
+    return { ...item };
+  }
+  async completeOrdinaryAcknowledgement(item: ModerationQueueItem): Promise<boolean> {
+    const row = this.items.find((value) => value.id === item.id && value.attention_cleanup_pending);
+    return row ? Boolean(await this.deleteById(row.id)) : false;
+  }
+
   async acknowledgeIdentityReview(input: {
     itemId: string;
     guildId: string;
@@ -194,7 +227,7 @@ class FakeModerationQueueRepository implements IModerationQueueRepository {
 
   async listByReportIntake(reportIntakeId: string): Promise<ModerationQueueItem[]> {
     return this.items
-      .filter((item) => item.report_intake_id === reportIntakeId)
+      .filter((item) => item.report_intake_id === reportIntakeId && !item.attention_cleanup_pending)
       .map((item) => ({ ...item }));
   }
 
@@ -218,7 +251,10 @@ class FakeModerationQueueRepository implements IModerationQueueRepository {
   ): Promise<ModerationQueueItem | null> {
     return this.clone(
       this.items.find(
-        (item) => item.item_type === itemType && item.source_thread_id === sourceThreadId
+        (item) =>
+          !item.attention_cleanup_pending &&
+          item.item_type === itemType &&
+          item.source_thread_id === sourceThreadId
       ) ?? null
     );
   }
@@ -229,7 +265,10 @@ class FakeModerationQueueRepository implements IModerationQueueRepository {
   ): Promise<ModerationQueueItem | null> {
     return this.clone(
       this.items.find(
-        (item) => item.item_type === itemType && item.verification_event_id === verificationEventId
+        (item) =>
+          !item.attention_cleanup_pending &&
+          item.item_type === itemType &&
+          item.verification_event_id === verificationEventId
       ) ?? null
     );
   }
@@ -250,7 +289,9 @@ class FakeModerationQueueRepository implements IModerationQueueRepository {
   async upsert(
     data: Parameters<IModerationQueueRepository['upsert']>[0]
   ): Promise<ModerationQueueItem> {
-    const existingIndex = this.items.findIndex((item) => this.matches(item, data));
+    const existingIndex = this.items.findIndex(
+      (item) => !item.attention_cleanup_pending && this.matches(item, data)
+    );
     const now = new Date();
     if (existingIndex >= 0) {
       const existing = this.items[existingIndex];
@@ -306,7 +347,7 @@ class FakeModerationQueueRepository implements IModerationQueueRepository {
       if (!current || !ownsPresentation(current, claim, new Date())) return null;
     }
     const item = this.items.find((entry) => entry.id === id);
-    if (!item) {
+    if (!item || item.attention_cleanup_pending) {
       return null;
     }
     item.queue_channel_id = queueChannelId;
@@ -605,6 +646,63 @@ describe('ModerationQueueService', () => {
     expect(channel.send).not.toHaveBeenCalled();
     expect(fallback.send).toHaveBeenCalledTimes(available ? 1 : 0);
     expect(queueRepository.items).toHaveLength(1);
+  });
+
+  it('publishes identity review through fallback while old ordinary cleanup is reserved and failing', async () => {
+    const intakeRepository = new InMemoryReportIntakeRepository();
+    const channel = new FakeDiscordChannel('queue-channel');
+    channel.permissionsFor.mockReturnValue({ has: () => false });
+    channel.messages.fetch.mockRejectedValue(
+      Object.assign(new Error('old channel access denied'), { code: 50013 })
+    );
+    const fallback = new FakeDiscordChannel('admin-channel');
+    const { service, queueRepository, attention } = buildService({
+      intakeRepository,
+      channel,
+      fallback,
+      server: { ...buildServer(), admin_channel_id: 'admin-channel' },
+    });
+    const intake = await createReviewIntake(intakeRepository, {
+      serverId: 'guild-1',
+      reporterId: 'reporter',
+      threadId: 'thread',
+      status: ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION,
+    });
+    const old = await queueRepository.upsert({
+      serverId: 'guild-1',
+      userId: 'reporter',
+      itemType: ModerationQueueItemType.REPORT_THREAD_ATTENTION,
+      reportIntakeId: intake.id,
+      sourceThreadId: 'thread',
+      queueChannelId: 'queue-channel',
+      queueMessageId: 'old-message',
+      metadata: {},
+    });
+    await expect(
+      attention.acknowledge(
+        {
+          guildId: 'guild-1',
+          requestId: 'ack',
+          source: 'discord_interaction',
+          actor: { kind: 'user', userId: 'staff' },
+        },
+        { itemId: old.id }
+      )
+    ).rejects.toThrow('Failed to delete');
+    const outcome = processingMetadata(intake).analysis.outcome!;
+    expect(
+      await service.upsertReportIdentityReview({ intake, revision: 0, outcome })
+    ).toMatchObject({ delivered: true });
+    expect(await queueRepository.findById(old.id)).toMatchObject({
+      attention_cleanup_pending: true,
+      queue_channel_id: 'queue-channel',
+      queue_message_id: 'old-message',
+    });
+    const live = (await queueRepository.listByReportIntake(intake.id))[0];
+    expect(live.id).not.toBe(old.id);
+    expect(live.queue_channel_id).toBe('admin-channel');
+    expect(live.queue_message_id).not.toBe('old-message');
+    expect(fallback.send).toHaveBeenCalledTimes(1);
   });
 
   it('upgrades a generic attention item and prevents a later generic message from downgrading it', async () => {

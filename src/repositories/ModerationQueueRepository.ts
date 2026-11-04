@@ -1,4 +1,9 @@
-import { acknowledgeIdentityReviewMetadata, isIdentityReviewItem } from '@drasil/application';
+import {
+  acknowledgeIdentityReviewMetadata,
+  isIdentityReviewItem,
+  type QueueAttentionItemRecord,
+  type QueueAttentionRepository,
+} from '@drasil/application';
 import { ownsPresentation } from './reportIntakeProcessing';
 import { injectable, inject } from 'inversify';
 import { Prisma, PrismaClient, moderation_queue_item_type } from '../db/prisma';
@@ -12,7 +17,10 @@ import {
   ReportIntake,
 } from './types';
 
-export interface IModerationQueueRepository {
+export interface IModerationQueueRepository extends Pick<
+  QueueAttentionRepository,
+  'reserveOrdinaryAcknowledgement' | 'completeOrdinaryAcknowledgement'
+> {
   findById(id: string): Promise<ModerationQueueItem | null>;
   findByCase(verificationEventId: string): Promise<ModerationQueueItem | null>;
   listByCase(verificationEventId: string): Promise<ModerationQueueItem[]>;
@@ -151,7 +159,7 @@ export class ModerationQueueRepository implements IModerationQueueRepository {
   async listByReportIntake(reportIntakeId: string): Promise<ModerationQueueItem[]> {
     try {
       const items = await this.prisma.moderation_queue_items.findMany({
-        where: { report_intake_id: reportIntakeId },
+        where: { report_intake_id: reportIntakeId, attention_cleanup_pending: false },
       });
       return items as ModerationQueueItem[];
     } catch (error) {
@@ -186,6 +194,7 @@ export class ModerationQueueRepository implements IModerationQueueRepository {
         where: {
           item_type: itemType as moderation_queue_item_type,
           source_thread_id: sourceThreadId,
+          attention_cleanup_pending: false,
         },
       });
       return item as ModerationQueueItem | null;
@@ -203,6 +212,7 @@ export class ModerationQueueRepository implements IModerationQueueRepository {
         where: {
           item_type: itemType as moderation_queue_item_type,
           verification_event_id: verificationEventId,
+          attention_cleanup_pending: false,
         },
       });
       return item as ModerationQueueItem | null;
@@ -252,14 +262,14 @@ export class ModerationQueueRepository implements IModerationQueueRepository {
       const existing = await this.findExistingItem(data);
       const writeData = this.toPrismaWriteData(data);
       if (existing) {
-        const updated = await this.prisma.moderation_queue_items.update({
-          where: { id: existing.id },
+        const updated = await this.prisma.moderation_queue_items.updateManyAndReturn({
+          where: { id: existing.id, attention_cleanup_pending: false },
           data: {
             ...writeData,
             updated_at: new Date(),
           },
         });
-        return updated as ModerationQueueItem;
+        if (updated[0]) return updated[0] as ModerationQueueItem;
       }
 
       const created = await this.prisma.moderation_queue_items.create({ data: writeData });
@@ -287,6 +297,7 @@ export class ModerationQueueRepository implements IModerationQueueRepository {
           const updated = await transaction.moderation_queue_items.updateMany({
             where: {
               id,
+              attention_cleanup_pending: false,
               report_intake_id: intake.id,
               server_id: intake.server_id,
               item_type: ModerationQueueItemType.REPORT_THREAD_ATTENTION,
@@ -303,21 +314,53 @@ export class ModerationQueueRepository implements IModerationQueueRepository {
           })) as ModerationQueueItem | null;
         });
 
-      const updated = await this.prisma.moderation_queue_items.update({
-        where: { id },
+      const updated = await this.prisma.moderation_queue_items.updateManyAndReturn({
+        where: { id, attention_cleanup_pending: false },
         data: {
           queue_channel_id: queueChannelId,
           queue_message_id: queueMessageId,
           updated_at: new Date(),
         },
       });
-      return updated as ModerationQueueItem;
+      return (updated[0] as ModerationQueueItem | undefined) ?? null;
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
         return null;
       }
       this.handleError(error, 'updateModerationQueueDiscordMessage');
     }
+  }
+
+  async reserveOrdinaryAcknowledgement(
+    itemId: string,
+    guildId: string
+  ): Promise<QueueAttentionItemRecord | null> {
+    const rows = await this.prisma.$queryRaw<ModerationQueueItem[]>`
+      UPDATE moderation_queue_items SET attention_cleanup_pending = true, updated_at = now(),
+        metadata = CASE WHEN attention_cleanup_pending THEN metadata ELSE
+          jsonb_set(COALESCE(metadata, '{}'::jsonb), '{attention_cleanup}', jsonb_build_object(
+            'source_thread_id', source_thread_id, 'verification_event_id', verification_event_id,
+            'detection_event_id', detection_event_id)) END,
+        source_thread_id = NULL, verification_event_id = NULL, detection_event_id = NULL
+      WHERE id = ${itemId}::uuid AND server_id = ${guildId}
+        AND item_type IN ('support_thread_attention', 'report_thread_attention', 'quarantine_breach_attention')
+        AND NOT (item_type = 'report_thread_attention' AND report_intake_id IS NOT NULL
+          AND COALESCE(jsonb_typeof(metadata->'identity_review') = 'object', false))
+      RETURNING *`;
+    return rows.at(0) ?? this.findById(itemId);
+  }
+
+  async completeOrdinaryAcknowledgement(item: QueueAttentionItemRecord): Promise<boolean> {
+    const deleted = await this.prisma.moderation_queue_items.deleteMany({
+      where: {
+        id: item.id,
+        server_id: item.server_id,
+        attention_cleanup_pending: true,
+        queue_channel_id: item.queue_channel_id,
+        queue_message_id: item.queue_message_id,
+      },
+    });
+    return deleted.count > 0;
   }
 
   async acknowledgeIdentityReview(input: {

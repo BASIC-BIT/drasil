@@ -659,6 +659,7 @@ export interface ModerationOutcome {
 }
 
 export interface ModerationQueueItem {
+  attention_cleanup_pending?: boolean;
   id: string;
   server_id: string;
   user_id: string;

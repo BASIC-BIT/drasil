@@ -1,3 +1,4 @@
+import { getAttentionCleanupSource } from '@drasil/application';
 import { z } from 'zod';
 import { type ModerationInboxItem, type ReportAttentionRecord } from '@drasil/contracts';
 import { getPostgresPool } from './setupDataAdapter';
@@ -52,8 +53,9 @@ export function createModerationAttentionDataAdapter(): ModerationAttentionDataA
          limit 1`,
         [guildId, queueItemId]
       );
-      const row = result.rows[0];
-      if (!row || row.server_id !== guildId) return null;
+      const saved = result.rows[0];
+      if (!saved || saved.server_id !== guildId) return null;
+      const row = { ...saved, ...getAttentionCleanupSource(saved) };
       const item = parseModerationQueueRow(row);
       if (
         !item ||

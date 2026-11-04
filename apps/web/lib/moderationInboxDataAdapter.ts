@@ -1,3 +1,4 @@
+import { getAttentionCleanupSource } from '@drasil/application';
 import {
   moderationInboxItemSchema,
   sortModerationInboxItems,
@@ -23,6 +24,7 @@ export interface ModerationInboxDataAdapter {
 }
 
 export interface ModerationQueueRow {
+  attention_cleanup_pending?: boolean;
   id: string;
   server_id: string;
   user_id: string;
@@ -324,6 +326,8 @@ export function parseModerationQueueRow(
   row: ModerationQueueRow,
   now = new Date()
 ): ModerationInboxItem | null {
+  const cleanupSource = getAttentionCleanupSource(row);
+  if (cleanupSource) row = { ...row, ...cleanupSource };
   const kind = queueKindByType[row.item_type];
   if (!kind) {
     return null;
@@ -454,6 +458,7 @@ export class PostgresModerationInboxDataAdapter implements ModerationInboxDataAd
            mqi.server_id,
            mqi.user_id,
            mqi.item_type,
+           mqi.attention_cleanup_pending,
            mqi.verification_event_id,
            mqi.detection_event_id,
            mqi.report_intake_id,

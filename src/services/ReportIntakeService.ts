@@ -1011,10 +1011,7 @@ export class ReportIntakeService implements IReportIntakeService {
           shouldArchiveThread: true,
         };
       }
-      if (
-        intake.status === ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION &&
-        !intake.confirmed_target_user_id
-      ) {
+      if (intake.status === ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION) {
         const updated = await this.reportIntakeRepository.updateIfCurrent(intake, {
           metadata: {
             ...toRecord(intake.metadata),

@@ -1,5 +1,7 @@
 import {
   createAttentionActions,
+  isIdentityReviewItem,
+  getAttentionCleanupSource,
   type AttentionActions,
   type QueueAttentionItemRecord,
 } from './attention';
@@ -66,11 +68,18 @@ function arrange(): {
     repository: {
       acknowledgeIdentityReview: async () => 'acknowledged',
       findById: async (id) => items.get(id) ?? null,
-      deleteById: async (id) => {
-        const item = items.get(id) ?? null;
+      reserveOrdinaryAcknowledgement: async (id) => {
+        const current = items.get(id);
+        if (!current || isIdentityReviewItem(current)) return current ?? null;
+        const reserved = { ...current, attention_cleanup_pending: true };
+        items.set(id, reserved);
+        return reserved;
+      },
+      completeOrdinaryAcknowledgement: async ({ id }) => {
+        const item = items.get(id);
         deletedItemIds.push(id);
         items.delete(id);
-        return item;
+        return Boolean(item);
       },
     },
     messageDeleter: {
@@ -221,4 +230,73 @@ it('acknowledges identity review without deleting the unresolved item or its mes
   expect(f.items.has(item.id)).toBe(true);
   expect(f.deletedItemIds).toEqual([]);
   expect(f.messageIds).toEqual([]);
+});
+
+it('acknowledges a review promoted after the initial read without deleting its row or message', async () => {
+  const original: QueueAttentionItemRecord = {
+    id: 'queue-1',
+    server_id: 'guild-1',
+    item_type: 'report_thread_attention',
+    report_intake_id: 'intake',
+    queue_channel_id: 'channel',
+    queue_message_id: 'message',
+    metadata: {},
+  };
+  let current: QueueAttentionItemRecord | null = original;
+  const acknowledgeIdentityReview = jest.fn(async () => 'acknowledged' as const);
+  const deleteQueueMessage = jest.fn();
+  const actions = createAttentionActions({
+    authority: {
+      loadFresh: async () => ({
+        guildId: 'guild-1',
+        userId: 'moderator-1',
+        present: true,
+        owner: true,
+        permissions: '8',
+        roleIds: [],
+      }),
+    },
+    repository: {
+      findById: async () => {
+        const snapshot = current;
+        current = { ...original, metadata: { identity_review: { revision: 1 } } };
+        return snapshot;
+      },
+      acknowledgeIdentityReview,
+      reserveOrdinaryAcknowledgement: async () => current,
+      completeOrdinaryAcknowledgement: async () => {
+        current = null;
+        return true;
+      },
+    },
+    messageDeleter: { deleteQueueMessage },
+  });
+  expect(await actions.acknowledge(context, { itemId: original.id })).toMatchObject({
+    outcome: { status: 'acknowledged' },
+  });
+  expect(current).not.toBeNull();
+  expect(acknowledgeIdentityReview).toHaveBeenCalled();
+  expect(deleteQueueMessage).not.toHaveBeenCalled();
+});
+
+it('restores only validated source metadata for a reserved cleanup row', () => {
+  const attention_cleanup = {
+    source_thread_id: 'thread',
+    verification_event_id: null,
+    detection_event_id: null,
+  };
+  expect(
+    getAttentionCleanupSource({ attention_cleanup_pending: true, metadata: { attention_cleanup } })
+  ).toEqual(attention_cleanup);
+  expect(
+    getAttentionCleanupSource({ attention_cleanup_pending: false, metadata: { attention_cleanup } })
+  ).toBeNull();
+  expect(
+    getAttentionCleanupSource({
+      attention_cleanup_pending: true,
+      metadata: {
+        attention_cleanup: { ...attention_cleanup, verification_event_id: 'not-a-uuid' },
+      },
+    })
+  ).toBeNull();
 });

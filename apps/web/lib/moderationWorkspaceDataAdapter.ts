@@ -298,7 +298,7 @@ export function createModerationWorkspaceDataAdapter(
     const intake = await loadReportAttentionRecord(guildId, reportId);
     if (!intake) return null;
     const result = await getPostgresPool().query<{ id: string }>(
-      "select id::text from moderation_queue_items where server_id=$1 and report_intake_id::text=$2 and item_type='report_thread_attention' order by updated_at desc nulls last, id limit 1",
+      "select id::text from moderation_queue_items where server_id=$1 and report_intake_id::text=$2 and item_type='report_thread_attention' and not attention_cleanup_pending order by updated_at desc nulls last, id limit 1",
       [guildId, reportId]
     );
     const selected = result.rows[0]

@@ -54,6 +54,7 @@ describe('direct web attention acknowledgement', () => {
       id: 'item-1',
       server_id: 'guild-1',
       item_type: 'report_thread_attention',
+      attention_cleanup_pending: true,
       queue_channel_id: 'channel-1',
       queue_message_id: 'message-1',
     };
@@ -67,6 +68,7 @@ describe('direct web attention acknowledgement', () => {
     expect(result.status).toBe('acknowledged');
     expect(runtime.query.mock.calls.map(([sql]) => String(sql).trim().split(/\s+/)[0])).toEqual([
       'select',
+      'update',
       'delete',
     ]);
     expect(runtime.deleteMessage).toHaveBeenCalledWith('channel-1', 'message-1');
@@ -80,7 +82,8 @@ describe('direct web attention acknowledgement', () => {
         findById: async () => {
           throw new Error('must authorize first');
         },
-        deleteById: async () => null,
+        reserveOrdinaryAcknowledgement: async () => null,
+        completeOrdinaryAcknowledgement: async () => false,
       },
       messageDeleter: { deleteQueueMessage: async () => undefined },
     });
@@ -95,7 +98,7 @@ describe('direct web attention acknowledgement', () => {
   });
 });
 
-it('keeps web message deletion best effort and rechecks revoked role permissions', async () => {
+it('retains web cleanup on deletion failure and rechecks revoked role permissions', async () => {
   const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   try {
     runtime.roles
@@ -107,6 +110,7 @@ it('keeps web message deletion best effort and rechecks revoked role permissions
           id: 'item-1',
           server_id: 'guild-1',
           item_type: 'support_thread_attention',
+          attention_cleanup_pending: true,
           queue_channel_id: 'channel-1',
           queue_message_id: 'message-1',
         },
@@ -119,7 +123,12 @@ it('keeps web message deletion best effort and rechecks revoked role permissions
       queueItemId: 'item-1',
       actor: { id: 'moderator-1', surface: 'web' },
     };
-    expect((await adapter.acknowledgeAttentionItem(input)).status).toBe('acknowledged');
+    await expect(adapter.acknowledgeAttentionItem(input)).rejects.toThrow(
+      'message deletion unavailable'
+    );
+    expect(runtime.query.mock.calls.some(([sql]) => String(sql).trim().startsWith('delete'))).toBe(
+      false
+    );
     runtime.query.mockClear();
     await expect(adapter.acknowledgeAttentionItem(input)).rejects.toThrow('moderation permissions');
     expect(runtime.query).not.toHaveBeenCalled();

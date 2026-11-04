@@ -17,6 +17,7 @@ import {
 } from '../../repositories/types';
 import type { IConfigService } from '../../config/ConfigService';
 import type { IReportCandidateService } from '../../services/ReportCandidateService';
+import type { IModerationQueueService } from '../../services/ModerationQueueService';
 import type { IThreadManager } from '../../services/ThreadManager';
 import { getPrismaClient } from '../testDb';
 
@@ -112,7 +113,12 @@ describeIntegration('staged report staff resolution', () => {
       {} as IReportCandidateService,
       {
         retireReportConfirmationPrompts: jest.fn().mockResolvedValue(undefined),
-      } as unknown as IThreadManager
+      } as unknown as IThreadManager,
+      {
+        deleteReportThreadAttention: async (id: string) => {
+          for (const row of await queue.listByReportIntake(id)) await queue.deleteById(row.id);
+        },
+      } as IModerationQueueService
     );
     const confirmed = jest.fn(async () => ({
       status: 'submitted' as const,
@@ -275,6 +281,29 @@ describeIntegration('staged report staff resolution', () => {
     expect(await f.repository.listEvidence(f.intake.id)).toHaveLength(1);
   });
 
+  it('keeps selected admin review open when submission fails and the reporter closes the thread', async () => {
+    const f = await fixture();
+    f.confirmed.mockRejectedValueOnce(new Error('submission unavailable'));
+    await expect(f.actions.execute(context, f.selection)).rejects.toThrow('submission unavailable');
+    expect(await f.repository.findById(f.intake.id)).toMatchObject({
+      confirmed_target_user_id: 'target-resolution',
+      status: 'needs_admin_confirmation',
+    });
+    expect(
+      await f.actions.execute(
+        { ...context, actor: { kind: 'user', userId: f.intake.reporter_id } },
+        { kind: 'close_report_intake', intakeId: f.intake.id }
+      )
+    ).toMatchObject({ outcome: { status: 'closed' } });
+    const saved = (await f.repository.findById(f.intake.id))!;
+    expect(saved.status).toBe('needs_admin_confirmation');
+    expect(saved.closed_at).toBeNull();
+    expect(saved.confirmed_target_user_id).toBe('target-resolution');
+    expect(processingMetadata(saved).analysis.handoff.state).toBe('delivered');
+    expect(await f.queue.findById(f.item.id)).not.toBeNull();
+    expect(await f.repository.listEvidence(f.intake.id)).toHaveLength(2);
+  });
+
   it('lets the reporter start another report after closing only the handed-off thread', async () => {
     const f = await fixture();
     expect(
@@ -343,6 +372,150 @@ describeIntegration('staged report staff resolution', () => {
       );
     }
   );
+
+  it('reclassifies a report attention row promoted between read and reservation', async () => {
+    const f = await fixture();
+    await f.prisma.moderation_queue_items.update({
+      where: { id: f.item.id },
+      data: { metadata: {} },
+    });
+    const read = f.queue.findById.bind(f.queue);
+    jest.spyOn(f.queue, 'findById').mockImplementationOnce(async (id) => {
+      const snapshot = await read(id);
+      await f.queue.upsert({
+        serverId: context.guildId,
+        userId: f.intake.reporter_id,
+        itemType: ModerationQueueItemType.REPORT_THREAD_ATTENTION,
+        reportIntakeId: f.intake.id,
+        sourceThreadId: f.intake.thread_id,
+        metadata: { identity_review: { revision: 1 } },
+      });
+      return snapshot;
+    });
+    const deleteQueueMessage = jest.fn();
+    const actions = createAttentionActions({
+      repository: f.queue,
+      authority,
+      messageDeleter: { deleteQueueMessage },
+    });
+    expect(await actions.acknowledge(context, { itemId: f.item.id })).toMatchObject({
+      outcome: { status: 'acknowledged' },
+    });
+    expect(await f.queue.findById(f.item.id)).toMatchObject({ attention_cleanup_pending: false });
+    expect(
+      processingMetadata((await f.repository.findById(f.intake.id))!).analysis.handoff.state
+    ).toBe('acknowledged');
+    expect(deleteQueueMessage).not.toHaveBeenCalled();
+  });
+
+  it('retains failed cleanup and publishes a separate live review without changing reserved message IDs', async () => {
+    const f = await fixture();
+    await f.prisma.moderation_queue_items.update({
+      where: { id: f.item.id },
+      data: { metadata: {} },
+    });
+    const deleteQueueMessage = jest
+      .fn()
+      .mockRejectedValueOnce(new Error('old channel unavailable'))
+      .mockResolvedValue(undefined);
+    const actions = createAttentionActions({
+      repository: f.queue,
+      authority,
+      messageDeleter: { deleteQueueMessage },
+    });
+    await expect(actions.acknowledge(context, { itemId: f.item.id })).rejects.toThrow(
+      'old channel unavailable'
+    );
+    const reserved = await f.queue.findById(f.item.id);
+    expect(reserved).toMatchObject({
+      attention_cleanup_pending: true,
+      queue_message_id: 'review-message',
+      queue_channel_id: 'review-channel',
+    });
+    expect(await f.queue.listByReportIntake(f.intake.id)).toHaveLength(0);
+    expect(
+      await f.queue.findAttentionByThread(
+        ModerationQueueItemType.REPORT_THREAD_ATTENTION,
+        f.intake.thread_id!
+      )
+    ).toBeNull();
+    // A producer that read the old row before reservation must also create a new generation.
+    jest.spyOn(f.queue, 'findAttentionByThread').mockResolvedValueOnce(f.item);
+    const live = await f.queue.upsert({
+      serverId: context.guildId,
+      userId: f.intake.reporter_id,
+      itemType: ModerationQueueItemType.REPORT_THREAD_ATTENTION,
+      reportIntakeId: f.intake.id,
+      sourceThreadId: f.intake.thread_id,
+      metadata: { identity_review: { revision: 1 } },
+    });
+    expect(live.id).not.toBe(f.item.id);
+    expect(live.queue_message_id).toBeNull();
+    expect(await f.queue.updateDiscordMessage(f.item.id, 'new-channel', 'new-message')).toBeNull();
+    await f.queue.updateDiscordMessage(live.id, 'fallback-channel', 'live-review-message');
+    expect(await f.queue.findById(f.item.id)).toMatchObject({
+      queue_message_id: 'review-message',
+      queue_channel_id: 'review-channel',
+    });
+    expect(await actions.acknowledge(context, { itemId: f.item.id })).toMatchObject({
+      outcome: { status: 'acknowledged' },
+    });
+    expect(await f.queue.findById(f.item.id)).toBeNull();
+    expect(await f.queue.findById(live.id)).toMatchObject({
+      attention_cleanup_pending: false,
+      queue_message_id: 'live-review-message',
+    });
+    expect(deleteQueueMessage.mock.calls.map(([item]) => item.queue_message_id)).toEqual([
+      'review-message',
+      'review-message',
+    ]);
+  });
+
+  it('keeps the deployed verification conflict target valid before and after ordinary reservation', async () => {
+    const f = await fixture();
+    const verification = await f.prisma.verification_events.create({
+      data: { server_id: context.guildId, user_id: f.intake.reporter_id },
+    });
+    const oldCaseUpsert = () => f.prisma.$queryRaw<{ id: string }[]>`
+      INSERT INTO moderation_queue_items(server_id,user_id,item_type,verification_event_id)
+      VALUES (${context.guildId},${f.intake.reporter_id},'case_mirror',${verification.id}::uuid)
+      ON CONFLICT (item_type,verification_event_id) WHERE verification_event_id IS NOT NULL
+      DO UPDATE SET updated_at=now() RETURNING id`;
+    const first = await oldCaseUpsert();
+    expect(await oldCaseUpsert()).toEqual(first);
+    const breach = await f.queue.upsert({
+      serverId: context.guildId,
+      userId: f.intake.reporter_id,
+      itemType: ModerationQueueItemType.QUARANTINE_BREACH_ATTENTION,
+      verificationEventId: verification.id,
+      sourceThreadId: 'breach-thread',
+      queueChannelId: 'old-channel',
+      queueMessageId: 'old-message',
+    });
+    const reserved = await f.queue.reserveOrdinaryAcknowledgement(breach.id, context.guildId);
+    expect(reserved).toMatchObject({
+      attention_cleanup_pending: true,
+      verification_event_id: null,
+      source_thread_id: null,
+      metadata: {
+        attention_cleanup: {
+          source_thread_id: 'breach-thread',
+          verification_event_id: verification.id,
+          detection_event_id: null,
+        },
+      },
+    });
+    const newBreach = await f.queue.upsert({
+      serverId: context.guildId,
+      userId: f.intake.reporter_id,
+      itemType: ModerationQueueItemType.QUARANTINE_BREACH_ATTENTION,
+      verificationEventId: verification.id,
+      sourceThreadId: 'breach-thread',
+    });
+    expect(newBreach.id).not.toBe(breach.id);
+    expect(newBreach.queue_message_id).toBeNull();
+    expect(await oldCaseUpsert()).toEqual(first);
+  });
 
   it('rejects target and close snapshots when only the evidence revision changed', async () => {
     const f = await fixture();
