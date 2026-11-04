@@ -33,7 +33,7 @@ export const reportDirectoryCoverageSchema = z.discriminatedUnion('kind', [
   }),
   z.object({
     kind: z.literal('unavailable'),
-    reason: z.enum(['permissions', 'rate_limited', 'transport']),
+    reason: z.enum(['permissions', 'rate_limited', 'transport', 'invalid_metadata']),
   }),
 ]);
 const matchedFields = z.array(
@@ -163,6 +163,15 @@ export const reportAnalysisMetadataSchema = z
     coverage: reportDirectoryCoverageSchema.nullable(),
     requestReservations: z.array(z.object({ revision, leaseToken: id, reservedAt: timestamp })),
     handoff: reportHandoffSchema,
+    presentation: z
+      .object({
+        revision,
+        attempts: revision,
+        nextDueAt: timestamp.nullable(),
+        lease: z.object({ token: id, until: timestamp }).nullable(),
+        lastFailure: z.literal('delivery_unavailable').nullable().optional(),
+      })
+      .optional(),
   })
   .passthrough();
 

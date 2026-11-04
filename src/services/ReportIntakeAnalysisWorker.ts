@@ -1,7 +1,8 @@
+import { IReportIntakeHandoffService } from './ReportIntakeHandoffService';
 import { activeReportEvidence } from '../utils/reportIntakeEvidence';
 import { awaitReportLookup } from './ReportMemberDirectory';
 import type { ReportAnalysisOutcome } from '@drasil/application';
-import { inject, injectable } from 'inversify';
+import { inject, injectable, optional } from 'inversify';
 import { IConfigService } from '../config/ConfigService';
 import { TYPES } from '../di/symbols';
 import { IReportIntakeRepository } from '../repositories/ReportIntakeRepository';
@@ -28,11 +29,15 @@ export class ReportIntakeAnalysisWorker implements IReportIntakeAnalysisWorker {
   private processing: Promise<number> | null = null;
   private owned: AbortController | null = null;
   private stopped = false;
+  private presenting: Promise<number> | null = null;
 
   constructor(
     @inject(TYPES.ReportIntakeRepository) private repository: IReportIntakeRepository,
     @inject(TYPES.ConfigService) private config: IConfigService,
-    @inject(TYPES.ReportIntakeAgentService) private agent: IReportIntakeAgentService
+    @inject(TYPES.ReportIntakeAgentService) private agent: IReportIntakeAgentService,
+    @inject(TYPES.ReportIntakeHandoffService)
+    @optional()
+    private handoff?: IReportIntakeHandoffService
   ) {}
 
   start(): void {
@@ -56,6 +61,14 @@ export class ReportIntakeAnalysisWorker implements IReportIntakeAnalysisWorker {
   async processPending(limit = MAX_CLAIMS): Promise<number> {
     if (this.processing) return this.processing;
     if (this.stopped) return 0;
+    if (!this.presenting && this.handoff) {
+      this.presenting = this.handoff
+        .deliverPending(1)
+        .catch(() => 0)
+        .finally(() => {
+          this.presenting = null;
+        });
+    }
     const processing = this.drain(Math.min(MAX_CLAIMS, Math.max(0, Math.floor(limit))));
     this.processing = processing;
     try {

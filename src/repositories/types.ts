@@ -1002,3 +1002,13 @@ export interface ReportAnalysisClaim {
   deadline: Date;
   attempts: number;
 }
+
+export interface ReportPresentationClaim {
+  intake: ReportIntake;
+  revision: number;
+  leaseToken: string;
+}
+export type ReportPresentationResult =
+  | { kind: 'delivered'; channelId: string; messageId: string; receipt: 'pending' | 'sent' }
+  | { kind: 'published' }
+  | { kind: 'failed' };

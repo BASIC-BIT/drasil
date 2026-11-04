@@ -292,6 +292,12 @@ export class ModerationQueueRepository implements IModerationQueueRepository {
   private async findExistingItem(
     data: ModerationQueueItemUpsert
   ): Promise<ModerationQueueItem | null> {
+    if (data.itemType === ModerationQueueItemType.REPORT_THREAD_ATTENTION && data.reportIntakeId) {
+      const existing = (await this.listByReportIntake(data.reportIntakeId)).find(
+        (item) => item.item_type === data.itemType
+      );
+      if (existing) return existing;
+    }
     if (data.itemType === ModerationQueueItemType.CASE_MIRROR && data.verificationEventId) {
       return this.findByCase(data.verificationEventId);
     }

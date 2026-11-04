@@ -1,3 +1,4 @@
+import { processingMetadata } from '../../repositories/reportIntakeProcessing';
 import type { IThreadManager } from '../../services/ThreadManager';
 import { GuildMember, Message, User } from 'discord.js';
 import { IConfigService } from '../../config/ConfigService';
@@ -149,6 +150,97 @@ describe('ReportIntakeService', () => {
     } as Awaited<ReturnType<IConfigService['getServerConfig']>>);
     return setup;
   }
+
+  async function savedCandidate() {
+    const setup = await stagedSetup();
+    const { metadata, analysis } = processingMetadata(setup.intake);
+    analysis.outcome = {
+      kind: 'confirm',
+      candidate: {
+        ...buildCandidate(),
+        matchedFields: ['username'],
+        sourceRefs: [],
+        subjectMatches: [{ subjectId: 'target', sourceRefs: [], matchedFields: ['username'] }],
+      },
+      coverage: { kind: 'not_required', reason: 'validated_anchor' },
+      includedEvidenceIds: [],
+      excludedEvidenceIds: [],
+    };
+    // A completed analysis includes the due time, which ordinary update deliberately cannot change.
+    const at = new Date();
+    jest.spyOn(setup.reportIntakeRepository, 'findById').mockImplementation(async () => saved);
+    let saved = {
+      ...setup.intake,
+      status: ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION,
+      analysis_due_at: new Date(at.getTime() + 600_000),
+      metadata: { ...metadata, analysis } as typeof setup.intake.metadata,
+    };
+    jest
+      .spyOn(setup.reportIntakeRepository, 'updateIfCurrent')
+      .mockImplementation(async (_intake, input) => {
+        saved = { ...saved, metadata: input.metadata as typeof saved.metadata };
+        return saved;
+      });
+    return { ...setup, read: () => saved };
+  }
+  it('publishes saved candidate controls disabled until persisted and binds the evidence revision', async () => {
+    const { service, intake, message, prompt, send, read } = await savedCandidate();
+    prompt.edit.mockImplementation(async (payload) => {
+      if (payload.components.length)
+        expect(read().metadata).toMatchObject({
+          last_confirmation_prompt_revision: 0,
+          last_confirmation_prompt_message_id: 'prompt-1',
+        });
+    });
+    expect(await service.publishSavedConfirmation(intake.id, message)).toBe(true);
+    const payload = send.mock.calls[0][0];
+    expect(
+      payload.components.every((row: { components: { data: { disabled: boolean } }[] }) =>
+        row.components.every((button) => button.data.disabled)
+      )
+    ).toBe(true);
+    expect(read().metadata).toMatchObject({
+      last_confirmation_prompt_due_at: read().analysis_due_at.toISOString(),
+    });
+  });
+  it('publishes the same saved candidate after an earlier prompt authorization was retired', async () => {
+    const { service, intake, message, read } = await savedCandidate();
+    const current = read();
+    const metadata = current.metadata as Record<string, unknown>;
+    metadata.last_confirmation_prompt_candidate_ids = ['user-1'];
+    expect(await service.publishSavedConfirmation(intake.id, message)).toBe(true);
+  });
+  it('resumes enabling a persisted confirmation after publication was interrupted', async () => {
+    const { service, intake, message, prompt, send, read } = await savedCandidate();
+    expect(await service.publishSavedConfirmation(intake.id, message)).toBe(true);
+    prompt.edit.mockClear();
+    Object.assign(message.channel, {
+      messages: { fetch: jest.fn().mockResolvedValue({ ...prompt, author: { id: 'bot' } }) },
+    });
+    Object.assign(message, { client: { user: { id: 'bot' } } });
+    expect(read().metadata).toMatchObject({ last_confirmation_prompt_revision: 0 });
+    expect(await service.publishSavedConfirmation(intake.id, message)).toBe(true);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(prompt.edit).toHaveBeenCalledWith(
+      expect.objectContaining({ components: expect.any(Array) })
+    );
+  });
+  it('rechecks a changed revision before enabling saved controls', async () => {
+    const { service, intake, message, prompt, reportIntakeRepository, read } =
+      await savedCandidate();
+    const save = jest.mocked(reportIntakeRepository.updateIfCurrent).getMockImplementation()!;
+    jest
+      .mocked(reportIntakeRepository.updateIfCurrent)
+      .mockImplementationOnce(async (snapshot, input) => {
+        const result = await save(snapshot, input);
+        jest
+          .mocked(reportIntakeRepository.findById)
+          .mockResolvedValue({ ...read(), evidence_revision: 1 });
+        return result;
+      });
+    expect(await service.publishSavedConfirmation(intake.id, message)).toBe(false);
+    expect(prompt.edit).toHaveBeenCalledWith({ components: [] });
+  });
 
   it('saves one complete screenshot-only revision before acknowledging once', async () => {
     const {

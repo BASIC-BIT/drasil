@@ -4,6 +4,8 @@ import {
   ANALYSIS_CLAIM_SCAN_LIMIT,
   canAnalyze,
   completeAnalysisChange,
+  presentationClaimChange,
+  completePresentationChange,
   evidenceBatchChange,
   ownsAnalysis,
   reserveAnalysisChange,
@@ -50,6 +52,8 @@ import {
   ModerationOutcomeType,
   type ReportEvidenceBatch,
   type ReportAnalysisClaim,
+  type ReportPresentationClaim,
+  type ReportPresentationResult,
   ReportIntake,
   ReportIntakeCreate,
   ReportIntakeEvidence,
@@ -1618,6 +1622,36 @@ export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
     Object.assign(intake, result.change);
     return result.result;
   }
+  async claimPendingPresentation(
+    now: Date,
+    intakeId?: string
+  ): Promise<ReportPresentationClaim | null> {
+    for (const intake of this.intakes.values()) {
+      if (intakeId && intake.id !== intakeId) continue;
+      if (
+        intake.status === ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION &&
+        !(await this.stagedEnabled(intake.server_id))
+      )
+        continue;
+      const result = presentationClaimChange(intake, now);
+      if (!result) continue;
+      Object.assign(intake, result.change);
+      return result.claim;
+    }
+    return null;
+  }
+  async completePresentation(
+    claim: ReportPresentationClaim,
+    result: ReportPresentationResult
+  ): Promise<boolean> {
+    const intake = this.intakes.find((item) => item.id === claim.intake.id);
+    if (!intake) return false;
+    const change = completePresentationChange(intake, claim, result, new Date());
+    if (!change) return false;
+    Object.assign(intake, change);
+    return true;
+  }
+
   async claimAnalysis(now: Date, leaseMs: number): Promise<ReportAnalysisClaim | null> {
     const due = this.intakes.filter(
       (intake) =>

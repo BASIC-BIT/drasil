@@ -58,6 +58,116 @@ describeIntegration('durable report intake processing', () => {
     return { prisma, repository, intake, batch };
   }
 
+  it.each([
+    'corrupt',
+    ['corrupt'],
+    {
+      unrelated: 'retained',
+      analysis: { broken: true },
+      confirmation_prompt_message_ids: ['old-prompt'],
+    },
+  ])(
+    'preserves quarantined raw metadata through repeated presentation failures: %p',
+    async (raw) => {
+      const { prisma, repository, intake } = await fixture();
+      const at = new Date();
+      await prisma.report_intakes.update({
+        where: { id: intake.id },
+        data: {
+          metadata: raw,
+          status: 'needs_admin_confirmation',
+          analysis_failure_code: 'invalid_metadata',
+          evidence_revision: 3,
+          analysis_revision: 1,
+          analysis_attempts: 2,
+          analysis_deadline_at: at,
+        },
+      });
+      const first = (await repository.claimPendingPresentation(at))!;
+      expect(first).not.toBeNull();
+      expect(first.intake.metadata).toMatchObject({
+        quarantined_metadata: raw,
+        analysis: {
+          outcome: {
+            reason: 'evidence_unavailable',
+            coverage: { kind: 'unavailable', reason: 'invalid_metadata' },
+          },
+        },
+      });
+      expect(await repository.completePresentation(first, { kind: 'failed' })).toBe(true);
+      const second = (await repository.claimPendingPresentation(new Date(at.getTime() + 31_000)))!;
+      expect(second.intake.metadata).toMatchObject({ quarantined_metadata: raw });
+      expect(second.intake).toMatchObject({
+        analysis_failure_code: 'invalid_metadata',
+        analysis_attempts: 2,
+        evidence_revision: 3,
+        analysis_revision: 1,
+        analysis_deadline_at: at,
+        analysis_due_at: null,
+      });
+      expect(await repository.claimAnalysis(new Date(at.getTime() + 31_000), 30_000)).toBeNull();
+    }
+  );
+
+  it('grants one presentation lease and retains delivery proof across repository restart', async () => {
+    const { prisma, repository, intake, batch } = await fixture();
+    const at = new Date();
+    await repository.recordEvidenceBatch({ ...batch, observedAt: new Date(at.getTime() - 15_000) });
+    const analysis = (await repository.claimAnalysis(at, 30_000))!;
+    expect(await repository.completeAnalysis(analysis, outcome, at)).toBe(true);
+    const claims = await Promise.all([
+      repository.claimPendingPresentation(at),
+      repository.claimPendingPresentation(at),
+    ]);
+    const claim = claims.find((value) => value !== null)!;
+    expect(claims.filter(Boolean)).toHaveLength(1);
+    expect(
+      await repository.completePresentation(claim, {
+        kind: 'delivered',
+        channelId: 'queue',
+        messageId: 'review',
+        receipt: 'sent',
+      })
+    ).toBe(true);
+    const restarted = new ReportIntakeRepository(prisma);
+    expect(await restarted.claimPendingPresentation(new Date(), intake.id)).toBeNull();
+    const saved = (await restarted.findById(intake.id))!;
+    expect(processingMetadata(saved).analysis.handoff).toMatchObject({
+      state: 'delivered',
+      channelId: 'queue',
+      messageId: 'review',
+      receipt: 'sent',
+      reason: 'no_match',
+    });
+    expect(saved.analysis_attempts).toBe(0);
+    expect(await restarted.claimAnalysis(new Date(), 30_000)).toBeNull();
+  });
+
+  it('leases presentation separately and rejects a stale completion', async () => {
+    const { repository, intake, batch } = await fixture();
+    await repository.recordEvidenceBatch(batch);
+    const analysis = (await repository.claimAnalysis(due, 30_000))!;
+    await repository.completeAnalysis(analysis, outcome, due);
+    const claim = (await repository.claimPendingPresentation(due))!;
+    expect(claim.intake.id).toBe(intake.id);
+    expect(await repository.claimPendingPresentation(due)).toBeNull();
+    await repository.recordEvidenceBatch({
+      ...batch,
+      sourceVersion: 2,
+      sourceFingerprint: 'v2',
+      observedAt: due,
+    });
+    expect(
+      await repository.completePresentation(claim, {
+        kind: 'delivered',
+        channelId: 'queue',
+        messageId: 'review',
+        receipt: 'sent',
+      })
+    ).toBe(false);
+    expect((await repository.findById(intake.id))?.analysis_attempts).toBe(0);
+  });
+
   it('skips disabled earliest work without changing its budget or starving enabled work', async () => {
     const { prisma, repository, intake, batch } = await fixture();
     await repository.recordEvidenceBatch({ ...batch, observedAt: new Date(now.getTime() - 1000) });

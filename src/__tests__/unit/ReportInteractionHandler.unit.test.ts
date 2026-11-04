@@ -142,6 +142,7 @@ const buildReportIntake = (overrides: Partial<ReportIntake> = {}): ReportIntake 
 });
 
 const createReportIntakeService = (): jest.Mocked<IReportIntakeService> => ({
+  publishSavedConfirmation: jest.fn(),
   openIntakeFromThread: jest.fn().mockResolvedValue(buildReportIntake()),
   findOpenIntakeForReporter: jest.fn().mockResolvedValue(null),
   findIntakeById: jest.fn().mockResolvedValue(

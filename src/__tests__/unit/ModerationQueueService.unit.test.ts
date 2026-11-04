@@ -1,7 +1,9 @@
+import { InMemoryReportIntakeRepository } from '../fakes/inMemoryRepositories';
 import { createAttentionActions } from '@drasil/application';
 import { createBotAttentionMessageDeleter } from '../../application/adapters/attention';
 import {
   ActionRowBuilder,
+  Collection,
   ButtonBuilder,
   ButtonStyle,
   EmbedBuilder,
@@ -16,6 +18,7 @@ import type { IModerationQueueRepository } from '../../repositories/ModerationQu
 import type { IServerRepository } from '../../repositories/ServerRepository';
 import type { IVerificationEventRepository } from '../../repositories/VerificationEventRepository';
 import {
+  ReportIntakeStatus,
   CaseAttentionState,
   CaseKind,
   DetectionEvent,
@@ -33,6 +36,11 @@ class FakeDiscordMessage {
   public readonly id: string;
   public readonly channelId: string;
   public payload: Record<string, unknown>;
+  public author = { id: 'bot' };
+  public createdTimestamp = Date.now();
+  public get embeds() {
+    return ((this.payload.embeds ?? []) as EmbedBuilder[]).map((embed) => embed.toJSON());
+  }
   public deleted = false;
   public edit = jest.fn(async (payload: MessageEditOptions) => {
     this.payload = { ...this.payload, ...payload };
@@ -52,10 +60,18 @@ class FakeDiscordMessage {
 
 class FakeDiscordChannel {
   public readonly id: string;
+  public guildId = 'guild-1';
+  public permissionsFor = jest.fn(() => ({ has: (): boolean => true }));
   private nextMessageId = 0;
   public readonly sentMessages: FakeDiscordMessage[] = [];
   public readonly messages = {
-    fetch: jest.fn(async (messageId: string) => {
+    fetch: jest.fn(async (messageId: string | { limit: number }) => {
+      if (typeof messageId !== 'string')
+        return new Collection(
+          this.sentMessages
+            .filter((entry) => !entry.deleted)
+            .map((entry) => [entry.id, entry as unknown as Message])
+        );
       const message = this.sentMessages.find((entry) => entry.id === messageId && !entry.deleted);
       if (!message) {
         throw Object.assign(new Error(`Message ${messageId} not found`), { code: 10008 });
@@ -368,6 +384,8 @@ const buildPendingScreeningMember = (): ServerMember => ({
 
 const buildService = (
   input: {
+    intakeRepository?: InMemoryReportIntakeRepository;
+    fallback?: FakeDiscordChannel;
     server?: Server;
     pendingCases?: VerificationEvent[];
     observedAlerts?: DetectionEvent[];
@@ -396,12 +414,17 @@ const buildService = (
     ),
   } as unknown as IDetectionEventsRepository;
   const client = {
+    user: { id: 'bot' },
     channels: {
       fetch: jest.fn(async (channelId: string) => {
         if (input.channelFetchError !== undefined) {
           throw input.channelFetchError;
         }
-        return channelId === channel.id ? channel : null;
+        return channelId === channel.id
+          ? channel
+          : channelId === input.fallback?.id
+            ? input.fallback
+            : null;
       }),
     },
   } as unknown as Client;
@@ -412,7 +435,8 @@ const buildService = (
     serverRepository,
     verificationRepository,
     detectionRepository,
-    queueRepository
+    queueRepository,
+    input.intakeRepository
   );
   const attention = createAttentionActions({
     repository: queueRepository,
@@ -432,6 +456,116 @@ const buildService = (
 };
 
 describe('ModerationQueueService', () => {
+  it.each([true, false])('uses only an authorized fallback, available=%s', async (available) => {
+    const intakeRepository = new InMemoryReportIntakeRepository();
+    const channel = new FakeDiscordChannel('queue-channel');
+    channel.permissionsFor.mockReturnValue({ has: () => false });
+    const fallback = new FakeDiscordChannel('admin-channel');
+    fallback.permissionsFor.mockReturnValue({ has: () => available });
+    const { service, queueRepository } = buildService({
+      intakeRepository,
+      channel,
+      fallback,
+      server: { ...buildServer(), admin_channel_id: 'admin-channel' },
+    });
+    const intake = await intakeRepository.create({
+      serverId: 'guild-1',
+      reporterId: 'reporter',
+      threadId: 'thread',
+      status: ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION,
+    });
+    const result = await service.upsertReportIdentityReview({
+      intake,
+      revision: 0,
+      outcome: {
+        kind: 'admin_review',
+        reason: 'no_match',
+        candidates: [],
+        coverage: { kind: 'unavailable', reason: 'transport' },
+        includedEvidenceIds: [],
+        excludedEvidenceIds: [],
+      },
+    });
+    expect(result.delivered).toBe(available);
+    expect(channel.send).not.toHaveBeenCalled();
+    expect(fallback.send).toHaveBeenCalledTimes(available ? 1 : 0);
+    expect(queueRepository.items).toHaveLength(1);
+  });
+
+  it('upgrades a generic attention item and prevents a later generic message from downgrading it', async () => {
+    const intakeRepository = new InMemoryReportIntakeRepository();
+    const { service, queueRepository, channel } = buildService({ intakeRepository });
+    const intake = await intakeRepository.create({
+      serverId: 'guild-1',
+      reporterId: 'reporter',
+      threadId: 'thread',
+      status: ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION,
+    });
+    const message = {
+      id: 'source',
+      content: 'Synthetic report evidence',
+      channelId: 'thread',
+      author: { id: 'reporter' },
+      createdTimestamp: Date.now(),
+      url: 'https://discord.com/channels/guild-1/thread/source',
+    } as Message;
+    await service.recordReportThreadAttention(intake, message);
+    const originalId = queueRepository.items[0].id;
+    await service.upsertReportIdentityReview({
+      intake,
+      revision: 0,
+      outcome: {
+        kind: 'admin_review',
+        reason: 'no_match',
+        candidates: [],
+        coverage: { kind: 'unavailable', reason: 'transport' },
+        includedEvidenceIds: [],
+        excludedEvidenceIds: [],
+      },
+    });
+    await service.recordReportThreadAttention(intake, { ...message, id: 'later' } as Message);
+    expect(queueRepository.items).toHaveLength(1);
+    expect(queueRepository.items[0].id).toBe(originalId);
+    expect(queueRepository.items[0].metadata).toMatchObject({ identity_review: { revision: 0 } });
+    expect(channel.sentMessages).toHaveLength(1);
+    expect(channel.sentMessages[0].embeds[0].title).toBe('Report needs admin review');
+    expect(channel.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('reconciles an accepted handoff after receipt persistence fails', async () => {
+    const intakeRepository = new InMemoryReportIntakeRepository();
+    const { service, queueRepository, channel } = buildService({ intakeRepository });
+    const intake = await intakeRepository.create({
+      serverId: 'guild-1',
+      reporterId: 'reporter',
+      threadId: 'thread',
+      status: ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION,
+    });
+    const input = {
+      intake,
+      revision: 0,
+      outcome: {
+        kind: 'admin_review' as const,
+        reason: 'no_match' as const,
+        candidates: [],
+        coverage: { kind: 'unavailable' as const, reason: 'transport' as const },
+        includedEvidenceIds: [],
+        excludedEvidenceIds: [],
+      },
+    };
+    jest
+      .spyOn(queueRepository, 'updateDiscordMessage')
+      .mockRejectedValueOnce(new Error('database unavailable'));
+    await expect(service.upsertReportIdentityReview(input)).rejects.toThrow('database unavailable');
+    expect((await service.upsertReportIdentityReview(input)).delivered).toBe(true);
+    const createdMessages = channel.sentMessages;
+    const rolePings = channel.send.mock.calls.filter(([payload]) =>
+      payload.content?.includes('<@&')
+    );
+    expect(createdMessages).toHaveLength(1);
+    expect(rolePings).toHaveLength(1);
+  });
+
   it('prioritizes case navigation and retains moderation controls below it', async () => {
     const { service, channel } = buildService();
     await service.upsertCaseMirror(buildVerificationEvent());

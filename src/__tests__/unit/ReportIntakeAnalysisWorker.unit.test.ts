@@ -61,6 +61,25 @@ describe('ReportIntakeAnalysisWorker', () => {
     );
     return { repository, intake, batch, config, agent, worker, servers };
   }
+  it('keeps analysis responsive while one presentation drain is pending', async () => {
+    const { repository, config, agent } = await fixture();
+    let release!: () => void;
+    const presentation = new Promise<number>((resolve) => {
+      release = () => resolve(1);
+    });
+    const handoff = { deliverPending: jest.fn(() => presentation), publishOutcome: jest.fn() };
+    const worker = new ReportIntakeAnalysisWorker(
+      repository,
+      config as unknown as IConfigService,
+      agent,
+      handoff
+    );
+    expect(await worker.processPending()).toBe(1);
+    expect(await worker.processPending()).toBe(0);
+    expect(handoff.deliverPending).toHaveBeenCalledTimes(1);
+    expect(handoff.deliverPending).toHaveBeenCalledWith(1);
+    release();
+  });
   it('reserves before dispatch and commits the result once', async () => {
     const { repository, intake, agent, worker } = await fixture();
     agent.analyze.mockImplementation(async ({ reserveModelAttempt }) => {

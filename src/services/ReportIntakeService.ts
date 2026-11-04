@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import { getReportIntakeSettings } from '../utils/reportIntakeSettings';
 import { canModerateReportIntake } from '../utils/reportIntakeStaffAuthorization';
 import { buildReportEvidenceBatch, activeReportEvidence } from '../utils/reportIntakeEvidence';
-import { processingMetadata } from '../repositories/reportIntakeProcessing';
+import { ownsPresentation, processingMetadata } from '../repositories/reportIntakeProcessing';
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -22,7 +22,12 @@ import { TYPES } from '../di/symbols';
 import { IReportIntakeRepository } from '../repositories/ReportIntakeRepository';
 import { IServerMemberRepository } from '../repositories/ServerMemberRepository';
 import { IServerRepository } from '../repositories/ServerRepository';
-import { ReportIntake, ReportIntakeEvidenceKind, ReportIntakeStatus } from '../repositories/types';
+import {
+  ReportIntake,
+  ReportPresentationClaim,
+  ReportIntakeEvidenceKind,
+  ReportIntakeStatus,
+} from '../repositories/types';
 import { IUserRepository } from '../repositories/UserRepository';
 import { getReportAiSettings, ReportAttachmentMetadata } from '../utils/reportAiSettings';
 import { selectEligibleMessageReportImageAttachments } from '../utils/reportAttachments';
@@ -79,6 +84,11 @@ export interface OpenReportIntakeInput {
 }
 
 export interface IReportIntakeService {
+  publishSavedConfirmation(
+    intakeId: string,
+    message: Message,
+    claim?: ReportPresentationClaim
+  ): Promise<boolean>;
   openIntakeFromThread(input: OpenReportIntakeInput): Promise<ReportIntake>;
   findOpenIntakeForReporter(input: {
     serverId: string;
@@ -148,6 +158,93 @@ export class ReportIntakeService implements IReportIntakeService {
     @optional()
     private moderationQueueService?: IModerationQueueService
   ) {}
+
+  async publishSavedConfirmation(
+    intakeId: string,
+    message: Message,
+    claim?: ReportPresentationClaim
+  ): Promise<boolean> {
+    const intake = await this.reportIntakeRepository.findById(intakeId);
+    if (!intake || !(await this.canPublishSavedConfirmation(intake, claim))) return false;
+    const { analysis, metadata } = processingMetadata(intake);
+    if (analysis.outcome?.kind !== 'confirm') return false;
+    const candidate: ReportCandidate = {
+      ...analysis.outcome.candidate,
+      matchReasons: [],
+      confidence: 1,
+      ambiguityNotes: [],
+      platformBackedEvidence: [],
+      confirmationRequired: true,
+    };
+    if (
+      metadata.last_confirmation_prompt_revision === intake.evidence_revision &&
+      typeof metadata.last_confirmation_prompt_message_id === 'string'
+    ) {
+      const sent = await message.channel.messages.fetch(
+        metadata.last_confirmation_prompt_message_id
+      );
+      if (
+        !message.client.user ||
+        sent.author.id !== message.client.user.id ||
+        !hasMessageSend(message.channel)
+      )
+        return false;
+      const token = metadata.last_confirmation_prompt_token;
+      if (typeof token !== 'string') return false;
+      return this.finishConfirmationPrompt(
+        intake,
+        {
+          message: sent,
+          channel: message.channel,
+          metadata: {},
+          components: this.candidateConfirmationControls(
+            intake.id,
+            [candidate.discordUserId],
+            token,
+            false
+          ),
+        },
+        intake,
+        claim
+      );
+    }
+    const prompt = await this.sendCandidateConfirmationPrompt(intake, message, [candidate]);
+    if (!prompt) return false;
+    const persisted = await this.reportIntakeRepository.updateIfCurrent(intake, {
+      metadata: {
+        ...metadata,
+        ...prompt.metadata,
+        candidate_suggestions: [candidate],
+        last_confirmation_prompt_revision: intake.evidence_revision,
+        last_confirmation_prompt_due_at: intake.analysis_due_at?.toISOString(),
+      },
+    });
+    return this.finishConfirmationPrompt(intake, prompt, persisted, claim);
+  }
+
+  private async canPublishSavedConfirmation(
+    intake: ReportIntake,
+    claim?: ReportPresentationClaim
+  ): Promise<boolean> {
+    if (
+      (claim && !ownsPresentation(intake, claim, new Date())) ||
+      intake.closed_at ||
+      intake.confirmed_target_user_id ||
+      intake.status !== ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION ||
+      intake.evidence_revision !== intake.analysis_revision ||
+      !intake.analysis_due_at ||
+      intake.analysis_due_at <= new Date()
+    )
+      return false;
+    const config = await this.configService.getServerConfig(intake.server_id, {
+      forceRefresh: true,
+      failOnReadError: true,
+    });
+    return (
+      getReportIntakeSettings(config.settings).stagedEnabled &&
+      processingMetadata(intake).analysis.handoff.state === 'none'
+    );
+  }
 
   async openIntakeFromThread(input: OpenReportIntakeInput): Promise<ReportIntake> {
     await this.serverRepository.getOrCreateServer(input.serverId);
@@ -1017,7 +1114,12 @@ export class ReportIntakeService implements IReportIntakeService {
         }
 
         const metadata = toRecord(intake.metadata);
-        if (sameStringArray(metadata.last_confirmation_prompt_candidate_ids, candidateIds)) {
+        if (
+          typeof metadata.last_confirmation_prompt_message_id === 'string' &&
+          sameStringArray(metadata.last_confirmation_prompt_candidate_ids, candidateIds) &&
+          (metadata.last_confirmation_prompt_revision === undefined ||
+            metadata.last_confirmation_prompt_revision === intake.evidence_revision)
+        ) {
           recordObservation('tool', {
             output: { confirmation_sent: false, reason: 'unchanged_candidates' },
           });
@@ -1033,25 +1135,13 @@ export class ReportIntakeService implements IReportIntakeService {
           return null;
         }
 
-        const confirmButtons = visibleCandidates.map((candidate, index) =>
-          new ButtonBuilder()
-            .setCustomId(
-              `${REPORT_INTAKE_CONFIRM_CUSTOM_ID_PREFIX}:${intake.id}:${candidate.discordUserId}`
-            )
-            .setLabel(visibleCandidates.length === 1 ? 'Submit report' : `Report ${index + 1}`)
-            .setStyle(ButtonStyle.Primary)
-            .setDisabled(true)
-        );
         const promptToken = this.createPromptToken(candidateIds);
-        const rejectButton = new ButtonBuilder()
-          .setCustomId(`${REPORT_INTAKE_REJECT_CUSTOM_ID_PREFIX}:${intake.id}:${promptToken}`)
-          .setLabel(visibleCandidates.length === 1 ? 'Different person' : 'None of these')
-          .setStyle(ButtonStyle.Secondary)
-          .setDisabled(true);
-        const components = [
-          new ActionRowBuilder<ButtonBuilder>().addComponents(confirmButtons),
-          new ActionRowBuilder<ButtonBuilder>().addComponents(rejectButton),
-        ];
+        const components = this.candidateConfirmationControls(
+          intake.id,
+          candidateIds,
+          promptToken,
+          true
+        );
 
         const sent = await message.channel.send({
           content: this.buildCandidateConfirmationMessage(
@@ -1093,6 +1183,31 @@ export class ReportIntakeService implements IReportIntakeService {
     );
   }
 
+  private candidateConfirmationControls(
+    intakeId: string,
+    candidateIds: string[],
+    token: string,
+    disabled: boolean
+  ): ActionRowBuilder<ButtonBuilder>[] {
+    const buttons = candidateIds.map((id, index) =>
+      new ButtonBuilder()
+        .setCustomId(`${REPORT_INTAKE_CONFIRM_CUSTOM_ID_PREFIX}:${intakeId}:${id}`)
+        .setLabel(candidateIds.length === 1 ? 'Submit report' : `Report ${index + 1}`)
+        .setStyle(ButtonStyle.Primary)
+        .setDisabled(disabled)
+    );
+    return [
+      new ActionRowBuilder<ButtonBuilder>().addComponents(buttons),
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`${REPORT_INTAKE_REJECT_CUSTOM_ID_PREFIX}:${intakeId}:${token}`)
+          .setLabel(candidateIds.length === 1 ? 'Different person' : 'None of these')
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(disabled)
+      ),
+    ];
+  }
+
   private async retireConfirmationPrompts(
     intake: ReportIntake,
     ids: readonly string[]
@@ -1106,7 +1221,8 @@ export class ReportIntakeService implements IReportIntakeService {
   private async finishConfirmationPrompt(
     intake: ReportIntake,
     prompt: ConfirmationPrompt | null,
-    persisted: ReportIntake | null
+    persisted: ReportIntake | null,
+    claim?: ReportPresentationClaim
   ): Promise<boolean> {
     if (!prompt) return Boolean(persisted);
     const removeControls = async (): Promise<void> => {
@@ -1117,6 +1233,20 @@ export class ReportIntakeService implements IReportIntakeService {
         );
     };
     if (!persisted) {
+      await removeControls();
+      return false;
+    }
+    const beforeEnable = await this.reportIntakeRepository.findById(intake.id);
+    if (
+      !beforeEnable ||
+      beforeEnable.status !== ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION ||
+      beforeEnable.confirmed_target_user_id ||
+      beforeEnable.closed_at ||
+      toRecord(beforeEnable.metadata).last_confirmation_prompt_message_id !== prompt.message.id ||
+      (toRecord(persisted.metadata).last_confirmation_prompt_revision !== undefined &&
+        (beforeEnable.evidence_revision !== intake.evidence_revision ||
+          !(await this.canPublishSavedConfirmation(beforeEnable, claim))))
+    ) {
       await removeControls();
       return false;
     }
@@ -1144,7 +1274,10 @@ export class ReportIntakeService implements IReportIntakeService {
       !current ||
       current.status !== ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION ||
       current.confirmed_target_user_id ||
-      toRecord(current.metadata).last_confirmation_prompt_message_id !== prompt.message.id
+      toRecord(current.metadata).last_confirmation_prompt_message_id !== prompt.message.id ||
+      (toRecord(persisted.metadata).last_confirmation_prompt_revision !== undefined &&
+        (current.evidence_revision !== intake.evidence_revision ||
+          !(await this.canPublishSavedConfirmation(current, claim))))
     ) {
       await removeControls();
       return false;

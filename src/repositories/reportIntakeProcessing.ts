@@ -2,6 +2,7 @@ import {
   reportAnalysisMetadataSchema,
   reportAnalysisOutcomeSchema,
   reportSourceVersionSchema,
+  reportHandoffSchema,
   type ReportAnalysisMetadata,
   type ReportAnalysisOutcome,
 } from '@drasil/application';
@@ -10,6 +11,8 @@ import { randomUUID } from 'crypto';
 import {
   ReportIntakeStatus,
   type ReportAnalysisClaim,
+  type ReportPresentationClaim,
+  type ReportPresentationResult,
   type ReportEvidenceBatch,
   type ReportIntake,
 } from './types';
@@ -313,6 +316,12 @@ export function completeAnalysisChange(
       includedEvidenceIds: outcome.includedEvidenceIds,
       excludedEvidenceIds: outcome.excludedEvidenceIds,
     };
+  analysis.presentation = {
+    revision: claim.revision,
+    attempts: 0,
+    nextDueAt: now.toISOString(),
+    lease: null,
+  };
   analysis.outcome = outcome;
   analysis.coverage = outcome.coverage;
   if (outcome.kind === 'admin_review' && analysis.handoff.state === 'none')
@@ -336,4 +345,158 @@ export function completeAnalysisChange(
     metadata: { ...metadata, analysis } as ReportIntake['metadata'],
     updated_at: now,
   };
+}
+
+export const PRESENTATION_LEASE_MS = 60_000;
+export const PRESENTATION_RECONCILE_MS = 24 * 60 * 60_000;
+const PRESENTATION_RETRY_MS = [30_000, 120_000, 600_000];
+
+export function presentationMetadata(intake: ReportIntake): ReturnType<typeof processingMetadata> {
+  try {
+    return processingMetadata(intake);
+  } catch (error) {
+    if (!(error instanceof z.ZodError) || intake.analysis_failure_code !== 'invalid_metadata')
+      throw error;
+    const root = z.record(z.string(), z.unknown()).safeParse(intake.metadata);
+    const original = root.success ? root.data : {};
+    const priorAnalysis = z.record(z.string(), z.unknown()).safeParse(original.analysis);
+    const priorHandoff = reportHandoffSchema.safeParse(
+      priorAnalysis.success ? priorAnalysis.data.handoff : undefined
+    );
+    const analysis = reportAnalysisMetadataSchema.parse({
+      schemaVersion: 1,
+      sources: {},
+      requestReservations: [],
+      outcome: {
+        kind: 'admin_review',
+        reason: 'evidence_unavailable',
+        candidates: [],
+        coverage: { kind: 'unavailable', reason: 'invalid_metadata' },
+        includedEvidenceIds: [],
+        excludedEvidenceIds: [],
+      },
+      coverage: { kind: 'unavailable', reason: 'invalid_metadata' },
+      handoff:
+        priorHandoff.success && priorHandoff.data.state !== 'none'
+          ? priorHandoff.data
+          : {
+              state: 'pending',
+              reason: 'evidence_unavailable',
+              attempts: 0,
+              nextDueAt: (intake.updated_at ?? intake.created_at ?? new Date()).toISOString(),
+              receipt: 'pending',
+            },
+    });
+    return { metadata: { ...original, quarantined_metadata: intake.metadata, analysis }, analysis };
+  }
+}
+
+export function canPresent(intake: ReportIntake): boolean {
+  return (
+    OPEN_ANALYSIS_STATUSES.includes(intake.status) &&
+    !intake.closed_at &&
+    !intake.confirmed_target_user_id
+  );
+}
+
+export function presentationClaimChange(
+  intake: ReportIntake,
+  now: Date
+): {
+  claim: ReportPresentationClaim;
+  change: Partial<ReportIntake>;
+} | null {
+  if (!canPresent(intake)) return null;
+  const { metadata, analysis } = presentationMetadata(intake);
+  if (
+    !analysis.outcome ||
+    analysis.handoff.state === 'resolved' ||
+    (intake.analysis_revision !== intake.evidence_revision &&
+      intake.analysis_failure_code !== 'invalid_metadata')
+  )
+    return null;
+  const previous = analysis.presentation;
+  if (
+    previous?.revision === intake.evidence_revision &&
+    (!previous.nextDueAt ||
+      new Date(previous.nextDueAt) > now ||
+      (previous.lease && new Date(previous.lease.until) > now))
+  )
+    return null;
+  const leaseToken = randomUUID();
+  analysis.presentation = {
+    revision: intake.evidence_revision,
+    attempts: (previous?.revision === intake.evidence_revision ? previous.attempts : 0) + 1,
+    nextDueAt: now.toISOString(),
+    lease: {
+      token: leaseToken,
+      until: new Date(now.getTime() + PRESENTATION_LEASE_MS).toISOString(),
+    },
+  };
+  const change = {
+    metadata: { ...metadata, analysis } as ReportIntake['metadata'],
+    updated_at: now,
+  };
+  return {
+    claim: { intake: { ...intake, ...change }, revision: intake.evidence_revision, leaseToken },
+    change,
+  };
+}
+
+export function ownsPresentation(
+  intake: ReportIntake,
+  claim: ReportPresentationClaim,
+  now: Date
+): boolean {
+  if (!canPresent(intake) || intake.evidence_revision !== claim.revision) return false;
+  const { analysis } = presentationMetadata(intake);
+  return (
+    analysis.handoff.state !== 'resolved' &&
+    analysis.presentation?.lease?.token === claim.leaseToken &&
+    new Date(analysis.presentation.lease.until) > now
+  );
+}
+
+export function completePresentationChange(
+  intake: ReportIntake,
+  claim: ReportPresentationClaim,
+  result: ReportPresentationResult,
+  now: Date
+): Partial<ReportIntake> | null {
+  if (!ownsPresentation(intake, claim, now)) return null;
+  const { metadata, analysis } = presentationMetadata(intake);
+  const attempts = analysis.presentation?.attempts ?? 1;
+  const success =
+    result.kind === 'published' || (result.kind === 'delivered' && result.receipt === 'sent');
+  const nextDueAt =
+    result.kind === 'published'
+      ? null
+      : new Date(
+          now.getTime() +
+            (success
+              ? PRESENTATION_RECONCILE_MS
+              : (PRESENTATION_RETRY_MS[attempts - 1] ?? PRESENTATION_RECONCILE_MS))
+        ).toISOString();
+  analysis.presentation = {
+    revision: claim.revision,
+    attempts,
+    nextDueAt,
+    lease: null,
+    lastFailure: success ? null : 'delivery_unavailable',
+  };
+  if (analysis.handoff.state !== 'none') {
+    const handoff = analysis.handoff;
+    if (result.kind === 'delivered')
+      analysis.handoff = reportHandoffSchema.parse({
+        ...handoff,
+        state: handoff.state === 'pending' ? 'delivered' : handoff.state,
+        channelId: result.channelId,
+        messageId: result.messageId,
+        receipt: handoff.receipt === 'sent' ? 'sent' : result.receipt,
+        attempts,
+        nextDueAt,
+      });
+    else analysis.handoff = { ...handoff, attempts, nextDueAt: nextDueAt ?? now.toISOString() };
+  }
+  return { metadata: { ...metadata, analysis } as ReportIntake['metadata'], updated_at: now };
 }

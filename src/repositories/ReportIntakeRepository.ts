@@ -2,6 +2,8 @@ import { getReportIntakeSettings } from '../utils/reportIntakeSettings';
 import type { ReportAnalysisOutcome } from '@drasil/application';
 import {
   analysisClaimChange,
+  presentationClaimChange,
+  completePresentationChange,
   ANALYSIS_CLAIM_SCAN_LIMIT,
   OPEN_ANALYSIS_STATUSES as OPEN_INTAKE_STATUSES,
   completeAnalysisChange,
@@ -23,6 +25,8 @@ import {
   ServerSettings,
   ReportEvidenceBatch,
   ReportAnalysisClaim,
+  ReportPresentationClaim,
+  ReportPresentationResult,
   ReportIntakeCreate,
   ReportIntakeEvidence,
   ReportIntakeEvidenceCreate,
@@ -39,6 +43,11 @@ export interface ReportBanClaim {
   attemptToken?: string;
 }
 export interface IReportIntakeRepository {
+  claimPendingPresentation(now: Date, intakeId?: string): Promise<ReportPresentationClaim | null>;
+  completePresentation(
+    claim: ReportPresentationClaim,
+    result: ReportPresentationResult
+  ): Promise<boolean>;
   recordEvidenceBatch(
     input: ReportEvidenceBatch
   ): Promise<'recorded' | 'duplicate' | 'stale' | 'closed'>;
@@ -157,6 +166,49 @@ export class ReportIntakeRepository implements IReportIntakeRepository {
         if (result.claim) return result.claim;
       }
       return null;
+    });
+  }
+
+  async claimPendingPresentation(
+    now: Date,
+    intakeId?: string
+  ): Promise<ReportPresentationClaim | null> {
+    return this.prisma.$transaction(async (transaction) => {
+      const rows = await transaction.$queryRaw<ReportIntake[]>`
+        SELECT * FROM report_intakes WHERE (${intakeId ?? null}::uuid IS NULL OR id = ${intakeId ?? null}::uuid)
+        AND status IN ('needs_reporter_confirmation', 'needs_admin_confirmation')
+        AND closed_at IS NULL AND confirmed_target_user_id IS NULL
+        AND (analysis_failure_code = 'invalid_metadata' OR jsonb_typeof(metadata->'analysis'->'outcome') = 'object')
+        AND (status <> 'needs_reporter_confirmation' OR EXISTS (SELECT 1 FROM servers WHERE guild_id = report_intakes.server_id
+          AND settings->'report_intake_staged_enabled' = 'true'::jsonb))
+        AND (analysis_revision = evidence_revision OR analysis_failure_code = 'invalid_metadata')
+        AND (metadata->'analysis'->'presentation' IS NULL OR
+          (metadata->'analysis'->'presentation'->>'nextDueAt' <= ${now.toISOString()}
+          AND (metadata->'analysis'->'presentation'->'lease'->>'until' IS NULL OR
+            metadata->'analysis'->'presentation'->'lease'->>'until' <= ${now.toISOString()})))
+        AND COALESCE(metadata->'analysis'->'handoff'->>'state', '') <> 'resolved'
+        ORDER BY updated_at, id FOR UPDATE SKIP LOCKED LIMIT ${ANALYSIS_CLAIM_SCAN_LIMIT}`;
+      for (const intake of rows) {
+        const result = presentationClaimChange(intake, now);
+        if (!result) continue;
+        await this.writeProcessing(transaction, intake, result.change);
+        return result.claim;
+      }
+      return null;
+    });
+  }
+
+  async completePresentation(
+    claim: ReportPresentationClaim,
+    result: ReportPresentationResult
+  ): Promise<boolean> {
+    return this.prisma.$transaction(async (transaction) => {
+      const intake = await this.lockedIntake(transaction, claim.intake.id);
+      if (!intake) return false;
+      const change = completePresentationChange(intake, claim, result, new Date());
+      if (!change) return false;
+      await this.writeProcessing(transaction, intake, change);
+      return true;
     });
   }
 
