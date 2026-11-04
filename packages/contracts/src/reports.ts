@@ -3,6 +3,7 @@ import {
   reportAnalysisMetadataSchema,
   reportHandoffReasonSchema,
   reportIdentityCandidateSchema,
+  type ReportHandoff,
 } from '@drasil/application/report-analysis';
 
 export const reportQueueStatusSchema = z.enum([
@@ -165,8 +166,7 @@ export function projectReportIdentityReview(input: {
         ? [analysis.outcome.candidate]
         : null;
   return reportIdentityReviewSchema.parse({
-    phase: review?.state ?? 'pending',
-    reason: review?.reason ?? null,
+    ...reviewHandoffFacts(review),
     evidenceRevision: z.number().int().nonnegative().safeParse(input.evidenceRevision).success
       ? input.evidenceRevision
       : null,
@@ -175,30 +175,45 @@ export function projectReportIdentityReview(input: {
       .slice(0, REVIEW_CANDIDATE_LIMIT)
       .map((candidate) => safeReviewCandidateSchema.parse(candidate)),
     coverageKind: analysis?.coverage?.kind ?? null,
-    delivery:
-      review &&
-      review.state !== 'pending' &&
-      'messageId' in review &&
-      typeof review.messageId === 'string' &&
-      typeof review.channelId === 'string'
-        ? 'delivered'
-        : review?.state === 'pending'
-          ? 'pending'
-          : 'unknown',
-    receipt: review?.receipt ?? 'unknown',
+  });
+}
+type SavedReportHandoff = Exclude<ReportHandoff, { state: 'none' }>;
+function reviewHandoffFacts(
+  review: SavedReportHandoff | null
+): Omit<
+  ReportIdentityReview,
+  'evidenceRevision' | 'candidateCount' | 'candidates' | 'coverageKind'
+> {
+  if (!review)
+    return {
+      phase: 'pending',
+      reason: null,
+      delivery: 'unknown',
+      receipt: 'unknown',
+      deliveredAt: null,
+      acknowledgedAt: null,
+      acknowledgedBy: null,
+      resolvedAt: null,
+      resolvedBy: null,
+    };
+  const delivered =
+    review.state !== 'pending' &&
+    'messageId' in review &&
+    typeof review.messageId === 'string' &&
+    typeof review.channelId === 'string';
+  const acknowledged = review.state === 'acknowledged' || review.state === 'resolved';
+  return {
+    phase: review.state,
+    reason: review.reason,
+    delivery: delivered ? 'delivered' : review.state === 'pending' ? 'pending' : 'unknown',
+    receipt: review.receipt,
     // The persisted handoff records delivery IDs but no delivery timestamp.
     deliveredAt: null,
-    acknowledgedAt:
-      review && (review.state === 'acknowledged' || review.state === 'resolved')
-        ? (review.acknowledgedAt ?? null)
-        : null,
-    acknowledgedBy:
-      review && (review.state === 'acknowledged' || review.state === 'resolved')
-        ? (review.acknowledgedBy ?? null)
-        : null,
-    resolvedAt: review?.state === 'resolved' ? review.resolvedAt : null,
-    resolvedBy: review?.state === 'resolved' ? review.resolvedBy : null,
-  });
+    acknowledgedAt: acknowledged ? (review.acknowledgedAt ?? null) : null,
+    acknowledgedBy: acknowledged ? (review.acknowledgedBy ?? null) : null,
+    resolvedAt: review.state === 'resolved' ? review.resolvedAt : null,
+    resolvedBy: review.state === 'resolved' ? review.resolvedBy : null,
+  };
 }
 export function projectReporterIdentityReview(
   input: Parameters<typeof projectReportIdentityReview>[0]

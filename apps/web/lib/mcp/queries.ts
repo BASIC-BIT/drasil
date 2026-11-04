@@ -246,7 +246,7 @@ const fields = {
   ],
   member: ['userId', 'username', 'joinedAt', 'accountCreatedAt'],
 } as const;
-function project(query: ResourceQuery, binding: AccessBinding, value: JsonRecord): JsonRecord {
+function projectionFields(query: ResourceQuery, binding: AccessBinding): readonly string[] {
   let keys: readonly string[];
   switch (query.kind) {
     case 'list_cases':
@@ -303,6 +303,10 @@ function project(query: ResourceQuery, binding: AccessBinding, value: JsonRecord
       keys = ['id', 'channelId', 'authorId', 'authorName', 'content', 'timestamp', 'attachments'];
       break;
   }
+  return keys;
+}
+function project(query: ResourceQuery, binding: AccessBinding, value: JsonRecord): JsonRecord {
+  const keys = projectionFields(query, binding);
   const projected = Object.fromEntries(
     keys.filter((key) => key in value).map((key) => [key, value[key]])
   );
