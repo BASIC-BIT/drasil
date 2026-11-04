@@ -484,7 +484,7 @@ it.each(['staff', 'reporter', 'wrong token', 'changed evidence', 'mcp'] as const
       dispatchedAt: '2026-11-03T00:00:01.000Z',
       settledAt: '2026-11-03T00:00:02.000Z',
     };
-    f.deps.authority.loadFresh = async (guildId, userId) => ({
+    f.deps.authority.loadFresh = async (guildId, userId): Promise<AuthorityFacts> => ({
       guildId,
       userId,
       present: true,
