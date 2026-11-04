@@ -1,6 +1,6 @@
 # Staged report intake acceptance
 
-The final technical review's eight Important findings and two Minor test gaps are corrected locally. Focused tests pass. The full gate for these corrections and the scoped rereview are pending. The staged selector still defaults to `false`. Paid provider evaluation, live Discord acceptance, publication, deployment, activation and merge remain pending.
+The final technical review's eight Important findings and two Minor test gaps are corrected locally and pass the full local gate. The scoped rereview remains pending. The staged selector still defaults to `false`. Paid provider evaluation, live Discord acceptance, publication, deployment, activation and merge remain pending.
 
 ## What the local journey proves
 
@@ -9,7 +9,7 @@ The final technical review's eight Important findings and two Minor test gaps ar
 | Scenario                         | Local assertion                                                                                                                                                                                    |
 | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Global-name-only account         | Username and nickname differ; a complete directory plus fresh member lookup resolves the account's global name.                                                                                    |
-| Multiple people and server title | Target, reporter, and bystander remain distinct; the server title is context.                                                                                                                      |
+| Multiple people and server title | Four competing directory accounts represent the target, reporter, bystander and server title; only the target reaches confirmation.                                                                |
 | Uncertain reading                | Two durably reserved extraction attempts maximum, then admin review.                                                                                                                               |
 | Evidence over budget             | No provider request for an oversized-only source; handoff retains the excluded evidence.                                                                                                           |
 | Unavailable directory            | Lookup failure reaches admin review without claiming complete coverage.                                                                                                                            |
@@ -20,31 +20,27 @@ The final technical review's eight Important findings and two Minor test gaps ar
 
 These are local restart simulations with a real database and replacement service instances. They do not prove recovery after an actual process crash or Discord acceptance. Existing queue tests cover role-ping deduplication and destination authorization; the journey's queue transport is mocked.
 
-## Previous local results before final review corrections
+The final correction tests also connect generated queue controls to the actual interaction handler, race identity upserts against resolution and revision replacement in Postgres, and exercise submission recovery through the real application adapter and intake repository. The recovery tests mock Discord and the security-service port. A separate security-service test exercises the actual completion-receipt producer after routing. Staff web and MCP adapter tests preserve source history while checking reporter privacy.
 
-- Focused extraction, directory, candidate, agent, worker, handoff and tooling: initially 8 suites, 171 tests passed. The final evaluator added one association assertion; its 5 tests and the 7 fixture-entry tests passed together after that change.
-- Focused application: 4 suites, 54 tests passed.
-- Report contracts: 1 file, 18 tests passed.
-- Web report actions and MCP reports: 2 files, 29 tests passed.
-- Owned Postgres journey, processing, resolution and repository: 4 suites, 77 tests passed. The combined run also included 5 evaluator tests, for 82 tests total.
-- `npm run check:ci`: passed with exit 0 on the exact source commit recorded in the appendix, in the isolated Linux container.
-- Provider tool dry run: 3 synthetic PNGs validated, maximum 3 requests printed, actual requests 0, provider elapsed time 0 ms, directory lookup not run.
+## Final local results
+
+`npm run check:ci` passed with exit 0 on the exact correction source recorded in the appendix, in the isolated Linux container. Focused regression runs preceded the full gate and are recorded in the local correction report. The earlier provider-tool dry run validated three synthetic PNGs, printed a maximum of three requests, and made zero requests. That dry run performed neither directory lookup nor paid execution.
 
 The fresh disposable database is guarded by `scripts/owned-test-database.js`. `TEST_DATABASE_URL`, `DATABASE_URL` and `POSTGRES_DB_URL` must be identical and select the owned loopback `55433/drasil_mcp_test` target. The older stopped test database remains preserved.
 
 | Full local gate stage | Result                             |
 | --------------------- | ---------------------------------- |
-| Application           | 45 suites, 630 tests passed        |
+| Application           | 45 suites, 636 tests passed        |
 | Action boundaries     | 17 tests passed                    |
-| Bot unit              | 115 suites, 2,146 tests passed     |
-| Contracts             | 6 files, 62 tests passed           |
+| Bot unit              | 115 suites, 2,154 tests passed     |
+| Contracts             | 6 files, 63 tests passed           |
 | Owned-database guard  | 8 tests passed                     |
-| Web unit              | 118 files, 1,159 tests passed      |
+| Web unit              | 118 files, 1,161 tests passed      |
 | Workspace browser     | 90 passed                          |
 | Legacy browser        | 9 passed, 13 conditional MCP skips |
 | Page visuals          | 8 passed                           |
 | Storybook             | 165 passed                         |
-| Bot integration       | 30 suites, 842 tests passed        |
+| Bot integration       | 31 suites, 849 tests passed        |
 | Web integration       | 5 files, 69 tests passed           |
 | Dedicated MCP browser | 13 passed                          |
 | Public RLS            | 44 tables passed                   |
@@ -112,18 +108,20 @@ No live check above is complete. Local mocks do not satisfy these checks.
 
 1. Obtain deployment approval for the reviewed exact commit. Apply the additive migrations before code through the existing release workflow. Retain old rows and their evidence. Existing rows without a due time remain idle.
 2. Deploy with `report_intake_staged_enabled` still false. Verify the schema and code version separately from worker/provider/Discord behavior.
-3. After controlled-server approval and a decision on failed-submission recovery, enable the selector for that server only. Run the controlled checklist and record actual outcomes.
+3. After controlled-server approval, enable the selector for that server only. Run the controlled checklist and record actual outcomes.
 4. Review wrong-candidate rate, request and time budgets, directory coverage, delivery recovery and acknowledgement before proposing broader enablement. A small synthetic set cannot establish a production error rate.
 5. Historical re-enqueue requires an approved exact-ID list. Do not add startup backfill.
 6. Roll back by disabling staged processing. Preserve evidence, processing metadata and pending reviews; retain the additive migrations. Verify saved reviews remain accessible and no new staged controls are published. Do not drop the migration as rollback.
 
 ## Evidence appendix
 
-Implementation base for Task 9: `a305ec1d63f0f4d3aead8c1f76040e1bdb171c09`. Branch fork: `46b2b053060e19b35beccf23f7cf6756490cbe5f`. Full local `npm run check:ci` passed with exit 0 on `030cd5edab8d7f0f563d40c433d3e62fd5d6fd33`, using Node 24.15.0 and Playwright 1.60.0 on Linux. The later acceptance update changes documentation only; the full run tested the stated source hash. GitHub CI, delayed review feedback, merge readiness and deployment remain unverified.
+The final correction gate passed with exit 0 on `e50cc75f613de0374295408141516de4386c6830`, using Node 24.15.0 and Playwright 1.60.0 on Linux. The final evidence update changes documentation only; the full run tested that source hash. The correction base was `35600abf5773ea008573e49c5f04cfb24cd532e7`. GitHub CI, delayed review feedback, merge readiness and deployment remain unverified.
 
-The full run used `NODE_ENV=test`, `CI=true`, `NEXT_TELEMETRY_DISABLED=1` and the three matching guarded database URLs. Its local log is `.superpowers/sdd/2026-11-03-staged-report-intake/task9-ci-030cd5e-final.log`. The detailed task report beside that log retains commands, earlier failures and focused diagnostics.
+The full run used `NODE_ENV=test`, `CI=true`, `NEXT_TELEMETRY_DISABLED=1` and the three matching guarded database URLs. Its local log is `.superpowers/sdd/2026-11-03-staged-report-intake/final-fix-ci-e50cc75.log`. The local `final-fix-report.md` beside it records each finding, behavioral RED/GREEN evidence, commands, and the two earlier gate failures. Those failures were a missing explicit return type in a test and a missing receipt-query method in a complete handler mock. Both were corrected before the successful run. No assertions, skip policy, coverage thresholds, visual baselines or tolerances were weakened.
 
-Local acceptance exposed and corrected four integration gaps:
+Before the final review, Task 9 passed its full local gate on `030cd5edab8d7f0f563d40c433d3e62fd5d6fd33`; its log remains `task9-ci-030cd5e-final.log` in the same local workspace. Implementation base for Task 9: `a305ec1d63f0f4d3aead8c1f76040e1bdb171c09`. Branch fork: `46b2b053060e19b35beccf23f7cf6756490cbe5f`.
+
+Task 9 local acceptance exposed and corrected four integration gaps before the final review:
 
 - The contracts package imported the application CommonJS root at runtime, breaking the web development server. The report-analysis schema now uses the existing browser-leaf export pattern, with CommonJS/ESM parity and real development-server checks.
 - Eight inbox snapshots needed the intended `Target not confirmed` heading. Only those snapshots changed. Eight unrelated case snapshots passed unchanged after installing the missing DejaVu font in the disposable Linux runtime (`fonts-dejavu-core` version `2.37-8`).
