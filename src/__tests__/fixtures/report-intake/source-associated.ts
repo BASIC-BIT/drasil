@@ -34,6 +34,6 @@ export function associatedOutput() {
       subject('reporter', 'reporter', 'River'),
       subject('bystander', 'other', 'Finch'),
     ],
-    contextLabels: [{ kind: 'server', text: serverTitle, sourceRefs: [{ ...sourceRef }] }],
+    contextLabels: [{ kind: 'server' as const, text: serverTitle, sourceRefs: [{ ...sourceRef }] }],
   };
 }

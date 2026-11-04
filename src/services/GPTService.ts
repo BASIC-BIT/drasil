@@ -26,6 +26,7 @@ import { getServerContextSettings, hasServerContext } from '../utils/serverConte
 import {
   isCurrentReportImageSource,
   MAX_REPORT_AI_MAX_IMAGES,
+  MAX_REPORT_AI_MAX_IMAGE_BYTES,
   type ReportAttachmentMetadata,
 } from '../utils/reportAiSettings';
 
@@ -652,6 +653,41 @@ export class GPTService implements IGPTService {
     sources: readonly ReportEvidenceSource[];
     signal: AbortSignal;
   }): Promise<ReportIdentityExtraction> {
+    return this.extractIdentitySources(input);
+  }
+
+  // Fixture bytes enter separately so the live agent never accepts local paths or data URLs.
+  public async extractReportIdentityFixture(input: {
+    ref: ReportEvidenceRef;
+    png: Buffer;
+    signal: AbortSignal;
+  }): Promise<ReportIdentityExtraction> {
+    input.signal.throwIfAborted();
+    if (
+      !identitySourceRef.safeParse(input.ref).success ||
+      input.ref.kind !== 'image' ||
+      input.png.length > MAX_REPORT_AI_MAX_IMAGE_BYTES ||
+      input.png.length <= 8 ||
+      !input.png.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))
+    )
+      throw new Error('Expected a bounded synthetic PNG with an image source reference.');
+    const source: ReportEvidenceSource = {
+      ref: input.ref,
+      content: {
+        kind: 'image',
+        url: `data:image/png;base64,${input.png.toString('base64')}`,
+        attachmentId: input.ref.evidenceId,
+        contentType: 'image/png',
+        size: input.png.length,
+      },
+    };
+    return this.extractIdentitySources({ sources: [source], signal: input.signal }, source);
+  }
+
+  private async extractIdentitySources(
+    input: { sources: readonly ReportEvidenceSource[]; signal: AbortSignal },
+    fixtureSource?: ReportEvidenceSource
+  ): Promise<ReportIdentityExtraction> {
     input.signal.throwIfAborted();
     const excludedEvidenceIds: string[] = [];
     const submitted: ReportEvidenceSource[] = [];
@@ -674,7 +710,7 @@ export class GPTService implements IGPTService {
             sourceContent.text.length <= REPORT_IDENTITY_TEXT_MAX_LENGTH
           : sourceContent.kind === 'image' &&
             source.ref.kind === 'image' &&
-            isCurrentReportImageSource(sourceContent);
+            (source === fixtureSource || isCurrentReportImageSource(sourceContent));
       if (
         !validRef ||
         !validAnchors ||

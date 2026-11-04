@@ -1,0 +1,30 @@
+[
+  {
+    "id": "clean-match",
+    "subjects": [
+      { "role": "target", "readableNames": ["Alder", "alder_account"] },
+      { "role": "reporter", "readableNames": ["River"] }
+    ],
+    "contextLabels": ["Synthetic workshop"],
+    "uncertaintyRequired": false,
+    "permittedIdentityOutcome": "confirm"
+  },
+  {
+    "id": "multiple-people",
+    "subjects": [
+      { "role": "target", "readableNames": ["Alder"] },
+      { "role": "reporter", "readableNames": ["River"] },
+      { "role": "other", "readableNames": ["Finch"] }
+    ],
+    "contextLabels": ["Synthetic workshop"],
+    "uncertaintyRequired": false,
+    "permittedIdentityOutcome": "confirm"
+  },
+  {
+    "id": "uncertain-name",
+    "subjects": [{ "role": "reporter", "readableNames": ["River"] }],
+    "contextLabels": ["Synthetic workshop"],
+    "uncertaintyRequired": true,
+    "permittedIdentityOutcome": "admin_review"
+  }
+]
