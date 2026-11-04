@@ -115,7 +115,7 @@ Docs: `docs/deploy/aws.md`
 - Provider-level default tags are applied in both `bootstrap` and `prod`.
 - `prod` provisions:
   - CloudWatch dashboard and ECS/log-based alarms,
-  - SNS alert topic with optional email subscriptions,
+  - SNS alert topic with email subscriptions from the required `alert_email_addresses` (plan and apply fail without at least one; each recipient confirms the SNS email),
   - Resource Group filtered by `Project` + `Environment`,
-  - Budget and Cost Anomaly Detection notifications (when `alert_email_addresses` is set).
+  - Budget and Cost Anomaly Detection notifications to the same recipients.
 - Important: activate cost allocation tags (`Project`, `Environment`) in AWS Billing for tag-based cost reporting.

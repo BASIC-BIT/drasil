@@ -11,7 +11,7 @@ The defaults are intentionally simple:
 - Customer-managed KMS keys for encryption at rest (state + runtime resources)
 - VPC Flow Logs enabled to CloudWatch Logs
 - CloudWatch dashboard + alarms + SNS topic for operational observability
-- Budget + cost anomaly notifications when `alert_email_addresses` is configured
+- Budget + cost anomaly notifications to `alert_email_addresses` (required)
 
 ## Prerequisites
 

@@ -136,8 +136,12 @@ variable "tags" {
 
 variable "alert_email_addresses" {
   type        = list(string)
-  description = "Email recipients for operational alarms and cost notifications."
-  default     = []
+  description = "Email recipients for operational alarms and cost notifications. Required: an empty list leaves the alarm topic with no subscribers, so alarms alert nobody. Pass it at apply time; it is not stored in this public repo."
+
+  validation {
+    condition     = length(var.alert_email_addresses) > 0
+    error_message = "alert_email_addresses must name at least one recipient, or the prod alarms email nobody."
+  }
 }
 
 variable "enable_observability" {
