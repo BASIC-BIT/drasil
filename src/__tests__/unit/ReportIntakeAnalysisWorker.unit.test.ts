@@ -302,4 +302,56 @@ describe('ReportIntakeAnalysisWorker', () => {
     expect(await f.worker.processPending(99)).toBe(5);
     expect(await f.worker.processPending(99)).toBe(2);
   });
+  it('saves admin review when the final settings read crosses the investigation deadline', async () => {
+    const f = await fixture();
+    const candidate = {
+      candidateId: 'target',
+      discordUserId: 'target',
+      serverId: 'guild',
+      username: 'target',
+      globalName: null,
+      nickname: null,
+      displayName: 'Target',
+      avatarUrl: null,
+      sourceRefs: [],
+      matchedFields: ['userId' as const],
+      subjectMatches: [{ subjectId: 'target', sourceRefs: [], matchedFields: ['userId' as const] }],
+    };
+    f.agent.analyze.mockResolvedValue({
+      kind: 'confirm',
+      candidate,
+      coverage: outcome.coverage,
+      includedEvidenceIds: ['evidence-1'],
+      excludedEvidenceIds: [],
+    });
+    const settings = { settings: { report_intake_staged_enabled: true } };
+    let release!: () => void;
+    const finalSettings = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const finalReadStarted = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    f.config.getServerConfig.mockResolvedValueOnce(settings).mockImplementationOnce(() => {
+      entered();
+      return finalSettings.then(() => settings);
+    });
+    const pending = f.worker.processPending();
+    await finalReadStarted;
+    await jest.advanceTimersByTimeAsync(45_000);
+    release();
+    await pending;
+    const saved = (await f.repository.findById(f.intake.id))!;
+    expect(saved.status).toBe('needs_admin_confirmation');
+    expect(saved.analysis_due_at).toBeNull();
+    expect(processingMetadata(saved).analysis.outcome).toMatchObject({
+      kind: 'admin_review',
+      reason: 'provider_failure',
+      candidates: [candidate],
+      includedEvidenceIds: ['evidence-1'],
+      excludedEvidenceIds: [],
+    });
+    expect(f.agent.analyze).toHaveBeenCalledTimes(1);
+  });
 });

@@ -526,6 +526,49 @@ describeIntegration('durable report intake processing', () => {
     });
   });
 
+  it.each([-1, 0, 1])(
+    'accepts confirmation only before the persisted deadline, offset %i ms',
+    async (offset) => {
+      const { repository, intake, batch } = await fixture();
+      await repository.recordEvidenceBatch(batch);
+      const claim = (await repository.claimAnalysis(due, 120_000))!;
+      const candidate = {
+        candidateId: 'target',
+        discordUserId: 'target',
+        serverId: intake.server_id,
+        username: 'target',
+        globalName: null,
+        nickname: null,
+        displayName: 'Target',
+        avatarUrl: null,
+        sourceRefs: [],
+        matchedFields: ['userId' as const],
+        subjectMatches: [
+          { subjectId: 'target', sourceRefs: [], matchedFields: ['userId' as const] },
+        ],
+      };
+      const completedAt = new Date(claim.deadline.getTime() + offset);
+      expect(
+        await repository.completeAnalysis(
+          claim,
+          { ...outcome, kind: 'confirm', candidate },
+          completedAt
+        )
+      ).toBe(offset < 0);
+      if (offset >= 0) {
+        expect((await repository.findById(intake.id))?.analysis_revision).toBe(0);
+        expect(
+          await repository.completeAnalysis(
+            claim,
+            { ...outcome, reason: 'provider_failure' },
+            completedAt
+          )
+        ).toBe(true);
+        expect((await repository.findById(intake.id))?.status).toBe('needs_admin_confirmation');
+      }
+    }
+  );
+
   it('claims confirmation timeout without spending provider budget', async () => {
     const { repository, intake, batch } = await fixture();
     await repository.recordEvidenceBatch(batch);

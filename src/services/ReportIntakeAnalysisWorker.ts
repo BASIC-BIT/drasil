@@ -168,6 +168,19 @@ export class ReportIntakeAnalysisWorker implements IReportIntakeAnalysisWorker {
       if (this.stopped || (controller.signal.aborted && controller.signal.reason !== DEADLINE))
         return;
       if (
+        claim.kind === 'analyze' &&
+        outcome.kind === 'confirm' &&
+        Date.now() >= claim.deadline.getTime()
+      )
+        outcome = {
+          kind: 'admin_review',
+          reason: 'provider_failure',
+          candidates: [outcome.candidate],
+          coverage: outcome.coverage,
+          includedEvidenceIds: outcome.includedEvidenceIds,
+          excludedEvidenceIds: outcome.excludedEvidenceIds,
+        };
+      if (
         outcome.kind === 'confirm' &&
         (analysis.handoff.state !== 'none' ||
           claim.intake.status === ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION)

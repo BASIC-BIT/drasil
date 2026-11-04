@@ -292,6 +292,13 @@ export function completeAnalysisChange(
 ): Partial<ReportIntake> | null {
   if (!ownsAnalysis(intake, claim, now)) return null;
   let outcome = reportAnalysisOutcomeSchema.parse(input);
+  if (
+    outcome.kind === 'confirm' &&
+    claim.kind === 'analyze' &&
+    (!intake.analysis_deadline_at || now >= intake.analysis_deadline_at)
+  )
+    return null;
+
   const { metadata, analysis } = processingMetadata(intake);
   const alreadyHandedOff =
     intake.status === ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION ||
