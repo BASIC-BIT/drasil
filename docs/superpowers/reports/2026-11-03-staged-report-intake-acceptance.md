@@ -1,6 +1,6 @@
 # Staged report intake acceptance
 
-The final technical review's eight Important findings, two Minor test gaps and later bookkeeping deletion regression are corrected locally and pass the full local gate. Focused N1 rereview remains pending. The staged selector still defaults to `false`. Paid provider evaluation, live Discord acceptance, publication, deployment, activation and merge remain pending.
+Local technical review is complete. I1-I8, M1-M2 and the later bookkeeping deletion regression N1 are addressed, with no new Critical, Important or Minor findings. The corrections pass the full local gate. The staged selector still defaults to `false`. Paid provider evaluation, live Discord acceptance, publication, deployment, activation and merge remain pending.
 
 ## What the local journey proves
 
@@ -117,11 +117,11 @@ No live check above is complete. Local mocks do not satisfy these checks.
 
 The latest correction gate passed with exit 0 on `0e494b1039a1a90b59826b28055556425d3abb76`, using Node 24.15.0 and Playwright 1.60.0 on Linux. The final evidence update changes documentation only; the full run tested that source hash. The N1 correction base was `374b14b5b78fce8c7a17f0abbb2b0ab2000edfd7`. GitHub CI, delayed review feedback, merge readiness and deployment remain unverified.
 
-The full run used `NODE_ENV=test`, `CI=true`, `NEXT_TELEMETRY_DISABLED=1` and the three matching guarded database URLs. Its local log is `.superpowers/sdd/2026-11-03-staged-report-intake/n1-ci-0e494b1.log`. The local `n1-fix-report.md` beside it records the N1 behavioral RED/GREEN checks and exact invocation. Four service regressions reproduce unknown/duplicate retirement with processing enabled and disabled; all five focused cases pass after the correction, including real eligible deletion invalidation. The full intake service suite passes all 99 tests. An earlier full-gate invocation mistakenly enabled integration mode globally and was stopped during bot unit tests. Its log remains separate as setup evidence; the successful run explicitly removed that flag before the integration runner enabled it at its own stage.
+The full run used `NODE_ENV=test`, `CI=true`, `NEXT_TELEMETRY_DISABLED=1` and the three matching guarded database URLs. The operator acceptance archive retains `n1-ci-0e494b1.log`, its exit marker `n1-ci-0e494b1.exit`, the implementation report `n1-fix-report.md` and the clean focused review `n1-review.md`. Four service regressions reproduce unknown/duplicate retirement with processing enabled and disabled; all five focused cases pass after the correction, including real eligible deletion invalidation. The full intake service suite passes all 99 tests. An earlier full-gate invocation mistakenly enabled integration mode globally and was stopped during bot unit tests. Its log remains separate as setup evidence; the successful run explicitly removed that flag before the integration runner enabled it at its own stage.
 
 The earlier review-correction gate passed on `e50cc75f613de0374295408141516de4386c6830`, with `final-fix-ci-e50cc75.log` and `final-fix-report.md` recording I1-I8/M1-M2 and their two earlier gate failures. Those failures were a missing explicit return type in a test and a missing receipt-query method in a complete handler mock. Both were corrected before that successful run. No assertions, skip policy, coverage thresholds, visual baselines or tolerances were weakened.
 
-Before the final review, Task 9 passed its full local gate on `030cd5edab8d7f0f563d40c433d3e62fd5d6fd33`; its log remains `task9-ci-030cd5e-final.log` in the same local workspace. Implementation base for Task 9: `a305ec1d63f0f4d3aead8c1f76040e1bdb171c09`. Branch fork: `46b2b053060e19b35beccf23f7cf6756490cbe5f`.
+Before the final review, Task 9 passed its full local gate on `030cd5edab8d7f0f563d40c433d3e62fd5d6fd33`, recorded in `task9-ci-030cd5e-final.log`. Implementation base for Task 9: `a305ec1d63f0f4d3aead8c1f76040e1bdb171c09`. Branch fork: `46b2b053060e19b35beccf23f7cf6756490cbe5f`.
 
 Task 9 local acceptance exposed and corrected four integration gaps before the final review:
 
