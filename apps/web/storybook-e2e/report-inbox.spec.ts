@@ -428,7 +428,8 @@ test('mobile workspace menu exposes destinations and closes with Escape or an ou
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto(story);
+  // Avoid competing with the addon scan while this test audits the open menu.
+  await page.goto(`${story}&globals=a11y.manual:true`);
   const menu = page.getByRole('button', { name: 'Community workspace menu', exact: true });
   await menu.click();
   const navigation = page.getByRole('navigation', { name: 'Workspace', exact: true });
