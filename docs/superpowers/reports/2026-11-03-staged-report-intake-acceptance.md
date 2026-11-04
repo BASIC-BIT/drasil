@@ -1,6 +1,6 @@
 # Staged report intake acceptance
 
-Local implementation is ready for acceptance checks. The staged selector still defaults to `false`. No paid provider evaluation, live Discord exercise, deployment, feature enablement, publication, or merge has run. A failed submission after a target claim has a known recovery limitation described below.
+Automated implementation and local acceptance are complete. Rollout remains pending, and the staged selector still defaults to `false`. No paid provider evaluation, live Discord exercise, deployment, feature enablement, publication, or merge has run. A failed submission after a target claim has a known recovery limitation described below.
 
 ## What the local journey proves
 
@@ -27,10 +27,29 @@ These are local restart simulations with a real database and replacement service
 - Report contracts: 1 file, 18 tests passed.
 - Web report actions and MCP reports: 2 files, 29 tests passed.
 - Owned Postgres journey, processing, resolution and repository: 4 suites, 77 tests passed. The combined run also included 5 evaluator tests, for 82 tests total.
-- `npm run check:ci`: pending on the exact committed source in the isolated Linux container.
+- `npm run check:ci`: passed with exit 0 on the exact source commit recorded in the appendix, in the isolated Linux container.
 - Provider tool dry run: 3 synthetic PNGs validated, maximum 3 requests printed, actual requests 0, provider elapsed time 0 ms, directory lookup not run.
 
 The fresh disposable database is guarded by `scripts/owned-test-database.js`. `TEST_DATABASE_URL`, `DATABASE_URL` and `POSTGRES_DB_URL` must be identical and select the owned loopback `55433/drasil_mcp_test` target. The older stopped test database remains preserved.
+
+| Full local gate stage | Result                             |
+| --------------------- | ---------------------------------- |
+| Application           | 45 suites, 630 tests passed        |
+| Action boundaries     | 17 tests passed                    |
+| Bot unit              | 115 suites, 2,146 tests passed     |
+| Contracts             | 6 files, 62 tests passed           |
+| Owned-database guard  | 8 tests passed                     |
+| Web unit              | 118 files, 1,159 tests passed      |
+| Workspace browser     | 90 passed                          |
+| Legacy browser        | 9 passed, 13 conditional MCP skips |
+| Page visuals          | 8 passed                           |
+| Storybook             | 165 passed                         |
+| Bot integration       | 30 suites, 842 tests passed        |
+| Web integration       | 5 files, 69 tests passed           |
+| Dedicated MCP browser | 13 passed                          |
+| Public RLS            | 44 tables passed                   |
+
+The legacy browser stage skips MCP cases because `DRASIL_MCP_E2E` is not true there. The dedicated stage provides the owned database and controlled Discord fixture and runs all 13. No other tests were skipped. Format, lint, typechecks, builds, package exports, dependency graph and coverage gates passed. Bot lint reported 32 nonblocking warnings and no errors.
 
 ## Known recovery limitation
 
@@ -88,4 +107,15 @@ No live check above is complete. Local mocks do not satisfy these checks.
 
 ## Evidence appendix
 
-Implementation base for Task 9: `a305ec1d63f0f4d3aead8c1f76040e1bdb171c09`. Branch fork: `46b2b053060e19b35beccf23f7cf6756490cbe5f`. Exact acceptance commit and full local CI result will be appended after execution. GitHub CI, delayed review feedback, merge readiness and deployment remain unverified.
+Implementation base for Task 9: `a305ec1d63f0f4d3aead8c1f76040e1bdb171c09`. Branch fork: `46b2b053060e19b35beccf23f7cf6756490cbe5f`. Full local `npm run check:ci` passed with exit 0 on `030cd5edab8d7f0f563d40c433d3e62fd5d6fd33`, using Node 24.15.0 and Playwright 1.60.0 on Linux. The later acceptance update changes documentation only; the full run tested the stated source hash. GitHub CI, delayed review feedback, merge readiness and deployment remain unverified.
+
+The full run used `NODE_ENV=test`, `CI=true`, `NEXT_TELEMETRY_DISABLED=1` and the three matching guarded database URLs. Its local log is `.superpowers/sdd/2026-11-03-staged-report-intake/task9-ci-030cd5e-final.log`. The detailed task report beside that log retains commands, earlier failures and focused diagnostics.
+
+Local acceptance exposed and corrected four integration gaps:
+
+- The contracts package imported the application CommonJS root at runtime, breaking the web development server. The report-analysis schema now uses the existing browser-leaf export pattern, with CommonJS/ESM parity and real development-server checks.
+- Eight inbox snapshots needed the intended `Target not confirmed` heading. Only those snapshots changed. Eight unrelated case snapshots passed unchanged after installing the missing DejaVu font in the disposable Linux runtime (`fonts-dejavu-core` version `2.37-8`).
+- The setup concurrency fixture expected 83 editable fields. It now checks all 84 and explicitly includes `report_intake_staged_enabled`; the locked-row concurrency assertions remain.
+- Storybook's automatic accessibility scans could collide with explicit audits. The explicit-audit entry points now select manual addon mode, retaining every audit assertion. A native-select font repaint race was reproduced with delayed font loading and corrected only in the screenshot helper. Repeated focused audits passed 38 tests and repeated visual baselines passed 9 tests, with unchanged screenshot tolerance and baseline images.
+
+The additive migration inventory is `20261103000000_report_intake_processing`, `20261103001000_report_intake_analysis_failure` and `20261104020000_reserve_attention_cleanup`. These remain in place during rollback.

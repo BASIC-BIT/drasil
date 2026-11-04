@@ -12,7 +12,7 @@
 
 ## Review brief
 
-The user approved the design on November 3, 2026 and requested this plan. Tasks 1 through 8 are implemented and reviewed. Task 9 local acceptance is in progress; paid provider and live Discord checks remain pending. See the [acceptance report](../reports/2026-11-03-staged-report-intake-acceptance.md) for evidence and the failed-submission recovery limitation. Retain useful tests from the prior local patches; replace the no-match request for more reporter input with admin handoff.
+The user approved the design on November 3, 2026 and requested this plan. Tasks 1 through 8 are implemented and reviewed. Task 9 implementation and full local acceptance passed; paid provider, live Discord and rollout checks remain pending. See the [acceptance report](../reports/2026-11-03-staged-report-intake-acceptance.md) for exact source evidence and the failed-submission recovery limitation. Retain useful tests from the prior local patches; replace the no-match request for more reporter input with admin handoff.
 
 This is one connected workflow. Each task below has its own tests and commit. Tasks 3 and 4 can proceed independently after Task 1. The main risks are stale identity selection, incomplete directory coverage, and saved handoffs that never reach admins. Production migration, feature enablement, historical recovery, and live Discord/provider exercises retain their separate approval gates.
 
@@ -198,11 +198,13 @@ For controlled rollout, add `report_intake_staged_enabled` to existing settings 
 
 **Interfaces:** The evaluation script consumes labeled synthetic fixtures and Task 3 extraction only, with no Discord client or moderation actions. Require explicit opt-in before paid provider calls and print the maximum request count before execution. Labels specify subject separation, readable names, uncertainty and permitted identity outcome, not exact model prose.
 
-- [ ] Add end-to-end tests for global-name-only resolution, multiple people/server-title distraction, OCR uncertainty, evidence over budget, unavailable directory, restart at each persisted boundary, acknowledgement and voluntary post-handoff evidence. Assert no role/kick/ban calls from investigation/handoff and one existing submission after human confirmation.
-- [ ] Run focused unit/application/contracts/web and isolated-Postgres suites. Run repository `npm run check:ci` before declaring implementation complete. Repair valid failures; do not treat unrelated failures as permission to skip required checks or broaden the change without explanation.
-- [ ] Prepare synthetic provider evaluation and controlled Discord checklist. Obtain approval before paid provider execution or live Discord messages. Required live cases: clean match, forced unresolved handoff, restart, delivery failure/recovery, staff resolution and permission revocation. Record actual request count, elapsed time, lookup coverage and outcome. Local mocks are not live acceptance.
+- [x] Add end-to-end tests for global-name-only resolution, multiple people/server-title distraction, OCR uncertainty, evidence over budget, unavailable directory, restart at each persisted boundary, acknowledgement and voluntary post-handoff evidence. Assert no role/kick/ban calls from investigation/handoff and one existing submission after human confirmation.
+- [x] Run focused unit/application/contracts/web and isolated-Postgres suites. Run repository `npm run check:ci` before declaring implementation complete. Repair valid failures; do not treat unrelated failures as permission to skip required checks or broaden the change without explanation.
+- [x] Prepare synthetic provider evaluation and controlled Discord checklist. Obtain approval before paid provider execution or live Discord messages. Required live cases: clean match, forced unresolved handoff, restart, delivery failure/recovery, staff resolution and permission revocation. Record actual request count, elapsed time, lookup coverage and outcome. Local mocks are not live acceptance.
 - [ ] Prepare additive schema deployment and enable `report_intake_staged_enabled` only for an approved controlled server. Review wrong-candidate rate, budgets, delivery and acknowledgement before broader rollout. Historical re-enqueue requires an approved exact-ID list, not startup backfill. Rollback disables staged processing and preserves evidence/pending reviews; it does not drop the migration.
-- [ ] Commit tests, tooling and truthful acceptance notes. Follow PR workflow and exact-head review requirements before claiming merge readiness. This plan alone does not authorize merge or deployment.
+- [x] Commit tests, tooling and truthful acceptance notes. Follow PR workflow and exact-head review requirements before claiming merge readiness. This plan alone does not authorize merge or deployment.
+
+Provider and controlled Discord execution remain pending in the acceptance checklist. Deployment preparation is documented; migration, enablement and historical re-enqueue have not run.
 
 ## Verification commands and checkpoints
 
