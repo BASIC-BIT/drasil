@@ -1,3 +1,7 @@
+import {
+  IReportIntakeAnalysisWorker,
+  ReportIntakeAnalysisWorker,
+} from '../services/ReportIntakeAnalysisWorker';
 import { IReportMemberDirectory, ReportMemberDirectory } from '../services/ReportMemberDirectory';
 import { createCaptchaCompletionStore } from '@drasil/application/postgres';
 import { createBotDelegationDatabase } from '../application/adapters/delegationDatabase';
@@ -431,6 +435,11 @@ function configureServices(container: Container): void {
   container
     .bind<IReportIntakeService>(TYPES.ReportIntakeService)
     .to(ReportIntakeService)
+    .inSingletonScope();
+
+  container
+    .bind<IReportIntakeAnalysisWorker>(TYPES.ReportIntakeAnalysisWorker)
+    .to(ReportIntakeAnalysisWorker)
     .inSingletonScope();
 
   container

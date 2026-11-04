@@ -460,8 +460,10 @@ export class EventHandler implements IEventHandler {
         const reportIntakeHandled = await this.reportIntakeService?.handleThreadMessage(message);
         if (reportIntakeHandled) {
           const config = await this.configService.getServerConfig(message.guild.id);
-          if (!getReportIntakeSettings(config.settings).stagedEnabled)
+          // Staged evidence is already durable; its worker owns scheduling and recovery.
+          if (!getReportIntakeSettings(config.settings).stagedEnabled) {
             this.reportIntakeAgentService?.scheduleAnalysisForThreadMessage(message);
+          }
           this.rememberRecentMessage(message);
           return;
         }

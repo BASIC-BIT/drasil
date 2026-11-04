@@ -147,6 +147,8 @@ export class ReportIntakeRepository implements IReportIntakeRepository {
           AND status IN ('collecting_evidence', 'needs_reporter_confirmation', 'needs_admin_confirmation')
           AND confirmed_target_user_id IS NULL AND closed_at IS NULL AND analysis_failure_code IS NULL
           AND (evidence_revision > analysis_revision OR status = 'needs_reporter_confirmation')
+          AND EXISTS (SELECT 1 FROM servers WHERE guild_id = report_intakes.server_id
+            AND settings->'report_intake_staged_enabled' = 'true'::jsonb)
         ORDER BY analysis_due_at, id FOR UPDATE SKIP LOCKED LIMIT ${ANALYSIS_CLAIM_SCAN_LIMIT}`;
       for (const intake of rows) {
         const result = analysisClaimChange(intake, now, leaseMs);
@@ -165,6 +167,12 @@ export class ReportIntakeRepository implements IReportIntakeRepository {
     return this.prisma.$transaction(async (transaction) => {
       const intake = await this.lockedIntake(transaction, claim.intake.id);
       if (!intake) return false;
+      const server = await transaction.servers.findUnique({
+        where: { guild_id: intake.server_id },
+        select: { settings: true },
+      });
+      if (!getReportIntakeSettings((server?.settings ?? {}) as ServerSettings).stagedEnabled)
+        return false;
       const change = transition(intake);
       if (!change) return false;
       await this.writeProcessing(transaction, intake, change);

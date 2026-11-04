@@ -25,10 +25,26 @@ describe('Bot (unit)', () => {
       start: jest.fn(),
       stop: jest.fn(),
     };
-    const bot = new Bot(client, eventHandler, moderationActionRequestService);
+    const analysisWorker = { start: jest.fn(), stop: jest.fn(), processPending: jest.fn() };
+    const bot = new Bot(
+      client,
+      eventHandler,
+      moderationActionRequestService,
+      undefined,
+      analysisWorker
+    );
 
     await bot.startBot();
 
+    expect(analysisWorker.start).toHaveBeenCalledTimes(1);
+    expect(client.login.mock.invocationCallOrder[0]).toBeLessThan(
+      analysisWorker.start.mock.invocationCallOrder[0]
+    );
+    await bot.destroy();
+    expect(analysisWorker.stop).toHaveBeenCalledTimes(1);
+    expect(analysisWorker.stop.mock.invocationCallOrder[0]).toBeLessThan(
+      client.destroy.mock.invocationCallOrder[0]
+    );
     expect(eventHandler.setupEventHandlers).toHaveBeenCalledTimes(1);
     expect(client.login).toHaveBeenCalledWith('test-token');
     expect(moderationActionRequestService.start).toHaveBeenCalledTimes(1);

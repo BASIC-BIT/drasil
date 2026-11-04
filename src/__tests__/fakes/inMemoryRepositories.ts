@@ -1632,7 +1632,10 @@ export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
       (a, b) =>
         (a.analysis_due_at?.getTime() ?? Infinity) - (b.analysis_due_at?.getTime() ?? Infinity)
     );
-    for (const intake of due.slice(0, ANALYSIS_CLAIM_SCAN_LIMIT)) {
+    let scanned = 0;
+    for (const intake of due) {
+      if (!(await this.stagedEnabled(intake.server_id))) continue;
+      if (scanned++ >= ANALYSIS_CLAIM_SCAN_LIMIT) break;
       const result = analysisClaimChange(intake, now, leaseMs);
       if (result) {
         Object.assign(intake, result.change);
@@ -1642,6 +1645,7 @@ export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
     return null;
   }
   async reserveModelAttempt(claim: ReportAnalysisClaim, now: Date): Promise<boolean> {
+    if (!(await this.stagedEnabled(claim.intake.server_id))) return false;
     const intake = this.intakes.find((item) => item.id === claim.intake.id);
     if (!intake) return false;
     const change = reserveAnalysisChange(intake, claim, now);
@@ -1656,6 +1660,7 @@ export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
   ): Promise<boolean> {
     if (!Number.isFinite(leaseMs) || leaseMs <= 0)
       throw new Error('Analysis lease must be positive');
+    if (!(await this.stagedEnabled(claim.intake.server_id))) return false;
     const intake = this.intakes.find((item) => item.id === claim.intake.id);
     if (!intake || !ownsAnalysis(intake, claim, now)) return false;
     intake.analysis_lease_until = new Date(now.getTime() + leaseMs);
@@ -1667,12 +1672,18 @@ export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
     outcome: ReportAnalysisOutcome,
     now: Date
   ): Promise<boolean> {
+    if (!(await this.stagedEnabled(claim.intake.server_id))) return false;
     const intake = this.intakes.find((item) => item.id === claim.intake.id);
     if (!intake) return false;
     const change = completeAnalysisChange(intake, claim, outcome, now);
     if (!change) return false;
     Object.assign(intake, change);
     return true;
+  }
+
+  private async stagedEnabled(serverId: string): Promise<boolean> {
+    const server = await this.serverRepository?.findByGuildId(serverId);
+    return getReportIntakeSettings(server?.settings).stagedEnabled;
   }
 
   private nextIntakeId(): string {

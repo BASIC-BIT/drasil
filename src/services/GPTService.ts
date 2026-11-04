@@ -138,8 +138,8 @@ const ReportIntakeExtractionResponseSchema = z.object({
   confidence: z.number().min(0).max(1),
 });
 
-const REPORT_IDENTITY_MAX_SOURCES = 16;
-const REPORT_IDENTITY_TEXT_MAX_LENGTH = 2000;
+export const REPORT_IDENTITY_MAX_SOURCES = 16;
+export const REPORT_IDENTITY_TEXT_MAX_LENGTH = 2000;
 const REPORT_IDENTITY_MAX_OUTPUT_TOKENS = 4096;
 const boundedClue = z.string().min(1).max(100);
 const identitySourceRef = reportEvidenceRefSchema.strict();

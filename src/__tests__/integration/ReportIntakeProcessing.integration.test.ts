@@ -1,3 +1,6 @@
+import { ReportIntakeAnalysisWorker } from '../../services/ReportIntakeAnalysisWorker';
+import type { IReportIntakeAgentService } from '../../services/ReportIntakeAgentService';
+import type { IConfigService } from '../../config/ConfigService';
 import { processingMetadata } from '../../repositories/reportIntakeProcessing';
 import { readFileSync } from 'fs';
 import { join } from 'path';
@@ -24,6 +27,9 @@ describeIntegration('durable report intake processing', () => {
   async function fixture(metadata: Record<string, unknown> = { unrelated: 'kept' }) {
     const prisma = getPrismaClient();
     await new ServerRepository(prisma).getOrCreateServer('guild-processing');
+    await new ServerRepository(prisma).updateSettings('guild-processing', {
+      report_intake_staged_enabled: true,
+    });
     await new UserRepository(prisma).getOrCreateUser('reporter-processing', 'reporter', now);
     const repository = new ReportIntakeRepository(prisma);
     const intake = await repository.create({
@@ -51,6 +57,84 @@ describeIntegration('durable report intake processing', () => {
     };
     return { prisma, repository, intake, batch };
   }
+
+  it('skips disabled earliest work without changing its budget or starving enabled work', async () => {
+    const { prisma, repository, intake, batch } = await fixture();
+    await repository.recordEvidenceBatch({ ...batch, observedAt: new Date(now.getTime() - 1000) });
+    await new ServerRepository(prisma).updateSettings(intake.server_id, {
+      report_intake_staged_enabled: false,
+    });
+    await new ServerRepository(prisma).getOrCreateServer('enabled-guild');
+    await new ServerRepository(prisma).updateSettings('enabled-guild', {
+      report_intake_staged_enabled: true,
+    });
+    const enabled = await repository.create({
+      serverId: 'enabled-guild',
+      reporterId: intake.reporter_id,
+    });
+    await repository.recordEvidenceBatch({ ...batch, intakeId: enabled.id });
+    const disabledBefore = await repository.findById(intake.id);
+    const claim = await repository.claimAnalysis(due, 30_000);
+    expect(claim?.intake.id).toBe(enabled.id);
+    expect(await repository.findById(intake.id)).toEqual(disabledBefore);
+    await new ServerRepository(prisma).updateSettings('enabled-guild', {
+      report_intake_staged_enabled: false,
+    });
+    expect(await repository.reserveModelAttempt(claim!, due)).toBe(false);
+    expect(await repository.completeAnalysis(claim!, outcome, due)).toBe(false);
+    expect((await repository.findById(enabled.id))?.analysis_revision).toBe(0);
+  });
+
+  it('allows only one concurrent worker to dispatch and commit a due revision', async () => {
+    const { repository, intake, batch } = await fixture();
+    await repository.recordEvidenceBatch(batch);
+    const config = {
+      getServerConfig: jest
+        .fn()
+        .mockResolvedValue({ settings: { report_intake_staged_enabled: true } }),
+    };
+    const agent: jest.Mocked<IReportIntakeAgentService> = {
+      analyze: jest.fn(),
+      scheduleAnalysisForThreadMessage: jest.fn(),
+      runAnalysisForThreadMessage: jest.fn(),
+    };
+    agent.analyze.mockImplementation(async ({ reserveModelAttempt }) => {
+      expect(await reserveModelAttempt()).toBe(true);
+      return outcome;
+    });
+    const first = new ReportIntakeAnalysisWorker(
+      repository,
+      config as unknown as IConfigService,
+      agent
+    );
+    const second = new ReportIntakeAnalysisWorker(
+      new ReportIntakeRepository(getPrismaClient()),
+      config as unknown as IConfigService,
+      agent
+    );
+    const counts = await Promise.all([first.processPending(), second.processPending()]);
+    expect(counts.reduce((sum, count) => sum + count, 0)).toBe(1);
+    expect(agent.analyze).toHaveBeenCalledTimes(1);
+    expect(await repository.findById(intake.id)).toMatchObject({
+      analysis_attempts: 1,
+      analysis_revision: 1,
+    });
+  });
+
+  it.each(['true', 1, {}, null])(
+    'does not coerce staged selector %p into enabled',
+    async (value) => {
+      const { prisma, repository, intake, batch } = await fixture();
+      await repository.recordEvidenceBatch(batch);
+      await prisma.servers.update({
+        where: { guild_id: intake.server_id },
+        data: { settings: { report_intake_staged_enabled: value } },
+      });
+      const before = await repository.findById(intake.id);
+      expect(await repository.claimAnalysis(due, 30_000)).toBeNull();
+      expect(await repository.findById(intake.id)).toEqual(before);
+    }
+  );
 
   it('does not schedule an old row with no due time', async () => {
     const { repository, intake } = await fixture();
@@ -167,7 +251,9 @@ describeIntegration('durable report intake processing', () => {
     const serverRepository = new ServerRepository(prisma);
     await prisma.servers.update({
       where: { guild_id: intake.server_id },
-      data: { settings: { report_intake_agent_debounce_ms: 5000 } },
+      data: {
+        settings: { report_intake_staged_enabled: true, report_intake_agent_debounce_ms: 5000 },
+      },
     });
     const fake = new InMemoryReportIntakeRepository(serverRepository);
     const fakeIntake = await fake.create({
@@ -500,7 +586,7 @@ describeIntegration('durable report intake processing', () => {
 
   it('keeps the in-memory repository processing behavior aligned', async () => {
     const { intake, batch } = await fixture();
-    const fake = new InMemoryReportIntakeRepository();
+    const fake = new InMemoryReportIntakeRepository(new ServerRepository(getPrismaClient()));
     const fakeIntake = await fake.create({
       serverId: intake.server_id,
       reporterId: intake.reporter_id,
@@ -673,7 +759,7 @@ describeIntegration('durable report intake processing', () => {
   });
 
   it('keeps malformed-row quarantine parity in the fake', async () => {
-    const fake = new InMemoryReportIntakeRepository();
+    const fake = new InMemoryReportIntakeRepository(new ServerRepository(getPrismaClient()));
     const { batch } = await fixture();
     const bad = await fake.create({
       serverId: 'guild-processing',
@@ -704,7 +790,7 @@ describeIntegration('durable report intake processing', () => {
     expect(await fake.listEvidence(bad.id)).toEqual(evidence);
   });
   it('bounds quarantine scanning and continues progress on the next claim', async () => {
-    const fake = new InMemoryReportIntakeRepository();
+    const fake = new InMemoryReportIntakeRepository(new ServerRepository(getPrismaClient()));
     const { batch } = await fixture();
     const badIds: string[] = [];
     for (let index = 0; index < 11; index++) {
