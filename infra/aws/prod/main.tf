@@ -17,15 +17,7 @@ locals {
     "repo:${local.github_repo_owner}/${local.github_repo_name}:ref:refs/heads/main",
     "repo:${lower(local.github_repo_owner)}/${lower(local.github_repo_name)}:ref:refs/heads/main",
     "repo:${local.github_repo_owner}/${local.github_repo_name}:environment:Deploy - web-prod",
-    "repo:${lower(local.github_repo_owner)}/${lower(local.github_repo_name)}:environment:Deploy - web-prod",
-    # Transition to the BITRATE-Labs org (owner ID 350167065, repo ID 961131517). Immutable form,
-    # which GitHub uses after a transfer, plus the short form as a fallback. Remove the
-    # var.github_repo entries above, and whichever form CloudTrail shows is unused, after a clean
-    # week under the new owner.
-    "repo:BITRATE-Labs@350167065/drasil@961131517:ref:refs/heads/main",
-    "repo:BITRATE-Labs@350167065/drasil@961131517:environment:Deploy - web-prod",
-    "repo:BITRATE-Labs/drasil:ref:refs/heads/main",
-    "repo:BITRATE-Labs/drasil:environment:Deploy - web-prod"
+    "repo:${lower(local.github_repo_owner)}/${lower(local.github_repo_name)}:environment:Deploy - web-prod"
   ])
 
   github_oidc_provider_arn = var.github_oidc_provider_arn != null ? var.github_oidc_provider_arn : aws_iam_openid_connect_provider.github[0].arn
@@ -487,6 +479,48 @@ data "aws_iam_policy_document" "github_assume" {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
       values   = local.github_oidc_subjects
+    }
+  }
+
+  # Transition to the BITRATE-Labs org. Separate statement so the owner and repository ID pins
+  # apply only to the new owner and do not break the var.github_repo subjects above. GitHub
+  # issues the immutable owner@id/repo@id sub after a transfer (seen in CloudTrail for selecta);
+  # the short form is a fallback. After a clean week under the new owner, set var.github_repo to
+  # BITRATE-Labs/drasil and remove this statement.
+  statement {
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+    principals {
+      type        = "Federated"
+      identifiers = [local.github_oidc_provider_arn]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:repository_owner_id"
+      values   = ["350167065"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:repository_id"
+      values   = ["961131517"]
+    }
+
+    condition {
+      test     = "StringLike"
+      variable = "token.actions.githubusercontent.com:sub"
+      values = [
+        "repo:BITRATE-Labs@350167065/drasil@961131517:ref:refs/heads/main",
+        "repo:BITRATE-Labs@350167065/drasil@961131517:environment:Deploy - web-prod",
+        "repo:BITRATE-Labs/drasil:ref:refs/heads/main",
+        "repo:BITRATE-Labs/drasil:environment:Deploy - web-prod",
+      ]
     }
   }
 }
