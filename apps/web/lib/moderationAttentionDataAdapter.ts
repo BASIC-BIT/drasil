@@ -39,6 +39,7 @@ export function createModerationAttentionDataAdapter(): ModerationAttentionDataA
         `select mqi.*, s.settings as server_settings, ve.case_kind, ve.status as case_status,
           de.detection_type, de.confidence as detection_confidence, de.detected_at as detection_detected_at,
           de.reasons as detection_reasons, de.metadata as detection_metadata,
+          ri.confirmed_target_user_id as report_target_user_id,
           ri.status as report_status, ri.summary as report_summary, ri.metadata as report_metadata,
           u.username as user_username, u.metadata as user_metadata,
           sm.discord_member_pending_since, sm.discord_member_pending_last_checked_at

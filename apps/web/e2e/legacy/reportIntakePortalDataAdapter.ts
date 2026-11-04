@@ -18,6 +18,8 @@ export class FixtureReportIntakePortalDataAdapter implements ReportIntakePortalD
     }
 
     return {
+      statusLabel: 'collecting evidence',
+      identityReview: null,
       createdAt: fixtureTimestampIso,
       guildId: fixtureGuildId,
       id: '00000000-0000-4000-8000-000000000001',

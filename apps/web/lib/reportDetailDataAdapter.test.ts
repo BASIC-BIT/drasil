@@ -208,3 +208,28 @@ it.each([{ server_id: 'other' }, { id: 'other' }])(
     expect(db.query).toHaveBeenCalledTimes(1);
   }
 );
+
+it('projects saved unidentified review without creating a target or enforcement actions', async () => {
+  db.query
+    .mockResolvedValueOnce({
+      rows: [
+        {
+          ...baseReportRow,
+          status: 'needs_admin_confirmation',
+          confirmed_target_user_id: null,
+          evidence_revision: 4,
+        },
+      ],
+    })
+    .mockResolvedValueOnce({ rows: [] });
+  expect(await loadReportAttentionRecord('guild-1', 'report-1')).toMatchObject({
+    targetUserId: null,
+    identityReview: {
+      phase: 'pending',
+      delivery: 'unknown',
+      receipt: 'unknown',
+      evidenceRevision: 4,
+    },
+    allowedActions: [],
+  });
+});

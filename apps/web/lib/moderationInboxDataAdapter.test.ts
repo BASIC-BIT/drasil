@@ -311,3 +311,62 @@ it('keeps a retired ordinary row reachable for cleanup with its original source 
     url: 'https://discord.com/channels/guild-1/original-thread',
   });
 });
+
+it('renders an unidentified report as admin review', () => {
+  const view = parseModerationQueueRow({
+    ...baseQueueRow,
+    item_type: 'report_thread_attention',
+    report_status: 'needs_admin_confirmation',
+    report_intake_id: 'report-1',
+    report_target_user_id: null,
+  })!;
+  expect(view.statusLabel).toBe('Needs admin review');
+  expect(view.subject.userId).toBeNull();
+  expect(view.allowedActions).not.toContain('ban_user');
+});
+
+it('retains cleanup retry visibility without treating the retired row as live identity review', () => {
+  const view = parseModerationQueueRow({
+    ...baseQueueRow,
+    item_type: 'report_thread_attention',
+    report_status: 'needs_admin_confirmation',
+    report_intake_id: 'report-1',
+    attention_cleanup_pending: true,
+    source_thread_id: null,
+    verification_event_id: null,
+    detection_event_id: null,
+    metadata: {
+      attention_cleanup: {
+        source_thread_id: 'thread-original',
+        verification_event_id: null,
+        detection_event_id: null,
+      },
+    },
+  })!;
+  expect(view.id).toBe(`queue:${baseQueueRow.id}`);
+  expect(view.statusLabel).toBe('Acknowledged, cleanup pending');
+  expect(view.links).toContainEqual({
+    label: 'Source thread',
+    url: 'https://discord.com/channels/guild-1/thread-original',
+  });
+  expect(view.sourceMetadata).toMatchObject({
+    identityReview: false,
+    attentionCleanupPending: true,
+  });
+  expect(view.allowedActions).toContain('acknowledge');
+  expect(view.subject.userId).toBeNull();
+});
+it('retains identity review acknowledgement separately from cleanup retry', () => {
+  const view = parseModerationQueueRow({
+    ...baseQueueRow,
+    item_type: 'report_thread_attention',
+    report_status: 'needs_admin_confirmation',
+    report_intake_id: 'report-1',
+    metadata: { identity_review: {} },
+  })!;
+  expect(view.allowedActions).toContain('acknowledge');
+  expect(view.sourceMetadata).toMatchObject({
+    identityReview: true,
+    attentionCleanupPending: false,
+  });
+});

@@ -55,6 +55,9 @@ const detectionFields = {
 const intakeFields = {
   id: 'ri.id',
   status: 'ri.status',
+  metadata: 'ri.metadata',
+  evidenceRevision: 'ri.evidence_revision',
+  analysisFailureCode: 'ri.analysis_failure_code',
   createdAt: 'ri.created_at',
   updatedAt: 'ri.updated_at',
   closedAt: 'ri.closed_at',

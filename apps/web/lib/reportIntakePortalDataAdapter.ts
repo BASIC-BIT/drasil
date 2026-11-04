@@ -1,3 +1,8 @@
+import {
+  projectReporterIdentityReview,
+  reportIntakeStatusLabel,
+  type ReporterIdentityReview,
+} from '@drasil/contracts';
 import type { ActionContext } from '@drasil/application';
 import { discordMessageUrl } from './discordUrls';
 import { getPostgresPool } from './setupDataAdapter';
@@ -6,13 +11,15 @@ export type OpenReportIntakeStatus =
   'collecting_evidence' | 'needs_reporter_confirmation' | 'needs_admin_confirmation';
 
 export interface ReporterOpenReportIntake {
-  readonly createdAt: string;
+  readonly identityReview?: ReporterIdentityReview | null;
+  readonly statusLabel?: string;
+  readonly createdAt: string | null;
   readonly guildId: string;
   readonly id: string;
   readonly status: OpenReportIntakeStatus;
   readonly threadId: string | null;
   readonly threadUrl: string | null;
-  readonly updatedAt: string;
+  readonly updatedAt: string | null;
 }
 
 export interface ReportIntakePortalDataAdapter {
@@ -23,6 +30,7 @@ export interface ReportIntakePortalDataAdapter {
 }
 
 interface OpenReportIntakeRow {
+  readonly metadata?: unknown;
   readonly created_at: unknown;
   readonly id: string;
   readonly server_id: string;
@@ -31,18 +39,20 @@ interface OpenReportIntakeRow {
   readonly updated_at: unknown;
 }
 
-function toIsoString(value: unknown): string {
-  if (value instanceof Date) {
-    return value.toISOString();
-  }
-  if (typeof value === 'string') {
-    return new Date(value).toISOString();
-  }
-  return new Date(0).toISOString();
+function toIsoString(value: unknown): string | null {
+  if (!(value instanceof Date) && typeof value !== 'string') return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
 export function parseOpenReportIntakeRow(row: OpenReportIntakeRow): ReporterOpenReportIntake {
+  const identityReview = projectReporterIdentityReview({
+    status: row.status,
+    metadata: row.metadata,
+  });
   return {
+    identityReview,
+    statusLabel: reportIntakeStatusLabel(row.status, identityReview, row.metadata),
     createdAt: toIsoString(row.created_at),
     guildId: row.server_id,
     id: row.id,
@@ -64,6 +74,7 @@ export class PostgresReportIntakePortalDataAdapter implements ReportIntakePortal
          server_id,
          thread_id,
          status::text as status,
+         metadata,
          created_at,
          updated_at
        from report_intakes

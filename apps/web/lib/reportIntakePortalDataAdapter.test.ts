@@ -14,6 +14,8 @@ describe('reportIntakePortalDataAdapter', () => {
         updated_at: '2026-06-08T01:17:02.000Z',
       })
     ).toEqual({
+      identityReview: null,
+      statusLabel: 'needs reporter confirmation',
       createdAt: '2026-06-08T01:16:02.000Z',
       guildId: 'guild-1',
       id: '00000000-0000-4000-8000-000000000001',
@@ -46,4 +48,37 @@ describe('reportIntakePortalDataAdapter', () => {
       })
     ).resolves.toBeNull();
   });
+});
+
+it('returns only the reporter status and receipt with unknown notification delivery', () => {
+  const view = parseOpenReportIntakeRow({
+    id: 'intake',
+    server_id: 'guild',
+    status: 'needs_admin_confirmation',
+    thread_id: null,
+    created_at: null,
+    updated_at: null,
+    metadata: {
+      analysis: {
+        schemaVersion: 1,
+        sources: {},
+        requestReservations: [],
+        outcome: null,
+        coverage: null,
+        handoff: {
+          state: 'pending',
+          reason: 'provider_failure',
+          receipt: 'sent',
+          attempts: 0,
+          nextDueAt: '2026-11-03T00:00:00.000Z',
+        },
+      },
+      quarantined_metadata: { private: 'RAW' },
+    },
+  });
+  expect(view).toMatchObject({
+    statusLabel: 'Needs admin review',
+    identityReview: { phase: 'pending', receipt: 'sent', delivery: 'pending' },
+  });
+  expect(JSON.stringify(view)).not.toMatch(/provider_failure|candidates|RAW/);
 });

@@ -97,3 +97,10 @@ it('bounds selected workspace source diagnostics without provider text or identi
   expect(JSON.parse(lines[1])).not.toHaveProperty('source');
   expect(lines.join()).not.toContain('PRIVATE');
 });
+
+import { reportAnalysisFailure } from './readDiagnostics';
+it('exposes only the queryable analysis failure code, never raw quarantine diagnostics', () => {
+  expect(reportAnalysisFailure('invalid_metadata')).toBe('invalid_metadata');
+  expect(reportAnalysisFailure({ code: 'invalid_metadata', provider: 'PRIVATE' })).toBeNull();
+  expect(reportAnalysisFailure('PRIVATE')).toBeNull();
+});

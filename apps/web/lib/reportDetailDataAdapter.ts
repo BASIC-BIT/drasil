@@ -1,5 +1,8 @@
+import { reportAnalysisFailure } from './readDiagnostics';
 import {
   reportAttentionRecordSchema,
+  projectReportIdentityReview,
+  reportIntakeStatusLabel,
   reportDetailSchema,
   type ReportAttentionRecord,
   type ReportDetail,
@@ -24,6 +27,8 @@ interface ReportDetailRow {
   status: ReportAttentionRecord['status'];
   summary: string | null;
   metadata?: unknown;
+  evidence_revision?: number;
+  analysis_failure_code?: unknown;
   confirmed_target_user_id: string | null;
   created_at: unknown;
   updated_at: unknown;
@@ -149,7 +154,15 @@ function parseEvidenceRow(guildId: string, row: ReportEvidenceRow): ReportEviden
 }
 
 function reportFields(row: ReportDetailRow, evidenceRows: readonly ReportEvidenceRow[]) {
+  const identityReview = projectReportIdentityReview({
+    status: row.status,
+    metadata: row.metadata,
+    evidenceRevision: row.evidence_revision,
+  });
   return {
+    statusLabel: reportIntakeStatusLabel(row.status, identityReview, row.metadata),
+    analysisFailureCode: reportAnalysisFailure(row.analysis_failure_code),
+    identityReview,
     id: row.id,
     guildId: row.server_id,
     reporterId: row.reporter_id,
@@ -201,6 +214,8 @@ async function readReportRows(
          ri.status,
          ri.summary,
          ri.metadata,
+         ri.evidence_revision,
+         ri.analysis_failure_code,
          ri.confirmed_target_user_id,
          target.username as target_display_name,
          reporter.username as reporter_display_name,

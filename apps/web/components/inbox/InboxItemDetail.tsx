@@ -32,6 +32,8 @@ import {
   type ReportEvidenceItem,
 } from '@drasil/contracts';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { ReportIdentityReview } from './ReportIdentityReview';
+import { reportIntakeStatusLabel } from '@drasil/contracts';
 import { inboxKindLabels } from './InboxQueue';
 import styles from './InboxWorkspace.module.css';
 
@@ -147,7 +149,11 @@ function actionLabel(action: ModerationInboxAction, detail: WorkspaceItemDetail)
     case 'mark_actioned':
       return 'Mark report actioned';
     case 'acknowledge':
-      return 'Acknowledge reply';
+      return detail.item.sourceMetadata?.identityReview
+        ? 'Acknowledge review'
+        : detail.item.sourceMetadata?.attentionCleanupPending
+          ? 'Retry acknowledgment cleanup'
+          : 'Acknowledge reply';
     default:
       return recordLabel(action).replace(/^./, (letter) => letter.toUpperCase());
   }
@@ -174,6 +180,8 @@ function actionEffect(action: ModerationInboxAction, detail: WorkspaceItemDetail
     case 'mark_actioned':
       return 'Record that this report has been actioned.';
     case 'acknowledge':
+      if (detail.item.sourceMetadata?.identityReview)
+        return 'Record that staff has seen this review. The review remains open until resolved.';
       return `Clear this reply from the attention queue. The conversation remains available in Discord.${detail.kind === 'support_attention' && detail.subtype !== 'support_reply' ? ' This does not establish account recovery or release quarantine.' : ''}`;
     case 'sync_existing_ban':
       return 'Update this case from the existing Discord ban.';
@@ -581,7 +589,11 @@ function SelectedDetail({
         <p className={styles.muted}>
           {inboxKindLabels[detail.kind]} · {recordLabel(item.statusLabel)}
         </p>
-        <h1>{item.subject.displayLabel}</h1>
+        <h1>
+          {detail.kind === 'report_attention' && !detail.intake.targetUserId
+            ? 'Report review'
+            : item.subject.displayLabel}
+        </h1>
         <p>{item.title}</p>
         {detail.kind === 'report_attention' ? (
           <>
@@ -675,8 +687,11 @@ function SelectedDetail({
       ) : detail.kind === 'report_attention' ? (
         <>
           <p>
-            Report {detail.intake.id} · {recordLabel(detail.intake.status)}
+            Report {detail.intake.id} ·{' '}
+            {detail.intake.statusLabel ??
+              reportIntakeStatusLabel(detail.intake.status, detail.intake.identityReview)}
           </p>
+          <ReportIdentityReview review={detail.intake.identityReview} />
           <Reply reply={detail.reply} />
           <ReportEvidence items={detail.intake.evidence} />
         </>

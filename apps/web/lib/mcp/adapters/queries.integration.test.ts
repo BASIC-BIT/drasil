@@ -269,3 +269,99 @@ it('paginates ascending evidence and scopes queue rows, report details and outco
   } while (cursor);
   expect(seen).toEqual([id(20), id(21), id(22)]);
 });
+
+it('projects stored handoff and candidates by authorized audience without leaking quarantined data', async () => {
+  const candidate = {
+    candidateId: 'candidate',
+    discordUserId: otherUser,
+    serverId: guildId,
+    username: 'candidate-handle',
+    globalName: 'Account display',
+    nickname: 'Server nickname',
+    displayName: 'Server nickname',
+    avatarUrl: null,
+    sourceRefs: [],
+    matchedFields: ['nickname'],
+    subjectMatches: [{ subjectId: 'subject', sourceRefs: [], matchedFields: ['nickname'] }],
+  };
+  const coverage = { kind: 'unavailable', reason: 'invalid_metadata' };
+  const metadata = {
+    analysis: {
+      schemaVersion: 1,
+      sources: {},
+      requestReservations: [],
+      coverage,
+      outcome: {
+        kind: 'admin_review',
+        reason: 'ambiguous',
+        candidates: [candidate],
+        coverage,
+        includedEvidenceIds: [],
+        excludedEvidenceIds: [],
+      },
+      handoff: {
+        state: 'acknowledged',
+        reason: 'no_match',
+        receipt: 'sent',
+        attempts: 0,
+        nextDueAt: null,
+        acknowledgedBy: principal.userId,
+        acknowledgedAt: '2026-11-03T00:00:00.000Z',
+      },
+    },
+    quarantined_metadata: { directory: 'PRIVATE_DIRECTORY', provider: 'PRIVATE_PROVIDER' },
+  };
+  await client.query(
+    "insert into report_intakes(id,server_id,reporter_id,status,evidence_revision,metadata,analysis_failure_code) values($1,$2,$3,'needs_admin_confirmation',3,$4,'invalid_metadata')",
+    [id(1), guildId, principal.userId, JSON.stringify(metadata)]
+  );
+  const staff = items(
+    await service.execute(principal, {
+      kind: 'get_intake',
+      guildId,
+      audience: 'staff',
+      intakeId: id(1),
+    })
+  )[0];
+  expect(staff).toMatchObject({
+    statusLabel: 'Needs admin review',
+    analysisFailureCode: 'invalid_metadata',
+    identityReview: {
+      phase: 'acknowledged',
+      delivery: 'unknown',
+      reason: 'no_match',
+      candidateCount: 1,
+      candidates: [
+        {
+          username: 'candidate-handle',
+          globalName: 'Account display',
+          nickname: 'Server nickname',
+        },
+      ],
+    },
+  });
+  expect(JSON.stringify(staff)).not.toMatch(/PRIVATE_|quarantined_metadata/);
+  const reporter = items(
+    await service.execute(principal, {
+      kind: 'get_report',
+      guildId,
+      audience: 'reporter',
+      reportId: id(1),
+    })
+  )[0];
+  expect(reporter).toMatchObject({
+    identityReview: { phase: 'acknowledged', receipt: 'sent', delivery: 'unknown' },
+  });
+  expect(JSON.stringify(reporter)).not.toMatch(
+    /candidate-handle|invalid_metadata|acknowledgedBy|candidates|PRIVATE_/
+  );
+  access.state.owner = false;
+  expect(
+    await service.execute(principal, {
+      kind: 'get_intake',
+      guildId,
+      audience: 'staff',
+      intakeId: id(1),
+    })
+  ).toMatchObject({ kind: 'denied' });
+});

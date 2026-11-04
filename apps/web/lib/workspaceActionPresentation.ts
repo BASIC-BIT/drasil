@@ -75,10 +75,10 @@ export function deriveWorkspaceActionPresentation({
       return reportOpenPresentation(localResult.result);
     case 'attention':
       return localResult.result.status === 'acknowledged'
-        ? { kind: 'completed', message: 'Reply acknowledged.' }
+        ? { kind: 'completed', message: 'Acknowledged.' }
         : {
             kind: 'blocked',
-            message: 'Reply was already handled. Refresh the record before continuing.',
+            message: 'Already handled. Refresh the record before continuing.',
           };
   }
 }

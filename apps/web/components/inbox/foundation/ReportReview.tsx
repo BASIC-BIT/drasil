@@ -1,5 +1,6 @@
 'use client';
 
+import { ReportIdentityReview } from '../ReportIdentityReview';
 import { Timestamp } from '@/components/workspace/Timestamp';
 
 import { useId, useRef, useState, type Ref } from 'react';
@@ -73,6 +74,7 @@ export function ReportReview({
         <span className={styles.reportId}>{report.id}</span>
       </header>
       <ReportMemberContext report={report} profile={profile} />
+      <ReportIdentityReview review={report.identityReview} />
       <div className={styles.tabs} role="tablist" aria-label="Report information">
         {tabs.map((name, index) => (
           <button
@@ -169,7 +171,7 @@ export function ReportReview({
           <ol className={styles.activity}>
             <li>
               <Timestamp value={report.createdAt} />
-              <h3>Report submitted</h3>
+              <h3>{report.targetUserId ? 'Report submitted' : 'Evidence saved'}</h3>
             </li>
             {activityLabel ? (
               <li>

@@ -16,6 +16,7 @@ import {
 } from '@drasil/application';
 import {
   memberProfileDetectionSchema,
+  reportIntakeStatusLabel,
   moderationInboxItemSchema,
   type ModerationInboxItem,
   type ModerationInboxAction,
@@ -314,15 +315,23 @@ export function createModerationWorkspaceDataAdapter(
       queueItemId: attention?.item.queueItemId ?? null,
       sourceMetadata: attention?.item.sourceMetadata,
       subject: {
-        userId: intake.reporterId,
-        displayLabel: intake.reporterDisplayName ?? intake.reporterId,
-        secondaryLabel: null,
+        userId: intake.targetUserId,
+        displayLabel:
+          intake.targetDisplayName ??
+          (intake.targetUserId ? `Target ${intake.targetUserId}` : 'Target not confirmed'),
+        secondaryLabel: `Reporter ${intake.reporterDisplayName ?? intake.reporterId}`,
         avatarUrl: null,
       },
       title: 'Report',
       summary: intake.summary,
       summarySource: intake.summarySource,
-      statusLabel: attention ? 'needs attention' : intake.status,
+      statusLabel:
+        intake.statusLabel ??
+        (intake.identityReview || intake.status === 'needs_admin_confirmation'
+          ? reportIntakeStatusLabel(intake.status, intake.identityReview)
+          : attention
+            ? 'needs attention'
+            : reportIntakeStatusLabel(intake.status)),
       signalLabel: null,
       createdAt: intake.createdAt,
       updatedAt: intake.updatedAt,
