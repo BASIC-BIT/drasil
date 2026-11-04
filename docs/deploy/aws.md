@@ -36,10 +36,10 @@ cd infra/aws/prod
 cp backend.hcl.example backend.hcl
  # Edit backend.hcl and replace REPLACE_ME values (e.g. the state bucket name)
 terraform init -backend-config=backend.hcl
-terraform apply
+terraform apply -var 'alert_email_addresses=["ops@example.com"]'
 ```
 
-Optional before `terraform apply`: create a `terraform.tfvars` for tags/alerts/cost thresholds.
+`alert_email_addresses` is required: pass it with `-var` as above or in an untracked `terraform.tfvars`, which can also hold tags and cost thresholds. Each recipient must confirm the SNS subscription email.
 
 ```hcl
 tags = {
@@ -245,7 +245,7 @@ It will:
 
 - CloudWatch dashboard output: `operations_dashboard_name`
 - SNS topic output: `ops_alert_topic_arn` (email subscriptions require confirmation)
-- Budget + anomaly notifications are created only when `alert_email_addresses` is non-empty
+- Budget + anomaly notifications go to the same `alert_email_addresses`
 - Cost allocation tags still need account-level activation in Billing:
   - activate at least `Project` and `Environment` as cost allocation tags
   - allow up to 24 hours for billing views to reflect newly activated tags
@@ -263,7 +263,7 @@ Re-run the deploy workflow and set the `ref` input to an older commit SHA. The w
 - If/when we add sharding, we can increase `desired_count` and/or move to a more controlled rollout.
 - If you prefer private subnets, add a NAT Gateway and set `assign_public_ip = false` in `infra/aws/prod/main.tf`.
 - Secrets Manager automatic rotation is intentionally not configured yet; it requires a rotation Lambda and an ops runbook.
-- CloudWatch alarms publish to SNS regardless of subscribers; add/confirm `alert_email_addresses` to receive notifications.
+- CloudWatch alarms publish to SNS; each address in `alert_email_addresses` must confirm its subscription email before it receives them.
 
 ### Langfuse tracing
 

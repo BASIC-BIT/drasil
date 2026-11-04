@@ -142,6 +142,11 @@ variable "alert_email_addresses" {
     condition     = length(var.alert_email_addresses) > 0
     error_message = "alert_email_addresses must name at least one recipient, or the prod alarms email nobody."
   }
+
+  validation {
+    condition     = alltrue([for a in var.alert_email_addresses : can(regex("^[^@[:space:]]+@[^@[:space:]]+[.][^@[:space:]]+$", a))])
+    error_message = "Every alert_email_addresses entry must be an email address."
+  }
 }
 
 variable "enable_observability" {

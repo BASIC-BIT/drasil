@@ -28,10 +28,10 @@ cp backend.hcl.example backend.hcl
 terraform init -backend-config=backend.hcl
 ```
 
-3. Apply prod infrastructure:
+3. Apply prod infrastructure. `alert_email_addresses` is required:
 
 ```bash
-terraform apply
+terraform apply -var 'alert_email_addresses=["ops@example.com"]'
 ```
 
 4. Set secret values in AWS Secrets Manager (created by Terraform) and then deploy the container image.
@@ -79,7 +79,7 @@ Outputs include:
 - `cases_s3_prefix`
 - `evidence_s3_prefix`
 
-Optional `infra/aws/prod/terraform.tfvars` starter:
+`infra/aws/prod/terraform.tfvars` starter (untracked; `alert_email_addresses` is required):
 
 ```hcl
 tags = {
