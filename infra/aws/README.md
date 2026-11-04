@@ -28,10 +28,10 @@ cp backend.hcl.example backend.hcl
 terraform init -backend-config=backend.hcl
 ```
 
-3. Apply prod infrastructure:
+3. Apply prod infrastructure. `alert_email_addresses` is required:
 
 ```bash
-terraform apply
+terraform apply -var 'alert_email_addresses=["ops@example.com"]'
 ```
 
 4. Set secret values in AWS Secrets Manager (created by Terraform) and then deploy the container image.
@@ -79,7 +79,7 @@ Outputs include:
 - `cases_s3_prefix`
 - `evidence_s3_prefix`
 
-Optional `infra/aws/prod/terraform.tfvars` starter:
+`infra/aws/prod/terraform.tfvars` starter (untracked; `alert_email_addresses` is required):
 
 ```hcl
 tags = {
@@ -115,7 +115,7 @@ Docs: `docs/deploy/aws.md`
 - Provider-level default tags are applied in both `bootstrap` and `prod`.
 - `prod` provisions:
   - CloudWatch dashboard and ECS/log-based alarms,
-  - SNS alert topic with optional email subscriptions,
+  - SNS alert topic with email subscriptions from the required `alert_email_addresses` (plan and apply fail without at least one; each recipient confirms the SNS email),
   - Resource Group filtered by `Project` + `Environment`,
-  - Budget and Cost Anomaly Detection notifications (when `alert_email_addresses` is set).
+  - Budget and Cost Anomaly Detection notifications to the same recipients.
 - Important: activate cost allocation tags (`Project`, `Environment`) in AWS Billing for tag-based cost reporting.

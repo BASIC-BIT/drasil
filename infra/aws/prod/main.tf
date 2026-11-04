@@ -481,6 +481,51 @@ data "aws_iam_policy_document" "github_assume" {
       values   = local.github_oidc_subjects
     }
   }
+
+  # Transition to the BITRATE-Labs org. Separate statement so the repository_owner_id and
+  # repository_id pins apply only to the new owner and leave the var.github_repo subjects above
+  # alone; sub only restricts the ref and environment. Repos transferred after July 2026 receive
+  # the immutable owner@id/repo@id sub; the short forms, in both casings, are fallbacks. After a
+  # clean week under the new owner, set var.github_repo to BITRATE-Labs/drasil and remove this
+  # statement.
+  statement {
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+    principals {
+      type        = "Federated"
+      identifiers = [local.github_oidc_provider_arn]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:repository_owner_id"
+      values   = ["350167065"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:repository_id"
+      values   = ["961131517"]
+    }
+
+    condition {
+      test     = "StringLike"
+      variable = "token.actions.githubusercontent.com:sub"
+      values = [
+        "repo:BITRATE-Labs@350167065/drasil@961131517:ref:refs/heads/main",
+        "repo:BITRATE-Labs@350167065/drasil@961131517:environment:Deploy - web-prod",
+        "repo:BITRATE-Labs/drasil:ref:refs/heads/main",
+        "repo:BITRATE-Labs/drasil:environment:Deploy - web-prod",
+        "repo:bitrate-labs/drasil:ref:refs/heads/main",
+        "repo:bitrate-labs/drasil:environment:Deploy - web-prod",
+      ]
+    }
+  }
 }
 
 resource "aws_iam_role" "github_deploy" {
