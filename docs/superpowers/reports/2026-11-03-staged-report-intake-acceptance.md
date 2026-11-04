@@ -1,6 +1,6 @@
 # Staged report intake acceptance
 
-The final technical review's eight Important findings and two Minor test gaps are corrected locally and pass the full local gate. The scoped rereview remains pending. The staged selector still defaults to `false`. Paid provider evaluation, live Discord acceptance, publication, deployment, activation and merge remain pending.
+The final technical review's eight Important findings, two Minor test gaps and later bookkeeping deletion regression are corrected locally and pass the full local gate. Focused N1 rereview remains pending. The staged selector still defaults to `false`. Paid provider evaluation, live Discord acceptance, publication, deployment, activation and merge remain pending.
 
 ## What the local journey proves
 
@@ -32,7 +32,7 @@ The fresh disposable database is guarded by `scripts/owned-test-database.js`. `T
 | --------------------- | ---------------------------------- |
 | Application           | 45 suites, 636 tests passed        |
 | Action boundaries     | 17 tests passed                    |
-| Bot unit              | 115 suites, 2,154 tests passed     |
+| Bot unit              | 115 suites, 2,159 tests passed     |
 | Contracts             | 6 files, 63 tests passed           |
 | Owned-database guard  | 8 tests passed                     |
 | Web unit              | 118 files, 1,161 tests passed      |
@@ -51,7 +51,7 @@ The legacy browser stage skips MCP cases because `DRASIL_MCP_E2E` is not true th
 
 The current moderation-queue message retains Admin Actions after acknowledgement. Reporter confirmation and moderator review show the distinct names, immutable ID and actual matched fields. Moderator lists show at most five candidates with count and directory coverage.
 
-Persisted staged ownership survives flag disablement. New evidence, edits and deletions still advance source history and invalidate stale controls, while both analysis paths remain paused. Submitted reports retain later evidence without changing their target or starting another investigation. Staff web and MCP evidence reads label superseded, deleted and unavailable sources and their analysis coverage. Reporter reads do not expose staff analysis.
+Persisted staged ownership survives flag disablement. Eligible new evidence, edits and source deletions still advance source history and invalidate stale controls, while both analysis paths remain paused. Unknown-source and duplicate deletions preserve the current evidence revision, saved outcome and usable reporter confirmation. They do not schedule analysis or send another acknowledgement. Submitted reports retain later evidence without changing their target or starting another investigation. Staff web and MCP evidence reads label superseded, deleted and unavailable sources and their analysis coverage. Reporter reads do not expose staff analysis.
 
 The queue's identity metadata and send reservation now share the report lock, revision and presentation lease with resolution. A delayed write cannot recreate resolved attention. The saved-evidence receipt is independent of moderator notification delivery and remains truthful while that delivery is pending.
 
@@ -115,9 +115,11 @@ No live check above is complete. Local mocks do not satisfy these checks.
 
 ## Evidence appendix
 
-The final correction gate passed with exit 0 on `e50cc75f613de0374295408141516de4386c6830`, using Node 24.15.0 and Playwright 1.60.0 on Linux. The final evidence update changes documentation only; the full run tested that source hash. The correction base was `35600abf5773ea008573e49c5f04cfb24cd532e7`. GitHub CI, delayed review feedback, merge readiness and deployment remain unverified.
+The latest correction gate passed with exit 0 on `0e494b1039a1a90b59826b28055556425d3abb76`, using Node 24.15.0 and Playwright 1.60.0 on Linux. The final evidence update changes documentation only; the full run tested that source hash. The N1 correction base was `374b14b5b78fce8c7a17f0abbb2b0ab2000edfd7`. GitHub CI, delayed review feedback, merge readiness and deployment remain unverified.
 
-The full run used `NODE_ENV=test`, `CI=true`, `NEXT_TELEMETRY_DISABLED=1` and the three matching guarded database URLs. Its local log is `.superpowers/sdd/2026-11-03-staged-report-intake/final-fix-ci-e50cc75.log`. The local `final-fix-report.md` beside it records each finding, behavioral RED/GREEN evidence, commands, and the two earlier gate failures. Those failures were a missing explicit return type in a test and a missing receipt-query method in a complete handler mock. Both were corrected before the successful run. No assertions, skip policy, coverage thresholds, visual baselines or tolerances were weakened.
+The full run used `NODE_ENV=test`, `CI=true`, `NEXT_TELEMETRY_DISABLED=1` and the three matching guarded database URLs. Its local log is `.superpowers/sdd/2026-11-03-staged-report-intake/n1-ci-0e494b1.log`. The local `n1-fix-report.md` beside it records the N1 behavioral RED/GREEN checks and exact invocation. Four service regressions reproduce unknown/duplicate retirement with processing enabled and disabled; all five focused cases pass after the correction, including real eligible deletion invalidation. The full intake service suite passes all 99 tests. An earlier full-gate invocation mistakenly enabled integration mode globally and was stopped during bot unit tests. Its log remains separate as setup evidence; the successful run explicitly removed that flag before the integration runner enabled it at its own stage.
+
+The earlier review-correction gate passed on `e50cc75f613de0374295408141516de4386c6830`, with `final-fix-ci-e50cc75.log` and `final-fix-report.md` recording I1-I8/M1-M2 and their two earlier gate failures. Those failures were a missing explicit return type in a test and a missing receipt-query method in a complete handler mock. Both were corrected before that successful run. No assertions, skip policy, coverage thresholds, visual baselines or tolerances were weakened.
 
 Before the final review, Task 9 passed its full local gate on `030cd5edab8d7f0f563d40c433d3e62fd5d6fd33`; its log remains `task9-ci-030cd5e-final.log` in the same local workspace. Implementation base for Task 9: `a305ec1d63f0f4d3aead8c1f76040e1bdb171c09`. Branch fork: `46b2b053060e19b35beccf23f7cf6756490cbe5f`.
 
