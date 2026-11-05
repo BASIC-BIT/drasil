@@ -23,6 +23,8 @@ export interface OperationsIntegritySnapshot {
     readonly caseRoleMembers: number;
     readonly activeRoleQuarantines: number;
     readonly queueItems: number;
+    readonly openReportIntakes: number;
+    readonly dueReportIntakeAnalyses: number;
   };
   readonly findingCounts: Record<OperationsIntegritySeverity, number>;
   readonly findings: readonly OperationsIntegrityFinding[];
@@ -39,6 +41,8 @@ interface IntegrityCountRow {
   readonly case_role_members: string | number | null;
   readonly active_role_quarantines: string | number | null;
   readonly queue_items: string | number | null;
+  readonly open_report_intakes: string | number | null;
+  readonly due_report_intake_analyses: string | number | null;
 }
 
 interface IntegrityFindingRow {
@@ -86,6 +90,8 @@ export function buildOperationsIntegritySnapshot(
       caseRoleMembers: toCount(countRow.case_role_members),
       activeRoleQuarantines: toCount(countRow.active_role_quarantines),
       queueItems: toCount(countRow.queue_items),
+      openReportIntakes: toCount(countRow.open_report_intakes),
+      dueReportIntakeAnalyses: toCount(countRow.due_report_intake_analyses),
     },
     findingCounts: {
       error: findings.filter((finding) => finding.severity === 'error').length,
@@ -100,9 +106,17 @@ export function buildOperationsIntegritySnapshot(
 export class PostgresOperationsIntegrityDataAdapter implements OperationsIntegrityDataAdapter {
   public async getSnapshot(guildId: string): Promise<OperationsIntegritySnapshot> {
     const pool = getPostgresPool();
+    // Ignore the staged-enable flag so operators can see paused worker candidates before activation.
     const [counts, findings] = await Promise.all([
       pool.query<IntegrityCountRow>(
-        `with recent_resolved as (
+        `with open_report_intakes as (
+           select status, analysis_due_at, analysis_lease_until, analysis_failure_code,
+             evidence_revision, analysis_revision
+           from report_intakes
+           where server_id = $1
+             and status in ('collecting_evidence', 'needs_reporter_confirmation', 'needs_admin_confirmation')
+             and confirmed_target_user_id is null and closed_at is null
+         ), recent_resolved as (
            select id
            from verification_events
            where server_id = $1
@@ -142,7 +156,15 @@ export class PostgresOperationsIntegrityDataAdapter implements OperationsIntegri
                  'report_thread_attention'::moderation_queue_item_type,
                  'pending_screening_member'::moderation_queue_item_type
                )
-           ) as queue_items`,
+           ) as queue_items,
+           (select count(*) from open_report_intakes) as open_report_intakes,
+           (
+             select count(*) from open_report_intakes
+             where analysis_due_at <= now()
+               and (analysis_lease_until is null or analysis_lease_until <= now())
+               and analysis_failure_code is null
+               and (evidence_revision > analysis_revision or status = 'needs_reporter_confirmation')
+           ) as due_report_intake_analyses`,
         [guildId, LOOKBACK_DAYS]
       ),
       pool.query<IntegrityFindingRow>(
@@ -389,6 +411,8 @@ export class PostgresOperationsIntegrityDataAdapter implements OperationsIntegri
         case_role_members: 0,
         active_role_quarantines: 0,
         queue_items: 0,
+        open_report_intakes: 0,
+        due_report_intake_analyses: 0,
       },
       findings.rows
     );
