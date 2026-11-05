@@ -17,6 +17,8 @@ export class FixtureOperationsIntegrityDataAdapter implements OperationsIntegrit
         case_role_members: 1,
         active_role_quarantines: 1,
         queue_items: 5,
+        open_report_intakes: 0,
+        due_report_intake_analyses: 0,
       },
       [
         {

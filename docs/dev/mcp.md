@@ -50,6 +50,15 @@ Operational audit logs allowlist original actor, guild, client, connection, gran
 
 Bot polling prunes only application-owned ephemeral data, independently of enablement and with failures isolated from moderation. It deletes expired/cancelled unconsumed intents after seven days from expiry (including idle elapsed pending rows), and rate buckets one day after their expiry, with at most 500 total deletions per poll. An explicit execution-absence guard prevents foreign-key cascades. Denied/consumed intents, executions, queue/report-ban outcomes and authorization references are retained. Provider-owned row cleanup remains the provider's separate lifecycle.
 
+## Staged report-intake diagnostics
+
+`drasil_get_diagnostics` includes two guild-scoped `candidateCounts` fields without a lookback cutoff:
+
+- `openReportIntakes`: unclosed, unconfirmed intakes in `collecting_evidence`, `needs_reporter_confirmation` or `needs_admin_confirmation`, including failed or unscheduled work.
+- `dueReportIntakeAnalyses`: the subset whose analysis is due, has no active lease or failure code, and has a newer evidence revision or is awaiting reporter confirmation. This follows the analysis worker's SQL candidate rules, including timeout candidates, but ignores `report_intake_staged_enabled` so paused exposure is visible before enabling it.
+
+These are aggregate snapshots, with no report content or member identities. A due candidate can still fail metadata validation or another runtime check; the number is not a processing guarantee. Zero due candidates does not rule out future scheduled or currently leased work. Read both counts before proposing activation, and preserve the existing diagnostic authorization. Reading these totals does not enable processing or claim a lease.
+
 ## Local verification
 
 Use only an owned disposable database and serialize database suites. Build `@drasil/application` before consumer tests and after shared changes. The task fixture uses `127.0.0.1:55433/drasil_mcp_test`; never point truncating integration fixtures at another database. Source inspection and synthetic header tests do not prove deployed ingress or real-client behavior. Full CI and the ChatGPT/Codex/Claude acceptance matrix are separate launch gates.

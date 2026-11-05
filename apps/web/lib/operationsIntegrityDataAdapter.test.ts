@@ -12,6 +12,8 @@ describe('operationsIntegrityDataAdapter', () => {
           case_role_members: 1,
           active_role_quarantines: '0',
           queue_items: '5',
+          open_report_intakes: '7',
+          due_report_intake_analyses: '3',
         },
         [
           {
@@ -41,6 +43,8 @@ describe('operationsIntegrityDataAdapter', () => {
         caseRoleMembers: 1,
         activeRoleQuarantines: 0,
         queueItems: 5,
+        openReportIntakes: 7,
+        dueReportIntakeAnalyses: 3,
       },
       findingCounts: {
         error: 1,
