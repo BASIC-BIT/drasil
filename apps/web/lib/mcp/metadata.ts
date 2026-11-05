@@ -1,16 +1,22 @@
 import {
-  protectedResourceHandler,
+  generateProtectedResourceMetadata,
   metadataCorsOptionsRequestHandler,
 } from '@drasil/mcp-runtime/handler';
-import { getMcpConfig } from './config';
+import { getMcpConfig, MCP_SCOPES } from './config';
 /** Both public aliases and auth challenges use this fixed resource owner. */
-export async function resourceMetadata(request: Request): Promise<Response> {
+export async function resourceMetadata(_request: Request): Promise<Response> {
   const config = getMcpConfig();
   if (!config) return new Response(null, { status: 404 });
-  return protectedResourceHandler({
-    authServerUrls: [config.issuer],
-    resourceUrl: config.resource,
-  })(request);
+  const headers = resourceMetadataOptions().headers;
+  headers.set('Cache-Control', 'max-age=3600');
+  return Response.json(
+    generateProtectedResourceMetadata({
+      authServerUrls: [config.issuer],
+      resourceUrl: config.resource,
+      additionalMetadata: { scopes_supported: [...MCP_SCOPES] },
+    }),
+    { headers }
+  );
 }
 export const resourceMetadataOptions = metadataCorsOptionsRequestHandler();
 

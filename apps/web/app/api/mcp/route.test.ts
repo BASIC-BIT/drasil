@@ -35,10 +35,14 @@ it('returns identical fixed resource metadata regardless of either alias request
     const second = await alias(
       new Request('https://another.test/.well-known/oauth-protected-resource/api/mcp')
     );
+    expect(first.headers.get('access-control-allow-origin')).toBe('*');
+    expect(first.headers.get('cache-control')).toBe('max-age=3600');
+    expect(first.headers.get('content-type')).toBe('application/json');
     expect(await first.json()).toEqual(await second.json());
     expect(await (await alias(new Request('https://untrusted.test/alias'))).json()).toMatchObject({
       resource: 'https://mcp.example.test/api/mcp',
       authorization_servers: ['https://mcp.example.test/api/mcp-auth'],
+      scopes_supported: ['drasil:read', 'drasil:moderate', 'drasil:configure'],
     });
   } finally {
     vi.unstubAllEnvs();
