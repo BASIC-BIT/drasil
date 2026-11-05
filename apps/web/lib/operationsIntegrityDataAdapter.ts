@@ -54,62 +54,7 @@ interface IntegrityFindingRow {
   readonly verification_event_id: string | null;
 }
 
-function toCount(value: string | number | null): number {
-  if (typeof value === 'number') {
-    return value;
-  }
-  if (typeof value === 'string') {
-    return Number.parseInt(value, 10);
-  }
-  return 0;
-}
-
-function parseIntegrityFinding(row: IntegrityFindingRow): OperationsIntegrityFinding {
-  return {
-    severity: row.severity,
-    code: row.code,
-    subject: row.subject,
-    detail: row.detail,
-    userId: row.user_id,
-    verificationEventId: row.verification_event_id,
-  };
-}
-
-export function buildOperationsIntegritySnapshot(
-  checkedAt: Date,
-  countRow: IntegrityCountRow,
-  findingRows: readonly IntegrityFindingRow[]
-): OperationsIntegritySnapshot {
-  const findings = findingRows.map(parseIntegrityFinding);
-  return {
-    checkedAt: checkedAt.toISOString(),
-    lookbackDays: LOOKBACK_DAYS,
-    candidateCounts: {
-      pendingCases: toCount(countRow.pending_cases),
-      recentResolvedCases: toCount(countRow.recent_resolved_cases),
-      caseRoleMembers: toCount(countRow.case_role_members),
-      activeRoleQuarantines: toCount(countRow.active_role_quarantines),
-      queueItems: toCount(countRow.queue_items),
-      openReportIntakes: toCount(countRow.open_report_intakes),
-      dueReportIntakeAnalyses: toCount(countRow.due_report_intake_analyses),
-    },
-    findingCounts: {
-      error: findings.filter((finding) => finding.severity === 'error').length,
-      warning: findings.filter((finding) => finding.severity === 'warning').length,
-      info: findings.filter((finding) => finding.severity === 'info').length,
-    },
-    findings,
-    liveDiscordChecksAvailableInDiscord: true,
-  };
-}
-
-export class PostgresOperationsIntegrityDataAdapter implements OperationsIntegrityDataAdapter {
-  public async getSnapshot(guildId: string): Promise<OperationsIntegritySnapshot> {
-    const pool = getPostgresPool();
-    // Ignore the staged-enable flag so operators can see paused worker candidates before activation.
-    const [counts, findings] = await Promise.all([
-      pool.query<IntegrityCountRow>(
-        `with open_report_intakes as (
+const OPERATIONS_INTEGRITY_COUNTS_SQL = `with open_report_intakes as (
            select status, analysis_due_at, analysis_lease_until, analysis_failure_code,
              evidence_revision, analysis_revision
            from report_intakes
@@ -164,9 +109,63 @@ export class PostgresOperationsIntegrityDataAdapter implements OperationsIntegri
                and (analysis_lease_until is null or analysis_lease_until <= now())
                and analysis_failure_code is null
                and (evidence_revision > analysis_revision or status = 'needs_reporter_confirmation')
-           ) as due_report_intake_analyses`,
-        [guildId, LOOKBACK_DAYS]
-      ),
+           ) as due_report_intake_analyses`;
+
+function toCount(value: string | number | null): number {
+  if (typeof value === 'number') {
+    return value;
+  }
+  if (typeof value === 'string') {
+    return Number.parseInt(value, 10);
+  }
+  return 0;
+}
+
+function parseIntegrityFinding(row: IntegrityFindingRow): OperationsIntegrityFinding {
+  return {
+    severity: row.severity,
+    code: row.code,
+    subject: row.subject,
+    detail: row.detail,
+    userId: row.user_id,
+    verificationEventId: row.verification_event_id,
+  };
+}
+
+export function buildOperationsIntegritySnapshot(
+  checkedAt: Date,
+  countRow: IntegrityCountRow,
+  findingRows: readonly IntegrityFindingRow[]
+): OperationsIntegritySnapshot {
+  const findings = findingRows.map(parseIntegrityFinding);
+  return {
+    checkedAt: checkedAt.toISOString(),
+    lookbackDays: LOOKBACK_DAYS,
+    candidateCounts: {
+      pendingCases: toCount(countRow.pending_cases),
+      recentResolvedCases: toCount(countRow.recent_resolved_cases),
+      caseRoleMembers: toCount(countRow.case_role_members),
+      activeRoleQuarantines: toCount(countRow.active_role_quarantines),
+      queueItems: toCount(countRow.queue_items),
+      openReportIntakes: toCount(countRow.open_report_intakes),
+      dueReportIntakeAnalyses: toCount(countRow.due_report_intake_analyses),
+    },
+    findingCounts: {
+      error: findings.filter((finding) => finding.severity === 'error').length,
+      warning: findings.filter((finding) => finding.severity === 'warning').length,
+      info: findings.filter((finding) => finding.severity === 'info').length,
+    },
+    findings,
+    liveDiscordChecksAvailableInDiscord: true,
+  };
+}
+
+export class PostgresOperationsIntegrityDataAdapter implements OperationsIntegrityDataAdapter {
+  public async getSnapshot(guildId: string): Promise<OperationsIntegritySnapshot> {
+    const pool = getPostgresPool();
+    // Ignore the staged-enable flag so operators can see paused worker candidates before activation.
+    const [counts, findings] = await Promise.all([
+      pool.query<IntegrityCountRow>(OPERATIONS_INTEGRITY_COUNTS_SQL, [guildId, LOOKBACK_DAYS]),
       pool.query<IntegrityFindingRow>(
         `with server_settings as (
            select settings->>'moderation_queue_channel_id' as queue_channel_id
