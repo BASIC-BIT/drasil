@@ -1,3 +1,4 @@
+import { sourceRef } from '../fixtures/report-intake/source-associated';
 import { Collection, Message } from 'discord.js';
 import {
   buildSpoilerImageAttachmentFileResult,
@@ -5,10 +6,171 @@ import {
   messageAttachmentsToReportMetadata,
   selectEligibleMessageReportImageAttachments,
   toSpoilerFilename,
+  prepareReportEvidenceSource,
 } from '../../utils/reportAttachments';
 import { getReportAiSettings } from '../../utils/reportAiSettings';
 
 describe('reportAttachments (unit)', () => {
+  it('prepares only the original authorized message and attachment within configured limits', () => {
+    const message = {
+      id: sourceRef.messageId,
+      content: 'Target Alder',
+      attachments: new Collection([
+        [
+          'attachment',
+          {
+            id: 'attachment',
+            contentType: 'image/png',
+            size: 100,
+            url: 'https://cdn.discordapp.com/attachments/channel/attachment/proof.png',
+          },
+        ],
+      ]),
+    };
+    const ref = { ...sourceRef, kind: 'image' as const };
+    const settings = getReportAiSettings({ report_ai_max_image_bytes: 200 });
+    expect(
+      prepareReportEvidenceSource({ message, ref, attachmentId: 'attachment', settings })
+    ).toEqual({
+      ref,
+      content: {
+        kind: 'image',
+        attachmentId: 'attachment',
+        contentType: 'image/png',
+        size: 100,
+        url: 'https://cdn.discordapp.com/attachments/channel/attachment/proof.png',
+      },
+    });
+    expect(prepareReportEvidenceSource({ message, ref: sourceRef, settings })).toEqual({
+      ref: sourceRef,
+      content: { kind: 'text', text: 'Target Alder' },
+    });
+    for (const input of [
+      { message: { ...message, id: 'other' }, ref, attachmentId: 'attachment', settings },
+      { message, ref, attachmentId: 'different', settings },
+      {
+        message,
+        ref,
+        attachmentId: 'attachment',
+        settings: getReportAiSettings({ report_ai_max_image_bytes: 50 }),
+      },
+      {
+        message,
+        ref,
+        attachmentId: 'attachment',
+        settings: getReportAiSettings({ report_ai_analyze_images: false }),
+      },
+    ])
+      expect(prepareReportEvidenceSource(input).content.kind).toBe('unavailable');
+  });
+
+  it.each([
+    [
+      'expired',
+      'image/png',
+      'https://cdn.discordapp.com/attachments/channel/attachment/proof.png?ex=00000001',
+    ],
+    [
+      'unsupported',
+      'application/zip',
+      'https://cdn.discordapp.com/attachments/channel/attachment/proof.png',
+    ],
+    [
+      'untrusted host',
+      'image/png',
+      'https://example.test/attachments/channel/attachment/proof.png',
+    ],
+    [
+      'mismatched URL attachment',
+      'image/png',
+      'https://cdn.discordapp.com/attachments/channel/other/proof.png',
+    ],
+  ])('excludes %s image metadata without fetching it', (_name, contentType, url) => {
+    const message = {
+      id: sourceRef.messageId,
+      attachments: new Collection([
+        ['attachment', { id: 'attachment', url, contentType, size: 100 }],
+      ]),
+    };
+    const result = prepareReportEvidenceSource({
+      message,
+      ref: { ...sourceRef, kind: 'image' },
+      attachmentId: 'attachment',
+      settings: getReportAiSettings(),
+    });
+    expect(result.content.kind).toBe('unavailable');
+  });
+
+  it('distinguishes deliberately excluded evidence from an unavailable original source', () => {
+    const ref = { ...sourceRef, kind: 'image' as const };
+    const image = {
+      id: 'attachment',
+      contentType: 'image/png',
+      size: 100,
+      url: 'https://cdn.discordapp.com/attachments/channel/attachment/proof.png',
+    };
+    const settings = getReportAiSettings();
+    const message = {
+      id: sourceRef.messageId,
+      attachments: new Collection([['attachment', image]]),
+    };
+    expect(
+      prepareReportEvidenceSource({ message, ref, attachmentId: 'missing', settings }).content
+    ).toEqual({ kind: 'unavailable', reason: 'evidence_unavailable' });
+    expect(
+      prepareReportEvidenceSource({
+        message,
+        ref,
+        attachmentId: 'attachment',
+        settings: getReportAiSettings({ report_ai_analyze_images: false }),
+      }).content
+    ).toEqual({ kind: 'unavailable', reason: 'excluded' });
+    const expired = {
+      ...message,
+      attachments: new Collection([['attachment', { ...image, url: image.url + '?ex=00000001' }]]),
+    };
+    expect(
+      prepareReportEvidenceSource({ message: expired, ref, attachmentId: 'attachment', settings })
+        .content
+    ).toEqual({ kind: 'unavailable', reason: 'evidence_unavailable' });
+  });
+
+  it('classifies an otherwise eligible original image without a URL as unavailable', () => {
+    const message = {
+      id: sourceRef.messageId,
+      attachments: new Collection([
+        ['attachment', { id: 'attachment', contentType: 'image/png', size: 100 }],
+      ]),
+    };
+    expect(
+      prepareReportEvidenceSource({
+        message,
+        ref: { ...sourceRef, kind: 'image' },
+        attachmentId: 'attachment',
+        settings: getReportAiSettings(),
+      }).content
+    ).toEqual({ kind: 'unavailable', reason: 'evidence_unavailable' });
+  });
+
+  it('keeps deliberate settings, unsupported-type and byte-budget exclusions ahead of missing metadata', () => {
+    const ref = { ...sourceRef, kind: 'image' as const };
+    const image = { id: 'attachment', contentType: 'image/png', size: 100 };
+    for (const [attachment, settings] of [
+      [image, getReportAiSettings({ report_ai_analyze_images: false })],
+      [image, getReportAiSettings({ report_ai_max_images: 0 })],
+      [{ ...image, contentType: 'application/zip' }, getReportAiSettings()],
+      [image, getReportAiSettings({ report_ai_max_image_bytes: 50 })],
+    ] as const) {
+      const message = {
+        id: sourceRef.messageId,
+        attachments: new Collection([['attachment', attachment]]),
+      };
+      expect(
+        prepareReportEvidenceSource({ message, ref, attachmentId: 'attachment', settings }).content
+      ).toEqual({ kind: 'unavailable', reason: 'excluded' });
+    }
+  });
+
   it('maps Discord message attachments to report metadata', () => {
     const message = buildMessageWithAttachments([
       [

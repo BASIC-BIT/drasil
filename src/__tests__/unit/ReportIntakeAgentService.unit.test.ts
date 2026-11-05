@@ -1,3 +1,8 @@
+import type { ReportAnalysisOutcome, ReportIdentityExtraction } from '@drasil/application';
+import { Client, Collection } from 'discord.js';
+import { buildReportEvidenceBatch } from '../../utils/reportIntakeEvidence';
+import { ReportCandidateService } from '../../services/ReportCandidateService';
+import type { IReportIntakeService } from '../../services/ReportIntakeService';
 import type { IThreadManager } from '../../services/ThreadManager';
 import { createTracingRecorder } from '../fakes/recordingTracing';
 import { withObservation } from '../../observability/langfuse';
@@ -88,6 +93,7 @@ describe('ReportIntakeAgentService', () => {
       }),
     } as unknown as IConfigService;
     const candidateService: jest.Mocked<IReportCandidateService> = {
+      resolveIdentity: jest.fn(),
       extractCandidateSignals: jest.fn().mockReturnValue({
         mentions: [],
         explicitUserIds: ['user-1'],
@@ -134,9 +140,67 @@ describe('ReportIntakeAgentService', () => {
       gptService as unknown as IGPTService
     );
 
-    return { agentService, intakeService, reportIntakeRepository, candidateService, gptService };
+    return {
+      agentService,
+      intakeService,
+      reportIntakeRepository,
+      candidateService,
+      gptService,
+      configService,
+    };
   }
 
+  it('does not run a legacy timer after staged intake is enabled', async () => {
+    jest.useFakeTimers();
+    try {
+      const { agentService, intakeService, gptService, configService } = buildServices();
+      await intakeService.openIntakeFromThread({
+        serverId: 'guild-1',
+        reporter: buildReporter(),
+        threadId: 'thread-1',
+        channelId: 'channel-1',
+      });
+      const message = buildMessage();
+      await intakeService.handleThreadMessage(message);
+      agentService.scheduleAnalysisForThreadMessage(message);
+      await jest.advanceTimersByTimeAsync(0);
+      const config = await configService.getServerConfig('guild-1');
+      jest.mocked(configService.getServerConfig).mockResolvedValue({
+        ...config,
+        settings: { ...config.settings, report_intake_staged_enabled: true },
+      });
+      await jest.advanceTimersByTimeAsync(15000);
+      expect(gptService.extractReportIntakeEvidence).not.toHaveBeenCalled();
+      expect(await agentService.runAnalysisForThreadMessage(message)).toBe(false);
+      agentService.scheduleAnalysisForThreadMessage(message);
+      await jest.advanceTimersByTimeAsync(0);
+      expect(jest.getTimerCount()).toBe(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('does not schedule or execute legacy analysis for persisted staged ownership while disabled', async () => {
+    jest.useFakeTimers();
+    try {
+      const f = buildServices();
+      const intake = await f.intakeService.openIntakeFromThread({
+        serverId: 'guild-1',
+        reporter: buildReporter(),
+        threadId: 'thread-1',
+        channelId: 'channel-1',
+      });
+      await f.reportIntakeRepository.update(intake.id, { metadata: { workflow: 'staged' } });
+      const message = buildMessage();
+      f.agentService.scheduleAnalysisForThreadMessage(message);
+      await jest.advanceTimersByTimeAsync(15_000);
+      expect(await f.agentService.runAnalysisForThreadMessage(message)).toBe(false);
+      expect(f.gptService.extractReportIntakeEvidence).not.toHaveBeenCalled();
+      expect(jest.getTimerCount()).toBe(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
   it('analyzes screenshot-only evidence and asks the reporter for target confirmation', async () => {
     const { agentService, intakeService, reportIntakeRepository, candidateService, gptService } =
       buildServices();
@@ -179,6 +243,58 @@ describe('ReportIntakeAgentService', () => {
       })
     );
   });
+  it.each([false, true])(
+    'explains an unmatched screenshot without repeating the notice (fallback: %s)',
+    async (isFallback) => {
+      const { agentService, intakeService, reportIntakeRepository, candidateService, gptService } =
+        buildServices();
+      const intake = await intakeService.openIntakeFromThread({
+        serverId: 'guild-1',
+        reporter: buildReporter(),
+        threadId: 'thread-1',
+        channelId: 'channel-1',
+      });
+      candidateService.resolveCandidatesFromSignals.mockResolvedValue([]);
+      gptService.extractReportIntakeEvidence.mockResolvedValue({
+        visibleNames: ['Example Person'],
+        visibleUsernames: ['example.person'],
+        visibleUserIds: [],
+        visibleMessageLinks: [],
+        quotedMessageText: [],
+        platformHints: [],
+        abuseSignals: [],
+        uncertainty: [],
+        confidence: isFallback ? 0 : 0.95,
+        analyzedImageCount: 1,
+        model: 'gpt-test',
+        promptVersion: 'test',
+        isFallback,
+      });
+      const message = buildMessage();
+      await intakeService.handleThreadMessage(message);
+
+      await agentService.runAnalysisForThreadMessage(message);
+      await agentService.runAnalysisForThreadMessage(message);
+
+      expect((message.channel as any).send).toHaveBeenCalledTimes(1);
+      expect((message.channel as any).send).toHaveBeenCalledWith({
+        content: isFallback
+          ? "I couldn't analyze this evidence. Please add an @mention, Discord user ID, or message link so I can identify the person you want to report."
+          : "I couldn't match this evidence to a current member of this server. Please add an @mention, Discord user ID, or message link so I can identify the person you want to report.",
+        components: [],
+        allowedMentions: { parse: [] },
+      });
+      expect((await reportIntakeRepository.findById(intake.id))?.status).toBe(
+        ReportIntakeStatus.COLLECTING_EVIDENCE
+      );
+      expect(candidateService.searchMembersByName).toHaveBeenCalledWith(
+        message.guild,
+        'example.person',
+        5
+      );
+    }
+  );
+
   it.each(['no-candidates', 'lookup-failure', 'send-failure', 'persistence-failure'] as const)(
     'tracks the full intake outcome for %s',
     async (mode) => {
@@ -415,5 +531,412 @@ describe('ReportIntakeAgentService', () => {
     } finally {
       await recorder.shutdown();
     }
+  });
+});
+
+describe('staged report intake investigation', () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-11-03T00:00:00Z'));
+  });
+  afterEach(() => jest.useRealTimers());
+  async function stagedFixture(content = 'Target displayed name') {
+    const servers = new InMemoryServerRepository();
+    await servers.getOrCreateServer('guild-1');
+    await servers.updateSettings('guild-1', { report_intake_staged_enabled: true });
+    const repository = new InMemoryReportIntakeRepository(servers);
+    const intake = await repository.create({
+      serverId: 'guild-1',
+      reporterId: 'reporter-1',
+      threadId: 'thread-1',
+    });
+    const message = buildMessage({
+      content,
+      createdTimestamp: 1,
+      editedTimestamp: null,
+      guildId: 'guild-1',
+      attachments: new Collection(),
+    });
+    await repository.recordEvidenceBatch(buildReportEvidenceBatch(message, intake, 'upsert'));
+    const claim = (await repository.claimAnalysis(new Date(Date.now() + 15_000), 30_000))!;
+    const ref = {
+      evidenceId: 'evidence-1',
+      messageId: 'message-1',
+      sourceVersion: 1,
+      role: 'reporter' as const,
+      kind: 'text' as const,
+    };
+    const subject = {
+      subjectId: 'target',
+      role: 'target' as const,
+      readability: 'clear' as const,
+      sourceRefs: [ref],
+      userIds: [],
+      usernames: [],
+      displayNames: ['Target'],
+      messageLinks: [],
+      uncertainty: [],
+    };
+    const extracted: ReportIdentityExtraction = {
+      kind: 'extracted',
+      subjects: [subject],
+      contextLabels: [],
+      includedEvidenceIds: ['evidence-1'],
+      excludedEvidenceIds: [],
+    };
+    const gpt = { extractReportIdentity: jest.fn().mockResolvedValue(extracted) };
+    const candidate = {
+      candidateId: 'candidate',
+      discordUserId: '12345678901234567',
+      serverId: 'guild-1',
+      username: 'target',
+      globalName: null,
+      nickname: null,
+      displayName: 'Target',
+      avatarUrl: null,
+      sourceRefs: [ref],
+      matchedFields: ['displayName' as const],
+      subjectMatches: [
+        {
+          subjectId: subject.subjectId,
+          sourceRefs: [ref],
+          matchedFields: ['displayName' as const],
+        },
+      ],
+    };
+    const resolved: ReportAnalysisOutcome = {
+      kind: 'confirm',
+      candidate,
+      coverage: {
+        kind: 'complete',
+        scannedAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 300_000).toISOString(),
+        memberCount: 1,
+      },
+      includedEvidenceIds: ['evidence-1'],
+      excludedEvidenceIds: [],
+    };
+    const candidates = {
+      resolveIdentity: jest.fn().mockResolvedValue(resolved),
+      extractCandidateSignals: new ReportCandidateService().extractCandidateSignals,
+    };
+    const fetchMessage = jest.fn().mockResolvedValue(message);
+    const channel = {
+      id: 'thread-1',
+      guildId: 'guild-1',
+      isThread: () => true,
+      messages: { fetch: fetchMessage },
+    };
+    const guild = { id: 'guild-1', channels: { fetch: jest.fn().mockResolvedValue(channel) } };
+    const client = { guilds: { fetch: jest.fn().mockResolvedValue(guild) } };
+    const config = {
+      getServerConfig: jest
+        .fn()
+        .mockResolvedValue({ settings: { report_intake_staged_enabled: true } }),
+    };
+    const agent = new ReportIntakeAgentService(
+      repository,
+      config as unknown as IConfigService,
+      candidates as unknown as IReportCandidateService,
+      {} as IReportIntakeService,
+      gpt as unknown as IGPTService,
+      client as unknown as Client
+    );
+    const reserve = jest.fn().mockResolvedValue(true);
+    return {
+      repository,
+      intake,
+      claim,
+      ref,
+      subject,
+      extracted,
+      resolved,
+      gpt,
+      candidates,
+      fetchMessage,
+      message,
+      agent,
+      reserve,
+      config,
+      guild,
+    };
+  }
+
+  it('extracts only the authorized saved source version before resolving identity', async () => {
+    const f = await stagedFixture();
+    const result = await f.agent.analyze({
+      claim: f.claim,
+      signal: new AbortController().signal,
+      reserveModelAttempt: f.reserve,
+    });
+    expect(result).toEqual(f.resolved);
+    expect(f.reserve).toHaveBeenCalledTimes(1);
+    expect(f.gpt.extractReportIdentity.mock.invocationCallOrder[0]).toBeGreaterThan(
+      f.reserve.mock.invocationCallOrder[0]
+    );
+    expect(f.fetchMessage).toHaveBeenCalledWith({
+      message: 'message-1',
+      force: true,
+      cache: false,
+    });
+  });
+  it.each(['newer', 'author', 'guild', 'channel'] as const)(
+    'rejects %s source content before extraction',
+    async (change) => {
+      const f = await stagedFixture();
+      const overrides =
+        change === 'newer'
+          ? { editedTimestamp: 2, content: 'new evidence' }
+          : change === 'author'
+            ? { author: { id: 'intruder' } }
+            : change === 'guild'
+              ? { guildId: 'other-guild' }
+              : { channelId: 'other-thread' };
+      f.fetchMessage.mockResolvedValue({ ...f.message, ...overrides });
+      expect(
+        await f.agent.analyze({
+          claim: f.claim,
+          signal: new AbortController().signal,
+          reserveModelAttempt: f.reserve,
+        })
+      ).toMatchObject({
+        kind: 'admin_review',
+        reason: 'evidence_unavailable',
+        includedEvidenceIds: [],
+        excludedEvidenceIds: ['evidence-1'],
+      });
+      expect(f.gpt.extractReportIdentity).not.toHaveBeenCalled();
+      expect(f.reserve).not.toHaveBeenCalled();
+    }
+  );
+
+  it('uses an explicit anchor without a model call', async () => {
+    const f = await stagedFixture('<@12345678901234567>');
+    await f.agent.analyze({
+      claim: f.claim,
+      signal: new AbortController().signal,
+      reserveModelAttempt: f.reserve,
+    });
+    expect(f.reserve).not.toHaveBeenCalled();
+    expect(f.candidates.resolveIdentity.mock.calls[0][0].subjects).toMatchObject([
+      { role: 'target', userIds: ['12345678901234567'], sourceRefs: [f.ref] },
+    ]);
+  });
+
+  it('allows one transient read retry with a fresh reservation', async () => {
+    const f = await stagedFixture();
+    f.gpt.extractReportIdentity.mockResolvedValueOnce({
+      kind: 'failed',
+      reason: 'provider_failure',
+      retryable: true,
+      includedEvidenceIds: ['evidence-1'],
+      excludedEvidenceIds: [],
+    });
+    const result = await f.agent.analyze({
+      claim: f.claim,
+      signal: new AbortController().signal,
+      reserveModelAttempt: f.reserve,
+    });
+    expect(result.kind).toBe('confirm');
+    expect(f.reserve).toHaveBeenCalledTimes(2);
+    expect(f.gpt.extractReportIdentity).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry an invalid extraction or dispatch after a denied reservation', async () => {
+    const f = await stagedFixture();
+    f.gpt.extractReportIdentity.mockResolvedValueOnce({
+      kind: 'failed',
+      reason: 'invalid_output',
+      retryable: false,
+      includedEvidenceIds: ['evidence-1'],
+      excludedEvidenceIds: [],
+    });
+    expect(
+      await f.agent.analyze({
+        claim: f.claim,
+        signal: new AbortController().signal,
+        reserveModelAttempt: f.reserve,
+      })
+    ).toMatchObject({
+      kind: 'admin_review',
+      reason: 'provider_failure',
+      includedEvidenceIds: ['evidence-1'],
+    });
+    expect(f.gpt.extractReportIdentity).toHaveBeenCalledTimes(1);
+    f.reserve.mockResolvedValue(false);
+    await f.agent.analyze({
+      claim: f.claim,
+      signal: new AbortController().signal,
+      reserveModelAttempt: f.reserve,
+    });
+    expect(f.gpt.extractReportIdentity).toHaveBeenCalledTimes(1);
+  });
+
+  it('rereads uncertain sources while retaining clear subject clues and original coverage', async () => {
+    const f = await stagedFixture();
+    const clear = { ...f.subject, subjectId: 'clear', userIds: ['12345678901234567'] };
+    f.gpt.extractReportIdentity.mockResolvedValueOnce({
+      ...f.extracted,
+      subjects: [
+        clear,
+        { ...f.subject, readability: 'uncertain', uncertainty: ['unreadable name'] },
+      ],
+    });
+    f.candidates.resolveIdentity.mockResolvedValueOnce({
+      ...f.resolved,
+      kind: 'admin_review',
+      reason: 'uncertain_text',
+      candidates: [],
+    });
+    const result = await f.agent.analyze({
+      claim: f.claim,
+      signal: new AbortController().signal,
+      reserveModelAttempt: f.reserve,
+    });
+    expect(f.reserve).toHaveBeenCalledTimes(2);
+    expect(f.candidates.resolveIdentity.mock.calls[1][0].subjects).toEqual([
+      clear,
+      { ...f.subject, subjectId: 'reread:target' },
+    ]);
+    expect(result).toMatchObject({
+      kind: 'confirm',
+      includedEvidenceIds: ['evidence-1'],
+      excludedEvidenceIds: [],
+    });
+  });
+
+  it('retains context-only source coverage from extraction rather than resolver subject coverage', async () => {
+    const f = await stagedFixture();
+    f.gpt.extractReportIdentity.mockResolvedValue({
+      ...f.extracted,
+      subjects: [],
+      contextLabels: [{ kind: 'server', text: 'Example', sourceRefs: [f.ref] }],
+    });
+    f.candidates.resolveIdentity.mockResolvedValue({
+      ...f.resolved,
+      kind: 'admin_review',
+      reason: 'no_match',
+      candidates: [],
+      includedEvidenceIds: [],
+    });
+    expect(
+      await f.agent.analyze({
+        claim: f.claim,
+        signal: new AbortController().signal,
+        reserveModelAttempt: f.reserve,
+      })
+    ).toMatchObject({ includedEvidenceIds: ['evidence-1'], excludedEvidenceIds: [] });
+  });
+
+  it('does not dispatch after cancellation during reservation', async () => {
+    const f = await stagedFixture();
+    const controller = new AbortController();
+    f.reserve.mockImplementation(async () => {
+      controller.abort();
+      return true;
+    });
+    await expect(
+      f.agent.analyze({ claim: f.claim, signal: controller.signal, reserveModelAttempt: f.reserve })
+    ).rejects.toBeDefined();
+    expect(f.gpt.extractReportIdentity).not.toHaveBeenCalled();
+  });
+
+  it('applies the configured image allowance across original messages and reports exclusions', async () => {
+    const f = await stagedFixture();
+    const messages: Message[] = [];
+    for (const index of [1, 2]) {
+      const id = `image-message-${index}`;
+      const attachmentId = `1234567890123456${index}`;
+      const message = buildMessage({
+        id,
+        content: '',
+        createdTimestamp: 1,
+        editedTimestamp: null,
+        guildId: 'guild-1',
+        attachments: new Collection([
+          [
+            attachmentId,
+            {
+              id: attachmentId,
+              name: 'synthetic.png',
+              contentType: 'image/png',
+              size: 100,
+              url: `https://cdn.discordapp.com/attachments/12345678901234567/${attachmentId}/synthetic.png`,
+            },
+          ],
+        ]),
+      });
+      await f.repository.recordEvidenceBatch(buildReportEvidenceBatch(message, f.intake, 'upsert'));
+      messages.push(message);
+    }
+    f.config.getServerConfig.mockResolvedValue({
+      settings: { report_intake_staged_enabled: true, report_ai_max_images: 1 },
+    });
+    f.fetchMessage.mockImplementation(async ({ message }: { message: string }) =>
+      [f.message, ...messages].find((item) => item.id === message)
+    );
+    const claim = (await f.repository.claimAnalysis(new Date(Date.now() + 75_000), 30_000))!;
+    f.gpt.extractReportIdentity.mockResolvedValue({
+      ...f.extracted,
+      includedEvidenceIds: ['evidence-1', 'evidence-2'],
+      excludedEvidenceIds: ['evidence-3'],
+    });
+    const result = await f.agent.analyze({
+      claim,
+      signal: new AbortController().signal,
+      reserveModelAttempt: f.reserve,
+    });
+    expect(
+      f.gpt.extractReportIdentity.mock.calls[0][0].sources.map(
+        (source: { content: { kind: string } }) => source.content.kind
+      )
+    ).toEqual(['text', 'image', 'unavailable']);
+    expect(result).toMatchObject({
+      kind: 'admin_review',
+      reason: 'evidence_over_budget',
+      includedEvidenceIds: ['evidence-1', 'evidence-2'],
+      excludedEvidenceIds: ['evidence-3'],
+    });
+  });
+
+  it('does not promote a negated bystander mention in prose to a target anchor', async () => {
+    const f = await stagedFixture('not the person to report <@12345678901234567>');
+    f.gpt.extractReportIdentity.mockResolvedValue({
+      ...f.extracted,
+      subjects: [{ ...f.subject, role: 'other', userIds: ['12345678901234567'] }],
+    });
+    f.candidates.resolveIdentity.mockResolvedValue({
+      ...f.resolved,
+      kind: 'admin_review',
+      reason: 'evidence_unavailable',
+      candidates: [],
+    });
+    const result = await f.agent.analyze({
+      claim: f.claim,
+      signal: new AbortController().signal,
+      reserveModelAttempt: f.reserve,
+    });
+    expect(result.kind).toBe('admin_review');
+    expect(f.gpt.extractReportIdentity.mock.calls[0][0].sources[0].anchors).toBeUndefined();
+    expect(f.candidates.resolveIdentity.mock.calls[0][0].subjects).toMatchObject([
+      { role: 'other' },
+    ]);
+  });
+  it('hands oversized text to moderators without dispatching a model request', async () => {
+    const f = await stagedFixture('x'.repeat(2001));
+    expect(
+      await f.agent.analyze({
+        claim: f.claim,
+        signal: new AbortController().signal,
+        reserveModelAttempt: f.reserve,
+      })
+    ).toMatchObject({
+      kind: 'admin_review',
+      reason: 'evidence_over_budget',
+      includedEvidenceIds: [],
+      excludedEvidenceIds: ['evidence-1'],
+    });
+    expect(f.reserve).not.toHaveBeenCalled();
+    expect(f.gpt.extractReportIdentity).not.toHaveBeenCalled();
   });
 });

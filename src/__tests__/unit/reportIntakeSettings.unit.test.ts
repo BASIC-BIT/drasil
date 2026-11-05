@@ -8,3 +8,10 @@ describe('reportIntakeSettings (unit)', () => {
     ).toBe('observed_alert');
   });
 });
+
+it('keeps the staged processor off unless explicitly enabled', () => {
+  expect(getReportIntakeSettings()).toMatchObject({ stagedEnabled: false });
+  expect(getReportIntakeSettings({ report_intake_staged_enabled: true })).toMatchObject({
+    stagedEnabled: true,
+  });
+});

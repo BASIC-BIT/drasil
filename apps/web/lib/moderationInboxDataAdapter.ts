@@ -1,3 +1,5 @@
+import { reportIntakeStatusLabel } from '@drasil/contracts';
+import { getAttentionCleanupSource, isIdentityReviewItem } from '@drasil/application';
 import {
   moderationInboxItemSchema,
   sortModerationInboxItems,
@@ -23,6 +25,7 @@ export interface ModerationInboxDataAdapter {
 }
 
 export interface ModerationQueueRow {
+  attention_cleanup_pending?: boolean;
   id: string;
   server_id: string;
   user_id: string;
@@ -48,6 +51,7 @@ export interface ModerationQueueRow {
   detection_reasons: string[] | null;
   detection_metadata: unknown;
   case_status: string | null;
+  report_target_user_id?: string | null;
   report_status: string | null;
   report_summary: string | null;
   report_metadata: unknown;
@@ -324,6 +328,8 @@ export function parseModerationQueueRow(
   row: ModerationQueueRow,
   now = new Date()
 ): ModerationInboxItem | null {
+  const cleanupSource = getAttentionCleanupSource(row);
+  if (cleanupSource) row = { ...row, ...cleanupSource };
   const kind = queueKindByType[row.item_type];
   if (!kind) {
     return null;
@@ -382,6 +388,8 @@ export function parseModerationQueueRow(
           ? `case:${row.verification_event_id}`
           : `queue:${row.id}`,
     sourceMetadata: {
+      identityReview: !row.attention_cleanup_pending && isIdentityReviewItem(row),
+      attentionCleanupPending: row.attention_cleanup_pending ?? false,
       subtype:
         row.item_type === 'quarantine_breach_attention'
           ? 'quarantine_breach'
@@ -413,11 +421,25 @@ export function parseModerationQueueRow(
     kind,
     sourceId,
     queueItemId: row.id,
-    subject: subjectFromQueueRow(row),
+    subject:
+      kind === 'report_attention'
+        ? {
+            userId: row.report_target_user_id ?? null,
+            displayLabel: row.report_target_user_id
+              ? `Target ${row.report_target_user_id}`
+              : 'Target not confirmed',
+            secondaryLabel: `Reporter ${row.user_id}`,
+            avatarUrl: null,
+          }
+        : subjectFromQueueRow(row),
     title: queueTitle(kind, row.item_type),
     summary,
     summarySource: resolveReportSummarySource(row.report_summary, row.report_metadata),
-    statusLabel: queueStatusLabel(kind, row),
+    statusLabel: row.attention_cleanup_pending
+      ? 'Acknowledged, cleanup pending'
+      : kind === 'report_attention' && row.report_status === 'needs_admin_confirmation'
+        ? reportIntakeStatusLabel(row.report_status, row.report_metadata)
+        : queueStatusLabel(kind, row),
     signalLabel: confidenceSignal(row.detection_confidence),
     createdAt: toIsoString(row.created_at),
     updatedAt,
@@ -454,6 +476,7 @@ export class PostgresModerationInboxDataAdapter implements ModerationInboxDataAd
            mqi.server_id,
            mqi.user_id,
            mqi.item_type,
+           mqi.attention_cleanup_pending,
            mqi.verification_event_id,
            mqi.detection_event_id,
            mqi.report_intake_id,
@@ -475,6 +498,7 @@ export class PostgresModerationInboxDataAdapter implements ModerationInboxDataAd
            ve.case_kind,
            sm.discord_member_pending_since,
            sm.discord_member_pending_last_checked_at,
+           ri.confirmed_target_user_id as report_target_user_id,
            ri.status as report_status,
            ri.summary as report_summary,
            ri.metadata as report_metadata,

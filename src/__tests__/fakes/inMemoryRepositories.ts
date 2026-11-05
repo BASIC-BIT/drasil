@@ -1,4 +1,17 @@
+import { getReportIntakeSettings } from '../../utils/reportIntakeSettings';
 import {
+  analysisClaimChange,
+  ANALYSIS_CLAIM_SCAN_LIMIT,
+  canAnalyze,
+  completeAnalysisChange,
+  presentationClaimChange,
+  completePresentationChange,
+  evidenceBatchChange,
+  ownsAnalysis,
+  reserveAnalysisChange,
+} from '../../repositories/reportIntakeProcessing';
+import {
+  type ReportAnalysisOutcome,
   materializeSetupStoredChange,
   setupStateMatches,
   parseSetupStoredRecord,
@@ -37,6 +50,10 @@ import {
   ModerationOutcome,
   ModerationOutcomeCreate,
   ModerationOutcomeType,
+  type ReportEvidenceBatch,
+  type ReportAnalysisClaim,
+  type ReportPresentationClaim,
+  type ReportPresentationResult,
   ReportIntake,
   ReportIntakeCreate,
   ReportIntakeEvidence,
@@ -159,6 +176,7 @@ const baseSettings: ServerSettings = {
   report_intake_agent_enabled: true,
   report_intake_agent_debounce_ms: 15_000,
   report_intake_agent_min_interval_ms: 60_000,
+  report_intake_staged_enabled: false,
   report_intake_confirmed_response_mode: 'observed_alert',
   [ROLE_QUARANTINE_MODE_SETTING_KEY]: DEFAULT_ROLE_QUARANTINE_MODE,
   [ROLE_QUARANTINE_EXEMPT_ROLE_IDS_SETTING_KEY]: [],
@@ -1568,10 +1586,139 @@ export class InMemoryVerificationEventRepository implements IVerificationEventRe
 }
 
 export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
+  constructor(private serverRepository?: IServerRepository) {}
+
   private intakes: ReportIntake[] = [];
   private evidence: ReportIntakeEvidence[] = [];
   private intakeIdCounter = 0;
   private evidenceIdCounter = 0;
+
+  async recordEvidenceBatch(
+    input: ReportEvidenceBatch
+  ): Promise<'recorded' | 'duplicate' | 'stale' | 'closed'> {
+    const intake = this.intakes.find((item) => item.id === input.intakeId);
+    if (!intake) return 'closed';
+    const server = await this.serverRepository?.findByGuildId(intake.server_id);
+    const result = evidenceBatchChange(intake, input, getReportIntakeSettings(server?.settings));
+    if (!result.change) return result.result;
+    if (input.operation === 'upsert' && result.appendEvidence)
+      for (const evidence of input.evidence)
+        this.evidence.push({
+          id: this.nextEvidenceId(),
+          intake_id: intake.id,
+          kind: evidence.kind,
+          source_message_id: input.sourceMessageId,
+          source_channel_id: input.sourceChannelId,
+          attachment_id: evidence.attachmentId ?? null,
+          content: evidence.content ?? null,
+          created_at: new Date(),
+          metadata: {
+            ...evidence.metadata,
+            sourceVersion: input.sourceVersion,
+            sourceFingerprint: input.sourceFingerprint,
+            sourceAuthorId: input.sourceAuthorId,
+          } as ReportIntakeEvidence['metadata'],
+        });
+    Object.assign(intake, result.change);
+    return result.result;
+  }
+  async claimPendingPresentation(
+    now: Date,
+    intakeId?: string
+  ): Promise<ReportPresentationClaim | null> {
+    for (const intake of this.intakes.values()) {
+      if (intakeId && intake.id !== intakeId) continue;
+      if (
+        intake.status === ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION &&
+        !(await this.stagedEnabled(intake.server_id))
+      )
+        continue;
+      const result = presentationClaimChange(intake, now);
+      if (!result) continue;
+      Object.assign(intake, result.change);
+      return result.claim;
+    }
+    return null;
+  }
+  async completePresentation(
+    claim: ReportPresentationClaim,
+    result: ReportPresentationResult
+  ): Promise<boolean> {
+    const intake = this.intakes.find((item) => item.id === claim.intake.id);
+    if (!intake) return false;
+    const change = completePresentationChange(intake, claim, result, new Date());
+    if (!change) return false;
+    Object.assign(intake, change);
+    return true;
+  }
+
+  async claimAnalysis(now: Date, leaseMs: number): Promise<ReportAnalysisClaim | null> {
+    const due = this.intakes.filter(
+      (intake) =>
+        canAnalyze(intake) &&
+        intake.analysis_due_at !== null &&
+        intake.analysis_due_at <= now &&
+        (intake.analysis_lease_until === null || intake.analysis_lease_until <= now) &&
+        (intake.evidence_revision > intake.analysis_revision ||
+          intake.status === ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION)
+    );
+    due.sort(
+      (a, b) =>
+        (a.analysis_due_at?.getTime() ?? Infinity) - (b.analysis_due_at?.getTime() ?? Infinity)
+    );
+    let scanned = 0;
+    for (const intake of due) {
+      if (!(await this.stagedEnabled(intake.server_id))) continue;
+      if (scanned++ >= ANALYSIS_CLAIM_SCAN_LIMIT) break;
+      const result = analysisClaimChange(intake, now, leaseMs);
+      if (result) {
+        Object.assign(intake, result.change);
+        if (result.claim) return structuredClone(result.claim);
+      }
+    }
+    return null;
+  }
+  async reserveModelAttempt(claim: ReportAnalysisClaim, now: Date): Promise<boolean> {
+    if (!(await this.stagedEnabled(claim.intake.server_id))) return false;
+    const intake = this.intakes.find((item) => item.id === claim.intake.id);
+    if (!intake) return false;
+    const change = reserveAnalysisChange(intake, claim, now);
+    if (!change) return false;
+    Object.assign(intake, change);
+    return true;
+  }
+  async renewAnalysisLease(
+    claim: ReportAnalysisClaim,
+    now: Date,
+    leaseMs: number
+  ): Promise<boolean> {
+    if (!Number.isFinite(leaseMs) || leaseMs <= 0)
+      throw new Error('Analysis lease must be positive');
+    if (!(await this.stagedEnabled(claim.intake.server_id))) return false;
+    const intake = this.intakes.find((item) => item.id === claim.intake.id);
+    if (!intake || !ownsAnalysis(intake, claim, now)) return false;
+    intake.analysis_lease_until = new Date(now.getTime() + leaseMs);
+    intake.updated_at = now;
+    return true;
+  }
+  async completeAnalysis(
+    claim: ReportAnalysisClaim,
+    outcome: ReportAnalysisOutcome,
+    now: Date
+  ): Promise<boolean> {
+    if (!(await this.stagedEnabled(claim.intake.server_id))) return false;
+    const intake = this.intakes.find((item) => item.id === claim.intake.id);
+    if (!intake) return false;
+    const change = completeAnalysisChange(intake, claim, outcome, now);
+    if (!change) return false;
+    Object.assign(intake, change);
+    return true;
+  }
+
+  private async stagedEnabled(serverId: string): Promise<boolean> {
+    const server = await this.serverRepository?.findByGuildId(serverId);
+    return getReportIntakeSettings(server?.settings).stagedEnabled;
+  }
 
   private nextIntakeId(): string {
     this.intakeIdCounter += 1;
@@ -1635,6 +1782,15 @@ export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
   async create(data: ReportIntakeCreate): Promise<ReportIntake> {
     const now = new Date();
     const intake: ReportIntake = {
+      evidence_revision: 0,
+      analysis_revision: 0,
+      analysis_due_at: null,
+      analysis_started_at: null,
+      analysis_deadline_at: null,
+      analysis_lease_until: null,
+      analysis_lease_token: null,
+      analysis_attempts: 0,
+      analysis_failure_code: null,
       id: this.nextIntakeId(),
       server_id: data.serverId,
       reporter_id: data.reporterId,
@@ -1682,6 +1838,8 @@ export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
       (item) =>
         item.server_id === serverId &&
         item.reporter_id === reporterId &&
+        !item.closed_at &&
+        !(item.metadata as Record<string, unknown> | null)?.thread_closed_at &&
         [
           ReportIntakeStatus.COLLECTING_EVIDENCE,
           ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION,
@@ -1708,6 +1866,16 @@ export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
           ? data.confirmedTargetUserId
           : existing.confirmed_target_user_id,
       closed_at: data.closedAt !== undefined ? data.closedAt : existing.closed_at,
+      analysis_due_at:
+        data.analysisDueAt !== undefined ? data.analysisDueAt : existing.analysis_due_at,
+      analysis_lease_token:
+        data.analysisLeaseToken !== undefined
+          ? data.analysisLeaseToken
+          : existing.analysis_lease_token,
+      analysis_lease_until:
+        data.analysisLeaseUntil !== undefined
+          ? data.analysisLeaseUntil
+          : existing.analysis_lease_until,
       metadata:
         data.metadata !== undefined
           ? (data.metadata as ReportIntake['metadata'])
@@ -1726,6 +1894,8 @@ export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
     if (
       !current ||
       current.status !== intake.status ||
+      current.evidence_revision !== intake.evidence_revision ||
+      !isDeepStrictEqual(current.closed_at, intake.closed_at) ||
       current.confirmed_target_user_id !== intake.confirmed_target_user_id ||
       !isDeepStrictEqual(current.metadata, intake.metadata)
     )
@@ -1738,13 +1908,18 @@ export class InMemoryReportIntakeRepository implements IReportIntakeRepository {
     data: {
       targetUserId: string;
       expectedMetadata: ReportIntake['metadata'];
+      expectedEvidenceRevision?: number;
+      expectedStatus?: ReportIntakeStatus;
       metadata: Record<string, unknown>;
     }
   ): Promise<ReportIntake | null> {
     const index = this.intakes.findIndex(
       (item) =>
         item.id === id &&
-        item.status === ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION &&
+        item.status === (data.expectedStatus ?? ReportIntakeStatus.NEEDS_REPORTER_CONFIRMATION) &&
+        item.evidence_revision === (data.expectedEvidenceRevision ?? 0) &&
+        !item.closed_at &&
+        !(item.metadata as Record<string, unknown> | null)?.report_ban_operation_id &&
         item.confirmed_target_user_id === null &&
         isDeepStrictEqual(item.metadata, data.expectedMetadata)
     );

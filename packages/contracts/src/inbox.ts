@@ -55,6 +55,8 @@ export const moderationInboxItemSchema = z.object({
   sourceId: z.string(),
   sourceMetadata: z
     .object({
+      identityReview: z.boolean().optional(),
+      attentionCleanupPending: z.boolean().optional(),
       subtype: z.enum(['support_reply', 'recovery_reply', 'quarantine_breach']).nullable(),
       caseId: z.string().nullable(),
       reportId: z.string().nullable(),

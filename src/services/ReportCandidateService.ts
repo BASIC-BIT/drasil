@@ -1,5 +1,20 @@
 import { Guild, GuildMember, Message, User } from 'discord.js';
-import { injectable } from 'inversify';
+import { injectable, inject } from 'inversify';
+import type {
+  ReportAnalysisOutcome,
+  ReportIdentityCandidate,
+  ReportSubjectClues,
+  ReportDirectoryCoverage,
+  ReportHandoffReason,
+} from '@drasil/application';
+import { TYPES } from '../di/symbols';
+import {
+  IReportMemberDirectory,
+  ReportMemberDirectory,
+  ReportDirectoryMember,
+  reportDirectoryMember,
+  awaitReportLookup,
+} from './ReportMemberDirectory';
 
 export interface DiscordMessageLink {
   guildId: string;
@@ -15,6 +30,7 @@ export interface CandidateSignalSummary {
 }
 
 export interface ReportCandidate {
+  matchedFields?: ReportIdentityCandidate['matchedFields'];
   candidateId: string;
   discordUserId: string;
   serverId: string;
@@ -36,7 +52,15 @@ interface MessageFetchChannel {
   };
 }
 
+export interface ResolveReportIdentityInput {
+  guild: Guild;
+  reporterId: string;
+  subjects: readonly ReportSubjectClues[];
+  signal: AbortSignal;
+}
+
 export interface IReportCandidateService {
+  resolveIdentity(input: ResolveReportIdentityInput): Promise<ReportAnalysisOutcome>;
   extractCandidateSignals(content: string): CandidateSignalSummary;
   resolvePlatformBackedCandidates(message: Message): Promise<ReportCandidate[]>;
   resolveCandidatesFromSignals(
@@ -49,12 +73,221 @@ export interface IReportCandidateService {
 
 const DISCORD_MESSAGE_LINK_PATTERN =
   /https?:\/\/(?:(?:canary|ptb)\.)?discord(?:app)?\.com\/channels\/(\d{17,20}|@me)\/(\d{17,20})\/(\d{17,20})/gi;
+const DISCORD_MEMBER_SEARCH_LIMIT = 1000;
 const DISCORD_MENTION_PATTERN = /<@!?(\d{17,20})>/g;
 const EXPLICIT_USER_ID_PATTERN = /\b(?:discord\s*)?(?:user\s*)?id[:#\s]+(\d{17,20})\b/gi;
 const STANDALONE_USER_ID_PATTERN = /\b\d{17,20}\b/g;
 
 @injectable()
 export class ReportCandidateService implements IReportCandidateService {
+  constructor(
+    @inject(TYPES.ReportMemberDirectory)
+    private directory: IReportMemberDirectory = new ReportMemberDirectory()
+  ) {}
+
+  async resolveIdentity({
+    guild,
+    reporterId,
+    subjects,
+    signal,
+  }: ResolveReportIdentityInput): Promise<ReportAnalysisOutcome> {
+    const candidates = new Map<string, ReportIdentityCandidate>();
+    const relevant = subjects.filter(
+      (subject) => subject.role === 'target' || subject.role === 'unknown'
+    );
+    const includedEvidenceIds = [
+      ...new Set(subjects.flatMap((subject) => subject.sourceRefs.map((ref) => ref.evidenceId))),
+    ];
+    const now = new Date().toISOString();
+    let coverage: ReportDirectoryCoverage = {
+      kind: 'partial',
+      reason: 'interrupted',
+      scannedAt: now,
+      expiresAt: now,
+      memberCount: 0,
+    };
+    const result = (reason: ReportHandoffReason): ReportAnalysisOutcome => ({
+      kind: 'admin_review',
+      reason,
+      candidates: [...candidates.values()],
+      coverage,
+      includedEvidenceIds,
+      excludedEvidenceIds: [],
+    });
+    let failure = false;
+    let conflict = false;
+    let unresolved = false;
+    let needsDirectory = false;
+    const anchors = new Map<string, Map<string, ReportIdentityCandidate['matchedFields']>>();
+    const add = (
+      member: ReportDirectoryMember,
+      subject: ReportSubjectClues,
+      fields: ReportIdentityCandidate['matchedFields']
+    ): void => {
+      if (member.id === reporterId || !fields.length) return;
+      const existing = candidates.get(member.id);
+      const association = {
+        subjectId: subject.subjectId,
+        sourceRefs: subject.sourceRefs,
+        matchedFields: fields,
+      };
+      if (existing) {
+        const match = existing.subjectMatches.find(
+          (match) => match.subjectId === subject.subjectId
+        );
+        if (match) match.matchedFields = [...new Set([...match.matchedFields, ...fields])];
+        else existing.subjectMatches.push(association);
+        existing.matchedFields = [...new Set([...existing.matchedFields, ...fields])];
+        existing.sourceRefs = [
+          ...new Map(
+            [...existing.sourceRefs, ...subject.sourceRefs].map((ref) => [JSON.stringify(ref), ref])
+          ).values(),
+        ];
+      } else
+        candidates.set(member.id, {
+          candidateId: `${guild.id}:${member.id}`,
+          discordUserId: member.id,
+          serverId: guild.id,
+          username: member.username,
+          globalName: member.globalName,
+          nickname: member.nickname,
+          displayName: member.displayName,
+          avatarUrl: null,
+          subjectMatches: [association],
+          sourceRefs: subject.sourceRefs,
+          matchedFields: fields,
+        });
+    };
+    try {
+      signal.throwIfAborted();
+      for (const subject of relevant) {
+        const ids = new Map<string, ReportIdentityCandidate['matchedFields']>();
+        for (const id of subject.userIds) ids.set(id, ['userId']);
+        for (const url of subject.messageLinks) {
+          const links = this.extractCandidateSignals(url).messageLinks;
+          const link = links.length === 1 && links[0].url === url ? links[0] : undefined;
+          if (!link || link.guildId !== guild.id) {
+            failure = true;
+            continue;
+          }
+          const channel = await awaitReportLookup(guild.channels.fetch(link.channelId), signal);
+          signal.throwIfAborted();
+          if (!hasMessageFetch(channel)) {
+            failure = true;
+            continue;
+          }
+          const message = await awaitReportLookup(channel.messages.fetch(link.messageId), signal);
+          signal.throwIfAborted();
+          ids.set(message.author.id, [
+            ...new Set([...(ids.get(message.author.id) ?? []), 'messageAuthor' as const]),
+          ]);
+        }
+        anchors.set(subject.subjectId, ids);
+        if (ids.size > 1) conflict = true;
+        if (!ids.size && (subject.usernames.length || subject.displayNames.length))
+          needsDirectory = true;
+        if (!ids.size && !subject.usernames.length && !subject.displayNames.length)
+          unresolved = true;
+        for (const [id, fields] of ids) {
+          if (!/^\d{17,20}$/.test(id)) {
+            failure = true;
+            continue;
+          }
+          const member = await awaitReportLookup(
+            guild.members.fetch({ user: id, force: true, cache: false }),
+            signal
+          );
+          signal.throwIfAborted();
+          if (member.user.bot || member.id === reporterId) {
+            unresolved = true;
+            continue;
+          }
+          const record = reportDirectoryMember(member);
+          add(record, subject, [...fields, ...matchingFields(record, subject)]);
+          if (!supportsAllNames(record, subject)) {
+            conflict = true;
+            needsDirectory = true;
+          }
+        }
+      }
+      if (needsDirectory) {
+        const snapshot = await this.directory.snapshot(guild, signal);
+        coverage = snapshot.coverage;
+        for (const subject of relevant) {
+          for (const member of snapshot.members)
+            add(member, subject, matchingFields(member, subject));
+        }
+      }
+      signal.throwIfAborted();
+      if (conflict) return result('conflicting_anchors');
+      if (
+        relevant.some(
+          (subject) =>
+            subject.role === 'unknown' ||
+            subject.readability !== 'clear' ||
+            subject.uncertainty.length
+        )
+      )
+        return result('uncertain_text');
+      if (failure) return result('lookup_failure');
+      if (needsDirectory && coverage.kind === 'unavailable') return result('lookup_failure');
+      if (needsDirectory && coverage.kind !== 'complete') return result('incomplete_coverage');
+      if (candidates.size > 1) return result('ambiguous');
+      const candidate = candidates.values().next().value;
+      if (unresolved || !relevant.length) return result('evidence_unavailable');
+      if (!candidate) return result(needsDirectory ? 'no_match' : 'lookup_failure');
+      const current = await awaitReportLookup(
+        guild.members.fetch({ user: candidate.discordUserId, force: true, cache: false }),
+        signal
+      );
+      signal.throwIfAborted();
+      if (current.user.bot || current.id === reporterId) return result('no_match');
+      const record = reportDirectoryMember(current);
+      for (const subject of relevant) {
+        const ids = anchors.get(subject.subjectId);
+        if (ids?.size && !ids.has(current.id)) return result('conflicting_anchors');
+        if (!ids?.size && !subject.usernames.length && !subject.displayNames.length)
+          return result('no_match');
+        if (!supportsAllNames(record, subject)) return result('no_match');
+        const reliedOnFields =
+          candidate.subjectMatches.find((match) => match.subjectId === subject.subjectId)
+            ?.matchedFields ?? [];
+        const currentFields = matchingFields(record, subject);
+        if (
+          reliedOnFields.some(
+            (field) =>
+              field !== 'userId' && field !== 'messageAuthor' && !currentFields.includes(field)
+          )
+        )
+          return result('no_match');
+      }
+      if (needsDirectory) {
+        // Check generation freshness again after the final REST revalidation.
+        const latest = await this.directory.snapshot(guild, signal);
+        if (latest.coverage.kind !== 'complete' || latest.coverage !== coverage)
+          return result('incomplete_coverage');
+      }
+      signal.throwIfAborted();
+      if (!needsDirectory) coverage = { kind: 'not_required', reason: 'validated_anchor' };
+      return {
+        kind: 'confirm',
+        candidate: {
+          ...candidate,
+          username: record.username,
+          globalName: record.globalName,
+          nickname: record.nickname,
+          displayName: record.displayName,
+          avatarUrl: current.displayAvatarURL(),
+        },
+        coverage,
+        includedEvidenceIds,
+        excludedEvidenceIds: [],
+      };
+    } catch {
+      return result(signal.aborted ? 'incomplete_coverage' : 'lookup_failure');
+    }
+  }
+
   extractCandidateSignals(content: string): CandidateSignalSummary {
     const mentions = new Set<string>();
     const explicitUserIds = new Set<string>();
@@ -152,7 +385,7 @@ export class ReportCandidateService implements IReportCandidateService {
     }
 
     const fetchedMembers = await guild.members
-      .fetch({ query: searchTerm, limit })
+      .search({ query: searchTerm.trim(), limit: DISCORD_MEMBER_SEARCH_LIMIT })
       .catch((error) => {
         console.warn(`Failed to search report candidate members in guild ${guild.id}:`, error);
         return null;
@@ -164,6 +397,7 @@ export class ReportCandidateService implements IReportCandidateService {
 
     return [...fetchedMembers.values()]
       .filter((member) => this.memberMatchesName(member, normalizedSearchTerm))
+      .slice(0, limit)
       .map((member) => ({
         ...this.buildCandidate(member, 'current-server name match'),
         confidence: 0.55,
@@ -247,4 +481,64 @@ function hasMessageFetch(channel: unknown): channel is MessageFetchChannel {
 
 function normalize(value: string | null | undefined): string {
   return value?.trim().toLowerCase() ?? '';
+}
+
+const NAME_FIELDS = ['username', 'globalName', 'nickname', 'displayName'] as const;
+function normalizedName(value: string | null): string {
+  return value?.normalize('NFC').trim().replace(/\s+/gu, ' ').toLowerCase() ?? '';
+}
+function matchingFields(
+  member: ReportDirectoryMember,
+  subject: ReportSubjectClues
+): ReportIdentityCandidate['matchedFields'] {
+  const fields: ReportIdentityCandidate['matchedFields'] = [];
+  if (
+    subject.usernames.some(
+      (name) => normalizedName(name) && normalizedName(name) === normalizedName(member.username)
+    )
+  )
+    fields.push('username');
+  for (const field of NAME_FIELDS) {
+    if (
+      subject.displayNames.some(
+        (name) => normalizedName(name) && normalizedName(name) === normalizedName(member[field])
+      )
+    )
+      fields.push(field);
+  }
+  return [...new Set(fields)];
+}
+function supportsAllNames(member: ReportDirectoryMember, subject: ReportSubjectClues): boolean {
+  return (
+    subject.usernames.every(
+      (name) =>
+        Boolean(normalizedName(name)) && normalizedName(name) === normalizedName(member.username)
+    ) &&
+    subject.displayNames.every(
+      (name) =>
+        Boolean(normalizedName(name)) &&
+        NAME_FIELDS.some((field) => normalizedName(name) === normalizedName(member[field]))
+    )
+  );
+}
+
+export function reportCandidateStillMatches(
+  candidate: ReportIdentityCandidate,
+  member: ReportDirectoryMember
+): boolean {
+  if (candidate.discordUserId !== member.id) return false;
+  const fields = new Set([
+    ...candidate.matchedFields,
+    ...candidate.subjectMatches.flatMap((match) => match.matchedFields),
+  ]);
+  return (
+    fields.size > 0 &&
+    [...fields].every(
+      (field) =>
+        field === 'userId' ||
+        field === 'messageAuthor' ||
+        (Boolean(normalizedName(candidate[field])) &&
+          normalizedName(candidate[field]) === normalizedName(member[field]))
+    )
+  );
 }

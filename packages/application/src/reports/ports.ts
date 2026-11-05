@@ -26,10 +26,14 @@ export interface ReportIntakeState {
   threadId: string | null;
   status: string;
   confirmedTargetUserId: string | null;
+  submission?: import('./intakeState').ReportSubmissionProgress | null;
   promptMessageId: string | null;
   promptToken: string | null;
   candidateIds: readonly string[];
   claimed: boolean;
+  evidenceRevision: number;
+  presentationRevision: number | null;
+  staged: boolean;
 }
 export interface ReportAttachment {
   id?: string;
@@ -82,7 +86,8 @@ export interface ReportDependencies {
     close(
       context: ActionContext,
       intake: ReportIntakeState,
-      staff: boolean
+      staff: boolean,
+      command: Extract<ReportCommand, { kind: 'close_report_intake' }>
     ): Promise<ReportCloseResult>;
     markSubmitted(context: ActionContext, intake: ReportIntakeState): Promise<boolean>;
   };

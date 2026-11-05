@@ -16,6 +16,23 @@ export function prepareReportClient(client: any, interaction: any): void {
   } else if (!oldGuildFetch) {
     client.guilds = { fetch: jest.fn() };
   }
+  const guildFetch = client.guilds.fetch;
+  client.guilds.fetch = jest.fn(async (input: string | { guild: string }) => {
+    const guild = await guildFetch(input);
+    if (guild) {
+      guild.roles ??= { fetch: jest.fn().mockResolvedValue(undefined) };
+      guild.roles.fetch ??= jest.fn().mockResolvedValue(undefined);
+      const memberFetch = guild.members?.fetch;
+      if (memberFetch && !memberFetch.acceptsFreshOptions) {
+        const wrapped = jest.fn((user: string | { user: string }) =>
+          memberFetch(typeof user === 'string' ? user : user.user)
+        );
+        Object.assign(wrapped, { acceptsFreshOptions: true });
+        guild.members.fetch = wrapped;
+      }
+    }
+    return guild;
+  });
   const oldUserFetch = client.users?.fetch;
   client.users ??= {};
   client.users.fetch = jest.fn(async (id: string) =>

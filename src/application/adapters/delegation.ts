@@ -146,7 +146,9 @@ export function createBotDelegatedRuntime(
       }
       if (
         execution.command.kind === 'confirm_intake_candidate' ||
-        execution.command.kind === 'reject_intake_candidates'
+        execution.command.kind === 'reject_intake_candidates' ||
+        (execution.command.kind === 'close_report_intake' &&
+          execution.command.closeMode?.kind === 'resolve_review')
       ) {
         if (p.kind !== 'intake_prompt')
           throw new ActionDeniedError('report_preconditions_required');

@@ -1,4 +1,10 @@
 import { z } from 'zod';
+import {
+  reportAnalysisMetadataSchema,
+  reportHandoffReasonSchema,
+  reportIdentityCandidateSchema,
+  type ReportHandoff,
+} from '@drasil/application/report-analysis';
 
 export const reportQueueStatusSchema = z.enum([
   'submitted',
@@ -55,7 +61,62 @@ export const reportEvidenceAttachmentSchema = z.object({
   size: z.number().int().nonnegative().nullable(),
 });
 
+export const reportEvidenceSourceSchema = z.object({
+  sourceVersion: z.number().int().nonnegative().nullable(),
+  currentSourceVersion: z.number().int().nonnegative().nullable(),
+  versionState: z.enum(['current', 'superseded', 'unknown']),
+  sourceState: z.enum(['available', 'deleted', 'unavailable', 'unknown']),
+  analysisState: z.enum(['analyzed', 'excluded', 'not_analyzed', 'unknown']),
+});
+export type ReportEvidenceSourceState = z.infer<typeof reportEvidenceSourceSchema>;
+/** Project only bounded source facts, never the source map, author IDs or reservations. */
+export function projectReportEvidenceSource(input: {
+  reportMetadata: unknown;
+  evidenceId: string;
+  sourceMessageId: string | null;
+  evidenceMetadata: unknown;
+}): ReportEvidenceSourceState {
+  const root = z.record(z.string(), z.unknown()).safeParse(input.reportMetadata);
+  const parsed = reportAnalysisMetadataSchema.safeParse(root.success ? root.data.analysis : null);
+  const version = z
+    .object({ sourceVersion: z.number().int().nonnegative() })
+    .safeParse(input.evidenceMetadata);
+  const sourceVersion = version.success ? version.data.sourceVersion : null;
+  const analysis = parsed.success ? parsed.data : null;
+  const source =
+    analysis &&
+    input.sourceMessageId &&
+    Object.prototype.hasOwnProperty.call(analysis.sources, input.sourceMessageId)
+      ? analysis.sources[input.sourceMessageId]
+      : null;
+  return {
+    sourceVersion,
+    currentSourceVersion: source?.sourceVersion ?? null,
+    versionState:
+      source && sourceVersion !== null
+        ? sourceVersion === source.sourceVersion
+          ? 'current'
+          : sourceVersion < source.sourceVersion
+            ? 'superseded'
+            : 'unknown'
+        : 'unknown',
+    sourceState: source
+      ? source.operation === 'delete'
+        ? 'deleted'
+        : source.availability
+      : 'unknown',
+    analysisState: !analysis
+      ? 'unknown'
+      : analysis.outcome?.includedEvidenceIds.includes(input.evidenceId)
+        ? 'analyzed'
+        : analysis.outcome?.excludedEvidenceIds.includes(input.evidenceId)
+          ? 'excluded'
+          : 'not_analyzed',
+  };
+}
+
 export const reportEvidenceItemSchema = z.object({
+  source: reportEvidenceSourceSchema.optional(),
   id: z.string(),
   kind: reportEvidenceKindSchema,
   content: z.string().nullable(),
@@ -64,7 +125,118 @@ export const reportEvidenceItemSchema = z.object({
   attachment: reportEvidenceAttachmentSchema.nullable(),
 });
 
+const REVIEW_CANDIDATE_LIMIT = 5;
+const safeReviewCandidateSchema = reportIdentityCandidateSchema.omit({ avatarUrl: true });
+export const reporterIdentityReviewSchema = z.object({
+  phase: z.enum(['pending', 'delivered', 'acknowledged', 'resolved']),
+  delivery: z.enum(['pending', 'delivered', 'unknown']),
+  receipt: z.enum(['pending', 'sent', 'unknown']),
+  deliveredAt: z.iso.datetime().nullable(),
+  acknowledgedAt: z.iso.datetime().nullable(),
+  resolvedAt: z.iso.datetime().nullable(),
+});
+export const reportIdentityReviewSchema = reporterIdentityReviewSchema.extend({
+  reason: reportHandoffReasonSchema.nullable(),
+  evidenceRevision: z.number().int().nonnegative().nullable(),
+  candidateCount: z.number().int().nonnegative().nullable(),
+  candidates: z.array(safeReviewCandidateSchema).max(REVIEW_CANDIDATE_LIMIT),
+  coverageKind: z.enum(['not_required', 'complete', 'partial', 'unavailable']).nullable(),
+  acknowledgedBy: z.string().nullable(),
+  resolvedBy: z.string().nullable(),
+});
+export type ReportIdentityReview = z.infer<typeof reportIdentityReviewSchema>;
+export type ReporterIdentityReview = z.infer<typeof reporterIdentityReviewSchema>;
+
+/** Only validated analysis may contribute identity or delivery facts. */
+export function projectReportIdentityReview(input: {
+  status: string;
+  metadata: unknown;
+  evidenceRevision?: unknown;
+}): ReportIdentityReview | null {
+  const root = z.record(z.string(), z.unknown()).safeParse(input.metadata);
+  const parsed = reportAnalysisMetadataSchema.safeParse(root.success ? root.data.analysis : null);
+  const analysis = parsed.success ? parsed.data : null;
+  const handoff = analysis?.handoff;
+  const review = handoff && handoff.state !== 'none' ? handoff : null;
+  if (!review && input.status !== 'needs_admin_confirmation') return null;
+  const candidates =
+    analysis?.outcome?.kind === 'admin_review'
+      ? analysis.outcome.candidates
+      : analysis?.outcome?.kind === 'confirm'
+        ? [analysis.outcome.candidate]
+        : null;
+  return reportIdentityReviewSchema.parse({
+    ...reviewHandoffFacts(review),
+    evidenceRevision: z.number().int().nonnegative().safeParse(input.evidenceRevision).success
+      ? input.evidenceRevision
+      : null,
+    candidateCount: candidates?.length ?? null,
+    candidates: (candidates ?? [])
+      .slice(0, REVIEW_CANDIDATE_LIMIT)
+      .map((candidate) => safeReviewCandidateSchema.parse(candidate)),
+    coverageKind: analysis?.coverage?.kind ?? null,
+  });
+}
+type SavedReportHandoff = Exclude<ReportHandoff, { state: 'none' }>;
+function reviewHandoffFacts(
+  review: SavedReportHandoff | null
+): Omit<
+  ReportIdentityReview,
+  'evidenceRevision' | 'candidateCount' | 'candidates' | 'coverageKind'
+> {
+  if (!review)
+    return {
+      phase: 'pending',
+      reason: null,
+      delivery: 'unknown',
+      receipt: 'unknown',
+      deliveredAt: null,
+      acknowledgedAt: null,
+      acknowledgedBy: null,
+      resolvedAt: null,
+      resolvedBy: null,
+    };
+  const delivered =
+    review.state !== 'pending' &&
+    'messageId' in review &&
+    typeof review.messageId === 'string' &&
+    typeof review.channelId === 'string';
+  const acknowledged = review.state === 'acknowledged' || review.state === 'resolved';
+  return {
+    phase: review.state,
+    reason: review.reason,
+    delivery: delivered ? 'delivered' : review.state === 'pending' ? 'pending' : 'unknown',
+    receipt: review.receipt,
+    // The persisted handoff records delivery IDs but no delivery timestamp.
+    deliveredAt: null,
+    acknowledgedAt: acknowledged ? (review.acknowledgedAt ?? null) : null,
+    acknowledgedBy: acknowledged ? (review.acknowledgedBy ?? null) : null,
+    resolvedAt: review.state === 'resolved' ? review.resolvedAt : null,
+    resolvedBy: review.state === 'resolved' ? review.resolvedBy : null,
+  };
+}
+export function projectReporterIdentityReview(
+  input: Parameters<typeof projectReportIdentityReview>[0]
+): ReporterIdentityReview | null {
+  const review = projectReportIdentityReview(input);
+  return review ? reporterIdentityReviewSchema.parse(review) : null;
+}
+export function reportIntakeStatusLabel(status: string, metadata?: unknown): string {
+  if (status === 'needs_admin_confirmation') return 'Needs admin review';
+  if (status === 'closed_by_reporter') {
+    const closure = z
+      .object({ closed_by_staff: z.boolean().optional(), closed_by: z.string().optional() })
+      .safeParse(metadata);
+    if (closure.success && closure.data.closed_by_staff === true) return 'Resolved by staff';
+    return closure.success && closure.data.closed_by ? 'Closed by reporter' : 'Closed';
+  }
+  return status.split('_').join(' ');
+}
+
 export const reportDetailSchema = z.object({
+  statusLabel: z.string().optional(),
+  identityReview: reportIdentityReviewSchema.nullable().optional(),
+  analysisFailureCode: z.literal('invalid_metadata').nullable().optional(),
   reporterDisplayName: z.string().nullable().optional(),
   targetDisplayName: z.string().nullable().default(null),
   id: z.string(),

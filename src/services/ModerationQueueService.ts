@@ -1,5 +1,13 @@
+import { formatReportIdentity } from '../utils/reportIdentityPresentation';
+import { buildReportIntakeAdminActionsCustomId } from '../utils/reportIntakeAdminActions';
+import { getCaseResponderSettings } from '../utils/caseResponderSettings';
+import { findAuthoredReportMessage } from '../utils/reportPresentationDiscord';
+import { IReportIntakeRepository } from '../repositories/ReportIntakeRepository';
+import { canPresent, presentationMetadata } from '../repositories/reportIntakeProcessing';
 import {
   ActionRowBuilder,
+  PermissionFlagsBits,
+  type Collection,
   ButtonBuilder,
   ButtonStyle,
   Client,
@@ -8,7 +16,7 @@ import {
   MessageCreateOptions,
   MessageEditOptions,
 } from 'discord.js';
-import { injectable, inject } from 'inversify';
+import { injectable, inject, optional } from 'inversify';
 import { IConfigService } from '../config/ConfigService';
 import { TYPES } from '../di/symbols';
 import { IDetectionEventsRepository } from '../repositories/DetectionEventsRepository';
@@ -24,13 +32,18 @@ import {
   ModerationQueueItemType,
   ReportIntake,
   ServerMember,
+  Server,
   VerificationEvent,
   VerificationStatus,
 } from '../repositories/types';
 import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
 import { getModerationQueueSettings } from '../utils/moderationQueueSettings';
 import { NotificationPresentationBuilder } from './NotificationPresentationBuilder';
-import type { QueueAttentionItemRecord } from '@drasil/application';
+import {
+  projectReportIntakeState,
+  type ReportAnalysisOutcome,
+  type QueueAttentionItemRecord,
+} from '@drasil/application';
 
 const QUEUE_ACK_CUSTOM_ID_PREFIX = 'queue:ack';
 const DISCORD_EMBED_FIELD_MAX_LENGTH = 1024;
@@ -42,6 +55,7 @@ interface QueueTextChannel {
   send(options: MessageCreateOptions): Promise<Message>;
   messages: {
     fetch(messageId: string): Promise<Message>;
+    fetch(options: { limit: number; before?: string }): Promise<Collection<string, Message>>;
   };
 }
 
@@ -84,6 +98,11 @@ export interface IModerationQueueService {
     verificationEvent: VerificationEvent,
     message: Message
   ): Promise<ModerationQueueAttentionResult>;
+  upsertReportIdentityReview(input: {
+    intake: ReportIntake;
+    outcome: ReportAnalysisOutcome;
+    revision: number;
+  }): Promise<ModerationQueueAttentionResult>;
   recordReportThreadAttention(reportIntake: ReportIntake, message: Message): Promise<void>;
   deleteReportThreadAttention(reportIntakeId: string): Promise<void>;
   deleteQueueMessage(item: QueueAttentionItemRecord): Promise<boolean>;
@@ -92,6 +111,8 @@ export interface IModerationQueueService {
 export interface ModerationQueueAttentionResult {
   readonly delivered: boolean;
   readonly created: boolean;
+  readonly channelId?: string;
+  readonly messageId?: string;
 }
 
 @injectable()
@@ -110,7 +131,10 @@ export class ModerationQueueService implements IModerationQueueService {
     @inject(TYPES.DetectionEventsRepository)
     private detectionEventsRepository: IDetectionEventsRepository,
     @inject(TYPES.ModerationQueueRepository)
-    private moderationQueueRepository: IModerationQueueRepository
+    private moderationQueueRepository: IModerationQueueRepository,
+    @inject(TYPES.ReportIntakeRepository)
+    @optional()
+    private intakeRepository?: IReportIntakeRepository
   ) {}
 
   public static buildAcknowledgeCustomId(itemId: string): string {
@@ -466,6 +490,281 @@ export class ModerationQueueService implements IModerationQueueService {
     });
   }
 
+  public async upsertReportIdentityReview(input: {
+    intake: ReportIntake;
+    outcome: ReportAnalysisOutcome;
+    revision: number;
+  }): Promise<ModerationQueueAttentionResult> {
+    const unavailable = { delivered: false, created: false };
+    const lease = presentationMetadata(input.intake).analysis.presentation?.lease;
+    if (!lease) return unavailable;
+    const claim = { intake: input.intake, revision: input.revision, leaseToken: lease.token };
+    let current = await this.intakeRepository?.findById(input.intake.id);
+    if (
+      !current ||
+      !canPresent(current) ||
+      current.evidence_revision !== input.revision ||
+      current.status !== 'needs_admin_confirmation' ||
+      !this.currentReportPresentation(current, input.intake)
+    )
+      return unavailable;
+    const config = await this.configService.getServerConfig(current.server_id, {
+      forceRefresh: true,
+      failOnReadError: true,
+    });
+    const existing =
+      (await this.moderationQueueRepository.listByReportIntake(current.id))[0] ??
+      (current.thread_id
+        ? await this.moderationQueueRepository.findAttentionByThread(
+            ModerationQueueItemType.REPORT_THREAD_ATTENTION,
+            current.thread_id
+          )
+        : null);
+    const oldMetadata = this.toRecord(existing?.metadata);
+    const identity = this.toRecord(oldMetadata.identity_review);
+    const marker = `Report intake ${current.id}`;
+    const preferred =
+      typeof identity.delivery_channel_id === 'string'
+        ? identity.delivery_channel_id
+        : (existing?.queue_channel_id ?? getModerationQueueSettings(config.settings).channelId);
+    let channel = preferred ? await this.reportReviewChannel(preferred, config) : null;
+    // An uncertain send must be reconciled in its original destination before falling back.
+    if (!channel && identity.send_reserved === true && !existing?.queue_message_id)
+      return unavailable;
+    if (!channel && config.admin_channel_id)
+      channel = await this.reportReviewChannel(config.admin_channel_id, config);
+    const beforeSave = await this.intakeRepository?.findById(current.id);
+    if (
+      !beforeSave ||
+      !canPresent(beforeSave) ||
+      beforeSave.evidence_revision !== input.revision ||
+      !this.currentReportPresentation(beforeSave, input.intake)
+    )
+      return unavailable;
+    current = beforeSave;
+    const handoff = presentationMetadata(current).analysis.handoff;
+    let acknowledged = handoff.state === 'acknowledged';
+    const item = await this.moderationQueueRepository.upsertIdentityReview(
+      {
+        serverId: current.server_id,
+        userId: current.reporter_id,
+        itemType: ModerationQueueItemType.REPORT_THREAD_ATTENTION,
+        reportIntakeId: current.id,
+        sourceThreadId: current.thread_id,
+        lastSourceMessageId: existing?.last_source_message_id,
+        lastNotifiedAt: existing?.last_notified_at,
+        metadata: this.toJson({
+          ...oldMetadata,
+          identity_review: {
+            ...identity,
+            revision: input.revision,
+            marker,
+            reason:
+              handoff.state === 'none'
+                ? input.outcome.kind === 'admin_review'
+                  ? input.outcome.reason
+                  : 'ambiguous'
+                : handoff.reason,
+            outcome: input.outcome,
+            acknowledged,
+            ...(channel ? { delivery_channel_id: channel.id } : {}),
+          },
+        }),
+      },
+      claim
+    );
+    if (!item || !channel || !this.client.user) return unavailable;
+    let message: Message | null = null;
+    if (item.queue_message_id && item.queue_channel_id === channel.id) {
+      try {
+        message = await channel.messages.fetch(item.queue_message_id);
+      } catch (error) {
+        if (!this.isUnknownDiscordResource(error)) throw error;
+      }
+    }
+    if (!message && identity.send_reserved === true)
+      message = await findAuthoredReportMessage(
+        channel,
+        this.client.user.id,
+        marker,
+        item.created_at ?? new Date(0)
+      );
+    const fresh = await this.intakeRepository?.findById(current.id);
+    if (
+      !fresh ||
+      !canPresent(fresh) ||
+      fresh.evidence_revision !== input.revision ||
+      !this.currentReportPresentation(fresh, input.intake)
+    )
+      return unavailable;
+    acknowledged = presentationMetadata(fresh).analysis.handoff.state === 'acknowledged';
+    const embed = new EmbedBuilder()
+      .setTitle('Report needs admin review')
+      .setFooter({ text: marker })
+      .setDescription(
+        `Evidence saved. ${acknowledged ? 'Review acknowledged.' : 'Awaiting moderator review.'}`
+      )
+      .addFields(
+        {
+          name: 'Reason',
+          value: (handoff.state === 'none' ? 'ambiguous' : handoff.reason).replace(/_/g, ' '),
+        },
+        { name: 'Evidence revision', value: String(input.revision) },
+        ...(current.thread_id
+          ? [
+              {
+                name: 'Evidence',
+                value: `[Open report thread](https://discord.com/channels/${current.server_id}/${current.thread_id})`,
+              },
+            ]
+          : [])
+      );
+    const submission = projectReportIntakeState(fresh).submission;
+    if (submission)
+      embed.addFields({
+        name: 'Submission',
+        value: `${submission.state.replace('_', ' ')}. Use Admin Actions to reconcile the recorded outcome. The selected target remains fixed.`,
+      });
+    if (input.outcome.kind === 'admin_review') {
+      const candidates = input.outcome.candidates;
+      const coverage = input.outcome.coverage;
+      embed.addFields({
+        name: 'Identity lookup',
+        value: `${candidates.length} candidate${candidates.length === 1 ? '' : 's'}; ${coverage.kind.replace('_', ' ')} coverage${'memberCount' in coverage ? ` (${coverage.memberCount} members checked)` : ''}. Showing ${Math.min(5, candidates.length)}.`,
+      });
+      for (const [index, candidate] of candidates.slice(0, 5).entries())
+        embed.addFields({ name: `Candidate ${index + 1}`, value: formatReportIdentity(candidate) });
+    }
+    const controls = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(buildReportIntakeAdminActionsCustomId(current.id))
+        .setLabel('Admin Actions')
+        .setStyle(ButtonStyle.Primary)
+    );
+    if (!acknowledged)
+      controls.addComponents(
+        new ButtonBuilder()
+          .setCustomId(ModerationQueueService.buildAcknowledgeCustomId(item.id))
+          .setLabel('Acknowledge')
+          .setStyle(ButtonStyle.Secondary)
+      );
+    const components = [controls];
+    if (message)
+      message = await message.edit({ embeds: [embed], components, allowedMentions: { parse: [] } });
+    else {
+      const ping =
+        !existing?.queue_message_id &&
+        (handoff.state === 'none' || handoff.state === 'pending') &&
+        !acknowledged &&
+        identity.send_reserved !== true;
+      const reserved = await this.moderationQueueRepository.upsertIdentityReview(
+        {
+          serverId: current.server_id,
+          userId: current.reporter_id,
+          itemType: ModerationQueueItemType.REPORT_THREAD_ATTENTION,
+          reportIntakeId: current.id,
+          sourceThreadId: current.thread_id,
+          metadata: this.toJson({
+            ...this.toRecord(item.metadata),
+            identity_review: {
+              ...this.toRecord(this.toRecord(item.metadata).identity_review),
+              send_reserved: true,
+            },
+          }),
+        },
+        claim
+      );
+      if (!reserved) return unavailable;
+      const beforeSend = await this.intakeRepository?.findById(current.id);
+      if (
+        !beforeSend ||
+        !canPresent(beforeSend) ||
+        beforeSend.evidence_revision !== input.revision ||
+        !this.currentReportPresentation(beforeSend, input.intake)
+      )
+        return unavailable;
+      message = await channel.send({
+        embeds: [embed],
+        components,
+        content: ping ? this.formatAttentionPing(config.admin_notification_role_id) : undefined,
+        allowedMentions: {
+          parse: [],
+          roles:
+            ping && config.admin_notification_role_id ? [config.admin_notification_role_id] : [],
+        },
+      });
+    }
+    const saved = await this.moderationQueueRepository.updateDiscordMessage(
+      item.id,
+      message.channelId,
+      message.id,
+      { intake: input.intake, revision: input.revision, leaseToken: lease.token }
+    );
+    if (!saved) throw new Error('Report review receipt was not saved');
+    return {
+      delivered: true,
+      created: !existing,
+      channelId: message.channelId,
+      messageId: message.id,
+    };
+  }
+
+  private currentReportPresentation(current: ReportIntake, expected: ReportIntake): boolean {
+    const analysis = presentationMetadata(current).analysis;
+    const lease = presentationMetadata(expected).analysis.presentation?.lease;
+    return (
+      analysis.handoff.state !== 'resolved' &&
+      (!lease ||
+        (analysis.presentation?.lease?.token === lease.token && new Date(lease.until) > new Date()))
+    );
+  }
+
+  private async reportReviewChannel(id: string, config: Server): Promise<QueueTextChannel | null> {
+    const channel = await this.client.channels.fetch(id).catch(() => null);
+    if (
+      !channel ||
+      !('guildId' in channel) ||
+      channel.guildId !== config.guild_id ||
+      !('permissionsFor' in channel) ||
+      !('send' in channel) ||
+      !('messages' in channel) ||
+      !this.client.user
+    )
+      return null;
+    const permissions = channel.permissionsFor(this.client.user);
+    if (
+      !permissions?.has([
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ReadMessageHistory,
+        PermissionFlagsBits.EmbedLinks,
+      ])
+    )
+      return null;
+    const roles = await channel.guild.roles.fetch().catch(() => null);
+    if (!roles) return null;
+    const explicitIds = new Set([
+      ...getCaseResponderSettings(config.settings).roleIds,
+      ...(config.admin_notification_role_id ? [config.admin_notification_role_id] : []),
+    ]);
+    const audience = explicitIds.size
+      ? [...explicitIds].map((id) => roles.get(id))
+      : [...roles.values()].filter(
+          (role) =>
+            role.permissions.has(PermissionFlagsBits.ManageGuild) ||
+            role.permissions.has(PermissionFlagsBits.ModerateMembers)
+        );
+    const canRead = (role: (typeof audience)[number]): boolean =>
+      !!role &&
+      !!channel
+        .permissionsFor(role)
+        ?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory]);
+    // Explicit audiences must all be reachable; otherwise require one authorized staff role.
+    if (!audience.length || !(explicitIds.size ? audience.every(canRead) : audience.some(canRead)))
+      return null;
+    return channel as QueueTextChannel;
+  }
+
   public async deleteReportThreadAttention(reportIntakeId: string): Promise<void> {
     const items = await this.moderationQueueRepository.listByReportIntake(reportIntakeId);
     await this.deleteQueueItems(items);
@@ -568,9 +867,12 @@ export class ModerationQueueService implements IModerationQueueService {
             input.itemType,
             input.sourceThreadId
           );
-    if (existing?.last_source_message_id === input.message.id) {
+    if (
+      this.toRecord(existing?.metadata).identity_review ||
+      existing?.last_source_message_id === input.message.id
+    ) {
       return {
-        delivered: Boolean(existing.queue_channel_id && existing.queue_message_id),
+        delivered: Boolean(existing?.queue_channel_id && existing?.queue_message_id),
         created: false,
       };
     }

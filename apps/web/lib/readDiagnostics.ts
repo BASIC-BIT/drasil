@@ -135,3 +135,8 @@ export function recordReadDependency(
     // Diagnostics must never change authorization or query results.
   }
 }
+
+/** Processing failure, separate from read transport failures and raw quarantined data. */
+export function reportAnalysisFailure(value: unknown): 'invalid_metadata' | null {
+  return value === 'invalid_metadata' ? value : null;
+}

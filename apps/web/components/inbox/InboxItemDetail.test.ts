@@ -245,3 +245,102 @@ it.each([
     expect(html).toMatch(/disabled=""[^>]*>Ban member/);
   } else expect(html).not.toContain('Request claimed-ban');
 });
+
+it('shows acknowledged review without claiming notification or exposing enforcement', () => {
+  const report = fixtureReportDetails[0];
+  const item = {
+    ...reportQueueItemToInboxItem(fixtureReportQueueItems[0]),
+    kind: 'report_attention',
+    subject: {
+      userId: null,
+      displayLabel: 'Target not confirmed',
+      secondaryLabel: null,
+      avatarUrl: null,
+    },
+    statusLabel: 'Needs admin review',
+    allowedActions: [],
+  };
+  const model = workspaceItemDetailSchema.parse({
+    kind: 'report_attention',
+    item,
+    policy: {
+      allowedActions: [],
+      canQueueCaseActions: false,
+      canOpenReportCases: false,
+      canManageCleanup: false,
+      kickReasonRequired: true,
+      banReasonRequired: true,
+    },
+    intake: {
+      ...report,
+      targetUserId: null,
+      status: 'needs_admin_confirmation',
+      allowedActions: [],
+      identityReview: {
+        phase: 'acknowledged',
+        delivery: 'unknown',
+        receipt: 'sent',
+        deliveredAt: null,
+        acknowledgedAt: '2026-11-03T00:00:00.000Z',
+        acknowledgedBy: 'staff',
+        resolvedAt: null,
+        resolvedBy: null,
+        reason: 'no_match',
+        evidenceRevision: 2,
+        candidateCount: null,
+        candidates: [],
+        coverageKind: null,
+      },
+    },
+    reply: { kind: 'unavailable', sourceUrl: null },
+  });
+  const submit = vi.fn();
+  const html = renderToStaticMarkup(
+    createElement(InboxItemDetail, {
+      detail: model,
+      loadedAt: '2026-11-03T00:00:00Z',
+      returnHref: '/inbox',
+      trackedRequestId: null,
+      onTrackedRequest() {},
+      actions: {
+        caseAction: submit,
+        reportAction: submit,
+        observedAction: submit,
+        attentionAction: submit,
+      },
+    })
+  );
+  expect(html).toContain('Needs admin review');
+  expect(html).toContain('Acknowledged, review remains open');
+  expect(html).toContain('Notification delivery unknown');
+  expect(html).not.toMatch(/Ban member|Open case|Report submitted/);
+});
+
+import { ReportIdentityReview } from './ReportIdentityReview';
+import { projectReportIdentityReview } from '@drasil/contracts';
+it('renders a completed identity handoff as review resolved without claiming staff report closure', () => {
+  const review = projectReportIdentityReview({
+    status: 'submitted',
+    metadata: {
+      analysis: {
+        schemaVersion: 1,
+        sources: {},
+        requestReservations: [],
+        outcome: null,
+        coverage: null,
+        handoff: {
+          state: 'resolved',
+          reason: 'no_match',
+          receipt: 'sent',
+          attempts: 1,
+          nextDueAt: null,
+          resolvedBy: 'staff',
+          resolvedAt: '2026-11-03T00:00:00.000Z',
+        },
+      },
+    },
+  });
+  const html = renderToStaticMarkup(createElement(ReportIdentityReview, { review }));
+  expect(html).toContain('<h2>Review resolved</h2>');
+  expect(html).not.toContain('Resolved by staff');
+});

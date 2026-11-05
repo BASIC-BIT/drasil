@@ -1,3 +1,4 @@
+import { handleSlashCommandConfirmationButton } from '../../utils/slashCommandConfirmations';
 import { buildReportActions, prepareReportClient } from './reportApplicationTestHarness';
 import {
   ButtonInteraction,
@@ -23,6 +24,7 @@ import { ISecurityActionService } from '../../services/SecurityActionService';
 import { IThreadManager } from '../../services/ThreadManager';
 import {
   buildReportIntakeAdminActionsCustomId,
+  buildReportIntakeReviewCustomId,
   buildReportIntakeAdminCloseCustomId,
   buildReportIntakeAdminConfirmCloseCustomId,
   buildReportIntakeThreadCloseCustomId,
@@ -114,6 +116,15 @@ const buildModalInteraction = (
   }) as unknown as ModalSubmitInteraction;
 
 const buildReportIntake = (overrides: Partial<ReportIntake> = {}): ReportIntake => ({
+  evidence_revision: 0,
+  analysis_revision: 0,
+  analysis_due_at: null,
+  analysis_started_at: null,
+  analysis_deadline_at: null,
+  analysis_lease_until: null,
+  analysis_lease_token: null,
+  analysis_attempts: 0,
+  analysis_failure_code: null,
   id: 'intake-1',
   server_id: 'guild-1',
   reporter_id: 'reporter-1',
@@ -132,7 +143,44 @@ const buildReportIntake = (overrides: Partial<ReportIntake> = {}): ReportIntake 
   ...overrides,
 });
 
+const buildStaffReviewIntake = (): ReportIntake =>
+  buildReportIntake({
+    thread_id: 'thread-1',
+    status: ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION,
+    evidence_revision: 2,
+    metadata: {
+      admin_review_prompt_revision: 2,
+      admin_review_prompt_message_id: 'prompt-1',
+      analysis: {
+        schemaVersion: 1,
+        sources: {},
+        requestReservations: [],
+        outcome: {
+          kind: 'admin_review',
+          reason: 'no_match',
+          candidates: [],
+          coverage: { kind: 'unavailable', reason: 'transport' },
+          includedEvidenceIds: [],
+          excludedEvidenceIds: [],
+        },
+        coverage: null,
+        handoff: {
+          state: 'delivered',
+          reason: 'no_match',
+          attempts: 1,
+          nextDueAt: null,
+          receipt: 'sent',
+          messageId: 'prompt-1',
+          channelId: 'channel-1',
+        },
+      },
+    },
+  });
+
 const createReportIntakeService = (): jest.Mocked<IReportIntakeService> => ({
+  beginConfirmedSubmission: jest.fn().mockResolvedValue(true),
+  settleConfirmedSubmission: jest.fn().mockResolvedValue(true),
+  publishSavedConfirmation: jest.fn(),
   openIntakeFromThread: jest.fn().mockResolvedValue(buildReportIntake()),
   findOpenIntakeForReporter: jest.fn().mockResolvedValue(null),
   findIntakeById: jest.fn().mockResolvedValue(
@@ -142,6 +190,8 @@ const createReportIntakeService = (): jest.Mocked<IReportIntakeService> => ({
     })
   ),
   handleThreadMessage: jest.fn().mockResolvedValue(false),
+  handleThreadMessageUpdate: jest.fn().mockResolvedValue(false),
+  handleThreadMessageDelete: jest.fn().mockResolvedValue(false),
   confirmCandidate: jest.fn().mockResolvedValue({ confirmed: false, message: '' }),
   rejectCandidates: jest.fn().mockResolvedValue({ rejected: false, message: '' }),
   closeIntakeForThread: jest.fn().mockResolvedValue({ closed: false, message: '' }),
@@ -172,6 +222,7 @@ describe('ReportInteractionHandler (unit)', () => {
     securityActionService = {
       handleUserReport: jest.fn().mockResolvedValue(true),
       handleConfirmedReportIntake: jest.fn().mockResolvedValue(true),
+      hasConfirmedReportIntakeReceipt: jest.fn().mockResolvedValue(false),
       handleMessageReport: jest.fn().mockResolvedValue(true),
     } as unknown as jest.Mocked<ISecurityActionService>;
     configService = {
@@ -811,6 +862,107 @@ describe('ReportInteractionHandler (unit)', () => {
         'Opened a private report thread: https://discord.com/channels/report-thread-1\nAdd what happened there.',
     });
   });
+
+  it('offers distinct target confirmation and review resolution on the current staff artifact', async () => {
+    const member = { ...buildMember('guild-1', 'staff-1'), permissions: { has: () => true } };
+    (client.guilds.fetch as jest.Mock).mockResolvedValue({
+      id: 'guild-1',
+      roles: { fetch: jest.fn() },
+      members: { fetch: jest.fn().mockResolvedValue(member) },
+    });
+    const service = createReportIntakeService();
+    service.findIntakeById.mockResolvedValue(buildStaffReviewIntake());
+    configService.getAdminChannel.mockResolvedValue({ id: 'channel-1' } as never);
+    const handler = createHandler(service);
+    const interaction = buildInteraction(
+      buildReportIntakeAdminActionsCustomId('intake-1'),
+      'guild-1',
+      { id: 'staff-1' } as User
+    );
+    prepareReportClient(client, interaction);
+    await handler.handleReportIntakeAdminAction(interaction, interaction.customId);
+    const reply = (interaction.editReply as jest.Mock).mock.calls[0][0];
+    const labels = reply.components.flatMap((row: { components: { data: { label: string } }[] }) =>
+      row.components.map((button) => button.data.label)
+    );
+    expect(labels).toContain('Confirm target');
+    expect(labels).toContain('Resolve review');
+    expect(labels).toContain('Close Report');
+  });
+
+  it.each(['allowed', 'revoked role', 'changed evidence', 'left server', 'foreign guild'])(
+    'rechecks manual target confirmation after the modal: %s',
+    async (scenario) => {
+      const targetId = '123456789012345678';
+      let staff = true;
+      let targetPresent = true;
+      const staffMember = {
+        ...buildMember('guild-1', 'staff-1'),
+        permissions: { has: () => staff },
+        roles: { cache: new Map() },
+      };
+      const target = buildMember('guild-1', targetId);
+      const fetchMember = jest.fn(async (input: string | { user: string }) => {
+        const user = typeof input === 'string' ? input : input.user;
+        return user === 'staff-1'
+          ? staffMember
+          : user === targetId && targetPresent
+            ? target
+            : null;
+      });
+      (client.guilds.fetch as jest.Mock).mockResolvedValue({
+        id: 'guild-1',
+        roles: { fetch: jest.fn() },
+        members: { fetch: fetchMember },
+      });
+      const service = createReportIntakeService();
+      const intake = buildStaffReviewIntake();
+      service.findIntakeById.mockResolvedValue(intake);
+      service.confirmCandidate.mockResolvedValue({
+        confirmed: true,
+        message: 'Confirmed',
+        reporterId: intake.reporter_id,
+        reason: 'Synthetic evidence',
+      });
+      const handler = createHandler(service);
+      const modal = buildModalInteraction(
+        buildReportIntakeReviewCustomId('select_target', intake.id, 2, 'prompt-1'),
+        scenario === 'foreign guild' ? 'other-guild' : 'guild-1',
+        { id: 'staff-1' } as User,
+        () => targetId
+      );
+      Object.assign(modal, { channelId: 'channel-1', deferred: true });
+      prepareReportClient(client, modal);
+      await handler.handleReportIntakeReviewModal(modal);
+      expect(service.confirmCandidate).not.toHaveBeenCalled();
+      if (scenario === 'foreign guild') {
+        expect(modal.editReply).toHaveBeenCalledWith({
+          content: 'Use the latest moderator review message.',
+        });
+        return;
+      }
+      const preview = (modal.editReply as jest.Mock).mock.calls[0][0];
+      expect(preview.content).toContain(targetId);
+      const customId = preview.components[0].components[0].data.custom_id;
+      if (scenario === 'revoked role') staff = false;
+      if (scenario === 'changed evidence') intake.evidence_revision = 3;
+      if (scenario === 'left server') targetPresent = false;
+      const button = buildInteraction(customId, 'guild-1', { id: 'staff-1' } as User);
+      Object.assign(button, { id: 'confirm-manual' });
+      await handleSlashCommandConfirmationButton(button);
+      expect(service.confirmCandidate).toHaveBeenCalledTimes(scenario === 'allowed' ? 1 : 0);
+      if (scenario === 'allowed')
+        expect(service.confirmCandidate).toHaveBeenCalledWith(
+          expect.objectContaining({
+            targetUserId: targetId,
+            confirmedByStaff: true,
+            expectedEvidenceRevision: 2,
+            promptMessageId: 'prompt-1',
+          })
+        );
+      expect(fetchMember).toHaveBeenCalledWith(targetId);
+    }
+  );
 
   it('shows the report intake admin menu to staff from the report thread button', async () => {
     const staffMember = {

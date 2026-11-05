@@ -1,6 +1,23 @@
+import { processingMetadata } from '../repositories/reportIntakeProcessing';
+import { activeReportEvidence, buildReportEvidenceBatch } from '../utils/reportIntakeEvidence';
+import {
+  prepareReportEvidenceSource,
+  messageAttachmentsToReportMetadata,
+} from '../utils/reportAttachments';
+import { awaitReportLookup } from './ReportMemberDirectory';
+import {
+  projectReportIntakeState,
+  type ReportAnalysisOutcome,
+  type ReportEvidenceSource,
+  type ReportEvidenceRef,
+  type ReportSubjectClues,
+  type ReportHandoffReason,
+  type ReportIdentityExtraction,
+} from '@drasil/application';
+import type { ReportAnalysisClaim } from '../repositories/types';
 import { withObservation, recordObservation } from '../observability/langfuse';
 import { hashIdentifier } from '../observability/hash';
-import { Guild, Message } from 'discord.js';
+import { Client, Guild, Message } from 'discord.js';
 import { injectable, inject, optional } from 'inversify';
 import { IConfigService } from '../config/ConfigService';
 import { TYPES } from '../di/symbols';
@@ -17,14 +34,26 @@ import {
   selectEligibleReportImageAttachments,
 } from '../utils/reportAiSettings';
 import { getReportIntakeSettings } from '../utils/reportIntakeSettings';
-import type { IGPTService, ReportIntakeEvidenceExtraction } from './GPTService';
+import {
+  REPORT_IDENTITY_MAX_SOURCES,
+  REPORT_IDENTITY_TEXT_MAX_LENGTH,
+  type IGPTService,
+  type ReportIntakeEvidenceExtraction,
+} from './GPTService';
 import { IReportCandidateService, ReportCandidate } from './ReportCandidateService';
 import { IReportIntakeService } from './ReportIntakeService';
 
 const REPORT_INTAKE_AGENT_TEXT_MAX_LENGTH = 2000;
 const REPORT_INTAKE_AGENT_NAME_SEARCH_LIMIT = 5;
 
+export interface AnalyzeReportIntakeInput {
+  claim: ReportAnalysisClaim;
+  signal: AbortSignal;
+  reserveModelAttempt(): Promise<boolean>;
+}
+
 export interface IReportIntakeAgentService {
+  analyze(input: AnalyzeReportIntakeInput): Promise<ReportAnalysisOutcome>;
   scheduleAnalysisForThreadMessage(message: Message): void;
   runAnalysisForThreadMessage(message: Message): Promise<boolean>;
 }
@@ -39,8 +68,334 @@ export class ReportIntakeAgentService implements IReportIntakeAgentService {
     @inject(TYPES.ConfigService) private configService: IConfigService,
     @inject(TYPES.ReportCandidateService) private candidateService: IReportCandidateService,
     @inject(TYPES.ReportIntakeService) private reportIntakeService: IReportIntakeService,
-    @inject(TYPES.GPTService) @optional() private gptService?: IGPTService
+    @inject(TYPES.GPTService) @optional() private gptService?: IGPTService,
+    @inject(TYPES.DiscordClient) @optional() private client?: Client
   ) {}
+
+  public async analyze({
+    claim,
+    signal,
+    reserveModelAttempt,
+  }: AnalyzeReportIntakeInput): Promise<ReportAnalysisOutcome> {
+    signal.throwIfAborted();
+    const { intake } = claim;
+    const { analysis } = processingMetadata(intake);
+    const evidence = await this.reportIntakeRepository.listEvidence(intake.id);
+    signal.throwIfAborted();
+    const config = await this.configService.getServerConfig(intake.server_id, {
+      forceRefresh: true,
+      failOnReadError: true,
+    });
+    if (!getReportIntakeSettings(config.settings).stagedEnabled)
+      throw new Error('Staged analysis disabled');
+    const settings = getReportAiSettings(config.settings);
+    const budgetExcluded = new Set<string>();
+    const sources: ReportEvidenceSource[] = [];
+    const handoff = (reason: ReportHandoffReason): ReportAnalysisOutcome => ({
+      kind: 'admin_review',
+      reason,
+      candidates: [],
+      coverage: { kind: 'unavailable', reason: 'transport' },
+      includedEvidenceIds: [],
+      excludedEvidenceIds: sources.length
+        ? sources.map((source) => source.ref.evidenceId)
+        : activeReportEvidence(intake, evidence).map((row) => row.id),
+    });
+    if (!this.client) return handoff('lookup_failure');
+    signal.throwIfAborted();
+    let guild: Guild;
+    try {
+      guild = await awaitReportLookup(this.client.guilds.fetch(intake.server_id), signal);
+    } catch {
+      signal.throwIfAborted();
+      return handoff('lookup_failure');
+    }
+    signal.throwIfAborted();
+    if (guild.id !== intake.server_id) return handoff('lookup_failure');
+    let imagesLeft = settings.maxImages;
+    let unavailableSource = false;
+    for (const [messageId, source] of Object.entries(analysis.sources)) {
+      if (source.operation === 'delete') continue;
+      const rows = evidence.filter(
+        (row) =>
+          row.source_message_id === messageId &&
+          toRecord(row.metadata).sourceVersion === source.sourceVersion &&
+          toRecord(row.metadata).sourceFingerprint === source.sourceFingerprint
+      );
+      let message: Message | null = null;
+      if (source.availability === 'available' && source.sourceChannelId === intake.thread_id) {
+        try {
+          signal.throwIfAborted();
+          const channel = await awaitReportLookup(
+            guild.channels.fetch(source.sourceChannelId),
+            signal
+          );
+          signal.throwIfAborted();
+          if (
+            channel?.isThread() &&
+            channel.id === intake.thread_id &&
+            channel.guildId === intake.server_id
+          ) {
+            const current = await awaitReportLookup(
+              channel.messages.fetch({ message: messageId, force: true, cache: false }),
+              signal
+            );
+            signal.throwIfAborted();
+            if (
+              current.id === messageId &&
+              current.guildId === intake.server_id &&
+              current.channelId === source.sourceChannelId &&
+              current.author.id === source.sourceAuthorId
+            ) {
+              const batch = buildReportEvidenceBatch(current, intake, 'upsert');
+              if (
+                batch.sourceVersion === source.sourceVersion &&
+                batch.sourceFingerprint === source.sourceFingerprint
+              )
+                message = current;
+            }
+          }
+        } catch {
+          signal.throwIfAborted();
+        }
+      }
+      const selectedImages = new Set(
+        message
+          ? selectEligibleReportImageAttachments(messageAttachmentsToReportMetadata(message), {
+              ...settings,
+              maxImages: imagesLeft,
+            }).map((attachment) => attachment.id)
+          : []
+      );
+      imagesLeft -= selectedImages.size;
+      for (const row of rows) {
+        const ref: ReportEvidenceRef = {
+          evidenceId: row.id,
+          messageId,
+          sourceVersion: source.sourceVersion,
+          role: source.sourceAuthorId === intake.reporter_id ? 'reporter' : 'staff',
+          kind: row.kind === ReportIntakeEvidenceKind.SCREENSHOT ? 'image' : 'text',
+        };
+        if (!message) {
+          sources.push({ ref, content: { kind: 'unavailable', reason: 'evidence_unavailable' } });
+          continue;
+        }
+        const prepared = prepareReportEvidenceSource({
+          message,
+          ref,
+          settings,
+          attachmentId: row.attachment_id ?? undefined,
+        });
+        if (
+          prepared.content.kind === 'image' &&
+          !selectedImages.has(row.attachment_id ?? undefined)
+        )
+          prepared.content = { kind: 'unavailable', reason: 'excluded' };
+        if (
+          prepared.content.kind === 'unavailable' &&
+          prepared.content.reason === 'excluded' &&
+          settings.enabled &&
+          settings.analyzeImages &&
+          ref.kind === 'image'
+        )
+          budgetExcluded.add(ref.evidenceId);
+        if (prepared.content.kind === 'text') {
+          const text = prepared.content.text.trim();
+          const clues = this.candidateService.extractCandidateSignals(text);
+          const ids = [...new Set([...clues.mentions, ...clues.explicitUserIds])].filter(
+            (id) => id !== intake.reporter_id
+          );
+          const soleAnchor =
+            /^(?:<@!?\d{17,20}>|\d{17,20})$/u.test(text) ||
+            clues.messageLinks.some(
+              (link) => link.guildId === intake.server_id && link.url === text
+            );
+          if (soleAnchor && (ids.length || clues.messageLinks.length))
+            prepared.anchors = [
+              {
+                subjectId: `anchor:${row.id}`,
+                role: 'target',
+                readability: 'clear',
+                sourceRefs: [ref],
+                userIds: ids,
+                messageLinks: clues.messageLinks.map((link) => link.url),
+                usernames: [],
+                displayNames: [],
+                uncertainty: [],
+              },
+            ];
+        }
+        sources.push(prepared);
+      }
+      if (!rows.length) unavailableSource = true;
+    }
+    // Unversioned evidence cannot borrow authorization from a different saved source.
+    for (const row of evidence.filter(
+      (row) =>
+        !row.source_message_id ||
+        !Object.prototype.hasOwnProperty.call(analysis.sources, row.source_message_id)
+    ))
+      sources.push({
+        ref: {
+          evidenceId: row.id,
+          messageId: row.source_message_id ?? row.id,
+          sourceVersion: 0,
+          role: 'reporter',
+          kind: row.kind === ReportIntakeEvidenceKind.SCREENSHOT ? 'image' : 'text',
+        },
+        content: { kind: 'unavailable', reason: 'evidence_unavailable' },
+      });
+    signal.throwIfAborted();
+    if (
+      !sources.length ||
+      unavailableSource ||
+      sources.some(
+        (source) =>
+          source.content.kind === 'unavailable' && source.content.reason === 'evidence_unavailable'
+      )
+    )
+      return handoff('evidence_unavailable');
+    let includedCount = 0;
+    for (const source of sources) {
+      if (source.content.kind === 'unavailable') continue;
+      if (
+        (source.content.kind === 'text' &&
+          source.content.text.length > REPORT_IDENTITY_TEXT_MAX_LENGTH) ||
+        includedCount >= REPORT_IDENTITY_MAX_SOURCES
+      ) {
+        budgetExcluded.add(source.ref.evidenceId);
+        source.content = { kind: 'unavailable', reason: 'excluded' };
+      } else includedCount++;
+    }
+    const eligible = sources.filter((source) => source.content.kind !== 'unavailable');
+    if (!eligible.length)
+      return handoff(budgetExcluded.size ? 'evidence_over_budget' : 'incomplete_coverage');
+    const anchors = eligible.flatMap((source) => source.anchors ?? []);
+    const needsExtraction = eligible.some((source) => !source.anchors?.length);
+    let extraction: ReportIdentityExtraction = {
+      kind: 'extracted',
+      subjects: anchors,
+      contextLabels: [],
+      includedEvidenceIds: eligible.map((source) => source.ref.evidenceId),
+      excludedEvidenceIds: sources
+        .filter((source) => source.content.kind === 'unavailable')
+        .map((source) => source.ref.evidenceId),
+    };
+    const extract = async (
+      selected: ReportEvidenceSource[]
+    ): Promise<ReportIdentityExtraction | null> => {
+      signal.throwIfAborted();
+      if (
+        !this.gptService ||
+        Date.now() >= claim.deadline.getTime() ||
+        !(await reserveModelAttempt())
+      )
+        return null;
+      signal.throwIfAborted();
+      if (Date.now() >= claim.deadline.getTime()) return null;
+      return this.gptService.extractReportIdentity({ sources: selected, signal });
+    };
+    if (needsExtraction) {
+      const first = await extract(sources);
+      if (!first) return handoff('provider_failure');
+      extraction = first;
+      if (extraction.kind === 'failed' && extraction.retryable)
+        extraction = (await extract(sources)) ?? extraction;
+      signal.throwIfAborted();
+      if (extraction.kind === 'failed')
+        return {
+          ...handoff(
+            extraction.reason === 'evidence_unavailable'
+              ? 'evidence_unavailable'
+              : 'provider_failure'
+          ),
+          includedEvidenceIds: extraction.includedEvidenceIds,
+          excludedEvidenceIds: extraction.excludedEvidenceIds,
+        };
+    }
+    const resolve = async (subjects: ReportSubjectClues[]): Promise<ReportAnalysisOutcome> => {
+      signal.throwIfAborted();
+      return this.candidateService.resolveIdentity({
+        guild,
+        reporterId: intake.reporter_id,
+        subjects,
+        signal,
+      });
+    };
+    let outcome = await resolve(extraction.subjects);
+    if (outcome.kind === 'admin_review' && outcome.reason === 'uncertain_text') {
+      const uncertain = extraction.subjects.filter(
+        (subject) => subject.readability !== 'clear' || subject.uncertainty.length
+      );
+      const refs = new Set(
+        uncertain.flatMap((subject) => subject.sourceRefs.map((ref) => ref.evidenceId))
+      );
+      const targeted = sources.filter((source) => refs.has(source.ref.evidenceId));
+      if (targeted.length) {
+        const reread = await extract(targeted);
+        signal.throwIfAborted();
+        if (reread?.kind === 'extracted') {
+          const retained = extraction.subjects.filter((subject) => !uncertain.includes(subject));
+          // Keep clear clues even when a reread also describes their source.
+          outcome = await resolve([
+            ...retained,
+            ...reread.subjects.map((subject) => ({
+              ...subject,
+              subjectId: `reread:${subject.subjectId}`,
+            })),
+          ]);
+          extraction.excludedEvidenceIds = [
+            ...new Set([...extraction.excludedEvidenceIds, ...reread.excludedEvidenceIds]),
+          ];
+        }
+      }
+    }
+    signal.throwIfAborted();
+    const excluded = new Set([
+      ...extraction.excludedEvidenceIds,
+      ...sources
+        .filter(
+          (source) =>
+            source.content.kind === 'unavailable' ||
+            !extraction.includedEvidenceIds.includes(source.ref.evidenceId)
+        )
+        .map((source) => source.ref.evidenceId),
+    ]);
+    outcome = {
+      ...outcome,
+      includedEvidenceIds: extraction.includedEvidenceIds.filter((id) => !excluded.has(id)),
+      excludedEvidenceIds: [...excluded],
+    };
+    if (excluded.size)
+      outcome = {
+        kind: 'admin_review',
+        reason:
+          budgetExcluded.size ||
+          extraction.excludedEvidenceIds.some((id) =>
+            eligible.some((source) => source.ref.evidenceId === id)
+          )
+            ? 'evidence_over_budget'
+            : 'incomplete_coverage',
+        candidates: outcome.kind === 'confirm' ? [outcome.candidate] : outcome.candidates,
+        coverage: outcome.coverage,
+        includedEvidenceIds: outcome.includedEvidenceIds,
+        excludedEvidenceIds: outcome.excludedEvidenceIds,
+      };
+    if (
+      outcome.kind === 'confirm' &&
+      (analysis.handoff.state !== 'none' ||
+        intake.status === ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION)
+    )
+      outcome = {
+        kind: 'admin_review',
+        reason: analysis.handoff.state === 'none' ? 'ambiguous' : analysis.handoff.reason,
+        candidates: [outcome.candidate],
+        coverage: outcome.coverage,
+        includedEvidenceIds: outcome.includedEvidenceIds,
+        excludedEvidenceIds: outcome.excludedEvidenceIds,
+      };
+    return outcome;
+  }
 
   public scheduleAnalysisForThreadMessage(message: Message): void {
     void this.scheduleAnalysis(message).catch((error) => {
@@ -80,7 +435,12 @@ export class ReportIntakeAgentService implements IReportIntakeAgentService {
         const serverConfig = await this.configService.getServerConfig(intake.server_id);
         const intakeSettings = getReportIntakeSettings(serverConfig.settings);
         const reportAiSettings = getReportAiSettings(serverConfig.settings);
-        if (!intakeSettings.agentEnabled || !reportAiSettings.enabled || !this.gptService) {
+        if (
+          intakeSettings.stagedEnabled ||
+          !intakeSettings.agentEnabled ||
+          !reportAiSettings.enabled ||
+          !this.gptService
+        ) {
           recordObservation('chain', { output: { actual_outcome: 'analysis_disabled' } });
           return false;
         }
@@ -153,7 +513,7 @@ export class ReportIntakeAgentService implements IReportIntakeAgentService {
 
     const serverConfig = await this.configService.getServerConfig(intake.server_id);
     const settings = getReportIntakeSettings(serverConfig.settings);
-    if (!settings.agentEnabled) {
+    if (settings.stagedEnabled || !settings.agentEnabled) {
       return;
     }
 
@@ -178,7 +538,11 @@ export class ReportIntakeAgentService implements IReportIntakeAgentService {
   }
 
   private canAnalyzeIntake(intake: ReportIntake | null): intake is ReportIntake {
-    return Boolean(intake && intake.status === ReportIntakeStatus.COLLECTING_EVIDENCE);
+    return Boolean(
+      intake &&
+      intake.status === ReportIntakeStatus.COLLECTING_EVIDENCE &&
+      !projectReportIntakeState(intake).staged
+    );
   }
 
   private hasNewEvidenceForAgent(intake: ReportIntake, evidenceCount: number): boolean {

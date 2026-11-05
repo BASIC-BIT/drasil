@@ -127,7 +127,24 @@ export default async function GuildReportPage({ params, searchParams }: PageProp
                       Open Discord thread
                     </Link>
                   ) : null}
-                  <span className="muted">Status: {openIntake.status.split('_').join(' ')}</span>
+                  <span className="muted">
+                    Status: {openIntake.statusLabel ?? openIntake.status.split('_').join(' ')}
+                  </span>
+                  {openIntake.identityReview ? (
+                    <>
+                      <p>
+                        Your evidence is saved for moderator review. You don't need to do anything
+                        else.
+                      </p>
+                      <p>
+                        {openIntake.identityReview.delivery === 'delivered'
+                          ? 'Moderators have been notified.'
+                          : openIntake.identityReview.delivery === 'pending'
+                            ? 'Moderator notification pending.'
+                            : 'Notification delivery is unknown.'}
+                      </p>
+                    </>
+                  ) : null}
                 </div>
                 <div className="actions">
                   <label>

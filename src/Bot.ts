@@ -1,3 +1,4 @@
+import { IReportIntakeAnalysisWorker } from './services/ReportIntakeAnalysisWorker';
 import { Client } from 'discord.js';
 import * as dotenv from 'dotenv';
 import { injectable, inject, optional } from 'inversify';
@@ -40,7 +41,10 @@ export class Bot implements IBot {
     moderationActionRequestService?: IModerationActionRequestService,
     @optional()
     @inject(TYPES.CaptchaChallengeService)
-    captchaChallengeService?: ICaptchaChallengeService
+    captchaChallengeService?: ICaptchaChallengeService,
+    @optional()
+    @inject(TYPES.ReportIntakeAnalysisWorker)
+    private reportIntakeAnalysisWorker?: IReportIntakeAnalysisWorker
   ) {
     this.client = client;
     this.eventHandler = eventHandler;
@@ -61,6 +65,7 @@ export class Bot implements IBot {
     await this.client.login(token);
     this.moderationActionRequestService?.start();
     this.captchaChallengeService?.start();
+    this.reportIntakeAnalysisWorker?.start();
     console.log('Bot started and logged in!');
   }
 
@@ -68,6 +73,7 @@ export class Bot implements IBot {
    * Clean up resources and disconnect from Discord
    */
   public async destroy(): Promise<void> {
+    this.reportIntakeAnalysisWorker?.stop();
     this.moderationActionRequestService?.stop();
     this.captchaChallengeService?.stop();
     await this.client.destroy();

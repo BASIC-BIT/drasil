@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { reportHandoffSchema } from '../reports/analysis';
 import { authorizeAttention, type AuthorityPort } from '../authorization';
 import type { ActionContext } from '../context';
 import type { ActionResult } from '../results';
@@ -20,10 +21,23 @@ export interface QueueAttentionItemRecord {
   readonly item_type: string;
   readonly queue_channel_id: string | null;
   readonly queue_message_id: string | null;
+  readonly report_intake_id?: string | null;
+  readonly metadata?: unknown;
+  readonly attention_cleanup_pending?: boolean;
 }
 export interface QueueAttentionRepository {
   findById(id: string): Promise<QueueAttentionItemRecord | null>;
-  deleteById(id: string): Promise<QueueAttentionItemRecord | null>;
+  acknowledgeIdentityReview(input: {
+    itemId: string;
+    guildId: string;
+    actorId: string;
+    acknowledgedAt: Date;
+  }): Promise<QueueAttentionAcknowledgeStatus>;
+  reserveOrdinaryAcknowledgement(
+    itemId: string,
+    guildId: string
+  ): Promise<QueueAttentionItemRecord | null>;
+  completeOrdinaryAcknowledgement(item: QueueAttentionItemRecord): Promise<boolean>;
 }
 export interface QueueMessageDeleter {
   deleteQueueMessage(item: QueueAttentionItemRecord): Promise<void>;
@@ -64,12 +78,28 @@ export function createAttentionActions(deps: AttentionDependencies): AttentionAc
     // Authorization rejects system actors; retain the narrowed user identity for audit output.
     if (context.actor.kind !== 'user') return { kind: 'denied', code: 'permission_denied' };
     const actor = { id: context.actor.userId, surface: context.source };
-    const item = await deps.repository.findById(itemId);
+    let item = await deps.repository.findById(itemId);
     if (!item || item.server_id !== context.guildId || !isQueueAttentionItemType(item.item_type)) {
       return { kind: 'outcome', outcome: { actor, itemId, status: 'already_handled' } };
     }
+    if (!isIdentityReviewItem(item)) {
+      item = await deps.repository.reserveOrdinaryAcknowledgement(itemId, context.guildId);
+      if (!item || item.server_id !== context.guildId || !isQueueAttentionItemType(item.item_type))
+        return { kind: 'outcome', outcome: { actor, itemId, status: 'already_handled' } };
+    }
+    if (isIdentityReviewItem(item)) {
+      const status = await deps.repository.acknowledgeIdentityReview({
+        itemId,
+        guildId: context.guildId,
+        actorId: actor.id,
+        acknowledgedAt: new Date(),
+      });
+      return { kind: 'outcome', outcome: { actor, itemId, status } };
+    }
+    if (!item.attention_cleanup_pending)
+      return { kind: 'outcome', outcome: { actor, itemId, status: 'already_handled' } };
     await deps.messageDeleter.deleteQueueMessage(item);
-    const deleted = await deps.repository.deleteById(item.id);
+    const deleted = await deps.repository.completeOrdinaryAcknowledgement(item);
     return {
       kind: 'outcome',
       outcome: { actor, itemId, status: deleted ? 'acknowledged' : 'already_handled' },
@@ -84,4 +114,61 @@ export function createAttentionActions(deps: AttentionDependencies): AttentionAc
       return results;
     },
   };
+}
+
+export function isIdentityReviewItem(item: QueueAttentionItemRecord): boolean {
+  const metadata = z
+    .object({ identity_review: z.record(z.string(), z.unknown()) })
+    .safeParse(item.metadata);
+  return (
+    item.item_type === 'report_thread_attention' &&
+    Boolean(item.report_intake_id) &&
+    metadata.success
+  );
+}
+
+/** Preserve the independently validated handoff even when other analysis metadata is quarantined. */
+export function acknowledgeIdentityReviewMetadata(
+  metadata: unknown,
+  actorId: string,
+  at: Date
+): Record<string, unknown> | null {
+  const parsed = z
+    .object({ analysis: z.object({ handoff: reportHandoffSchema }).passthrough() })
+    .passthrough()
+    .safeParse(metadata);
+  if (!parsed.success) return null;
+  const { analysis } = parsed.data;
+  if (analysis.handoff.state !== 'pending' && analysis.handoff.state !== 'delivered') return null;
+  return {
+    ...parsed.data,
+    analysis: {
+      ...analysis,
+      handoff: {
+        ...analysis.handoff,
+        state: 'acknowledged',
+        acknowledgedBy: actorId,
+        acknowledgedAt: at.toISOString(),
+      },
+    },
+  };
+}
+
+const attentionCleanupSourceSchema = z
+  .object({
+    source_thread_id: z.string().min(1),
+    verification_event_id: z.string().uuid().nullable(),
+    detection_event_id: z.string().uuid().nullable(),
+  })
+  .strict();
+
+/** Retired ordinary rows retain their real source links for explicit cleanup retry. */
+export function getAttentionCleanupSource(
+  item: Pick<QueueAttentionItemRecord, 'metadata' | 'attention_cleanup_pending'>
+): z.infer<typeof attentionCleanupSourceSchema> | null {
+  if (!item.attention_cleanup_pending) return null;
+  const result = z
+    .object({ attention_cleanup: attentionCleanupSourceSchema })
+    .safeParse(item.metadata);
+  return result.success ? result.data.attention_cleanup : null;
 }

@@ -1,3 +1,10 @@
+import { projectReportEvidenceSource } from '@drasil/contracts';
+import { reportAnalysisFailure } from '../readDiagnostics';
+import {
+  projectReportIdentityReview,
+  projectReporterIdentityReview,
+  reportIntakeStatusLabel,
+} from '@drasil/contracts';
 import { classifyReadFailure, recordReadDependency } from '../readDiagnostics';
 import { MCP_RESULT_METADATA_BYTES } from './protocol';
 import { createHash } from 'node:crypto';
@@ -239,7 +246,7 @@ const fields = {
   ],
   member: ['userId', 'username', 'joinedAt', 'accountCreatedAt'],
 } as const;
-function project(query: ResourceQuery, binding: AccessBinding, value: JsonRecord): JsonRecord {
+function projectionFields(query: ResourceQuery, binding: AccessBinding): readonly string[] {
   let keys: readonly string[];
   switch (query.kind) {
     case 'list_cases':
@@ -296,9 +303,35 @@ function project(query: ResourceQuery, binding: AccessBinding, value: JsonRecord
       keys = ['id', 'channelId', 'authorId', 'authorName', 'content', 'timestamp', 'attachments'];
       break;
   }
+  return keys;
+}
+function project(query: ResourceQuery, binding: AccessBinding, value: JsonRecord): JsonRecord {
+  const keys = projectionFields(query, binding);
   const projected = Object.fromEntries(
     keys.filter((key) => key in value).map((key) => [key, value[key]])
   );
+  if (query.kind === 'list_report_evidence' && !binding.reporterId) {
+    projected.source = projectReportEvidenceSource({
+      reportMetadata: value.reportMetadata,
+      evidenceId: typeof value.id === 'string' ? value.id : '',
+      sourceMessageId: typeof value.sourceMessageId === 'string' ? value.sourceMessageId : null,
+      evidenceMetadata: value.metadata,
+    });
+  }
+  if (query.kind === 'get_report' || query.kind === 'list_reports' || query.kind === 'get_intake') {
+    const input = {
+      status: typeof value.status === 'string' ? value.status : '',
+      metadata: value.metadata,
+      evidenceRevision: value.evidenceRevision,
+    };
+    const review = binding.reporterId
+      ? projectReporterIdentityReview(input)
+      : projectReportIdentityReview(input);
+    projected.identityReview = review;
+    if (!binding.reporterId)
+      projected.analysisFailureCode = reportAnalysisFailure(value.analysisFailureCode);
+    projected.statusLabel = reportIntakeStatusLabel(input.status, value.metadata);
+  }
   if (Array.isArray(projected.attachments))
     projected.attachments = projected.attachments.map((item) => {
       if (!item || typeof item !== 'object' || Array.isArray(item)) return {};

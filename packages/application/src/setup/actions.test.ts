@@ -452,3 +452,32 @@ test('same-method Off resaves cannot activate checks during unrelated setup save
       .settings
   ).toMatchObject({ captcha_method: 'discord_image', captcha_mode: 'manual' });
 });
+
+test('retains the staged selector across unrelated report patches and verification resets', async () => {
+  const state = arrange();
+  await state.actions.execute(context, {
+    kind: 'update_setup',
+    changes: { reportIntakeStagedEnabled: true },
+  });
+  await state.actions.execute(context, {
+    kind: 'update_settings',
+    section: 'report',
+    changes: { report_ai_analyze_text: false },
+  });
+  await state.actions.execute(context, {
+    kind: 'update_settings',
+    section: 'verification',
+    changes: {},
+    reset: 'context',
+  });
+  expect(state.server().settings).toMatchObject({
+    report_intake_staged_enabled: true,
+    report_ai_analyze_text: false,
+    unrelated_setting: 'preserved',
+  });
+  await state.actions.execute(context, {
+    kind: 'update_setup',
+    changes: { reportIntakeStagedEnabled: false },
+  });
+  expect(state.server().settings.report_intake_staged_enabled).toBe(false);
+});

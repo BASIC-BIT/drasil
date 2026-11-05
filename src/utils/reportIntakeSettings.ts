@@ -1,5 +1,7 @@
 import type { ServerSettings } from '../repositories/types';
 
+export const REPORT_INTAKE_STAGED_ENABLED_SETTING_KEY = 'report_intake_staged_enabled';
+
 export const REPORT_INTAKE_AGENT_ENABLED_SETTING_KEY = 'report_intake_agent_enabled';
 export const REPORT_INTAKE_AGENT_DEBOUNCE_MS_SETTING_KEY = 'report_intake_agent_debounce_ms';
 export const REPORT_INTAKE_AGENT_MIN_INTERVAL_MS_SETTING_KEY =
@@ -18,6 +20,7 @@ export type ReportIntakeConfirmedResponseMode =
 
 export interface ReportIntakeSettings {
   agentEnabled: boolean;
+  stagedEnabled: boolean;
   debounceMs: number;
   minAnalysisIntervalMs: number;
   confirmedResponseMode: ReportIntakeConfirmedResponseMode;
@@ -33,6 +36,7 @@ export const MAX_REPORT_INTAKE_AGENT_MIN_INTERVAL_MS = 5 * 60_000;
 
 export function getReportIntakeSettings(settings: ServerSettings = {}): ReportIntakeSettings {
   return {
+    stagedEnabled: settings.report_intake_staged_enabled === true,
     agentEnabled: readBoolean(
       settings[REPORT_INTAKE_AGENT_ENABLED_SETTING_KEY],
       DEFAULT_REPORT_INTAKE_AGENT_ENABLED

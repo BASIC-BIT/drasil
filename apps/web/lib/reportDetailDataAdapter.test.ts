@@ -1,3 +1,6 @@
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { ReportEvidence } from '../components/inbox/foundation/ReportEvidence';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadReportAttentionRecord, parseReportDetailRows } from './reportDetailDataAdapter';
 
@@ -208,3 +211,130 @@ it.each([{ server_id: 'other' }, { id: 'other' }])(
     expect(db.query).toHaveBeenCalledTimes(1);
   }
 );
+
+it('projects saved unidentified review without creating a target or enforcement actions', async () => {
+  db.query
+    .mockResolvedValueOnce({
+      rows: [
+        {
+          ...baseReportRow,
+          status: 'needs_admin_confirmation',
+          confirmed_target_user_id: null,
+          evidence_revision: 4,
+        },
+      ],
+    })
+    .mockResolvedValueOnce({ rows: [] });
+  expect(await loadReportAttentionRecord('guild-1', 'report-1')).toMatchObject({
+    targetUserId: null,
+    identityReview: {
+      phase: 'pending',
+      delivery: 'unknown',
+      receipt: 'unknown',
+      evidenceRevision: 4,
+    },
+    allowedActions: [],
+  });
+});
+
+it.each([
+  ['submitted', 'submitted'],
+  ['actioned', 'actioned'],
+  ['dismissed', 'dismissed'],
+  ['false_positive', 'false positive'],
+] as const)(
+  'keeps %s as the report lifecycle label after identity handoff resolution',
+  (status, expectedLabel) => {
+    const detail = parseReportDetailRows(
+      {
+        ...baseReportRow,
+        status,
+        metadata: {
+          analysis: {
+            schemaVersion: 1,
+            sources: {},
+            requestReservations: [],
+            outcome: null,
+            coverage: null,
+            handoff: {
+              state: 'resolved',
+              reason: 'no_match',
+              receipt: 'sent',
+              attempts: 1,
+              nextDueAt: null,
+              resolvedBy: 'staff',
+              resolvedAt: '2026-11-03T00:00:00.000Z',
+            },
+          },
+          submitted_by: 'staff',
+        },
+      },
+      []
+    );
+    expect(detail.identityReview?.phase).toBe('resolved');
+    expect(detail.statusLabel).toBe(expectedLabel);
+  }
+);
+
+it('labels edited and deleted source history through the staff read adapter and renderer', async () => {
+  const source = {
+    sourceVersion: 2,
+    sourceFingerprint: 'v2',
+    sourceChannelId: 'thread-1',
+    sourceAuthorId: 'reporter-1',
+    observedAt: '2026-11-03T00:00:00.000Z',
+    editedAt: '2026-11-03T00:00:00.000Z',
+    operation: 'upsert',
+  };
+  const evidence = [1, 2].map((version) => ({
+    id: `e-${version}`,
+    kind: 'reporter_text',
+    source_message_id: 'message',
+    source_channel_id: 'thread-1',
+    attachment_id: null,
+    content: version === 1 ? 'Original allegation' : 'Corrected allegation',
+    metadata: { sourceVersion: version },
+    created_at: new Date(),
+  }));
+  const metadata = {
+    analysis: {
+      schemaVersion: 1,
+      sources: { message: source },
+      requestReservations: [],
+      handoff: { state: 'none' },
+      coverage: null,
+      outcome: {
+        kind: 'admin_review',
+        reason: 'no_match',
+        candidates: [],
+        coverage: { kind: 'unavailable', reason: 'transport' },
+        includedEvidenceIds: ['e-2'],
+        excludedEvidenceIds: ['e-1'],
+      },
+    },
+  };
+  for (const operation of ['upsert', 'delete']) {
+    source.operation = operation;
+    db.query
+      .mockResolvedValueOnce({
+        rows: [{ ...baseReportRow, metadata, status: 'needs_admin_confirmation' }],
+      })
+      .mockResolvedValueOnce({ rows: evidence });
+    const report = await loadReportAttentionRecord('guild-1', 'report-1');
+    expect(report?.evidence[0]).toMatchObject({
+      content: 'Original allegation',
+      source: {
+        versionState: 'superseded',
+        sourceState: operation === 'delete' ? 'deleted' : 'available',
+        analysisState: 'excluded',
+      },
+    });
+    expect(report?.evidence[1]).toMatchObject({
+      source: { sourceVersion: 2, versionState: 'current', analysisState: 'analyzed' },
+    });
+    const html = renderToStaticMarkup(createElement(ReportEvidence, { items: report!.evidence }));
+    expect(html).toContain('Superseded version');
+    expect(html).toContain('Excluded from analysis');
+    if (operation === 'delete') expect(html).toContain('Source deleted');
+  }
+});

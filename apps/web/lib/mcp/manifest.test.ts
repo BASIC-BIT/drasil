@@ -29,7 +29,7 @@ it('binds every workflow to an object-root tool with complete coverage metadata'
   const actual = new Set(mcpWorkflowManifest.flatMap((entry) => entry.settingsFields));
   const expected = new Set(Object.keys(setupChangesSchema.shape));
   expect(actual).toEqual(expected);
-  expect(actual.size).toBe(74);
+  expect(actual.size).toBe(75);
   expect(actual).toContain('captchaMethod');
   expect(Object.keys(settingsSectionSchemas)).toHaveLength(11);
 });
@@ -86,7 +86,7 @@ describe('strict public authority boundaries', () => {
   });
 });
 
-it('advertises every canonical section field independently of the 74 mutable setup names', () => {
+it('advertises every canonical section field independently of the 75 mutable setup names', () => {
   const entry = mcpWorkflowManifest.find((entry) => entry.commandKind === 'update_settings');
   const advertised = entry?.schema['~standard'].jsonSchema.input({ target: 'draft-07' });
   const branches = z
@@ -118,7 +118,7 @@ it('advertises every canonical section field independently of the 74 mutable set
   expect(
     new Set(Object.values(settingsSectionSchemas).flatMap((section) => Object.keys(section.shape)))
       .size
-  ).toBe(76);
+  ).toBe(77);
 });
 
 it('rejects nested authority, raw prompt tokens and runtime-created cleanup jobs', async () => {

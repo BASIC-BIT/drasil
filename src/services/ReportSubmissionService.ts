@@ -96,12 +96,17 @@ export class ReportSubmissionService {
     member: GuildMember,
     reporter: User,
     reason: string | undefined,
-    options?: { intakeId?: string; attachments?: MessageReportAttachment[] }
+    options?: {
+      intakeId?: string;
+      submissionToken?: string;
+      attachments?: MessageReportAttachment[];
+    }
   ): Promise<Extract<UserReportSubmissionResult, { status: 'submitted' | 'failed' }>> {
     try {
       await this.securityActionService.handleConfirmedReportIntake(member, reporter, {
         reason,
         intakeId: options?.intakeId,
+        submissionToken: options?.submissionToken,
         attachments: options?.attachments,
       });
       return { status: 'submitted', targetUserId: member.id };

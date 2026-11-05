@@ -130,3 +130,11 @@ For a real-server walkthrough, use `docs/manual-qa.md`.
 - `npm run test`
 - `npm run format:check`
 - `npm run lint`
+
+## Staged report intake acceptance
+
+Run `src/__tests__/integration/ReportIntakeStagedFlow.integration.test.ts` only against the guarded owned disposable Postgres target. It connects the real persisted intake, worker, extraction validation, directory resolution, handoff and application actions with mocked external transports. It covers global-name-only matches, multiple subjects, uncertain reading, evidence budgets, unavailable directory, persisted restart boundaries, acknowledgement, voluntary evidence and one submission-port dispatch after confirmation.
+
+Run `node -r ts-node/register src/scripts/evaluateReportIntake.ts` to validate the synthetic PNG assets and labels with zero provider requests. Paid execution requires separate approval and `--execute-paid`. The tool never creates a Discord client or performs moderation.
+
+See the [acceptance report and controlled rollout checklist](superpowers/reports/2026-11-03-staged-report-intake-acceptance.md) for actual results, live checks still pending, rollout/rollback steps and the known failed-submission recovery limitation. Local mocks are not live acceptance.

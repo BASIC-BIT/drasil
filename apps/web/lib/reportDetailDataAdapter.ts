@@ -1,5 +1,9 @@
+import { projectReportEvidenceSource } from '@drasil/contracts';
+import { reportAnalysisFailure } from './readDiagnostics';
 import {
   reportAttentionRecordSchema,
+  projectReportIdentityReview,
+  reportIntakeStatusLabel,
   reportDetailSchema,
   type ReportAttentionRecord,
   type ReportDetail,
@@ -24,6 +28,8 @@ interface ReportDetailRow {
   status: ReportAttentionRecord['status'];
   summary: string | null;
   metadata?: unknown;
+  evidence_revision?: number;
+  analysis_failure_code?: unknown;
   confirmed_target_user_id: string | null;
   created_at: unknown;
   updated_at: unknown;
@@ -149,7 +155,15 @@ function parseEvidenceRow(guildId: string, row: ReportEvidenceRow): ReportEviden
 }
 
 function reportFields(row: ReportDetailRow, evidenceRows: readonly ReportEvidenceRow[]) {
+  const identityReview = projectReportIdentityReview({
+    status: row.status,
+    metadata: row.metadata,
+    evidenceRevision: row.evidence_revision,
+  });
   return {
+    statusLabel: reportIntakeStatusLabel(row.status, row.metadata),
+    analysisFailureCode: reportAnalysisFailure(row.analysis_failure_code),
+    identityReview,
     id: row.id,
     guildId: row.server_id,
     reporterId: row.reporter_id,
@@ -165,7 +179,15 @@ function reportFields(row: ReportDetailRow, evidenceRows: readonly ReportEvidenc
     reportThreadUrl: row.thread_id ? discordMessageUrl(row.server_id, row.thread_id) : null,
     latestDetectionId: row.latest_detection_id,
     latestCaseId: row.latest_case_id,
-    evidence: evidenceRows.map((evidence) => parseEvidenceRow(row.server_id, evidence)),
+    evidence: evidenceRows.map((evidence) => ({
+      ...parseEvidenceRow(row.server_id, evidence),
+      source: projectReportEvidenceSource({
+        reportMetadata: row.metadata,
+        evidenceId: evidence.id,
+        sourceMessageId: evidence.source_message_id,
+        evidenceMetadata: evidence.metadata,
+      }),
+    })),
     allowedActions: resolveAllowedActions(row),
   };
 }
@@ -201,6 +223,8 @@ async function readReportRows(
          ri.status,
          ri.summary,
          ri.metadata,
+         ri.evidence_revision,
+         ri.analysis_failure_code,
          ri.confirmed_target_user_id,
          target.username as target_display_name,
          reporter.username as reporter_display_name,

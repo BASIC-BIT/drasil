@@ -16,6 +16,7 @@ import {
 } from '@drasil/application';
 import {
   memberProfileDetectionSchema,
+  reportIntakeStatusLabel,
   moderationInboxItemSchema,
   type ModerationInboxItem,
   type ModerationInboxAction,
@@ -298,7 +299,7 @@ export function createModerationWorkspaceDataAdapter(
     const intake = await loadReportAttentionRecord(guildId, reportId);
     if (!intake) return null;
     const result = await getPostgresPool().query<{ id: string }>(
-      "select id::text from moderation_queue_items where server_id=$1 and report_intake_id::text=$2 and item_type='report_thread_attention' order by updated_at desc nulls last, id limit 1",
+      "select id::text from moderation_queue_items where server_id=$1 and report_intake_id::text=$2 and item_type='report_thread_attention' and not attention_cleanup_pending order by updated_at desc nulls last, id limit 1",
       [guildId, reportId]
     );
     const selected = result.rows[0]
@@ -314,15 +315,23 @@ export function createModerationWorkspaceDataAdapter(
       queueItemId: attention?.item.queueItemId ?? null,
       sourceMetadata: attention?.item.sourceMetadata,
       subject: {
-        userId: intake.reporterId,
-        displayLabel: intake.reporterDisplayName ?? intake.reporterId,
-        secondaryLabel: null,
+        userId: intake.targetUserId,
+        displayLabel:
+          intake.targetDisplayName ??
+          (intake.targetUserId ? `Target ${intake.targetUserId}` : 'Target not confirmed'),
+        secondaryLabel: `Reporter ${intake.reporterDisplayName ?? intake.reporterId}`,
         avatarUrl: null,
       },
       title: 'Report',
       summary: intake.summary,
       summarySource: intake.summarySource,
-      statusLabel: attention ? 'needs attention' : intake.status,
+      statusLabel:
+        intake.statusLabel ??
+        (intake.identityReview || intake.status === 'needs_admin_confirmation'
+          ? reportIntakeStatusLabel(intake.status)
+          : attention
+            ? 'needs attention'
+            : reportIntakeStatusLabel(intake.status)),
       signalLabel: null,
       createdAt: intake.createdAt,
       updatedAt: intake.updatedAt,

@@ -21,3 +21,10 @@ const compiled = ts.transpileModule(presentation, {
   fileName: 'approvalPresentation.ts',
 });
 await writeFile(new URL('approvalPresentation.mjs', directory), compiled.outputText);
+
+const analysis = await readFile(new URL('../src/reports/analysis.ts', import.meta.url), 'utf8');
+const analysisCompiled = ts.transpileModule(analysis, {
+  compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ES2020 },
+  fileName: 'analysis.ts',
+});
+await writeFile(new URL('reportAnalysis.mjs', directory), analysisCompiled.outputText);

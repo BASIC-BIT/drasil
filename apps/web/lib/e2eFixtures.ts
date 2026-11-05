@@ -156,6 +156,7 @@ function initialFixtureServerRecord(): SetupServerRecord {
       detection_response_mode: 'restrict',
       moderation_queue_channel_id: 'queue-channel-1',
       report_instructions_channel_id: 'report-channel-1',
+      report_intake_staged_enabled: false,
       report_intake_confirmed_response_mode: 'observed_alert',
       case_review_reminders_enabled: true,
       case_review_reminder_stale_hours: 24,
@@ -264,6 +265,7 @@ function applyFixtureServerSettingsUpdate(
     update.messageDetectionAutoKickEnabled
   );
   setIfDefined(settings, 'join_detection_auto_kick_enabled', update.joinDetectionAutoKickEnabled);
+  setIfDefined(settings, 'report_intake_staged_enabled', update.reportIntakeStagedEnabled);
   setIfDefined(settings, 'report_intake_auto_kick_enabled', update.reportIntakeAutoKickEnabled);
   setIfDefined(
     settings,

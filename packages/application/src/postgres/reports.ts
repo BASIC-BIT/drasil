@@ -1,6 +1,7 @@
 import type { DelegationQueryClient } from './delegation';
 import type { ReportOpenCaseRepository, ReportOpenCaseCandidate } from '../reports/review';
 import type { ReportIntakeState } from '../reports/ports';
+import { projectReportIntakeState, type ReportIntakeSnapshot } from '../reports/intakeState';
 export function createReportResources(database: DelegationQueryClient): {
   openCaseRepository: ReportOpenCaseRepository;
   intakes: { load(id: string): Promise<ReportIntakeState | null> };
@@ -17,19 +18,11 @@ export function createReportResources(database: DelegationQueryClient): {
     },
     intakes: {
       async load(id): Promise<ReportIntakeState | null> {
-        const result = await database.query<ReportIntakeState & Record<string, unknown>>(
-          `select id,server_id as "guildId",reporter_id as "reporterId",thread_id as "threadId",status,confirmed_target_user_id as "confirmedTargetUserId",metadata->>'last_confirmation_prompt_message_id' as "promptMessageId",metadata->>'last_confirmation_prompt_token' as "promptToken",coalesce(metadata->'last_confirmation_prompt_candidate_ids','[]'::jsonb) as "candidateIds",coalesce(metadata->>'report_ban_operation_id','')<>'' as claimed from report_intakes where id=$1::uuid`,
+        const result = await database.query<ReportIntakeSnapshot & Record<string, unknown>>(
+          `select id,server_id,reporter_id,thread_id,status,confirmed_target_user_id,evidence_revision,metadata from report_intakes where id=$1::uuid`,
           [id]
         );
-        const row = result.rows[0];
-        return row
-          ? {
-              ...row,
-              candidateIds: Array.isArray(row.candidateIds)
-                ? row.candidateIds.filter((id): id is string => typeof id === 'string')
-                : [],
-            }
-          : null;
+        return result.rows[0] ? projectReportIntakeState(result.rows[0]) : null;
       },
     },
   };

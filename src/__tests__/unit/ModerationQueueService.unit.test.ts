@@ -1,10 +1,29 @@
-import { createAttentionActions } from '@drasil/application';
+import { ReportIntakeService, type IReportIntakeService } from '../../services/ReportIntakeService';
+import { ReportCandidateService } from '../../services/ReportCandidateService';
+import {
+  InMemoryReportIntakeRepository,
+  InMemoryServerRepository,
+  InMemoryUserRepository,
+  InMemoryServerMemberRepository,
+} from '../fakes/inMemoryRepositories';
+import { ReportInteractionHandler } from '../../controllers/ReportInteractionHandler';
+import type { ReportSubmissionService } from '../../services/ReportSubmissionService';
+import type { IThreadManager } from '../../services/ThreadManager';
+import { ownsPresentation, processingMetadata } from '../../repositories/reportIntakeProcessing';
+import {
+  acknowledgeIdentityReviewMetadata,
+  projectReportIntakeState,
+  isIdentityReviewItem,
+  createAttentionActions,
+} from '@drasil/application';
 import { createBotAttentionMessageDeleter } from '../../application/adapters/attention';
 import {
   ActionRowBuilder,
+  Collection,
   ButtonBuilder,
   ButtonStyle,
   EmbedBuilder,
+  type ButtonInteraction,
   type Client,
   type Message,
   type MessageCreateOptions,
@@ -16,6 +35,8 @@ import type { IModerationQueueRepository } from '../../repositories/ModerationQu
 import type { IServerRepository } from '../../repositories/ServerRepository';
 import type { IVerificationEventRepository } from '../../repositories/VerificationEventRepository';
 import {
+  ReportIntakeStatus,
+  ReportPresentationClaim,
   CaseAttentionState,
   CaseKind,
   DetectionEvent,
@@ -33,6 +54,11 @@ class FakeDiscordMessage {
   public readonly id: string;
   public readonly channelId: string;
   public payload: Record<string, unknown>;
+  public author = { id: 'bot' };
+  public createdTimestamp = Date.now();
+  public get embeds() {
+    return ((this.payload.embeds ?? []) as EmbedBuilder[]).map((embed) => embed.toJSON());
+  }
   public deleted = false;
   public edit = jest.fn(async (payload: MessageEditOptions) => {
     this.payload = { ...this.payload, ...payload };
@@ -52,10 +78,30 @@ class FakeDiscordMessage {
 
 class FakeDiscordChannel {
   public readonly id: string;
+  public guildId = 'guild-1';
+  public permissionsFor = jest.fn((subject?: { id: string }) => ({
+    has: (): boolean => subject !== undefined,
+  }));
+  public guild = {
+    roles: {
+      fetch: jest.fn(
+        async () =>
+          new Collection([
+            ['admin-role', { id: 'admin-role', permissions: { has: (): boolean => true } }],
+          ])
+      ),
+    },
+  };
   private nextMessageId = 0;
   public readonly sentMessages: FakeDiscordMessage[] = [];
   public readonly messages = {
-    fetch: jest.fn(async (messageId: string) => {
+    fetch: jest.fn(async (messageId: string | { limit: number }) => {
+      if (typeof messageId !== 'string')
+        return new Collection(
+          this.sentMessages
+            .filter((entry) => !entry.deleted)
+            .map((entry) => [entry.id, entry as unknown as Message])
+        );
       const message = this.sentMessages.find((entry) => entry.id === messageId && !entry.deleted);
       if (!message) {
         throw Object.assign(new Error(`Message ${messageId} not found`), { code: 10008 });
@@ -81,7 +127,65 @@ class FakeDiscordChannel {
 
 class FakeModerationQueueRepository implements IModerationQueueRepository {
   public items: ModerationQueueItem[] = [];
+  public intakeRepository?: InMemoryReportIntakeRepository;
   private nextId = 0;
+
+  async reserveOrdinaryAcknowledgement(
+    itemId: string,
+    guildId: string
+  ): Promise<ModerationQueueItem | null> {
+    const item = this.items.find((row) => row.id === itemId && row.server_id === guildId);
+    if (!item) return null;
+    if (!isIdentityReviewItem(item) && !item.attention_cleanup_pending) {
+      item.metadata = {
+        ...(item.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata)
+          ? item.metadata
+          : {}),
+        attention_cleanup: {
+          source_thread_id: item.source_thread_id,
+          verification_event_id: item.verification_event_id,
+          detection_event_id: item.detection_event_id,
+        },
+      };
+      item.attention_cleanup_pending = true;
+      item.source_thread_id = null;
+      item.verification_event_id = null;
+      item.detection_event_id = null;
+    }
+    return { ...item };
+  }
+  async completeOrdinaryAcknowledgement(item: ModerationQueueItem): Promise<boolean> {
+    const row = this.items.find((value) => value.id === item.id && value.attention_cleanup_pending);
+    return row ? Boolean(await this.deleteById(row.id)) : false;
+  }
+
+  async acknowledgeIdentityReview(input: {
+    itemId: string;
+    guildId: string;
+    actorId: string;
+    acknowledgedAt: Date;
+  }): Promise<'acknowledged' | 'already_handled'> {
+    const item = await this.findById(input.itemId);
+    const intake =
+      item?.report_intake_id && (await this.intakeRepository?.findById(item.report_intake_id));
+    if (
+      !item ||
+      item.server_id !== input.guildId ||
+      !intake ||
+      intake.status !== 'needs_admin_confirmation' ||
+      intake.closed_at ||
+      (intake.confirmed_target_user_id && !projectReportIntakeState(intake).submission)
+    )
+      return 'already_handled';
+    const metadata = acknowledgeIdentityReviewMetadata(
+      intake.metadata,
+      input.actorId,
+      input.acknowledgedAt
+    );
+    if (!metadata || !(await this.intakeRepository?.updateIfCurrent(intake, { metadata })))
+      return 'already_handled';
+    return 'acknowledged';
+  }
 
   async findById(id: string): Promise<ModerationQueueItem | null> {
     return this.clone(this.items.find((item) => item.id === id) ?? null);
@@ -135,7 +239,7 @@ class FakeModerationQueueRepository implements IModerationQueueRepository {
 
   async listByReportIntake(reportIntakeId: string): Promise<ModerationQueueItem[]> {
     return this.items
-      .filter((item) => item.report_intake_id === reportIntakeId)
+      .filter((item) => item.report_intake_id === reportIntakeId && !item.attention_cleanup_pending)
       .map((item) => ({ ...item }));
   }
 
@@ -159,7 +263,10 @@ class FakeModerationQueueRepository implements IModerationQueueRepository {
   ): Promise<ModerationQueueItem | null> {
     return this.clone(
       this.items.find(
-        (item) => item.item_type === itemType && item.source_thread_id === sourceThreadId
+        (item) =>
+          !item.attention_cleanup_pending &&
+          item.item_type === itemType &&
+          item.source_thread_id === sourceThreadId
       ) ?? null
     );
   }
@@ -170,7 +277,10 @@ class FakeModerationQueueRepository implements IModerationQueueRepository {
   ): Promise<ModerationQueueItem | null> {
     return this.clone(
       this.items.find(
-        (item) => item.item_type === itemType && item.verification_event_id === verificationEventId
+        (item) =>
+          !item.attention_cleanup_pending &&
+          item.item_type === itemType &&
+          item.verification_event_id === verificationEventId
       ) ?? null
     );
   }
@@ -188,10 +298,19 @@ class FakeModerationQueueRepository implements IModerationQueueRepository {
       .map((item) => ({ ...item }));
   }
 
+  async upsertIdentityReview(
+    data: Parameters<IModerationQueueRepository['upsert']>[0],
+    claim: ReportPresentationClaim
+  ): Promise<ModerationQueueItem | null> {
+    const current = await this.intakeRepository?.findById(claim.intake.id);
+    return current && ownsPresentation(current, claim, new Date()) ? this.upsert(data) : null;
+  }
   async upsert(
     data: Parameters<IModerationQueueRepository['upsert']>[0]
   ): Promise<ModerationQueueItem> {
-    const existingIndex = this.items.findIndex((item) => this.matches(item, data));
+    const existingIndex = this.items.findIndex(
+      (item) => !item.attention_cleanup_pending && this.matches(item, data)
+    );
     const now = new Date();
     if (existingIndex >= 0) {
       const existing = this.items[existingIndex];
@@ -239,10 +358,15 @@ class FakeModerationQueueRepository implements IModerationQueueRepository {
   async updateDiscordMessage(
     id: string,
     queueChannelId: string | null,
-    queueMessageId: string | null
+    queueMessageId: string | null,
+    claim?: ReportPresentationClaim
   ): Promise<ModerationQueueItem | null> {
+    if (claim) {
+      const current = await this.intakeRepository?.findById(claim.intake.id);
+      if (!current || !ownsPresentation(current, claim, new Date())) return null;
+    }
     const item = this.items.find((entry) => entry.id === id);
-    if (!item) {
+    if (!item || item.attention_cleanup_pending) {
       return null;
     }
     item.queue_channel_id = queueChannelId;
@@ -368,6 +492,8 @@ const buildPendingScreeningMember = (): ServerMember => ({
 
 const buildService = (
   input: {
+    intakeRepository?: InMemoryReportIntakeRepository;
+    fallback?: FakeDiscordChannel;
     server?: Server;
     pendingCases?: VerificationEvent[];
     observedAlerts?: DetectionEvent[];
@@ -379,6 +505,7 @@ const buildService = (
   const server = input.server ?? buildServer();
   const channel = input.channel ?? new FakeDiscordChannel('queue-channel');
   const queueRepository = input.queueRepository ?? new FakeModerationQueueRepository();
+  queueRepository.intakeRepository = input.intakeRepository;
   const configService = {
     getServerConfig: jest.fn(async () => server),
   } as unknown as IConfigService;
@@ -396,12 +523,17 @@ const buildService = (
     ),
   } as unknown as IDetectionEventsRepository;
   const client = {
+    user: { id: 'bot' },
     channels: {
       fetch: jest.fn(async (channelId: string) => {
         if (input.channelFetchError !== undefined) {
           throw input.channelFetchError;
         }
-        return channelId === channel.id ? channel : null;
+        return channelId === channel.id
+          ? channel
+          : channelId === input.fallback?.id
+            ? input.fallback
+            : null;
       }),
     },
   } as unknown as Client;
@@ -412,7 +544,8 @@ const buildService = (
     serverRepository,
     verificationRepository,
     detectionRepository,
-    queueRepository
+    queueRepository,
+    input.intakeRepository
   );
   const attention = createAttentionActions({
     repository: queueRepository,
@@ -431,7 +564,510 @@ const buildService = (
   return { channel, queueRepository, service, attention };
 };
 
+async function createReviewIntake(
+  repository: InMemoryReportIntakeRepository,
+  input: Parameters<InMemoryReportIntakeRepository['create']>[0]
+) {
+  const intake = await repository.create(input);
+  const { metadata, analysis } = processingMetadata(intake);
+  analysis.outcome = {
+    kind: 'admin_review',
+    reason: 'no_match',
+    candidates: [],
+    coverage: { kind: 'unavailable', reason: 'transport' },
+    includedEvidenceIds: [],
+    excludedEvidenceIds: [],
+  };
+  analysis.handoff = {
+    state: 'pending',
+    reason: 'no_match',
+    attempts: 0,
+    nextDueAt: new Date().toISOString(),
+    receipt: 'pending',
+  };
+  await repository.update(intake.id, { metadata: { ...metadata, analysis } });
+  return (await repository.claimPendingPresentation(new Date(), intake.id))!.intake;
+}
+
 describe('ModerationQueueService', () => {
+  it.each([false, true])(
+    'connects rendered review controls to the actual staff modals, acknowledged=%s',
+    async (acknowledged) => {
+      const repo = new InMemoryReportIntakeRepository();
+      const f = buildService({ intakeRepository: repo });
+      let intake = await createReviewIntake(repo, {
+        serverId: 'guild-1',
+        reporterId: 'reporter',
+        threadId: 'thread',
+        status: ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION,
+      });
+      const outcome = processingMetadata(intake).analysis.outcome!;
+      const first = await f.service.upsertReportIdentityReview({ intake, revision: 0, outcome });
+      await repo.completePresentation(
+        {
+          intake,
+          revision: 0,
+          leaseToken: processingMetadata(intake).analysis.presentation!.lease!.token,
+        },
+        {
+          kind: 'delivered',
+          channelId: first.channelId!,
+          messageId: first.messageId!,
+          receipt: 'pending',
+        }
+      );
+      if (acknowledged) {
+        await f.attention.acknowledge(
+          {
+            guildId: 'guild-1',
+            requestId: 'ack',
+            source: 'discord_interaction',
+            actor: { kind: 'user', userId: 'staff' },
+          },
+          { itemId: f.queueRepository.items[0].id }
+        );
+        intake = (await repo.claimPendingPresentation(new Date(Date.now() + 31_000), intake.id))!
+          .intake;
+        await f.service.upsertReportIdentityReview({ intake, revision: 0, outcome });
+      }
+      const message = f.channel.sentMessages[0];
+      const rows = message.payload.components as ActionRowBuilder<ButtonBuilder>[];
+      const entry = rows
+        .flatMap((row) => row.components)
+        .find((button) => 'label' in button.data && button.data.label === 'Admin Actions');
+      expect(entry).toBeDefined();
+      const staffGuild = {
+        id: 'guild-1',
+        roles: { fetch: jest.fn() },
+        members: { fetch: jest.fn().mockResolvedValue({ permissions: { has: () => true } }) },
+      };
+      const client = {
+        user: { id: 'bot' },
+        guilds: { fetch: jest.fn().mockResolvedValue(staffGuild) },
+        channels: { fetch: jest.fn().mockResolvedValue(null) },
+      } as unknown as Client;
+      const handler = new ReportInteractionHandler(
+        client,
+        {} as ReportSubmissionService,
+        { getServerConfig: async () => ({ settings: {} }) } as unknown as IConfigService,
+        {} as IThreadManager,
+        { findIntakeById: async (id: string) => repo.findById(id) } as IReportIntakeService
+      );
+      const interaction = {
+        guildId: 'guild-1',
+        guild: staffGuild,
+        channelId: f.channel.id,
+        channel: null,
+        user: { id: 'staff' },
+        message,
+        deferred: true,
+        replied: false,
+        editReply: jest.fn(),
+        reply: jest.fn(),
+        showModal: jest.fn(),
+        memberPermissions: { has: () => true },
+      } as unknown as ButtonInteraction;
+      const entryId = entry!.data as { custom_id: string };
+      await handler.handleReportIntakeAdminAction(interaction, entryId.custom_id);
+      const decisions = (
+        jest.mocked(interaction.editReply).mock.calls[0][0] as {
+          components: ActionRowBuilder<ButtonBuilder>[];
+        }
+      ).components;
+      for (const label of ['Confirm target', 'Resolve review']) {
+        const button = decisions
+          .flatMap((row) => row.components)
+          .find((button) => 'label' in button.data && button.data.label === label)!;
+        await handler.handleReportIntakeAdminAction(
+          interaction,
+          (button.data as { custom_id: string }).custom_id
+        );
+        expect(interaction.showModal).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({
+              title:
+                label === 'Confirm target' ? 'Confirm report target' : 'Resolve identity review',
+            }),
+          })
+        );
+      }
+      const intakeService = new ReportIntakeService(
+        repo,
+        new InMemoryServerRepository(),
+        new InMemoryUserRepository(),
+        new InMemoryServerMemberRepository(),
+        { getServerConfig: async () => ({ settings: {} }) } as unknown as IConfigService,
+        new ReportCandidateService(),
+        {
+          retireReportConfirmationPrompts: async (_intake, ids) => {
+            if (ids.includes(message.id)) message.payload.components = [];
+          },
+        } as IThreadManager
+      );
+      expect(
+        await intakeService.confirmCandidate({
+          intakeId: intake.id,
+          targetUserId: 'selected-target',
+          confirmedById: 'staff',
+          confirmedByStaff: true,
+          expectedEvidenceRevision: 0,
+          promptMessageId: message.id,
+        })
+      ).toMatchObject({ confirmed: true });
+      expect(
+        (message.payload.components as ActionRowBuilder<ButtonBuilder>[])
+          .flatMap((row) => row.components)
+          .some((button) => 'label' in button.data && button.data.label === 'Admin Actions')
+      ).toBe(true);
+      const token = projectReportIntakeState((await repo.findById(intake.id))!).submission!.token;
+      await intakeService.beginConfirmedSubmission(intake.id, token);
+      await intakeService.settleConfirmedSubmission(intake.id, token, 'unknown');
+      const recovery = (await repo.claimPendingPresentation(new Date(), intake.id))!;
+      await f.service.upsertReportIdentityReview({
+        intake: recovery.intake,
+        revision: 0,
+        outcome: processingMetadata(recovery.intake).analysis.outcome!,
+      });
+      jest.mocked(interaction.editReply).mockClear();
+      await handler.handleReportIntakeAdminAction(interaction, entryId.custom_id);
+      const recoveryRows = (
+        jest.mocked(interaction.editReply).mock.calls[0][0] as {
+          components: ActionRowBuilder<ButtonBuilder>[];
+        }
+      ).components;
+      const recover = recoveryRows
+        .flatMap((row) => row.components)
+        .find((button) => 'label' in button.data && button.data.label === 'Reconcile submission')!;
+      expect(recover).toBeDefined();
+      await handler.handleReportIntakeAdminAction(
+        interaction,
+        (recover.data as { custom_id: string }).custom_id
+      );
+      expect(interaction.showModal).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ title: 'Reconcile submission' }),
+        })
+      );
+    }
+  );
+
+  it('shows at most five distinct candidates and actual matching fields with coverage context', async () => {
+    const repository = new InMemoryReportIntakeRepository();
+    const f = buildService({ intakeRepository: repository });
+    const intake = await createReviewIntake(repository, {
+      serverId: 'guild-1',
+      reporterId: 'reporter',
+      threadId: 'thread',
+      status: ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION,
+    });
+    const candidates = Array.from({ length: 6 }, (_, index) => ({
+      candidateId: `candidate-${index}`,
+      serverId: 'guild-1',
+      discordUserId: `user-${index}`,
+      username: `opaque_${index}`,
+      globalName: 'Alder',
+      displayName: `Nick ${index}`,
+      nickname: `Nick ${index}`,
+      avatarUrl: null,
+      sourceRefs: [],
+      matchedFields: ['globalName' as const],
+      subjectMatches: [
+        { subjectId: 'reported', sourceRefs: [], matchedFields: ['globalName' as const] },
+      ],
+    }));
+    await f.service.upsertReportIdentityReview({
+      intake,
+      revision: 0,
+      outcome: {
+        kind: 'admin_review',
+        reason: 'ambiguous',
+        candidates,
+        coverage: {
+          kind: 'partial',
+          memberCount: 1000,
+          scannedAt: new Date().toISOString(),
+          expiresAt: new Date().toISOString(),
+          reason: 'page_limit',
+        },
+        includedEvidenceIds: [],
+        excludedEvidenceIds: [],
+      },
+    });
+    const fields = f.channel.sentMessages[0].embeds[0].fields!;
+    expect(fields.filter((field) => field.name.startsWith('Candidate '))).toHaveLength(5);
+    expect(fields.find((field) => field.name === 'Candidate 1')?.value).toContain(
+      'Matched: account display name'
+    );
+    expect(fields.find((field) => field.name === 'Candidate 1')?.value).toContain('Alder');
+    expect(fields.find((field) => field.name === 'Identity lookup')?.value).toContain(
+      '6 candidates; partial coverage (1000 members checked). Showing 5'
+    );
+    expect(JSON.stringify(fields)).not.toContain('opaque_5');
+  });
+
+  it.each([true, false])(
+    'checks configured non-administrator responder access, allowed=%s',
+    async (allowed) => {
+      const intakeRepository = new InMemoryReportIntakeRepository();
+      const channel = new FakeDiscordChannel('queue-channel');
+      channel.guild.roles.fetch.mockResolvedValue(
+        new Collection([
+          ['11111111111111111', { id: '11111111111111111', permissions: { has: () => false } }],
+          ['unrelated-role', { id: 'unrelated-role', permissions: { has: () => true } }],
+        ])
+      );
+      channel.permissionsFor.mockImplementation((subject) => ({
+        has: () => subject?.id === 'bot' || (allowed && subject?.id === '11111111111111111'),
+      }));
+      const server = buildServer();
+      server.admin_notification_role_id = null;
+      server.settings = { ...server.settings, case_responder_role_ids: ['11111111111111111'] };
+      const { service } = buildService({ intakeRepository, channel, server });
+      const intake = await createReviewIntake(intakeRepository, {
+        serverId: 'guild-1',
+        reporterId: 'reporter',
+        threadId: 'thread',
+        status: ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION,
+      });
+      const result = await service.upsertReportIdentityReview({
+        intake,
+        revision: 0,
+        outcome: {
+          kind: 'admin_review',
+          reason: 'no_match',
+          candidates: [],
+          coverage: { kind: 'unavailable', reason: 'transport' },
+          includedEvidenceIds: [],
+          excludedEvidenceIds: [],
+        },
+      });
+      expect(result.delivered).toBe(allowed);
+      expect(channel.send).toHaveBeenCalledTimes(allowed ? 1 : 0);
+    }
+  );
+
+  it.each([true, false])('uses only an authorized fallback, available=%s', async (available) => {
+    const intakeRepository = new InMemoryReportIntakeRepository();
+    const channel = new FakeDiscordChannel('queue-channel');
+    channel.permissionsFor.mockReturnValue({ has: () => false });
+    const fallback = new FakeDiscordChannel('admin-channel');
+    fallback.permissionsFor.mockReturnValue({ has: () => available });
+    const { service, queueRepository } = buildService({
+      intakeRepository,
+      channel,
+      fallback,
+      server: { ...buildServer(), admin_channel_id: 'admin-channel' },
+    });
+    const intake = await createReviewIntake(intakeRepository, {
+      serverId: 'guild-1',
+      reporterId: 'reporter',
+      threadId: 'thread',
+      status: ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION,
+    });
+    const result = await service.upsertReportIdentityReview({
+      intake,
+      revision: 0,
+      outcome: {
+        kind: 'admin_review',
+        reason: 'no_match',
+        candidates: [],
+        coverage: { kind: 'unavailable', reason: 'transport' },
+        includedEvidenceIds: [],
+        excludedEvidenceIds: [],
+      },
+    });
+    expect(result.delivered).toBe(available);
+    expect(channel.send).not.toHaveBeenCalled();
+    expect(fallback.send).toHaveBeenCalledTimes(available ? 1 : 0);
+    expect(queueRepository.items).toHaveLength(1);
+  });
+
+  it('publishes identity review through fallback while old ordinary cleanup is reserved and failing', async () => {
+    const intakeRepository = new InMemoryReportIntakeRepository();
+    const channel = new FakeDiscordChannel('queue-channel');
+    channel.permissionsFor.mockReturnValue({ has: () => false });
+    channel.messages.fetch.mockRejectedValue(
+      Object.assign(new Error('old channel access denied'), { code: 50013 })
+    );
+    const fallback = new FakeDiscordChannel('admin-channel');
+    const { service, queueRepository, attention } = buildService({
+      intakeRepository,
+      channel,
+      fallback,
+      server: { ...buildServer(), admin_channel_id: 'admin-channel' },
+    });
+    const intake = await createReviewIntake(intakeRepository, {
+      serverId: 'guild-1',
+      reporterId: 'reporter',
+      threadId: 'thread',
+      status: ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION,
+    });
+    const old = await queueRepository.upsert({
+      serverId: 'guild-1',
+      userId: 'reporter',
+      itemType: ModerationQueueItemType.REPORT_THREAD_ATTENTION,
+      reportIntakeId: intake.id,
+      sourceThreadId: 'thread',
+      queueChannelId: 'queue-channel',
+      queueMessageId: 'old-message',
+      metadata: {},
+    });
+    await expect(
+      attention.acknowledge(
+        {
+          guildId: 'guild-1',
+          requestId: 'ack',
+          source: 'discord_interaction',
+          actor: { kind: 'user', userId: 'staff' },
+        },
+        { itemId: old.id }
+      )
+    ).rejects.toThrow('Failed to delete');
+    const outcome = processingMetadata(intake).analysis.outcome!;
+    expect(
+      await service.upsertReportIdentityReview({ intake, revision: 0, outcome })
+    ).toMatchObject({ delivered: true });
+    expect(await queueRepository.findById(old.id)).toMatchObject({
+      attention_cleanup_pending: true,
+      queue_channel_id: 'queue-channel',
+      queue_message_id: 'old-message',
+    });
+    const live = (await queueRepository.listByReportIntake(intake.id))[0];
+    expect(live.id).not.toBe(old.id);
+    expect(live.queue_channel_id).toBe('admin-channel');
+    expect(live.queue_message_id).not.toBe('old-message');
+    expect(fallback.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('upgrades a generic attention item and prevents a later generic message from downgrading it', async () => {
+    const intakeRepository = new InMemoryReportIntakeRepository();
+    const { service, queueRepository, channel } = buildService({ intakeRepository });
+    const intake = await createReviewIntake(intakeRepository, {
+      serverId: 'guild-1',
+      reporterId: 'reporter',
+      threadId: 'thread',
+      status: ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION,
+    });
+    const message = {
+      id: 'source',
+      content: 'Synthetic report evidence',
+      channelId: 'thread',
+      author: { id: 'reporter' },
+      createdTimestamp: Date.now(),
+      url: 'https://discord.com/channels/guild-1/thread/source',
+    } as Message;
+    await service.recordReportThreadAttention(intake, message);
+    const originalId = queueRepository.items[0].id;
+    await service.upsertReportIdentityReview({
+      intake,
+      revision: 0,
+      outcome: {
+        kind: 'admin_review',
+        reason: 'no_match',
+        candidates: [],
+        coverage: { kind: 'unavailable', reason: 'transport' },
+        includedEvidenceIds: [],
+        excludedEvidenceIds: [],
+      },
+    });
+    await service.recordReportThreadAttention(intake, { ...message, id: 'later' } as Message);
+    expect(queueRepository.items).toHaveLength(1);
+    expect(queueRepository.items[0].id).toBe(originalId);
+    expect(queueRepository.items[0].metadata).toMatchObject({ identity_review: { revision: 0 } });
+    expect(channel.sentMessages).toHaveLength(1);
+    expect(channel.sentMessages[0].embeds[0].title).toBe('Report needs admin review');
+    expect(channel.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let a delayed old send replace the delivery pointer from a replacement claim', async () => {
+    jest.useFakeTimers();
+    try {
+      const intakeRepository = new InMemoryReportIntakeRepository();
+      const { service, queueRepository, channel } = buildService({ intakeRepository });
+      const intake = await createReviewIntake(intakeRepository, {
+        serverId: 'guild-1',
+        reporterId: 'reporter',
+        threadId: 'thread',
+        status: ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION,
+      });
+      const outcome = processingMetadata(intake).analysis.outcome!;
+      let release!: () => void;
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      channel.send.mockImplementationOnce(async (payload) => {
+        entered();
+        await held;
+        const message = new FakeDiscordMessage(
+          'old-send',
+          channel.id,
+          payload as unknown as Record<string, unknown>
+        );
+        channel.sentMessages.push(message);
+        return message as unknown as Message;
+      });
+      const oldSend = service.upsertReportIdentityReview({
+        intake,
+        outcome,
+        revision: intake.evidence_revision,
+      });
+      const oldResult = oldSend.catch((error: unknown) => error);
+      await started;
+      jest.advanceTimersByTime(61_000);
+      const replacement = (await intakeRepository.claimPendingPresentation(new Date(), intake.id))!;
+      const delivered = await service.upsertReportIdentityReview({
+        intake: replacement.intake,
+        outcome,
+        revision: replacement.revision,
+      });
+      expect(delivered.delivered).toBe(true);
+      release();
+      expect(await oldResult).toEqual(new Error('Report review receipt was not saved'));
+      expect(queueRepository.items[0].queue_message_id).toBe(delivered.messageId);
+      expect(queueRepository.items[0].queue_message_id).not.toBe('old-send');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('reconciles an accepted handoff after receipt persistence fails', async () => {
+    const intakeRepository = new InMemoryReportIntakeRepository();
+    const { service, queueRepository, channel } = buildService({ intakeRepository });
+    const intake = await createReviewIntake(intakeRepository, {
+      serverId: 'guild-1',
+      reporterId: 'reporter',
+      threadId: 'thread',
+      status: ReportIntakeStatus.NEEDS_ADMIN_CONFIRMATION,
+    });
+    const input = {
+      intake,
+      revision: 0,
+      outcome: {
+        kind: 'admin_review' as const,
+        reason: 'no_match' as const,
+        candidates: [],
+        coverage: { kind: 'unavailable' as const, reason: 'transport' as const },
+        includedEvidenceIds: [],
+        excludedEvidenceIds: [],
+      },
+    };
+    jest
+      .spyOn(queueRepository, 'updateDiscordMessage')
+      .mockRejectedValueOnce(new Error('database unavailable'));
+    await expect(service.upsertReportIdentityReview(input)).rejects.toThrow('database unavailable');
+    expect((await service.upsertReportIdentityReview(input)).delivered).toBe(true);
+    const createdMessages = channel.sentMessages;
+    const rolePings = channel.send.mock.calls.filter(([payload]) =>
+      payload.content?.includes('<@&')
+    );
+    expect(createdMessages).toHaveLength(1);
+    expect(rolePings).toHaveLength(1);
+  });
+
   it('prioritizes case navigation and retains moderation controls below it', async () => {
     const { service, channel } = buildService();
     await service.upsertCaseMirror(buildVerificationEvent());

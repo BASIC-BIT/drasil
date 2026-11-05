@@ -133,3 +133,48 @@ export function selectEligibleReportImageAttachments(
     .filter((attachment) => isEligibleReportImageAttachment(attachment, settings))
     .slice(0, settings.maxImages);
 }
+
+/** The caller must refresh through the original authorized Discord message, never this URL. */
+export function isCurrentReportImageSource(
+  input: {
+    url: string;
+    attachmentId: string;
+    contentType: string;
+    size: number;
+  },
+  maxImageBytes = MAX_REPORT_AI_MAX_IMAGE_BYTES
+): boolean {
+  if (
+    !Number.isSafeInteger(input.size) ||
+    input.size < 0 ||
+    input.size > maxImageBytes ||
+    !['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(
+      input.contentType.toLowerCase()
+    )
+  )
+    return false;
+  try {
+    const url = new URL(input.url);
+    const path = url.pathname.split('/');
+    if (
+      url.protocol !== 'https:' ||
+      url.username ||
+      url.password ||
+      url.port ||
+      !['cdn.discordapp.com', 'media.discordapp.net'].includes(url.hostname) ||
+      path.length !== 5 ||
+      path[1] !== 'attachments' ||
+      !path[2] ||
+      path[3] !== input.attachmentId ||
+      !path[4]
+    )
+      return false;
+    const expires = url.searchParams.get('ex');
+    return (
+      expires === null ||
+      (/^[a-f0-9]{1,16}$/i.test(expires) && parseInt(expires, 16) * 1000 > Date.now())
+    );
+  } catch {
+    return false;
+  }
+}

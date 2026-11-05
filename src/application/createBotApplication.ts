@@ -74,7 +74,7 @@ export interface BotApplication {
 export function createBotApplication(
   deps: BotSetupDependencies &
     BotOperationsDependencies &
-    Pick<BotReportDependencies, 'reportIntakeService'> &
+    Pick<BotReportDependencies, 'reportIntakeService' | 'reportIntakeHandoffService'> &
     Omit<BotCaseDependencies, 'confirmations'> &
     BotMessageCleanupDependencies &
     Pick<

@@ -344,7 +344,9 @@ for (const width of [390, 1440])
         { id: 'queue:pending_screening', kind: 'screening', heading: 'orbit', source: '7 days' },
       ];
       for (const scenario of scenarios) {
-        await page.goto(`${story}&selected=${encodeURIComponent(scenario.id)}`);
+        await page.goto(
+          `${story}&selected=${encodeURIComponent(scenario.id)}&globals=a11y.manual:!true`
+        );
         const detail = page.getByRole('region', { name: 'Selected inbox item' });
         await expect(
           detail.getByRole('heading', { name: scenario.heading, exact: true })

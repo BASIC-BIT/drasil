@@ -20,12 +20,25 @@ it('preserves a submitted report when final intake bookkeeping fails', async () 
     promptToken: 'secret',
     candidateIds: ['target'],
     claimed: false,
+    evidenceRevision: 0,
+    presentationRevision: null,
+    staged: false,
   };
   const confirmedSubmission = jest.fn(async () => ({
     status: 'submitted' as const,
     targetUserId: 'target',
   }));
   const deps = mock<ReportDependencies>({
+    authority: {
+      loadFresh: async (guildId, userId) => ({
+        guildId,
+        userId,
+        present: true,
+        owner: false,
+        permissions: '0',
+        roleIds: [],
+      }),
+    },
     intakes: {
       load: async () => intake,
       findOpen: async () => null,

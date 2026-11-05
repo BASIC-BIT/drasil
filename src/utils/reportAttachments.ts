@@ -1,6 +1,12 @@
+import type {
+  ReportEvidenceRef,
+  ReportEvidenceSource,
+  ReportSubjectClues,
+} from '@drasil/application';
 import type { MessageCreateOptions } from 'discord.js';
 import {
   selectEligibleReportImageAttachments,
+  isCurrentReportImageSource,
   type ReportAiSettings,
   type ReportAttachmentMetadata,
 } from './reportAiSettings';
@@ -124,4 +130,70 @@ export async function buildSpoilerImageAttachmentFileResult(
 export function toSpoilerFilename(filename: string): string {
   const sanitized = filename.replace(/[\\/:*?"<>|]/g, '_').trim() || 'image';
   return sanitized.startsWith('SPOILER_') ? sanitized : `SPOILER_${sanitized}`;
+}
+
+export function prepareReportEvidenceSource(input: {
+  message: MessageWithAttachmentsLike & { readonly id: string; readonly content?: string };
+  ref: ReportEvidenceRef;
+  attachmentId?: string;
+  settings: ReportAiSettings;
+  anchors?: readonly ReportSubjectClues[];
+}): ReportEvidenceSource {
+  const { message, ref, settings } = input;
+  const unavailable: ReportEvidenceSource = {
+    ref,
+    content: { kind: 'unavailable', reason: 'evidence_unavailable' },
+  };
+  const excluded: ReportEvidenceSource = {
+    ref,
+    content: { kind: 'unavailable', reason: 'excluded' },
+  };
+  if (message.id !== ref.messageId) return unavailable;
+  if (!settings.enabled) return excluded;
+  if (ref.kind === 'text') {
+    if (!settings.analyzeText) return excluded;
+    return message.content?.trim()
+      ? {
+          ref,
+          content: { kind: 'text', text: message.content },
+          ...(input.anchors ? { anchors: input.anchors } : {}),
+        }
+      : unavailable;
+  }
+  if (!settings.analyzeImages || settings.maxImages < 1) return excluded;
+  const attachment = messageAttachmentsToReportMetadata(message).find(
+    (item) => item.id === input.attachmentId
+  );
+  if (!attachment) return unavailable;
+  if (
+    (attachment.contentType &&
+      !['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(
+        attachment.contentType.toLowerCase()
+      )) ||
+    (typeof attachment.size === 'number' && attachment.size > settings.maxImageBytes)
+  )
+    return excluded;
+  if (
+    !attachment.id ||
+    !attachment.url?.trim() ||
+    !attachment.contentType ||
+    typeof attachment.size !== 'number'
+  )
+    return unavailable;
+  if (
+    !selectEligibleMessageReportImageAttachments(message, settings).some(
+      (item) => item.id === attachment.id
+    )
+  )
+    return excluded;
+  const image = {
+    kind: 'image' as const,
+    attachmentId: attachment.id,
+    url: attachment.url,
+    contentType: attachment.contentType,
+    size: attachment.size,
+  };
+  return isCurrentReportImageSource(image, settings.maxImageBytes)
+    ? { ref, content: image, ...(input.anchors ? { anchors: input.anchors } : {}) }
+    : unavailable;
 }

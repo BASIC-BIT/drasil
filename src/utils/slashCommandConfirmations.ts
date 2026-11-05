@@ -5,6 +5,7 @@ import {
   ButtonInteraction,
   ButtonStyle,
   ChatInputCommandInteraction,
+  ModalSubmitInteraction,
   MessageFlags,
 } from 'discord.js';
 
@@ -72,7 +73,7 @@ export function isSlashCommandConfirmationCustomId(customId: string): boolean {
 }
 
 export async function requestSlashCommandConfirmation(
-  interaction: ChatInputCommandInteraction,
+  interaction: ChatInputCommandInteraction | ModalSubmitInteraction,
   options: SlashCommandConfirmationOptions
 ): Promise<void> {
   pruneExpiredConfirmations();

@@ -40,6 +40,9 @@ export function decodeReportCommand(row: QueuedRow): QueuedReportCommand | null 
       });
     case 'close_report_intake':
       return queuedReportCommandSchema.parse({
+        ...(metadata.report_command && typeof metadata.report_command === 'object'
+          ? metadata.report_command
+          : {}),
         kind: row.action_type,
         intakeId: row.report_intake_id,
       });
@@ -94,7 +97,19 @@ export function encodeReportAction(
           }
         : command.kind === 'start_report_intake'
           ? { channel_id: command.channelId }
-          : {}),
+          : command.closeMode ||
+              command.expectedEvidenceRevision !== undefined ||
+              command.promptMessageId
+            ? {
+                report_command: {
+                  ...(command.closeMode ? { closeMode: command.closeMode } : {}),
+                  ...(command.expectedEvidenceRevision !== undefined
+                    ? { expectedEvidenceRevision: command.expectedEvidenceRevision }
+                    : {}),
+                  ...(command.promptMessageId ? { promptMessageId: command.promptMessageId } : {}),
+                },
+              }
+            : {}),
     },
   };
 }

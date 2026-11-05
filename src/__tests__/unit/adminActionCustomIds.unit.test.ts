@@ -144,3 +144,10 @@ describe('adminActionCustomIds (unit)', () => {
     ).toBeNull();
   });
 });
+
+it.each(['st', 'rr'])('rejects extra empty fields in revision-bound review action %s', (action) => {
+  const id = `report_intake_admin:${action}:intake:2:message`;
+  expect(parseReportIntakeAdminActionCustomId(id)).toMatchObject({ evidenceRevision: 2 });
+  expect(parseReportIntakeAdminActionCustomId(`${id}:`)).toBeNull();
+  expect(parseReportIntakeAdminActionCustomId(`${id}::extra`)).toBeNull();
+});

@@ -27,8 +27,10 @@ it('creates direct correlation without a durable request and preserves source', 
       }),
     },
     repository: {
+      acknowledgeIdentityReview: async () => 'already_handled',
       findById: async () => null,
-      deleteById: async () => {
+      reserveOrdinaryAcknowledgement: async () => null,
+      completeOrdinaryAcknowledgement: async () => {
         throw new Error('no item');
       },
     },

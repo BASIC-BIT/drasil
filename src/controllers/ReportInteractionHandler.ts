@@ -1,4 +1,11 @@
-import type { ReportActions, ReportCommand, ReportOutcome } from '@drasil/application';
+import { requestSlashCommandConfirmation } from '../utils/slashCommandConfirmations';
+import {
+  reportAnalysisMetadataSchema,
+  projectReportIntakeState,
+  type ReportActions,
+  type ReportCommand,
+  type ReportOutcome,
+} from '@drasil/application';
 import { createDiscordActionContext } from '../application/context';
 import { requireReportOutcome } from '../application/adapters/reports';
 import { getDetectionResponseSettings } from '../utils/detectionResponseSettings';
@@ -14,6 +21,9 @@ import {
   InteractionContextType,
   MessageFlags,
   ModalSubmitInteraction,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
   PermissionFlagsBits,
   ThreadChannel,
 } from 'discord.js';
@@ -34,6 +44,8 @@ import { REPORT_MESSAGE_REASON_FIELD_ID } from '../utils/userReportSettings';
 import { canModerateReportIntake } from '../utils/reportIntakeStaffAuthorization';
 import {
   buildReportIntakeAdminBanCustomId,
+  buildReportIntakeReviewCustomId,
+  type ParsedReportIntakeAdminActionCustomId,
   buildReportIntakeAdminCancelCustomId,
   buildReportIntakeAdminCloseCustomId,
   buildReportIntakeAdminConfirmCloseCustomId,
@@ -176,7 +188,9 @@ export class ReportInteractionHandler {
       const context = await this.resolveReportConfirmationContext(interaction, intakeId);
       if (!context) return;
       const guild = context.guild;
-      const targetMember = await guild.members.fetch(targetUserId).catch(() => null);
+      const targetMember = await guild.members
+        .fetch({ user: targetUserId, force: true })
+        .catch(() => null);
       if (!targetMember) {
         await interaction.editReply({
           content: 'The confirmed target is no longer available in this server.',
@@ -190,6 +204,9 @@ export class ReportInteractionHandler {
         targetUserId,
         threadId: interaction.channelId,
         promptMessageId: interaction.message.id,
+        ...(projectReportIntakeState(context.intake).staged
+          ? { expectedEvidenceRevision: context.intake.evidence_revision }
+          : {}),
       });
       if (outcome.kind !== 'confirm_intake_candidate') return;
       if (outcome.status !== 'submitted') {
@@ -249,6 +266,9 @@ export class ReportInteractionHandler {
         intakeId,
         threadId: interaction.channelId,
         promptMessageId: interaction.message.id,
+        ...(projectReportIntakeState(context.intake).staged
+          ? { expectedEvidenceRevision: context.intake.evidence_revision }
+          : {}),
         promptToken,
       });
       if (outcome.kind !== 'reject_intake_candidates') return;
@@ -257,7 +277,7 @@ export class ReportInteractionHandler {
         console.warn('Failed to deliver report selection result:', error);
       });
 
-      if (result.rejected) {
+      if (result.rejected && !projectReportIntakeState(context.intake).staged) {
         const threadChannel = this.getThreadChannel(interaction.channel);
         if (threadChannel) {
           await threadChannel
@@ -297,6 +317,65 @@ export class ReportInteractionHandler {
           interaction,
           { content: 'Unknown report admin action.', components: [] },
           responseMode
+        );
+        return;
+      }
+
+      if (
+        parsed.action === 'select_target' ||
+        parsed.action === 'resolve_review' ||
+        parsed.action === 'recover_submission'
+      ) {
+        const intake = await this.currentIdentityReview(interaction, parsed);
+        if (!intake) {
+          await interaction.reply({
+            content: 'Use the latest moderator review message.',
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+        const target = parsed.action === 'select_target';
+        const recovery = parsed.action === 'recover_submission';
+        await interaction.showModal(
+          new ModalBuilder()
+            .setCustomId(customId)
+            .setTitle(
+              target
+                ? 'Confirm report target'
+                : recovery
+                  ? 'Reconcile submission'
+                  : 'Resolve identity review'
+            )
+            .addComponents(
+              new ActionRowBuilder<TextInputBuilder>().addComponents(
+                new TextInputBuilder()
+                  .setCustomId(target ? 'target' : 'reason')
+                  .setLabel(
+                    target
+                      ? 'Current server member ID'
+                      : recovery
+                        ? 'Verified outcome and reason'
+                        : 'Reason for resolving without a target'
+                  )
+                  .setStyle(target ? TextInputStyle.Short : TextInputStyle.Paragraph)
+                  .setRequired(true)
+                  .setMaxLength(target ? 20 : 1000)
+              )
+            )
+            .addComponents(
+              ...(recovery
+                ? [
+                    new ActionRowBuilder<TextInputBuilder>().addComponents(
+                      new TextInputBuilder()
+                        .setCustomId('verifiedOutcome')
+                        .setLabel('Type not_applied or handled_separately')
+                        .setStyle(TextInputStyle.Short)
+                        .setRequired(true)
+                        .setMaxLength(30)
+                    ),
+                  ]
+                : [])
+            )
         );
         return;
       }
@@ -359,6 +438,174 @@ export class ReportInteractionHandler {
         responseMode
       ).catch((replyError) => {
         console.warn('Failed to respond to report intake admin action error:', replyError);
+      });
+    }
+  }
+
+  private async currentIdentityReview(
+    interaction: ButtonInteraction | ModalSubmitInteraction,
+    parsed: ParsedReportIntakeAdminActionCustomId
+  ): Promise<ReportIntake | null> {
+    const intake = await this.reportIntakeService?.findIntakeById(parsed.intakeId);
+    if (!intake || !interaction.guildId || intake.server_id !== interaction.guildId) return null;
+    const state = projectReportIntakeState(intake);
+    const recovery = parsed.action === 'recover_submission';
+    if (
+      recovery
+        ? !state.submission ||
+          state.submission.token !== parsed.submissionToken ||
+          !state.confirmedTargetUserId ||
+          state.claimed ||
+          intake.closed_at !== null ||
+          parsed.evidenceRevision !== state.evidenceRevision
+        : state.status !== 'needs_admin_confirmation' ||
+          state.confirmedTargetUserId ||
+          state.claimed ||
+          parsed.evidenceRevision !== state.evidenceRevision ||
+          state.presentationRevision !== state.evidenceRevision ||
+          !parsed.promptMessageId ||
+          parsed.promptMessageId !== state.promptMessageId
+    )
+      return null;
+    const analysis = reportAnalysisMetadataSchema.safeParse(
+      intake.metadata && typeof intake.metadata === 'object' && !Array.isArray(intake.metadata)
+        ? intake.metadata.analysis
+        : null
+    );
+    const handoff = analysis.success ? analysis.data.handoff : null;
+    if (
+      interaction.channelId !== intake.thread_id &&
+      (!handoff || !('channelId' in handoff) || interaction.channelId !== handoff.channelId)
+    )
+      return null;
+    const guild = await this.client.guilds.fetch(interaction.guildId);
+    return (await canModerateReportIntake(guild, interaction.user.id, this.configService))
+      ? intake
+      : null;
+  }
+
+  public async handleReportIntakeReviewModal(interaction: ModalSubmitInteraction): Promise<void> {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    try {
+      const parsed = parseReportIntakeAdminActionCustomId(interaction.customId);
+      if (
+        !parsed ||
+        (parsed.action !== 'select_target' &&
+          parsed.action !== 'resolve_review' &&
+          parsed.action !== 'recover_submission')
+      ) {
+        await interaction.editReply({ content: 'This report review form is invalid.' });
+        return;
+      }
+      const intake = await this.currentIdentityReview(interaction, parsed);
+      if (
+        !intake ||
+        !intake.thread_id ||
+        (!parsed.promptMessageId && !parsed.submissionToken) ||
+        parsed.evidenceRevision === undefined
+      ) {
+        await interaction.editReply({ content: 'Use the latest moderator review message.' });
+        return;
+      }
+      let command: ReportCommand;
+      let message: string;
+      if (parsed.action === 'select_target') {
+        if (!parsed.promptMessageId) throw new Error('Missing report confirmation binding');
+        const targetUserId = interaction.fields.getTextInputValue('target').trim();
+        const guild = await this.client.guilds.fetch(intake.server_id);
+        const member = /^\d{17,20}$/.test(targetUserId)
+          ? await guild.members.fetch({ user: targetUserId, force: true }).catch(() => null)
+          : null;
+        if (
+          !member ||
+          member.id !== targetUserId ||
+          targetUserId === intake.reporter_id ||
+          targetUserId === interaction.user.id
+        ) {
+          await interaction.editReply({
+            content: 'Choose a current server member other than the reporter or yourself.',
+          });
+          return;
+        }
+        command = {
+          kind: 'confirm_intake_candidate',
+          intakeId: intake.id,
+          threadId: intake.thread_id,
+          promptMessageId: parsed.promptMessageId,
+          expectedEvidenceRevision: parsed.evidenceRevision,
+          targetUserId,
+        };
+        message = `Submit this report for ${formatInlineIdentifier(member.user.username)} (${targetUserId})? Saved evidence will be submitted using the existing report policy.`;
+      } else {
+        const reason = interaction.fields.getTextInputValue('reason').trim();
+        if (!reason) {
+          await interaction.editReply({ content: 'Include a reason for resolving this review.' });
+          return;
+        }
+        const recovery = parsed.action === 'recover_submission';
+        const verifiedOutcome = recovery
+          ? interaction.fields.getTextInputValue('verifiedOutcome').trim()
+          : null;
+        if (
+          recovery &&
+          verifiedOutcome !== 'not_applied' &&
+          verifiedOutcome !== 'handled_separately'
+        ) {
+          await interaction.editReply({
+            content:
+              'Record the verified outcome as not_applied or handled_separately. A submission still in progress cannot be resolved.',
+          });
+          return;
+        }
+        command = {
+          kind: 'close_report_intake',
+          intakeId: intake.id,
+          closeMode:
+            recovery && parsed.submissionToken && verifiedOutcome
+              ? {
+                  kind: 'resolve_submission',
+                  token: parsed.submissionToken,
+                  reason,
+                  verifiedOutcome: verifiedOutcome as 'not_applied' | 'handled_separately',
+                }
+              : { kind: 'resolve_review', reason },
+          promptMessageId: parsed.promptMessageId,
+          expectedEvidenceRevision: parsed.evidenceRevision,
+        };
+        message = recovery
+          ? `Reconcile the recorded submission first. If no completed receipt exists and the call has settled, resolve review using your verified outcome (${verifiedOutcome}). This does not retry submission or clear the selected target. Reason: ${reason}`
+          : `Resolve this identity review without selecting a target? Saved evidence remains recorded. Reason: ${reason}`;
+      }
+      await requestSlashCommandConfirmation(interaction, {
+        message,
+        confirmLabel: parsed.action === 'select_target' ? 'Submit report' : 'Resolve review',
+        execute: async (button) => {
+          await button.deferUpdate();
+          if (!this.reports) throw new Error('Report application is unavailable.');
+          const result = await this.reports.execute(
+            createDiscordActionContext({
+              guildId: intake.server_id,
+              userId: button.user.id,
+              requestId: button.id,
+            }),
+            command
+          );
+          const content =
+            result.kind === 'denied'
+              ? 'The report or your permissions changed. Use the latest moderator review message.'
+              : result.outcome.kind === 'confirm_intake_candidate'
+                ? result.outcome.message
+                : result.outcome.kind === 'close_report_intake'
+                  ? result.outcome.result.message
+                  : 'Report action completed.';
+          await button.editReply({ content, components: [], allowedMentions: { parse: [] } });
+        },
+      });
+    } catch (error) {
+      console.error('Failed to prepare report identity review:', error);
+      await interaction.editReply({
+        content: 'Could not prepare this report action. Use the latest moderator review message.',
+        components: [],
       });
     }
   }
@@ -680,11 +927,19 @@ export class ReportInteractionHandler {
       return null;
     }
 
+    const savedAnalysis = reportAnalysisMetadataSchema.safeParse(
+      intake.metadata && typeof intake.metadata === 'object' && !Array.isArray(intake.metadata)
+        ? intake.metadata.analysis
+        : null
+    );
+    const handoff = savedAnalysis.success ? savedAnalysis.data.handoff : null;
+    const reviewChannelId = handoff && 'channelId' in handoff ? handoff.channelId : null;
     const currentChannelId = interaction.channelId;
     if (
       intake.thread_id &&
       currentChannelId &&
       currentChannelId !== intake.thread_id &&
+      currentChannelId !== reviewChannelId &&
       !(await isReportIntakeActionChannel(
         this.configService,
         guildId,
@@ -728,6 +983,65 @@ export class ReportInteractionHandler {
     interaction: ButtonInteraction,
     context: ReportIntakeAdminContext
   ): Promise<void> {
+    const state = projectReportIntakeState(context.intake);
+    const reviewRows: ActionRowBuilder<ButtonBuilder>[] = [];
+    if (state.submission && state.confirmedTargetUserId && !context.intake.closed_at) {
+      if (interaction.message.author.id !== this.client.user?.id) return;
+      reviewRows.push(
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId(
+              buildReportIntakeReviewCustomId(
+                'recover_submission',
+                state.id,
+                state.evidenceRevision,
+                state.submission.token
+              )
+            )
+            .setLabel('Reconcile submission')
+            .setStyle(ButtonStyle.Primary)
+        )
+      );
+    } else if (state.status === 'needs_admin_confirmation' && state.staged) {
+      if (
+        !state.promptMessageId ||
+        state.presentationRevision !== state.evidenceRevision ||
+        interaction.message.id !== state.promptMessageId ||
+        interaction.message.author.id !== this.client.user?.id
+      ) {
+        await interaction.editReply({
+          content: 'Use the latest moderator review message.',
+          components: [],
+        });
+        return;
+      }
+      reviewRows.push(
+        new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId(
+              buildReportIntakeReviewCustomId(
+                'select_target',
+                state.id,
+                state.evidenceRevision,
+                state.promptMessageId
+              )
+            )
+            .setLabel('Confirm target')
+            .setStyle(ButtonStyle.Primary),
+          new ButtonBuilder()
+            .setCustomId(
+              buildReportIntakeReviewCustomId(
+                'resolve_review',
+                state.id,
+                state.evidenceRevision,
+                state.promptMessageId
+              )
+            )
+            .setLabel('Resolve review')
+            .setStyle(ButtonStyle.Secondary)
+        )
+      );
+    }
     const config = await this.configService.getServerConfig(context.intake.server_id);
     const banEnabled = getDetectionResponseSettings(config.settings).moderatorBanActionEnabled;
     const banUnavailableReason =
@@ -752,11 +1066,15 @@ export class ReportInteractionHandler {
       {
         content: [
           this.buildReportIntakeAdminMenuMessage(context.intake),
+          state.submission
+            ? `Submission: ${state.submission.state.replace('_', ' ')}. Reconcile recorded completion before resolving; a call still in progress cannot be closed without completion proof.`
+            : null,
           banUnavailableReason ? `Ban unavailable: ${banUnavailableReason}` : null,
         ]
           .filter(Boolean)
           .join('\n'),
         components: [
+          ...reviewRows,
           new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder()
               .setCustomId(buildReportIntakeAdminCloseCustomId(context.intake.id))

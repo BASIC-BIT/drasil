@@ -1,3 +1,11 @@
+import type { ReportEvidenceSource } from '@drasil/application';
+import {
+  associatedOutput,
+  hostileText,
+  serverTitle,
+  sourceRef,
+  subject,
+} from '../fixtures/report-intake/source-associated';
 import { createTracingRecorder } from '../fakes/recordingTracing';
 import OpenAI from 'openai';
 import {
@@ -38,6 +46,443 @@ describe('GPTService (unit)', () => {
     const openai = { responses: { create: parse } } as unknown as OpenAI;
     return { openai, parse };
   }
+
+  describe('source-associated report extraction', () => {
+    const signal = new AbortController().signal;
+    const textSource: ReportEvidenceSource = {
+      ref: sourceRef,
+      content: { kind: 'text', text: hostileText },
+    };
+    const unavailable: ReportEvidenceSource = {
+      ref: { ...sourceRef, evidenceId: 'unsupported', kind: 'image' },
+      content: { kind: 'unavailable', reason: 'excluded' },
+    };
+
+    it('keeps a server title out of target subjects', async () => {
+      const { openai, parse } = buildOpenAiMock(associatedOutput());
+      const extraction = await new GPTService(openai).extractReportIdentity({
+        sources: [textSource, unavailable],
+        signal,
+      });
+      expect(extraction.kind).toBe('extracted');
+      if (extraction.kind !== 'extracted') throw new Error('Expected associated clues');
+      const targetSubjects = extraction.subjects.filter((s) => s.role === 'target');
+      const excludedIds = ['unsupported'];
+      expect(targetSubjects.flatMap((s) => s.displayNames)).not.toContain(serverTitle);
+      expect(extraction.excludedEvidenceIds).toEqual(excludedIds);
+      expect(extraction.includedEvidenceIds).toEqual(['evidence-text']);
+      expect(extraction.subjects.map((s) => [s.role, s.displayNames])).toEqual([
+        ['target', ['Alder']],
+        ['reporter', ['River']],
+        ['other', ['Finch']],
+      ]);
+      expect(extraction.contextLabels).toEqual(associatedOutput().contextLabels);
+      expect(parse.mock.calls[0][0].instructions).toContain('untrusted evidence');
+      expect(JSON.parse(parse.mock.calls[0][0].input[0].content[0].text).text).toBe(hostileText);
+    });
+
+    it('does not promote an uncertain reading through numeric confidence', async () => {
+      const output = associatedOutput();
+      output.subjects[0].readability = 'uncertain';
+      output.subjects[0].uncertainty = ['Partially obscured name'];
+      const { openai } = buildOpenAiMock(output);
+      const extraction = await new GPTService(openai).extractReportIdentity({
+        sources: [textSource],
+        signal,
+      });
+      expect(extraction).toMatchObject({
+        kind: 'extracted',
+        subjects: [
+          expect.objectContaining({ readability: 'uncertain' }),
+          expect.anything(),
+          expect.anything(),
+        ],
+      });
+      const numeric = buildOpenAiMock({ ...output, confidence: 1 });
+      await expect(
+        new GPTService(numeric.openai).extractReportIdentity({ sources: [textSource], signal })
+      ).resolves.toMatchObject({ kind: 'failed', reason: 'invalid_output' });
+    });
+
+    it.each(['evidenceId', 'messageId', 'sourceVersion', 'role', 'kind'] as const)(
+      'rejects invented or mismatched %s provenance',
+      async (field) => {
+        const output = associatedOutput();
+        const ref = output.subjects[0].sourceRefs[0];
+        if (field === 'sourceVersion') ref.sourceVersion = 3;
+        else if (field === 'role') ref.role = 'staff';
+        else if (field === 'kind') ref.kind = 'image';
+        else ref[field] = 'invented';
+        const { openai } = buildOpenAiMock(output);
+        await expect(
+          new GPTService(openai).extractReportIdentity({ sources: [textSource], signal })
+        ).resolves.toMatchObject({
+          kind: 'failed',
+          reason: 'invalid_output',
+          includedEvidenceIds: ['evidence-text'],
+        });
+      }
+    );
+
+    it('rejects a server context label promoted into a target subject', async () => {
+      const output = associatedOutput();
+      output.subjects[0].displayNames = [serverTitle];
+      const { openai } = buildOpenAiMock(output);
+      await expect(
+        new GPTService(openai).extractReportIdentity({ sources: [textSource], signal })
+      ).resolves.toMatchObject({ kind: 'failed', reason: 'invalid_output' });
+    });
+
+    it('rejects empty provenance and oversized structured output', async () => {
+      for (const invalidSubject of [
+        { ...subject('target', 'target', 'Alder'), sourceRefs: [] },
+        { ...subject('target', 'target', 'Alder'), displayNames: ['x'.repeat(101)] },
+      ]) {
+        const { openai } = buildOpenAiMock({ subjects: [invalidSubject], contextLabels: [] });
+        await expect(
+          new GPTService(openai).extractReportIdentity({ sources: [textSource], signal })
+        ).resolves.toMatchObject({ kind: 'failed', reason: 'invalid_output' });
+      }
+    });
+
+    it('reports only submitted sources and excludes source and image budget overflow', async () => {
+      const sources: ReportEvidenceSource[] = Array.from({ length: 17 }, (_, index) => ({
+        ref: { ...sourceRef, evidenceId: `text-${index}` },
+        content: { kind: 'text', text: 'Alder' },
+      }));
+      const { openai } = buildOpenAiMock({ subjects: [], contextLabels: [] });
+      const extraction = await new GPTService(openai).extractReportIdentity({ sources, signal });
+      expect(extraction.includedEvidenceIds).toHaveLength(16);
+      expect(extraction.excludedEvidenceIds).toEqual(['text-16']);
+      const images: ReportEvidenceSource[] = Array.from({ length: 9 }, (_, index) => ({
+        ref: { ...sourceRef, kind: 'image', evidenceId: `image-${index}` },
+        content: {
+          kind: 'image',
+          attachmentId: 'attachment',
+          url: 'https://cdn.discordapp.com/attachments/channel/attachment/proof.png',
+          contentType: 'image/png',
+          size: 100,
+        },
+      }));
+      const imageMock = buildOpenAiMock({ subjects: [], contextLabels: [] });
+      const imageExtraction = await new GPTService(imageMock.openai).extractReportIdentity({
+        sources: images,
+        signal,
+      });
+      expect(imageExtraction.includedEvidenceIds).toHaveLength(8);
+      expect(imageExtraction.excludedEvidenceIds).toEqual(['image-8']);
+    });
+
+    it('fails before dispatch when any supplied live source is invalid or ambiguous', async () => {
+      for (const invalid of [
+        {
+          ...textSource,
+          ref: { ...sourceRef, evidenceId: 'expired', kind: 'image' as const },
+          content: {
+            kind: 'image' as const,
+            attachmentId: 'attachment',
+            url: 'https://cdn.discordapp.com/attachments/channel/attachment/proof.png?ex=00000001',
+            contentType: 'image/png',
+            size: 100,
+          },
+        },
+        { ...textSource },
+      ]) {
+        const { openai, parse } = buildOpenAiMock({ subjects: [], contextLabels: [] });
+        const extraction = await new GPTService(openai).extractReportIdentity({
+          sources: [textSource, invalid],
+          signal,
+        });
+        expect(extraction).toMatchObject({
+          kind: 'failed',
+          reason: 'evidence_unavailable',
+          includedEvidenceIds: [],
+        });
+        expect(parse).not.toHaveBeenCalled();
+      }
+    });
+
+    it('propagates an in-flight abort without a second request', async () => {
+      const controller = new AbortController();
+      const parse = jest.fn().mockImplementation(async () => {
+        controller.abort();
+        throw new Error('interrupted transport');
+      });
+      const service = new GPTService({ responses: { create: parse } } as unknown as OpenAI);
+      await expect(
+        service.extractReportIdentity({ sources: [textSource], signal: controller.signal })
+      ).rejects.toMatchObject({ name: 'AbortError' });
+      expect(parse).toHaveBeenCalledTimes(1);
+    });
+
+    it('fails without dispatch when preparation could not recover the original source', async () => {
+      const { openai, parse } = buildOpenAiMock({ subjects: [], contextLabels: [] });
+      await expect(
+        new GPTService(openai).extractReportIdentity({
+          sources: [
+            textSource,
+            { ...unavailable, content: { kind: 'unavailable', reason: 'evidence_unavailable' } },
+          ],
+          signal,
+        })
+      ).resolves.toMatchObject({
+        kind: 'failed',
+        reason: 'evidence_unavailable',
+        includedEvidenceIds: [],
+        excludedEvidenceIds: ['evidence-text', 'unsupported'],
+      });
+      expect(parse).not.toHaveBeenCalled();
+    });
+
+    it('preserves validated deterministic anchors when extraction omits them', async () => {
+      const anchor = { ...subject('explicit', 'target', 'Alder'), userIds: ['123456789012345678'] };
+      const { openai } = buildOpenAiMock({ subjects: [], contextLabels: [] });
+      await expect(
+        new GPTService(openai).extractReportIdentity({
+          sources: [{ ...textSource, anchors: [anchor] }],
+          signal,
+        })
+      ).resolves.toMatchObject({ kind: 'extracted', subjects: [anchor] });
+    });
+
+    it('retains conflicting extracted clues when their subject ID collides with an anchor from another source', async () => {
+      const anchor = { ...subject('target', 'target', 'Alder'), userIds: ['123456789012345678'] };
+      const secondRef = {
+        ...sourceRef,
+        evidenceId: 'second-evidence',
+        messageId: 'second-message',
+        role: 'staff' as const,
+      };
+      const extracted = {
+        ...subject('target', 'target', 'Birch'),
+        sourceRefs: [secondRef],
+        userIds: ['223456789012345678'],
+        readability: 'uncertain' as const,
+        uncertainty: ['The displayed account ID conflicts with the first source'],
+        messageLinks: [
+          'https://discord.com/channels/123456789012345678/223456789012345678/323456789012345678',
+        ],
+      };
+      const { openai } = buildOpenAiMock({ subjects: [extracted], contextLabels: [] });
+      const extraction = await new GPTService(openai).extractReportIdentity({
+        sources: [
+          { ...textSource, anchors: [anchor] },
+          {
+            ref: secondRef,
+            content: { kind: 'text', text: 'A different displayed account ID and uncertain name' },
+          },
+        ],
+        signal,
+      });
+      expect(extraction.kind).toBe('extracted');
+      if (extraction.kind !== 'extracted')
+        throw new Error('Expected source-associated conflicting clues');
+      expect(extraction.includedEvidenceIds).toEqual(['evidence-text', 'second-evidence']);
+      expect(extraction.subjects).toHaveLength(2);
+      expect(extraction.subjects).toContainEqual(anchor);
+      const retained = extraction.subjects.find(
+        (entry) => entry.sourceRefs[0].evidenceId === 'second-evidence'
+      );
+      expect(retained).toMatchObject({ ...extracted, subjectId: expect.any(String) });
+      expect(new Set(extraction.subjects.map((entry) => entry.subjectId)).size).toBe(2);
+    });
+
+    it('rejects anchors associated with a different original source before dispatch', async () => {
+      const anchor = subject('explicit', 'target', 'Alder');
+      anchor.sourceRefs[0] = { ...sourceRef, messageId: 'different' };
+      const { openai, parse } = buildOpenAiMock({ subjects: [], contextLabels: [] });
+      await expect(
+        new GPTService(openai).extractReportIdentity({
+          sources: [{ ...textSource, anchors: [anchor] }],
+          signal,
+        })
+      ).resolves.toMatchObject({ kind: 'failed', reason: 'evidence_unavailable' });
+      expect(parse).not.toHaveBeenCalled();
+    });
+
+    it('submits four synthetic images at high detail with one reserved request and a bounded output', async () => {
+      const sources: ReportEvidenceSource[] = Array.from({ length: 4 }, (_, index) => ({
+        ref: { ...sourceRef, evidenceId: `image-${index}`, kind: 'image' },
+        content: {
+          kind: 'image',
+          attachmentId: `attachment-${index}`,
+          url: `https://cdn.discordapp.com/attachments/channel/attachment-${index}/proof.png`,
+          contentType: 'image/png',
+          size: 100,
+        },
+      }));
+      const output = {
+        subjects: sources.map((source, index) => ({
+          ...subject(`subject-${index}`, 'target', `Synthetic ${index}`),
+          sourceRefs: [source.ref],
+        })),
+        contextLabels: [],
+      };
+      const { openai, parse } = buildOpenAiMock(output);
+      process.env[OPENAI_MODERATION_MODEL_ENV] = 'gpt-5.4-mini';
+      try {
+        await expect(
+          new GPTService(openai).extractReportIdentity({ sources, signal })
+        ).resolves.toMatchObject({
+          kind: 'extracted',
+          includedEvidenceIds: ['image-0', 'image-1', 'image-2', 'image-3'],
+        });
+      } finally {
+        delete process.env[OPENAI_MODERATION_MODEL_ENV];
+      }
+      expect(parse).toHaveBeenCalledTimes(1);
+      const [payload, options] = parse.mock.calls[0];
+      expect(options).toMatchObject({ signal, maxRetries: 0 });
+      expect(payload).toMatchObject({
+        model: 'gpt-5.4-mini',
+        max_output_tokens: 4096,
+        store: false,
+      });
+      expect(
+        payload.input[0].content.filter((item: { type: string }) => item.type === 'input_image')
+      ).toEqual(
+        sources.map((source) => ({
+          type: 'input_image',
+          image_url: source.content.kind === 'image' ? source.content.url : '',
+          detail: 'high',
+        }))
+      );
+      expect(payload.text.format.schema.additionalProperties).toBe(false);
+    });
+
+    it('fails closed for expired images without fetching an arbitrary URL', async () => {
+      const { openai, parse } = buildOpenAiMock({ subjects: [], contextLabels: [] });
+      const sources: ReportEvidenceSource[] = [
+        {
+          ref: { ...sourceRef, kind: 'image' },
+          content: {
+            kind: 'image',
+            attachmentId: 'attachment',
+            url: 'https://cdn.discordapp.com/attachments/channel/attachment/proof.png?ex=00000001',
+            contentType: 'image/png',
+            size: 10,
+          },
+        },
+      ];
+      await expect(
+        new GPTService(openai).extractReportIdentity({ sources, signal })
+      ).resolves.toEqual({
+        kind: 'failed',
+        reason: 'evidence_unavailable',
+        retryable: false,
+        includedEvidenceIds: [],
+        excludedEvidenceIds: ['evidence-text'],
+      });
+      expect(parse).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      [
+        'rate limit',
+        new OpenAI.APIError(
+          429,
+          { message: 'synthetic raw payload' },
+          'synthetic error text',
+          new Headers()
+        ),
+        true,
+      ],
+      [
+        'server failure',
+        new OpenAI.APIError(
+          503,
+          { message: 'synthetic raw payload' },
+          'synthetic error text',
+          new Headers()
+        ),
+        true,
+      ],
+      [
+        'connection',
+        new OpenAI.APIConnectionError({ cause: new Error('synthetic transport detail') }),
+        true,
+      ],
+      ['timeout', new OpenAI.APIConnectionTimeoutError(), true],
+      [
+        'authentication',
+        new OpenAI.APIError(
+          401,
+          { message: 'synthetic raw payload' },
+          'synthetic error text',
+          new Headers()
+        ),
+        false,
+      ],
+      [
+        'permission',
+        new OpenAI.APIError(
+          403,
+          { message: 'synthetic raw payload' },
+          'synthetic error text',
+          new Headers()
+        ),
+        false,
+      ],
+      ['unknown', new Error('synthetic unknown error'), false],
+    ])(
+      'classifies SDK provider retryability without exposing raw errors (%s)',
+      async (_name, error, retryable) => {
+        const parse = jest.fn().mockRejectedValue(error);
+        const result = await new GPTService({
+          responses: { create: parse },
+        } as unknown as OpenAI).extractReportIdentity({ sources: [textSource], signal });
+        expect(result).toEqual({
+          kind: 'failed',
+          reason: 'provider_failure',
+          retryable,
+          includedEvidenceIds: ['evidence-text'],
+          excludedEvidenceIds: [],
+        });
+        expect(JSON.stringify(result)).not.toContain('synthetic');
+        expect(parse).toHaveBeenCalledTimes(1);
+      }
+    );
+
+    it('marks schema and unavailable evidence failures non-retryable', async () => {
+      const { openai } = buildOpenAiMock({ subjects: [{}], contextLabels: [] });
+      await expect(
+        new GPTService(openai).extractReportIdentity({ sources: [textSource], signal })
+      ).resolves.toMatchObject({ kind: 'failed', reason: 'invalid_output', retryable: false });
+      const missing = buildOpenAiMock({ subjects: [], contextLabels: [] });
+      await expect(
+        new GPTService(missing.openai).extractReportIdentity({ sources: [], signal })
+      ).resolves.toMatchObject({
+        kind: 'failed',
+        reason: 'evidence_unavailable',
+        retryable: false,
+      });
+    });
+
+    it('propagates the SDK abort type even when its Error name is generic', async () => {
+      const abort = new OpenAI.APIUserAbortError();
+      const parse = jest.fn().mockRejectedValue(abort);
+      const service = new GPTService({ responses: { create: parse } } as unknown as OpenAI);
+      await expect(service.extractReportIdentity({ sources: [textSource], signal })).rejects.toBe(
+        abort
+      );
+      expect(parse).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns provider failure without retrying and propagates aborts', async () => {
+      const parse = jest.fn().mockRejectedValue(new Error('provider unavailable'));
+      const service = new GPTService({ responses: { create: parse } } as unknown as OpenAI);
+      await expect(
+        service.extractReportIdentity({ sources: [textSource], signal })
+      ).resolves.toMatchObject({ kind: 'failed', reason: 'provider_failure' });
+      expect(parse).toHaveBeenCalledTimes(1);
+      const controller = new AbortController();
+      controller.abort();
+      await expect(
+        service.extractReportIdentity({ sources: [textSource], signal: controller.signal })
+      ).rejects.toMatchObject({ name: 'AbortError' });
+      expect(parse).toHaveBeenCalledTimes(1);
+    });
+  });
 
   it('preserves a single profile image description beyond the old limits', async () => {
     const summary =

@@ -26,11 +26,14 @@ function fixture(): {
     promptToken: 'token',
     candidateIds: ['target'],
     claimed: false,
+    evidenceRevision: 0,
+    presentationRevision: null,
+    staged: false,
   };
   let submissions = 0;
   const deps: ReportDependencies = {
     authority: {
-      loadFresh: async (guildId, userId) => ({
+      loadFresh: async (guildId, userId): Promise<AuthorityFacts> => ({
         guildId,
         userId,
         present: true,
@@ -275,3 +278,237 @@ it('a changed persisted target prevents submission of the command target', async
   ).toMatchObject({ code: 'stale_state' });
   expect(f.submissionCount()).toBe(0);
 });
+
+it('allows current staff to explicitly confirm a current member from the admin review artifact', async () => {
+  const f = fixture();
+  Object.assign(f.intake, {
+    status: 'needs_admin_confirmation',
+    evidenceRevision: 3,
+    presentationRevision: 3,
+    staged: true,
+    candidateIds: [],
+  });
+  f.deps.authority.loadFresh = async (guildId, userId): Promise<AuthorityFacts> => ({
+    guildId,
+    userId,
+    present: true,
+    owner: false,
+    permissions: '0',
+    roleIds: userId === 'staff-user' ? ['staff'] : [],
+  });
+  expect(
+    await f.actions.execute({ ...context, actor: { kind: 'user', userId: 'staff-user' } }, {
+      kind: 'confirm_intake_candidate',
+      intakeId: 'intake',
+      threadId: 'thread',
+      promptMessageId: 'current',
+      targetUserId: 'target',
+      expectedEvidenceRevision: 3,
+    } as never)
+  ).toMatchObject({ outcome: { status: 'submitted' } });
+  expect(f.submissionCount()).toBe(1);
+});
+
+it('denies a stored v1 confirmation against a staged prompt', async () => {
+  const f = fixture();
+  Object.assign(f.intake, { evidenceRevision: 3, presentationRevision: 3, staged: true });
+  expect(
+    await f.actions.execute(context, {
+      kind: 'confirm_intake_candidate',
+      intakeId: 'intake',
+      threadId: 'thread',
+      promptMessageId: 'current',
+      targetUserId: 'target',
+    })
+  ).toMatchObject({ kind: 'denied', code: 'stale_state' });
+  expect(f.submissionCount()).toBe(0);
+});
+
+it.each([
+  ['needs_reporter_confirmation', 'reporter', false, true],
+  ['needs_reporter_confirmation', 'staff-user', true, true],
+  ['needs_reporter_confirmation', 'outsider', false, false],
+  ['needs_admin_confirmation', 'reporter', false, false],
+  ['needs_admin_confirmation', 'staff-user', true, true],
+  ['needs_admin_confirmation', 'outsider', false, false],
+] as const)('checks current actor in %s for %s', async (status, actor, staffRole, allowed) => {
+  const f = fixture();
+  Object.assign(f.intake, { status, evidenceRevision: 3, presentationRevision: 3, staged: true });
+  f.deps.authority.loadFresh = async (guildId, userId): Promise<AuthorityFacts> => ({
+    guildId,
+    userId,
+    present: true,
+    owner: false,
+    permissions: '0',
+    roleIds: userId === actor && staffRole ? ['staff'] : [],
+  });
+  const result = await f.actions.execute(
+    { ...context, actor: { kind: 'user', userId: actor } },
+    {
+      kind: 'confirm_intake_candidate',
+      intakeId: 'intake',
+      threadId: 'thread',
+      promptMessageId: 'current',
+      targetUserId: 'target',
+      expectedEvidenceRevision: 3,
+    }
+  );
+  expect(result.kind).toBe(allowed ? 'outcome' : 'denied');
+  expect(f.submissionCount()).toBe(allowed ? 1 : 0);
+});
+it.each([
+  'foreign guild',
+  'removed staff role',
+  'missing target',
+  'old revision',
+  'superseded artifact',
+  'reporter target',
+])('rejects staff selection with %s', async (failure) => {
+  const f = fixture();
+  Object.assign(f.intake, {
+    status: 'needs_admin_confirmation',
+    evidenceRevision: 3,
+    presentationRevision: 3,
+    staged: true,
+    candidateIds: [],
+  });
+  f.deps.authority.loadFresh = async (guildId, userId): Promise<AuthorityFacts> => ({
+    guildId,
+    userId,
+    present: !(userId === 'target' && failure === 'missing target'),
+    owner: false,
+    permissions: '0',
+    roleIds: userId === 'staff-user' && failure !== 'removed staff role' ? ['staff'] : [],
+  });
+  const result = await f.actions.execute(
+    {
+      ...context,
+      guildId: failure === 'foreign guild' ? 'elsewhere' : 'guild',
+      actor: { kind: 'user', userId: 'staff-user' },
+    },
+    {
+      kind: 'confirm_intake_candidate',
+      intakeId: 'intake',
+      threadId: 'thread',
+      promptMessageId: failure === 'superseded artifact' ? 'old' : 'current',
+      targetUserId: failure === 'reporter target' ? 'reporter' : 'target',
+      expectedEvidenceRevision: failure === 'old revision' ? 2 : 3,
+    }
+  );
+  expect(result.kind).toBe('denied');
+  expect(f.submissionCount()).toBe(0);
+});
+it.each(['not staff', 'missing reason', 'missing revision', 'missing artifact', 'stale revision'])(
+  'denies review resolution with %s',
+  async (failure) => {
+    const f = fixture();
+    Object.assign(f.intake, {
+      status: 'needs_admin_confirmation',
+      evidenceRevision: 3,
+      presentationRevision: 3,
+      staged: true,
+    });
+    f.deps.authority.loadFresh = async (guildId, userId): Promise<AuthorityFacts> => ({
+      guildId,
+      userId,
+      present: true,
+      owner: false,
+      permissions: '0',
+      roleIds: failure === 'not staff' ? [] : ['staff'],
+    });
+    const close = jest.spyOn(f.deps.intakes, 'close');
+    expect(
+      await f.actions.execute(
+        { ...context, actor: { kind: 'user', userId: 'staff-user' } },
+        {
+          kind: 'close_report_intake',
+          intakeId: 'intake',
+          closeMode: {
+            kind: 'resolve_review',
+            reason: failure === 'missing reason' ? '  ' : 'Insufficient identity evidence',
+          },
+          expectedEvidenceRevision:
+            failure === 'missing revision' ? undefined : failure === 'stale revision' ? 2 : 3,
+          promptMessageId: failure === 'missing artifact' ? undefined : 'current',
+        }
+      )
+    ).toMatchObject({ kind: 'denied' });
+    expect(close).not.toHaveBeenCalled();
+  }
+);
+
+it('rejects staff whose refreshed membership no longer has the required role', async () => {
+  const f = fixture();
+  Object.assign(f.intake, {
+    status: 'needs_admin_confirmation',
+    evidenceRevision: 3,
+    presentationRevision: 3,
+    staged: true,
+  });
+  let reads = 0;
+  f.deps.authority.loadFresh = async (guildId, userId): Promise<AuthorityFacts> => ({
+    guildId,
+    userId,
+    present: true,
+    owner: false,
+    permissions: '0',
+    roleIds: userId === 'staff-user' && reads++ === 0 ? ['staff'] : [],
+  });
+  expect(
+    await f.actions.execute(
+      { ...context, actor: { kind: 'user', userId: 'staff-user' } },
+      {
+        kind: 'confirm_intake_candidate',
+        intakeId: 'intake',
+        threadId: 'thread',
+        promptMessageId: 'current',
+        expectedEvidenceRevision: 3,
+        targetUserId: 'target',
+      }
+    )
+  ).toMatchObject({ kind: 'denied' });
+  expect(f.submissionCount()).toBe(0);
+});
+
+it.each(['staff', 'reporter', 'wrong token', 'changed evidence', 'mcp'] as const)(
+  'limits submission recovery to a current staff decision: %s',
+  async (scenario) => {
+    const f = fixture();
+    f.intake.status = 'needs_admin_confirmation';
+    f.intake.confirmedTargetUserId = 'target';
+    f.intake.submission = {
+      token: 'attempt',
+      targetUserId: 'target',
+      state: 'unknown',
+      claimedAt: '2026-11-03T00:00:00.000Z',
+      dispatchedAt: '2026-11-03T00:00:01.000Z',
+      settledAt: '2026-11-03T00:00:02.000Z',
+    };
+    f.deps.authority.loadFresh = async (guildId, userId): Promise<AuthorityFacts> => ({
+      guildId,
+      userId,
+      present: true,
+      owner: scenario !== 'reporter',
+      permissions: '0',
+      roleIds: [],
+    });
+    const close = jest.spyOn(f.deps.intakes, 'close');
+    const result = await f.actions.execute(
+      { ...context, source: scenario === 'mcp' ? 'mcp' : 'discord_interaction' },
+      {
+        kind: 'close_report_intake',
+        intakeId: 'intake',
+        expectedEvidenceRevision: scenario === 'changed evidence' ? 4 : 0,
+        closeMode: {
+          kind: 'resolve_submission',
+          token: scenario === 'wrong token' ? 'stale' : 'attempt',
+          reason: 'Verified separately',
+          verifiedOutcome: 'handled_separately',
+        },
+      }
+    );
+    expect(result.kind).toBe(scenario === 'staff' ? 'outcome' : 'denied');
+    expect(close).toHaveBeenCalledTimes(scenario === 'staff' ? 1 : 0);
+    expect(f.submissionCount()).toBe(0);
+  }
+);

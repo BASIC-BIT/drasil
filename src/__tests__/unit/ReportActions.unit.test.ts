@@ -27,6 +27,15 @@ function fixture() {
     threadManager: mock<BotReportDependencies['threadManager']>(),
   };
   const intake: ReportIntake = {
+    evidence_revision: 0,
+    analysis_revision: 0,
+    analysis_due_at: null,
+    analysis_started_at: null,
+    analysis_deadline_at: null,
+    analysis_lease_until: null,
+    analysis_lease_token: null,
+    analysis_attempts: 0,
+    analysis_failure_code: null,
     id: 'intake',
     server_id: 'guild',
     reporter_id: 'reporter',
@@ -122,4 +131,61 @@ it('loads current required-reason settings with fail-closed options at execution
     failOnReadError: true,
   });
   expect(f.security.handleUserReport).not.toHaveBeenCalled();
+});
+
+it('passes uncached current identity fields to the staged confirmation service', async () => {
+  const f = fixture();
+  f.intake.evidence_revision = 2;
+  f.intake.metadata = {
+    last_confirmation_prompt_message_id: 'current',
+    last_confirmation_prompt_token: 'token',
+    last_confirmation_prompt_candidate_ids: ['target'],
+    last_confirmation_prompt_revision: 2,
+    analysis: {
+      schemaVersion: 1,
+      sources: {},
+      outcome: null,
+      coverage: null,
+      requestReservations: [],
+      handoff: { state: 'none' },
+    },
+  };
+  const member = (id: string) => ({
+    id,
+    guild: { id: 'guild' },
+    user: { id, username: 'Alder', globalName: 'Current name' },
+    nickname: 'Current nickname',
+    permissions: { bitfield: 0n },
+    roles: { cache: new Map() },
+  });
+  const fetch = jest.fn(async (input: { user: string }) => member(input.user));
+  const guild = {
+    id: 'guild',
+    roles: { fetch: jest.fn() },
+    members: { fetch },
+  } as unknown as Guild;
+  jest.spyOn(f.client.guilds, 'fetch').mockResolvedValue(guild as never);
+  f.intakes.confirmCandidate.mockResolvedValue({ confirmed: false, message: 'Rechecked' });
+  expect(
+    await f.actions.execute(context, {
+      kind: 'confirm_intake_candidate',
+      intakeId: 'intake',
+      threadId: 'thread',
+      promptMessageId: 'current',
+      targetUserId: 'target',
+      expectedEvidenceRevision: 2,
+    })
+  ).toMatchObject({ outcome: { status: 'not_confirmed' } });
+  expect(fetch).toHaveBeenCalledWith({ user: 'target', force: true, cache: false });
+  expect(f.intakes.confirmCandidate).toHaveBeenCalledWith(
+    expect.objectContaining({
+      currentMember: {
+        id: 'target',
+        username: 'Alder',
+        globalName: 'Current name',
+        nickname: 'Current nickname',
+        displayName: 'Current nickname',
+      },
+    })
+  );
 });

@@ -6,6 +6,9 @@ const DISCORD_CUSTOM_ID_MAX_LENGTH = 100;
 
 const ACTION_TO_CODE = {
   menu: 'm',
+  select_target: 'st',
+  resolve_review: 'rr',
+  recover_submission: 'rs',
   ban: 'b',
   close: 'c',
   confirm_close: 'cc',
@@ -24,6 +27,9 @@ export type ReportIntakeAdminAction = keyof typeof ACTION_TO_CODE;
 export interface ParsedReportIntakeAdminActionCustomId {
   readonly action: ReportIntakeAdminAction;
   readonly intakeId: string;
+  readonly evidenceRevision?: number;
+  readonly promptMessageId?: string;
+  readonly submissionToken?: string;
 }
 
 export function buildReportIntakeAdminActionsCustomId(intakeId: string): string {
@@ -57,7 +63,8 @@ export function isReportIntakeAdminActionCustomId(customId: string): boolean {
 export function parseReportIntakeAdminActionCustomId(
   customId: string
 ): ParsedReportIntakeAdminActionCustomId | null {
-  const [prefix, actionCode, intakeId] = customId.split(':');
+  const parts = customId.split(':');
+  const [prefix, actionCode, intakeId, revision, promptMessageId] = parts;
   if (prefix !== REPORT_INTAKE_ADMIN_ACTION_CUSTOM_ID_PREFIX || !actionCode || !intakeId) {
     return null;
   }
@@ -67,6 +74,29 @@ export function parseReportIntakeAdminActionCustomId(
     return null;
   }
 
+  if (
+    action === 'select_target' ||
+    action === 'resolve_review' ||
+    action === 'recover_submission'
+  ) {
+    if (
+      !revision ||
+      !/^(0|[1-9][0-9]*)$/.test(revision) ||
+      !Number.isSafeInteger(Number(revision)) ||
+      !promptMessageId ||
+      parts.length !== 5
+    )
+      return null;
+    return {
+      action,
+      intakeId,
+      evidenceRevision: Number(revision),
+      ...(action === 'recover_submission'
+        ? { submissionToken: promptMessageId }
+        : { promptMessageId }),
+    };
+  }
+  if (parts.length !== 3) return null;
   return { action, intakeId };
 }
 
@@ -102,4 +132,21 @@ export async function isReportIntakeActionChannel(
     return null;
   });
   return adminChannel?.id === channelId;
+}
+
+export function buildReportIntakeReviewCustomId(
+  action: 'select_target' | 'resolve_review' | 'recover_submission',
+  intakeId: string,
+  revision: number,
+  promptMessageId: string
+): string {
+  return assertCustomIdLength(
+    [
+      REPORT_INTAKE_ADMIN_ACTION_CUSTOM_ID_PREFIX,
+      ACTION_TO_CODE[action],
+      intakeId,
+      revision,
+      promptMessageId,
+    ].join(':')
+  );
 }

@@ -25,6 +25,11 @@
       "types": "./dist/delegation/approvalPresentation.d.ts",
       "require": "./dist/delegation/approvalPresentation.js",
       "import": "./dist/browser/approvalPresentation.mjs"
+    },
+    "./report-analysis": {
+      "types": "./dist/reports/analysis.d.ts",
+      "require": "./dist/reports/analysis.js",
+      "import": "./dist/browser/reportAnalysis.mjs"
     }
   },
   "scripts": {
@@ -47,6 +52,9 @@
       ],
       "approval-presentation": [
         "dist/delegation/approvalPresentation.d.ts"
+      ],
+      "report-analysis": [
+        "dist/reports/analysis.d.ts"
       ]
     }
   }

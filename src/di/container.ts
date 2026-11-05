@@ -1,3 +1,12 @@
+import {
+  IReportIntakeHandoffService,
+  ReportIntakeHandoffService,
+} from '../services/ReportIntakeHandoffService';
+import {
+  IReportIntakeAnalysisWorker,
+  ReportIntakeAnalysisWorker,
+} from '../services/ReportIntakeAnalysisWorker';
+import { IReportMemberDirectory, ReportMemberDirectory } from '../services/ReportMemberDirectory';
 import { createCaptchaCompletionStore } from '@drasil/application/postgres';
 import { createBotDelegationDatabase } from '../application/adapters/delegationDatabase';
 import { CaptchaImageService, type ICaptchaImageService } from '../services/CaptchaImageService';
@@ -7,7 +16,7 @@ import { createBotApplication, type BotApplication } from '../application/create
 import { ModerationEvidenceService } from '../services/ModerationEvidenceService';
 import 'reflect-metadata';
 import { Container } from 'inversify';
-import { Client, GatewayIntentBits } from 'discord.js';
+import { Client, GatewayIntentBits, Partials } from 'discord.js';
 import OpenAI from 'openai';
 import { createPrismaClient, PrismaClient } from '../db/prisma';
 
@@ -186,6 +195,7 @@ function configureExternalDependencies(container: Container): void {
   // Discord client
   container.bind<Client>(TYPES.DiscordClient).toConstantValue(
     new Client({
+      partials: [Partials.Message],
       intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
@@ -303,6 +313,9 @@ function configureServices(container: Container): void {
           TYPES.SetupDiagnosticsService
         ),
         reportIntakeService: context.get<IReportIntakeService>(TYPES.ReportIntakeService),
+        reportIntakeHandoffService: context.get<IReportIntakeHandoffService>(
+          TYPES.ReportIntakeHandoffService
+        ),
         caseThreadClosureSweepService: context.get<ICaseThreadClosureSweepService>(
           TYPES.CaseThreadClosureSweepService
         ),
@@ -417,6 +430,11 @@ function configureServices(container: Container): void {
     .inSingletonScope();
 
   container
+    .bind<IReportMemberDirectory>(TYPES.ReportMemberDirectory)
+    .to(ReportMemberDirectory)
+    .inSingletonScope();
+
+  container
     .bind<IReportCandidateService>(TYPES.ReportCandidateService)
     .to(ReportCandidateService)
     .inSingletonScope();
@@ -424,6 +442,15 @@ function configureServices(container: Container): void {
   container
     .bind<IReportIntakeService>(TYPES.ReportIntakeService)
     .to(ReportIntakeService)
+    .inSingletonScope();
+
+  container
+    .bind<IReportIntakeHandoffService>(TYPES.ReportIntakeHandoffService)
+    .to(ReportIntakeHandoffService)
+    .inSingletonScope();
+  container
+    .bind<IReportIntakeAnalysisWorker>(TYPES.ReportIntakeAnalysisWorker)
+    .to(ReportIntakeAnalysisWorker)
     .inSingletonScope();
 
   container

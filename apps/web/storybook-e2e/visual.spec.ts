@@ -15,6 +15,24 @@ async function gotoStory(page: Page, storyId: string): Promise<void> {
 async function expectVisualSchemes(page: Page, name: string): Promise<void> {
   for (const scheme of visualSchemes) {
     await page.emulateMedia({ colorScheme: scheme });
+    await page.evaluate(async () => {
+      await document.fonts.ready;
+      // Chromium can retain fallback glyphs in native selects after a web font loads.
+      const focused = document.activeElement;
+      const selects = [...document.querySelectorAll('select')].map((select) => ({
+        select,
+        style: select.getAttribute('style'),
+      }));
+      for (const { select } of selects) select.style.display = 'none';
+      void document.documentElement.offsetHeight;
+      for (const { select, style } of selects) {
+        if (style === null) select.removeAttribute('style');
+        else select.setAttribute('style', style);
+      }
+      if (focused instanceof HTMLElement && document.activeElement !== focused) {
+        focused.focus({ preventScroll: true });
+      }
+    });
     await expect
       .soft(page)
       .toHaveScreenshot(platformSnapshotName(name, scheme), { fullPage: true });

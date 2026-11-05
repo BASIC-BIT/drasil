@@ -407,7 +407,7 @@ test('canonical early report retains evidence and acknowledgment after attention
   await page.getByRole('button', { name: 'Acknowledge reply', exact: true }).click();
   await page.getByRole('dialog').getByRole('checkbox').check();
   await page.getByRole('button', { name: 'Confirm Acknowledge reply', exact: true }).click();
-  await expect(page.getByText('Reply acknowledged.', { exact: true })).toBeVisible();
+  await expect(page.getByText('Acknowledged.', { exact: true })).toBeVisible();
   // Fresh server props must remove eligibility without replacing the report or its action instance.
   await expect(page.getByRole('button', { name: 'Acknowledge reply', exact: true })).toBeDisabled();
   await expect
@@ -424,7 +424,7 @@ test('canonical early report retains evidence and acknowledgment after attention
     page.getByText('Reporter follow-up · collecting evidence', { exact: true })
   ).toBeVisible();
   await expect(page.getByText(evidence, { exact: true })).toBeVisible();
-  await expect(page.getByText('Reply acknowledged.', { exact: true })).toBeVisible();
+  await expect(page.getByText('Acknowledged.', { exact: true })).toBeVisible();
   await page.reload();
   await expect(page.getByText(evidence, { exact: true })).toBeVisible();
   await expect(page.getByText('Target not confirmed', { exact: true })).toBeVisible();
@@ -1087,4 +1087,68 @@ test('empty inbox return focuses after the queue commits even when a frame runs 
       contentType: 'application/json',
     });
   }
+});
+
+test('unidentified review shows acknowledgement and delivery separately with current candidate names', async ({
+  page,
+}) => {
+  const candidate = {
+    candidateId: 'candidate',
+    discordUserId: id.member,
+    serverId: id.guild,
+    username: 'candidate-handle',
+    globalName: 'Account display',
+    nickname: 'Server nickname',
+    displayName: 'Server nickname',
+    avatarUrl: null,
+    sourceRefs: [],
+    matchedFields: ['nickname'],
+    subjectMatches: [{ subjectId: 'subject', sourceRefs: [], matchedFields: ['nickname'] }],
+  };
+  const coverage = { kind: 'not_required', reason: 'validated_anchor' };
+  const metadata = {
+    analysis: {
+      schemaVersion: 1,
+      sources: {},
+      requestReservations: [],
+      coverage,
+      outcome: {
+        kind: 'admin_review',
+        reason: 'ambiguous',
+        candidates: [candidate],
+        coverage,
+        includedEvidenceIds: [],
+        excludedEvidenceIds: [],
+      },
+      handoff: {
+        state: 'acknowledged',
+        reason: 'no_match',
+        receipt: 'sent',
+        attempts: 0,
+        nextDueAt: null,
+        acknowledgedBy: id.actor,
+        acknowledgedAt: '2026-11-03T00:00:00.000Z',
+      },
+    },
+    quarantined_metadata: { provider: 'PRIVATE_PROVIDER' },
+  };
+  await fixtures.pool.query(
+    "update report_intakes set status='needs_admin_confirmation',metadata=$2,evidence_revision=2 where id=$1",
+    [id.early, JSON.stringify(metadata)]
+  );
+  await fixtures.pool.query('update moderation_queue_items set metadata=$2 where id=$1', [
+    id.reportAttention,
+    JSON.stringify({ identity_review: {} }),
+  ]);
+  await page.goto(`/admin/guild/${id.guild}/reports/${id.early}`);
+  const review = page.getByRole('region', { name: 'Identity review' });
+  await expect(review.getByRole('heading', { name: 'Needs admin review' })).toBeVisible();
+  await expect(review.getByText('Acknowledged, review remains open')).toBeVisible();
+  await expect(review.getByText('Notification delivery unknown')).toBeVisible();
+  await expect(review.getByText('candidate-handle')).toBeVisible();
+  await expect(review.getByText('Account display', { exact: true })).toBeVisible();
+  await expect(review.getByText('No matching account was found')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Ban member', exact: true })).toHaveCount(0);
+  await expect(page.getByText('Target not confirmed', { exact: true })).toBeVisible();
+  await expect(page.locator('body')).not.toContainText('PRIVATE_PROVIDER');
 });

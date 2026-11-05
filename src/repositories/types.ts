@@ -76,6 +76,7 @@ export interface ServerSettings {
   report_ai_open_case_threshold?: number;
   report_ai_max_images?: number;
   report_ai_max_image_bytes?: number;
+  report_intake_staged_enabled?: boolean;
   report_intake_agent_enabled?: boolean;
   report_intake_agent_debounce_ms?: number;
   report_intake_agent_min_interval_ms?: number;
@@ -658,6 +659,7 @@ export interface ModerationOutcome {
 }
 
 export interface ModerationQueueItem {
+  attention_cleanup_pending?: boolean;
   id: string;
   server_id: string;
   user_id: string;
@@ -899,6 +901,15 @@ export enum ReportIntakeEvidenceKind {
 }
 
 export interface ReportIntake {
+  evidence_revision: number;
+  analysis_revision: number;
+  analysis_due_at: Date | null;
+  analysis_started_at: Date | null;
+  analysis_deadline_at: Date | null;
+  analysis_lease_until: Date | null;
+  analysis_lease_token: string | null;
+  analysis_attempts: number;
+  analysis_failure_code: 'invalid_metadata' | null;
   id: string;
   server_id: string;
   reporter_id: string;
@@ -935,6 +946,9 @@ export interface ReportIntakeCreate {
 }
 
 export interface ReportIntakeUpdate {
+  analysisDueAt?: Date | null;
+  analysisLeaseToken?: string | null;
+  analysisLeaseUntil?: Date | null;
   status?: ReportIntakeStatus;
   summary?: string | null;
   confirmedTargetUserId?: string | null;
@@ -968,3 +982,37 @@ export interface ModerationOutcomeCreate extends Omit<
   occurred_at?: Date | null;
   metadata?: Prisma.JsonValue | null;
 }
+
+export interface ReportEvidenceBatch {
+  recoveryToken?: string;
+  availability?: 'available' | 'unavailable';
+  intakeId: string;
+  sourceMessageId: string;
+  sourceChannelId: string;
+  sourceAuthorId: string | null;
+  sourceVersion: number;
+  sourceFingerprint: string;
+  observedAt: Date;
+  editedAt: Date | null;
+  operation: 'upsert' | 'delete';
+  evidence: Omit<ReportIntakeEvidenceCreate, 'intakeId' | 'sourceMessageId' | 'sourceChannelId'>[];
+}
+
+export interface ReportAnalysisClaim {
+  kind: 'analyze' | 'confirmation_timeout';
+  intake: ReportIntake;
+  revision: number;
+  leaseToken: string;
+  deadline: Date;
+  attempts: number;
+}
+
+export interface ReportPresentationClaim {
+  intake: ReportIntake;
+  revision: number;
+  leaseToken: string;
+}
+export type ReportPresentationResult =
+  | { kind: 'delivered'; channelId: string; messageId: string; receipt: 'pending' | 'sent' }
+  | { kind: 'published' }
+  | { kind: 'failed' };

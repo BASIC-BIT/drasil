@@ -409,3 +409,125 @@ it('continues discovery at the last emitted eligible guild', async () => {
   if (second.kind !== 'allowed') throw new Error('expected discovery');
   expect(second.items.map((item) => item.guildId)).toEqual(ids.slice(1));
 });
+
+it('separates reporter receipt from staff identity review and rechecks staff authorization', async () => {
+  const h = harness([
+    {
+      key: { id: id(1), timestamp: null },
+      value: {
+        id: id(1),
+        status: 'needs_admin_confirmation',
+        evidenceRevision: 2,
+        metadata: {
+          analysis: {
+            schemaVersion: 1,
+            sources: {},
+            outcome: null,
+            coverage: null,
+            requestReservations: [],
+            handoff: {
+              state: 'acknowledged',
+              reason: 'provider_failure',
+              attempts: 0,
+              nextDueAt: null,
+              receipt: 'sent',
+              acknowledgedBy: 'staff',
+              acknowledgedAt: '2026-11-03T00:00:00.000Z',
+            },
+          },
+          quarantined_metadata: { secret: 'PRIVATE_PROVIDER' },
+        },
+      },
+    },
+  ]);
+  const query = { kind: 'get_report', guildId, reportId: id(1) };
+  const staff = await h.service.execute(principal, { ...query, audience: 'staff' });
+  expect(staff).toMatchObject({
+    kind: 'allowed',
+    items: [
+      {
+        identityReview: {
+          phase: 'acknowledged',
+          reason: 'provider_failure',
+          delivery: 'unknown',
+          receipt: 'sent',
+        },
+      },
+    ],
+  });
+  const reporter = await h.service.execute(principal, { ...query, audience: 'reporter' });
+  expect(reporter).toMatchObject({
+    kind: 'allowed',
+    items: [{ identityReview: { phase: 'acknowledged', delivery: 'unknown', receipt: 'sent' } }],
+  });
+  expect(JSON.stringify(reporter)).not.toMatch(
+    /provider_failure|acknowledgedBy|candidates|PRIVATE_PROVIDER|metadata/
+  );
+  expect(JSON.stringify(staff)).not.toMatch(/PRIVATE_PROVIDER|quarantined_metadata/);
+  h.state.owner = false;
+  expect(await h.service.execute(principal, { ...query, audience: 'staff' })).toMatchObject({
+    kind: 'denied',
+  });
+});
+
+it('projects staff source history without leaking the source map or staff analysis to reporters', async () => {
+  const h = harness([
+    {
+      key: { id: id(1), timestamp: null },
+      value: {
+        id: id(1),
+        sourceMessageId: 'source',
+        metadata: { sourceVersion: 1 },
+        reportMetadata: {
+          analysis: {
+            schemaVersion: 1,
+            sources: {
+              source: {
+                sourceVersion: 2,
+                sourceFingerprint: 'internal',
+                sourceChannelId: 'thread',
+                sourceAuthorId: 'reporter',
+                observedAt: '2026-11-03T00:00:00.000Z',
+                editedAt: null,
+                operation: 'delete',
+              },
+            },
+            outcome: null,
+            coverage: null,
+            requestReservations: [],
+            handoff: { state: 'none' },
+          },
+        },
+      },
+    },
+  ]);
+  const staff = await h.service.execute(principal, {
+    kind: 'list_report_evidence',
+    guildId,
+    reportId: id(2),
+  });
+  expect(staff).toMatchObject({
+    kind: 'allowed',
+    items: [
+      {
+        source: {
+          sourceVersion: 1,
+          currentSourceVersion: 2,
+          sourceState: 'deleted',
+          versionState: 'superseded',
+        },
+      },
+    ],
+  });
+  expect(JSON.stringify(staff)).not.toMatch(/sourceFingerprint|reportMetadata|sourceAuthorId/);
+  const reporter = await h.service.execute(principal, {
+    kind: 'list_report_evidence',
+    guildId,
+    reportId: id(2),
+    audience: 'reporter',
+  });
+  expect(reporter).toMatchObject({ kind: 'allowed', items: [{ id: id(1) }] });
+  expect(JSON.stringify(reporter)).not.toMatch(
+    /sourceFingerprint|analysisState|reportMetadata|sourceAuthorId/
+  );
+});

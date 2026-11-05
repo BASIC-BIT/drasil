@@ -1,3 +1,4 @@
+import { IReportMemberDirectory } from '../services/ReportMemberDirectory';
 import { withObservation, recordWorkflowOutcome } from '../observability/langfuse';
 import { hashIdentifier } from '../observability/hash';
 import {
@@ -18,6 +19,7 @@ import {
   PermissionFlagsBits,
   User,
   type MessageCreateOptions,
+  type PartialMessage,
 } from 'discord.js';
 import * as dotenv from 'dotenv';
 import { randomUUID } from 'node:crypto';
@@ -85,6 +87,7 @@ import {
   ModerationQueueAttentionResult,
 } from '../services/ModerationQueueService';
 import { ICaseRoleReleaseReconciliationService } from '../services/CaseRoleReleaseReconciliationService';
+import { getReportIntakeSettings } from '../utils/reportIntakeSettings';
 import { getManualIntakeSettings } from '../utils/manualIntakeSettings';
 import { getRoleGateSettings } from '../utils/roleGateSettings';
 import { IRoleQuarantineService } from '../services/RoleQuarantineService';
@@ -239,7 +242,10 @@ export class EventHandler implements IEventHandler {
     caseRoleReleaseReconciliationService?: ICaseRoleReleaseReconciliationService,
     @inject(TYPES.ActiveAccountQuarantineCache)
     @optional()
-    activeQuarantineCache?: IActiveAccountQuarantineCache
+    activeQuarantineCache?: IActiveAccountQuarantineCache,
+    @inject(TYPES.ReportMemberDirectory)
+    @optional()
+    private reportMemberDirectory?: IReportMemberDirectory
   ) {
     this.client = client;
     this.detectionOrchestrator = detectionOrchestrator;
@@ -265,12 +271,61 @@ export class EventHandler implements IEventHandler {
   }
 
   public async setupEventHandlers(): Promise<void> {
+    // Member events depend on SDK cache presence; raw dispatches also cover uncached members.
+    this.client.on(Events.Raw, (packet: unknown) => {
+      if (!packet || typeof packet !== 'object' || !('t' in packet) || !('d' in packet)) return;
+      if (
+        packet.t !== 'GUILD_MEMBER_ADD' &&
+        packet.t !== 'GUILD_MEMBER_UPDATE' &&
+        packet.t !== 'GUILD_MEMBER_REMOVE'
+      )
+        return;
+      const data = packet.d;
+      if (
+        data &&
+        typeof data === 'object' &&
+        'guild_id' in data &&
+        typeof data.guild_id === 'string'
+      ) {
+        this.reportMemberDirectory?.invalidate(data.guild_id);
+      }
+    });
+    this.client.on(Events.UserUpdate, () => this.reportMemberDirectory?.invalidate());
+    this.client.on(Events.ShardDisconnect, () => this.reportMemberDirectory?.invalidate());
+    this.client.on(Events.ShardReconnecting, () => this.reportMemberDirectory?.invalidate());
+    this.client.on(Events.Invalidated, () => this.reportMemberDirectory?.invalidate());
+    this.client.on(Events.GuildUnavailable, (guild) =>
+      this.reportMemberDirectory?.invalidate(guild.id)
+    );
     // Ready-time initialization is critical startup work and intentionally remains outside the
     // recoverable operational event boundary.
     this.client.on(Events.ClientReady, this.handleReady.bind(this));
     this.client.on(
       Events.MessageCreate,
       this.createRecoverableEventHandler(Events.MessageCreate, this.handleMessage.bind(this))
+    );
+    this.client.on(
+      Events.MessageUpdate,
+      this.createRecoverableEventHandler(
+        Events.MessageUpdate,
+        async (_previous, message: Message | PartialMessage) => {
+          await this.reportIntakeService?.handleThreadMessageUpdate(message);
+        }
+      )
+    );
+    this.client.on(
+      Events.MessageDelete,
+      this.createRecoverableEventHandler(
+        Events.MessageDelete,
+        async (message: Message | PartialMessage) => {
+          if (!message.guildId) return;
+          await this.reportIntakeService?.handleThreadMessageDelete({
+            guildId: message.guildId,
+            threadId: message.channelId,
+            messageId: message.id,
+          });
+        }
+      )
     );
     this.client.on(
       Events.GuildMemberAdd,
@@ -404,7 +459,11 @@ export class EventHandler implements IEventHandler {
       try {
         const reportIntakeHandled = await this.reportIntakeService?.handleThreadMessage(message);
         if (reportIntakeHandled) {
-          this.reportIntakeAgentService?.scheduleAnalysisForThreadMessage(message);
+          const config = await this.configService.getServerConfig(message.guild.id);
+          // Staged evidence is already durable; its worker owns scheduling and recovery.
+          if (!getReportIntakeSettings(config.settings).stagedEnabled) {
+            this.reportIntakeAgentService?.scheduleAnalysisForThreadMessage(message);
+          }
           this.rememberRecentMessage(message);
           return;
         }
@@ -989,6 +1048,7 @@ export class EventHandler implements IEventHandler {
   }
 
   private async handleGuildMemberAdd(member: GuildMember): Promise<void> {
+    this.reportMemberDirectory?.invalidate(member.guild.id);
     try {
       console.log(`New member joined: ${member.user.tag} (${member.id})`);
 
@@ -1017,6 +1077,7 @@ export class EventHandler implements IEventHandler {
     oldMember: GuildMember | PartialGuildMember,
     newMember: GuildMember
   ): Promise<void> {
+    this.reportMemberDirectory?.invalidate(newMember.guild.id);
     try {
       if (oldMember.partial || newMember.user.bot) {
         return;
@@ -1595,6 +1656,7 @@ export class EventHandler implements IEventHandler {
   }
 
   private async handleGuildMemberRemove(member: GuildMember | PartialGuildMember): Promise<void> {
+    this.reportMemberDirectory?.invalidate(member.guild.id);
     this.cancelManualIntakeForMember(member.guild.id, member.id);
 
     if (!this.userModerationService) {
@@ -2049,6 +2111,7 @@ export class EventHandler implements IEventHandler {
   }
 
   private async handleGuildDelete(guild: Guild): Promise<void> {
+    this.reportMemberDirectory?.invalidate(guild.id);
     await runSerializedGuildSetup(guild.id, () =>
       this.configService.updateServerConfig(guild.id, { is_active: false })
     );

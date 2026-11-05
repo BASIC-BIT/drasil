@@ -25,6 +25,31 @@ export function ReportEvidence({ items }: { readonly items: readonly ReportEvide
                 <h3>{labels[item.kind]}</h3>
                 <Timestamp value={item.createdAt} />
               </header>
+              {item.source ? (
+                <p className={styles.muted}>
+                  {[
+                    item.source.versionState === 'superseded'
+                      ? 'Superseded version'
+                      : item.source.versionState === 'current'
+                        ? 'Current version'
+                        : 'Source version unknown',
+                    item.source.sourceState === 'deleted'
+                      ? 'Source deleted'
+                      : item.source.sourceState === 'unavailable'
+                        ? 'Source unavailable'
+                        : null,
+                    item.source.analysisState === 'analyzed'
+                      ? 'Analyzed'
+                      : item.source.analysisState === 'excluded'
+                        ? 'Excluded from analysis'
+                        : item.source.analysisState === 'not_analyzed'
+                          ? 'Not analyzed'
+                          : 'Analysis coverage unknown',
+                  ]
+                    .filter(Boolean)
+                    .join(' � ')}
+                </p>
+              ) : null}
               {item.content ? <blockquote>{item.content}</blockquote> : null}
               {item.attachment ? (
                 <div className={styles.attachment}>

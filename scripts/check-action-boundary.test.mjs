@@ -242,7 +242,7 @@ test('canonical_setup_leaf_supports_commonjs_and_es_imports', async () => {
     const commonjs = createRequire(import.meta.url)('@drasil/application/setup-settings');
     assert.deepEqual(Object.keys(browser).sort(), Object.keys(commonjs).sort());
     assert.deepEqual(browser.guildSetupUpdateSchema.parse({guildId:'g', captchaMode:'manual'}), commonjs.guildSetupUpdateSchema.parse({guildId:'g', captchaMode:'manual'}));
-    assert.equal(Object.keys(browser.guildSetupUpdateSchema.shape).filter(key => !['guildId', 'updatedBy'].includes(key)).length, 74);
+    assert.equal(Object.keys(browser.guildSetupUpdateSchema.shape).filter(key => !['guildId', 'updatedBy'].includes(key)).length, 75);
   `,
     ],
     { encoding: 'utf8' }
@@ -261,4 +261,28 @@ test('mcp_registration_cannot_call_domain_workflows', () => {
       assert.match(result.stderr, /workflow/);
     }
   );
+});
+
+test('canonical_report_analysis_leaf_supports_commonjs_and_browser_imports', () => {
+  const result = spawnSync(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      `
+    import assert from 'node:assert/strict';
+    import { createRequire } from 'node:module';
+    import * as browser from '@drasil/application/report-analysis';
+    const commonjs = createRequire(import.meta.url)('@drasil/application/report-analysis');
+    assert.match(import.meta.resolve('@drasil/application/report-analysis'), /reportAnalysis\\.mjs$/);
+    assert.deepEqual(Object.keys(browser).sort(), Object.keys(commonjs).sort());
+    const reference = { evidenceId: 'e', messageId: 'm', sourceVersion: 1, role: 'reporter', kind: 'text' };
+    assert.deepEqual(browser.reportEvidenceRefSchema.parse(reference), commonjs.reportEvidenceRefSchema.parse(reference));
+    assert.equal(browser.reportEvidenceRefSchema.safeParse({ ...reference, sourceVersion: -1 }).success, false);
+    assert.equal(commonjs.reportEvidenceRefSchema.safeParse({ ...reference, sourceVersion: -1 }).success, false);
+  `,
+    ],
+    { encoding: 'utf8' }
+  );
+  assert.equal(result.status, 0, result.stderr);
 });
