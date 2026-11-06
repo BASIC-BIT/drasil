@@ -42,6 +42,8 @@ import {
   MODERATOR_ACTION_KICK_DEFAULT_REASON,
   ModeratorUserAction,
 } from '../utils/moderationActionCustomIds';
+import { BanTargetError } from '../services/UserModerationService';
+import { getDiscordErrorCode } from '../utils/discordErrors';
 import { requestSlashCommandConfirmation } from '../utils/slashCommandConfirmations';
 
 type ModerationCommandInteraction =
@@ -126,10 +128,19 @@ export class ModerationCommandHandler {
   }
 
   public async handleBanCommand(interaction: ChatInputCommandInteraction): Promise<void> {
-    const targetUser = interaction.options.getUser('user');
-    if (!targetUser) {
+    let targetUser = interaction.options.getUser('user');
+    const rawId = interaction.options.getString('user-id')?.trim();
+    if (Boolean(targetUser) === Boolean(rawId)) {
       await interaction.reply({
-        content: 'You must specify a user to ban.',
+        content: 'Specify exactly one target: user or user-id.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (rawId && (!/^[1-9]\d{0,19}$/.test(rawId) || BigInt(rawId) > 18446744073709551615n)) {
+      await interaction.reply({
+        content: 'Enter a valid Discord user ID using digits only.',
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -177,17 +188,40 @@ export class ModerationCommandHandler {
       return;
     }
 
-    const member = await guild.members.fetch(targetUser.id).catch(() => null);
+    if (rawId) {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      try {
+        targetUser = await guild.client.users.fetch(rawId, { force: true });
+      } catch (error) {
+        await interaction.editReply({
+          content:
+            getDiscordErrorCode(error) === 10013
+              ? 'No Discord user exists with that ID.'
+              : 'Could not look up that Discord user. No ban was attempted.',
+        });
+        return;
+      }
+    }
+    if (!targetUser) return;
+    const target = targetUser;
+    if (
+      target.id === interaction.user.id ||
+      target.id === guild.ownerId ||
+      target.id === guild.client?.user?.id
+    ) {
+      const response = { content: 'You cannot ban yourself, the server owner or Drasil.' };
+      if (interaction.deferred) await interaction.editReply(response);
+      else await interaction.reply({ ...response, flags: MessageFlags.Ephemeral });
+      return;
+    }
 
     await requestSlashCommandConfirmation(interaction, {
-      confirmation: { action: 'ban_user', targetId: targetUser.id },
-      message: member
-        ? `Ban ${targetUser.tag} from this server?`
-        : `Ban ${targetUser.tag} from this server by ID?`,
-      confirmLabel: member ? 'Ban User' : 'Ban by ID',
+      confirmation: { action: 'ban_user', targetId: target.id },
+      message: `Ban ${target.tag} (${target.id}) from this server${rawId ? ' by ID' : ''}?`,
+      confirmLabel: rawId ? 'Ban by ID' : 'Ban User',
       confirmStyle: ButtonStyle.Danger,
       execute: async (buttonInteraction, evidence) => {
-        await buttonInteraction.update({ content: `Banning ${targetUser.tag}...`, components: [] });
+        await buttonInteraction.update({ content: `Banning ${target.tag}...`, components: [] });
         try {
           if (!this.application) throw new Error('Case application is unavailable.');
           const context = createDiscordActionContext({
@@ -198,18 +232,29 @@ export class ModerationCommandHandler {
           const command = {
             kind: 'ban_user',
             intent: 'slash_command',
-            targetUserId: targetUser.id,
+            targetUserId: target.id,
             reason: providedReason ?? null,
             selectedMessage: null,
           } as const;
           if (!evidence) throw new Error('Confirmation is unavailable.');
           this.application.caseConfirmations.recordVerified(context, command, evidence);
-          requireCaseOutcome(await this.application.cases.execute(context, command));
-          await buttonInteraction.editReply({ content: `User ${targetUser.tag} has been banned.` });
+          const outcome = requireCaseOutcome(
+            await this.application.cases.execute(context, command)
+          );
+          if (outcome.kind !== 'ban_user' || !outcome.succeeded)
+            throw new Error('Ban did not complete.');
+          await buttonInteraction.editReply({ content: `User ${target.tag} has been banned.` });
         } catch (error) {
           console.error('Failed to ban user via command:', error);
           await buttonInteraction.editReply({
-            content: `Failed to ban ${targetUser.tag}. Please try again later.`,
+            content:
+              error instanceof BanTargetError
+                ? error.message
+                : getDiscordErrorCode(error) === 10013
+                  ? 'No Discord user exists with that ID.'
+                  : getDiscordErrorCode(error) === 50013
+                    ? 'Discord denied the ban. Check Drasil permissions and role hierarchy.'
+                    : `Ban outcome for ${target.tag} (${target.id}) could not be confirmed. Check the current ban and audit log before submitting another ban.`,
           });
         }
       },

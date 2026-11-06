@@ -21,7 +21,10 @@ function fixture(path: 'member' | 'by_id' | 'kick') {
   const guild = {
     id: 'guild',
     client: { users: { fetch: jest.fn(async () => user) } },
-    bans: { create: jest.fn(async () => undefined) },
+    bans: {
+      fetch: jest.fn().mockRejectedValue({ code: 10026 }),
+      create: jest.fn(async () => undefined),
+    },
   } as unknown as Guild;
   const member = {
     id: 'target',

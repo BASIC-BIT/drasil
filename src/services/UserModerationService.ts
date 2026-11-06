@@ -1,3 +1,4 @@
+import { isDiscordUnknownBanError } from '../utils/discordErrors';
 import { randomUUID } from 'node:crypto';
 import { Guild, GuildMember, PartialGuildMember, User } from 'discord.js';
 import { injectable, inject, optional } from 'inversify';
@@ -56,6 +57,9 @@ import {
   getResolutionModerationOutcomeType,
   ResolvedVerificationStatus,
 } from '../utils/verificationResolution';
+
+/** Only these explicit target denials are safe to display directly to moderators. */
+export class BanTargetError extends Error {}
 
 /** Injected only by trusted delegated native execution; absent on direct Discord paths. */
 export interface NativeEnforcementLifecycle {
@@ -2488,7 +2492,18 @@ export class UserModerationService implements IUserModerationService, ICombinedB
     nativeLifecycle?: NativeEnforcementLifecycle
   ): Promise<boolean> {
     try {
-      const targetUser = await guild.client.users.fetch(userId).catch(() => null);
+      if (userId === moderator.id || userId === guild.ownerId || userId === guild.client.user?.id)
+        throw new BanTargetError('You cannot ban yourself, the server owner or Drasil.');
+      const targetUser = await guild.client.users.fetch(userId, { force: true });
+      const existingBan = await guild.bans
+        .fetch({ user: userId, force: true })
+        .catch((error: unknown) => {
+          if (!isDiscordUnknownBanError(error)) throw error;
+          return null;
+        });
+      if (existingBan)
+        throw new BanTargetError('This user is already banned. No new ban was performed.');
+      const membership = await this.serverMemberRepository.findByServerAndUser(guild.id, userId);
       const verificationEvents = await this.verificationEventRepository.findByUserAndServer(
         userId,
         guild.id
@@ -2506,7 +2521,11 @@ export class UserModerationService implements IUserModerationService, ICombinedB
 
       try {
         await nativeLifecycle?.beforeSend();
-        await guild.bans.create(targetUser ?? userId, { reason });
+        await guild.bans.create(targetUser, {
+          reason:
+            reason.trim().slice(0, DISCORD_AUDIT_LOG_REASON_MAX_LENGTH) ||
+            'Moderator-requested ban',
+        });
         await nativeLifecycle?.acknowledged();
       } catch (banError) {
         await this.rollbackPendingTerminalActions(
@@ -2516,7 +2535,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         throw banError;
       }
 
-      console.log(`Banned user ${targetUser?.tag ?? userId} by ID. Reason: ${reason}`);
+      console.log(`Banned user ${targetUser.tag} by ID. Reason: ${reason}`);
       resolvedEvents = await this.completeTerminalVerificationEvents(
         claimedVerificationEvents,
         VerificationStatus.BANNED,
@@ -2524,7 +2543,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         resolvedAt,
         reason,
         {
-          ...(targetUser ? { user_snapshot: this.buildUserSnapshot(targetUser) } : {}),
+          user_snapshot: this.buildUserSnapshot(targetUser),
           membership_state: 'left_or_removed',
           banned_by_id_at: resolvedAt.toISOString(),
         } as VerificationEvent['metadata']
@@ -2532,18 +2551,20 @@ export class UserModerationService implements IUserModerationService, ICombinedB
       await this.tryAbandonRoleQuarantine(guild.id, userId, 'drasil_ban_by_id', moderator.id);
 
       try {
-        await this.serverMemberRepository.upsertMember(guild.id, userId, {
-          verification_status: VerificationStatus.BANNED,
-          case_role_active: false,
-          last_status_change: resolvedAt,
-        });
+        if (membership)
+          await this.serverMemberRepository.markBannedIfNotNewer(
+            guild.id,
+            userId,
+            resolvedAt,
+            membership.join_date ?? null
+          );
 
         const target: ModerationTarget = {
           guildId: guild.id,
           userId,
-          userTag: targetUser?.tag ?? userId,
-          username: targetUser?.username ?? null,
-          accountCreatedAt: targetUser ? this.getUserAccountCreatedAt(targetUser) : null,
+          userTag: targetUser.tag,
+          username: targetUser.username,
+          accountCreatedAt: this.getUserAccountCreatedAt(targetUser),
         };
 
         for (const resolvedEvent of resolvedEvents) {
@@ -2573,13 +2594,28 @@ export class UserModerationService implements IUserModerationService, ICombinedB
             reason,
             detectionEventId:
               detectionEventId ?? resolvedEvents[0]?.event.detection_event_id ?? null,
-            metadata: this.buildOutcomeMetadata(
-              { source_detail: 'ban_by_id' },
-              targetUser ?? undefined
-            ),
+            metadata: this.buildOutcomeMetadata({ source_detail: 'ban_by_id' }, targetUser),
             recordWithoutVerificationEvent: true,
           }
         );
+
+        if (resolvedEvents.length === 0) {
+          await this.adminActionService.recordAction({
+            server_id: guild.id,
+            user_id: userId,
+            admin_id: moderator.id,
+            verification_event_id: null,
+            detection_event_id: detectionEventId ?? null,
+            action_type: AdminActionType.BAN,
+            previous_status: membership?.verification_status ?? null,
+            new_status: VerificationStatus.BANNED,
+            notes: reason,
+            metadata: this.buildOutcomeMetadata(
+              { source_detail: 'ban_by_id' },
+              targetUser
+            ) as Prisma.JsonObject,
+          });
+        }
 
         void this.productAnalyticsService.captureUserEvent(
           guild.id,
@@ -2595,7 +2631,7 @@ export class UserModerationService implements IUserModerationService, ICombinedB
         );
       } catch (postBanError) {
         console.error(
-          `Ban by ID succeeded for ${targetUser?.tag ?? userId}, but post-ban updates failed:`,
+          `Ban by ID succeeded for ${targetUser.tag}, but post-ban updates failed:`,
           postBanError
         );
       }

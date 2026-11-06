@@ -157,7 +157,12 @@ integration('MCP native enforcement', () => {
       ownerId: 'other',
       roles: { fetch: async () => undefined },
       client: { users: { fetch: async () => user } },
-      bans: { create: provider },
+      bans: {
+        fetch: async () => {
+          throw { code: 10026 };
+        },
+        create: provider,
+      },
       members: {
         fetch: async (input: unknown) => {
           if (input === 'target') {

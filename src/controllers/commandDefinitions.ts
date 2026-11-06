@@ -92,9 +92,19 @@ const baseApplicationCommandBuilders = [
     .setContexts(InteractionContextType.Guild),
   new SlashCommandBuilder()
     .setName('ban')
-    .setDescription('Ban a user from the server')
+    .setDescription('Ban a user, including someone who has not joined')
     .addUserOption((option) =>
-      option.setName('user').setDescription('The user to ban').setRequired(true)
+      option
+        .setName('user')
+        .setDescription('The user to ban (or supply user-id)')
+        .setRequired(false)
+    )
+    .addStringOption((option) =>
+      option
+        .setName('user-id')
+        .setDescription('Discord user ID, even if they have never joined')
+        .setRequired(false)
+        .setMaxLength(20)
     )
     .addStringOption((option) =>
       option.setName('reason').setDescription('Reason for the ban').setRequired(false)
