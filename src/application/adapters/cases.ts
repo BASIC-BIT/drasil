@@ -217,7 +217,10 @@ export function createBotCaseDependencies(deps: BotCaseDependencies): CaseDepend
         await enforcePermission(input.guildId, PermissionFlagsBits.BanMembers, 'Ban Members');
         const target = input.caseId
           ? await member(input.guildId, input.targetUserId)
-          : await member(input.guildId, input.targetUserId).catch(() => null);
+          : await member(input.guildId, input.targetUserId).catch((error: unknown) => {
+              if (!isDiscordErrorCode(error, DISCORD_UNKNOWN_MEMBER_ERROR_CODE)) throw error;
+              return null;
+            });
         if (!target) {
           if (deps.nativeLifecycle)
             return deps.userModerationService.banUserById(

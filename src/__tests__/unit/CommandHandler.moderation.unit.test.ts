@@ -254,7 +254,9 @@ describe('CommandHandler moderation commands (unit)', () => {
       memberPermissions: null,
       options: {
         getUser: jest.fn().mockReturnValue(targetUser),
-        getString: jest.fn().mockReturnValue('reason'),
+        getString: jest
+          .fn()
+          .mockImplementation((name: string) => (name === 'reason' ? 'reason' : null)),
       },
       reply: jest.fn().mockResolvedValue(undefined),
       editReply: jest.fn().mockResolvedValue(undefined),
@@ -305,7 +307,9 @@ describe('CommandHandler moderation commands (unit)', () => {
       },
       options: {
         getUser: jest.fn().mockReturnValue(targetUser),
-        getString: jest.fn().mockReturnValue('reason'),
+        getString: jest
+          .fn()
+          .mockImplementation((name: string) => (name === 'reason' ? 'reason' : null)),
       },
       reply: jest.fn().mockResolvedValue(undefined),
       editReply: jest.fn().mockResolvedValue(undefined),
@@ -313,7 +317,6 @@ describe('CommandHandler moderation commands (unit)', () => {
 
     await handler.handleSlashCommand(interaction);
 
-    expect(guild.members.fetch).toHaveBeenCalledWith(targetUser.id);
     expect(userModerationService.banUser).not.toHaveBeenCalled();
     await confirmLastSlashCommand(interaction);
 

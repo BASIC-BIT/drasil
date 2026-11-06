@@ -3351,6 +3351,108 @@ describe('UserModerationService (unit)', () => {
     consoleError.mockRestore();
   });
 
+  function preemptiveBanFixture() {
+    const userId = '123456789012345678';
+    const moderator = { id: 'moderator' } as User;
+    const target = { id: userId, tag: 'outside-user', username: 'outside-user' } as User;
+    const guild = {
+      id: 'preemptive-guild',
+      ownerId: 'owner',
+      client: { user: { id: 'bot' }, users: { fetch: jest.fn().mockResolvedValue(target) } },
+      bans: {
+        fetch: jest.fn().mockRejectedValue({ code: 10026 }),
+        create: jest.fn().mockResolvedValue({}),
+      },
+    };
+    const service = new UserModerationService(
+      serverMemberRepository,
+      notificationManager,
+      roleManager,
+      verificationEventRepository,
+      adminActionService,
+      threadManager,
+      undefined,
+      moderationOutcomeService
+    );
+    return {
+      userId,
+      moderator,
+      target,
+      guild,
+      service,
+      run: () =>
+        service.banUserById(guild as unknown as Guild, userId, 'Pre-emptive moderation', moderator),
+    };
+  }
+
+  it('records a never-member ban without inventing membership or a case', async () => {
+    const f = preemptiveBanFixture();
+    await expect(f.run()).resolves.toBe(true);
+    expect(await serverMemberRepository.findByServerAndUser(f.guild.id, f.userId)).toBeNull();
+    expect(
+      await verificationEventRepository.findByUserAndServer(f.userId, f.guild.id)
+    ).toHaveLength(0);
+    expect(roleManager.assignCaseRole).not.toHaveBeenCalled();
+    expect(threadManager.createVerificationThread).not.toHaveBeenCalled();
+    const outcomes = await moderationOutcomeRepository.findByUserAndServer(f.userId, f.guild.id);
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]).toMatchObject({
+      actor_id: f.moderator.id,
+      reason: 'Pre-emptive moderation',
+      verification_event_id: null,
+    });
+    const actions = await adminActionService.getActionsForUser(f.guild.id, f.userId);
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({
+      admin_id: f.moderator.id,
+      action_type: AdminActionType.BAN,
+      verification_event_id: null,
+    });
+  });
+
+  it('updates an existing departed membership without changing its join history', async () => {
+    const f = preemptiveBanFixture();
+    const joinedAt = new Date('2025-01-01T00:00:00Z');
+    await serverMemberRepository.upsertMember(f.guild.id, f.userId, { join_date: joinedAt });
+    await f.run();
+    expect(await serverMemberRepository.findByServerAndUser(f.guild.id, f.userId)).toMatchObject({
+      join_date: joinedAt,
+      verification_status: VerificationStatus.BANNED,
+    });
+  });
+
+  it.each(['moderator', 'owner', 'bot'])('rejects protected by-ID target %s', async (id) => {
+    const f = preemptiveBanFixture();
+    await expect(
+      f.service.banUserById(f.guild as unknown as Guild, id, 'Reason', f.moderator)
+    ).rejects.toThrow();
+    expect(f.guild.bans.create).not.toHaveBeenCalled();
+  });
+
+  it('does not repeat or reattribute an existing ban', async () => {
+    const f = preemptiveBanFixture();
+    f.guild.bans.fetch.mockResolvedValue({ reason: 'Earlier moderation' });
+    await expect(f.run()).rejects.toThrow('already banned');
+    expect(f.guild.bans.create).not.toHaveBeenCalled();
+    expect(
+      await moderationOutcomeRepository.findByUserAndServer(f.userId, f.guild.id)
+    ).toHaveLength(0);
+  });
+
+  it.each([10013, 50013])('does not enforce after user lookup fails with %s', async (code) => {
+    const f = preemptiveBanFixture();
+    f.guild.client.users.fetch.mockRejectedValue({ code });
+    await expect(f.run()).rejects.toBeDefined();
+    expect(f.guild.bans.create).not.toHaveBeenCalled();
+  });
+
+  it('does not enforce when current ban lookup fails', async () => {
+    const f = preemptiveBanFixture();
+    f.guild.bans.fetch.mockRejectedValue(new Error('network unavailable'));
+    await expect(f.run()).rejects.toThrow('network unavailable');
+    expect(f.guild.bans.create).not.toHaveBeenCalled();
+  });
+
   it('bans by ID and resolves pending cases after the member leaves', async () => {
     const guildId = 'guild-ban-by-id';
     const userId = 'user-ban-by-id';
@@ -3364,7 +3466,10 @@ describe('UserModerationService (unit)', () => {
     const guild = {
       id: guildId,
       client: { users: { fetch: jest.fn().mockResolvedValue(targetUser) } },
-      bans: { create: jest.fn().mockResolvedValue({}) },
+      bans: {
+        fetch: jest.fn().mockRejectedValue({ code: 10026 }),
+        create: jest.fn().mockResolvedValue({}),
+      },
     } as unknown as Guild;
 
     await serverRepository.getOrCreateServer(guildId);
@@ -3433,8 +3538,11 @@ describe('UserModerationService (unit)', () => {
     const moderator = { id: 'mod-ban' } as User;
     const guild = {
       id: guildId,
-      client: { users: { fetch: jest.fn().mockRejectedValue(new Error('Unknown user')) } },
-      bans: { create: jest.fn().mockRejectedValue(new Error('Missing permissions')) },
+      client: { users: { fetch: jest.fn().mockResolvedValue({ id: userId }) } },
+      bans: {
+        fetch: jest.fn().mockRejectedValue({ code: 10026 }),
+        create: jest.fn().mockRejectedValue(new Error('Missing permissions')),
+      },
     } as unknown as Guild;
     const parkedAt = new Date('2026-08-18T07:00:00Z');
 

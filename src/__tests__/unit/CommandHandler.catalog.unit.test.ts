@@ -23,6 +23,17 @@ describe('CommandHandler command catalog (unit)', () => {
 
     expect(banCommand).toBeDefined();
     expect(banCommand.default_member_permissions).toBe(PermissionFlagsBits.BanMembers.toString());
+    expect(
+      banCommand.options.map((option: { name: string; required: boolean }) => [
+        option.name,
+        option.required,
+      ])
+    ).toEqual([
+      ['user', false],
+      ['user-id', false],
+      ['reason', false],
+    ]);
+    expect(banCommand.options[1].max_length).toBe(20);
   });
 
   it('registers server-only slash commands as guild install commands', () => {

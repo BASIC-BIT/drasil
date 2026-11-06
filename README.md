@@ -113,7 +113,7 @@ The bot automatically registers the following slash commands during startup:
 - `/config lockdown`, `/config role-quarantine`, `/config role-gate`, `/config detection`,
   `/config case-staff`, `/config reports`, `/config analytics`, and `/config verification` - Manage
   advanced moderation and setup policy
-- `/ban` - Ban a user with an optional reason
+- `/ban user:<user>` or `/ban user-id:<Discord ID>` - Ban a user with an optional reason, including someone who has never joined. Supply exactly one target.
 - `/report` - Submit a user report for moderation intake
 - `/flaguser` - Manually flag a user for review
 - `/case` - Refresh, repair, and inspect active case notifications
